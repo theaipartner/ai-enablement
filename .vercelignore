@@ -1,0 +1,36 @@
+# Match git semantics: production deploys go through git push, where
+# anything in .gitignore is implicitly excluded. `vercel deploy` from
+# a local working dir doesn't honor .gitignore, so we mirror the
+# critical exclusions here. Keep this in sync with .gitignore.
+
+# Python virtual env (192MB+, blows past Vercel's 250MB function size cap)
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local dev / IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Tests aren't needed in serverless function bundles
+tests/
+
+# Build artifacts that vercel rebuilds anyway
+.next/
+node_modules/
+
+# Local secrets (already in .gitignore but defense-in-depth)
+.env
+.env.local
+.env.*.local
+
+# Supabase local-only artifacts
+supabase/.temp/
