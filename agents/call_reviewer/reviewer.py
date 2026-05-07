@@ -53,12 +53,19 @@ def review_call(
     call_id: str,
     *,
     model: str = "claude-sonnet-4-6",
+    trigger_type: str = "manual_backfill",
 ) -> dict[str, Any]:
     """Generate a call review for the given call_id.
 
     Returns the parsed JSON dict
     (pain_points, wins, dodged_questions, sentiment_arc).
     Writes nothing — caller handles persistence.
+
+    Args:
+        trigger_type: tag for the agent_runs row's trigger_type column.
+            Defaults to "manual_backfill" for the one-shot script;
+            pipeline-fired auto-review passes "fathom_pipeline" so cost
+            rollups can distinguish the two.
 
     Raises:
         ValueError: when the call doesn't exist, has no transcript,
@@ -74,7 +81,7 @@ def review_call(
     started_ms = int(time.monotonic() * 1000)
     run_id = start_agent_run(
         agent_name="call_reviewer",
-        trigger_type="manual_backfill",
+        trigger_type=trigger_type,
         trigger_metadata={
             "call_id": call_id,
             "model": model,

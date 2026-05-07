@@ -255,6 +255,25 @@ def ingest_call(
                 retrievable=final_retrievable,
             )
             validation_failures.extend(summary_validation_failures)
+
+            # Auto-review hook. Mirrors the cs_call_summary_post hook
+            # below: wrapped in try/except so a review-generation failure
+            # NEVER fails the Fathom webhook delivery. The call row +
+            # summary doc + chunks are already persisted; review is
+            # value-add. Idempotency-by-existence inside the helper
+            # means Fathom retries / re-deliveries don't burn LLM
+            # tokens. Logged failures land in agent_runs (via
+            # review_call's own telemetry) for later diagnosis.
+            try:
+                _ensure_call_review_document(db, record, call_id, classification)
+            except Exception as exc:
+                logger.warning(
+                    "_ensure_call_review_document hook raised for call %s: %s — "
+                    "ingest continues",
+                    call_id,
+                    exc,
+                )
+                errors.append(f"call_review: {exc!r}")
     else:
         # Non-client call. If a prior client-classification wrote a
         # document for this call, soft-archive it so chunks stop
@@ -959,6 +978,98 @@ def _sync_summary_content(
     if existing.get("content") == new_content:
         return
     db.table("documents").update({"content": new_content}).eq("id", doc_id).execute()
+
+
+# ---------------------------------------------------------------------------
+# call_review (auto-review on Fathom webhook ingest)
+# ---------------------------------------------------------------------------
+
+
+_REVIEW_DOC_TYPE = "call_review"
+
+
+def _ensure_call_review_document(
+    db,
+    record: FathomCallRecord,
+    call_id: str,
+    classification: ClassificationResult,
+) -> str | None:
+    """Generate and persist a call_review document via the call_reviewer
+    agent. Mirrors the shape of _ensure_summary_document but without
+    embeddings, chunks, or retrievability flags — review docs are
+    display-only and persistence.py writes is_active=False.
+
+    Three guards before the LLM call (cheapest-first):
+
+      1. Category guard — only client calls have a primary_client_id;
+         the review's metadata.client_id requires it. Caller already
+         scopes by category, but defense-in-depth.
+      2. Primary-client guard — same. ai_call_signal asserts this too;
+         re-asserted here so the failure mode is clear if the
+         classifier ever changes.
+      3. Existence guard — if a call_review document already exists
+         for this external_id, SKIP the LLM call entirely. Saves the
+         ~$0.07 Sonnet cost on Fathom retries / dup deliveries / the
+         documented F2.2 case where Fathom may re-fire
+         new-meeting-content-ready twice. The first review wins; if
+         operators want regeneration they delete the row + re-fire.
+
+    Returns the documents.id of the review row (existing or newly
+    written), or None when the function short-circuited at a guard.
+
+    Raises on LLM error / parse error — caller wraps in try/except per
+    the existing CS Slack post hook idiom.
+    """
+    if classification.call_category != "client":
+        return None
+    if classification.primary_client_id is None:
+        logger.info(
+            "call_review skipped for call %s: no primary_client_id (category=%s)",
+            call_id,
+            classification.call_category,
+        )
+        return None
+
+    # Existence guard. Direct (source, external_id, document_type) lookup
+    # against the migration-0011 unique. Cheap; no LLM cost on hit.
+    existing = (
+        db.table("documents")
+        .select("id")
+        .eq("source", _SOURCE)
+        .eq("external_id", record.external_id)
+        .eq("document_type", _REVIEW_DOC_TYPE)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        logger.info(
+            "call_review already exists for external_id=%s; skipping regen",
+            record.external_id,
+        )
+        return existing.data[0]["id"]
+
+    # Late imports keep agents.* off the cold-start critical path for
+    # non-client ingests + match the cs_call_summary_post pattern below.
+    from agents.call_reviewer.persistence import upsert_call_review
+    from agents.call_reviewer.reviewer import review_call
+
+    review = review_call(db, call_id, trigger_type="fathom_pipeline")
+    started_at_iso = (
+        record.started_at.isoformat()
+        if hasattr(record.started_at, "isoformat")
+        else str(record.started_at)
+    )
+    return upsert_call_review(
+        db,
+        call_id,
+        review,
+        call_external_id=record.external_id,
+        primary_client_id=classification.primary_client_id,
+        call_category=classification.call_category,
+        started_at=started_at_iso,
+        model="claude-sonnet-4-6",
+        title=record.title,
+    )
 
 
 # ---------------------------------------------------------------------------

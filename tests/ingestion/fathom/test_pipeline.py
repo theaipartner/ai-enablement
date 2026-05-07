@@ -149,6 +149,16 @@ class _FakeTable:
         self._filters.append(("in_", col, vals))
         return self
 
+    def limit(self, n):
+        self._filters.append(("limit", n))
+        return self
+
+    def order(self, *args, **kwargs):
+        # Pipeline uses order(...) on some lookups (e.g. timestamp-sorted
+        # summary lookup). FakeDB ignores order — the canned response is
+        # whatever the test scripted.
+        return self
+
     def execute(self):
         op = self._current_op
         self.db.ops.append((op, self.name, {
@@ -787,3 +797,258 @@ def test_estimate_embedding_cost_is_small_and_nonzero():
     cost = pipeline.estimate_embedding_cost_usd(100)
     assert cost > 0
     assert cost < 1.0  # 100 chunks should be pennies
+
+
+# ---------------------------------------------------------------------------
+# Auto-review hook (M6.x — Fathom pipeline auto-review)
+# ---------------------------------------------------------------------------
+#
+# Five paths covered:
+#   1. happy_path: summary_text set + client + primary_client_id →
+#      review_call + upsert_call_review fired exactly once
+#   2. no_summary_text: summary_text empty → review skipped at the
+#      gate, review_call NOT called (same gate that skips summary doc)
+#   3. non_client_category: would never reach the review block since
+#      it's nested in the client-category branch — verified via the
+#      _ensure_call_review_document direct unit test
+#   4. idempotency: existing call_review documents row → review_call
+#      NOT called, helper short-circuits at the existence guard
+#   5. failure_isolation: review_call raises → ingest_call still
+#      returns success, errors[] populated, summary doc still landed
+
+
+def _record_with_summary(**overrides):
+    """Same as _record() but with summary_text set so the auto-review
+    hook fires."""
+    r = _record(**overrides)
+    # FathomCallRecord is a dataclass; we re-construct because the type
+    # may be frozen. Falls back to dict-merge if not.
+    try:
+        from dataclasses import replace
+        return replace(r, summary_text="A short Fathom-generated summary.")
+    except TypeError:
+        r.summary_text = "A short Fathom-generated summary."
+        return r
+
+
+def _stage_pipeline_db_for_first_client_ingest(db):
+    """Common DB scripting for first-ingest of a client call: empty
+    calls + documents lookups, synthetic ids on insert."""
+    db.respond("select", "calls", [])
+    db.respond("select", "documents", [])  # transcript-doc lookup
+    db.respond("select", "document_chunks", [])
+    db.respond("select", "documents", [])  # summary-doc lookup
+    db.respond("select", "document_chunks", [])  # summary chunk count
+    db.respond("select", "documents", [])  # call_review existence guard
+    db.insert_returning("calls", ["call-1"])
+    db.insert_returning("documents", ["doc-transcript", "doc-summary"])
+
+
+def test_auto_review_happy_path_fires_after_summary_write(mocker):
+    db = _FakeDB()
+    _stage_pipeline_db_for_first_client_ingest(db)
+
+    review_mock = mocker.patch(
+        "agents.call_reviewer.reviewer.review_call",
+        return_value={
+            "pain_points": [],
+            "wins": [],
+            "dodged_questions": [],
+            "sentiment_arc": "Steady call.",
+        },
+    )
+    upsert_mock = mocker.patch(
+        "agents.call_reviewer.persistence.upsert_call_review",
+        return_value="doc-review",
+    )
+
+    resolver = ClientResolver({"client@example.com": "c-1"})
+    team_resolver = pipeline.TeamMemberResolver(
+        {"scott@theaipartner.io": "tm-scott"}
+    )
+
+    outcome = pipeline.ingest_call(
+        _record_with_summary(),
+        db,
+        client_resolver=resolver,
+        team_resolver=team_resolver,
+        embed_fn=_fake_embed,
+        dry_run=False,
+    )
+
+    # review_call called once with the persisted call_id + fathom_pipeline trigger
+    review_mock.assert_called_once()
+    args, kwargs = review_mock.call_args
+    # call_id is positional; trigger_type is kwarg per the new signature.
+    assert args[1] == "call-1"
+    assert kwargs.get("trigger_type") == "fathom_pipeline"
+
+    # upsert_call_review called once with the right metadata
+    upsert_mock.assert_called_once()
+    upsert_kwargs = upsert_mock.call_args.kwargs
+    assert upsert_kwargs["call_external_id"] == "rec-001"
+    assert upsert_kwargs["primary_client_id"] == "c-1"
+    assert upsert_kwargs["call_category"] == "client"
+
+    assert outcome.action == "inserted"
+    assert outcome.errors == []
+
+
+def test_auto_review_skipped_when_no_summary_text(mocker):
+    """TXT-backlog shape (summary_text=None) skips both summary doc
+    and review at the same gate."""
+    db = _FakeDB()
+    db.respond("select", "calls", [])
+    db.respond("select", "documents", [])
+    db.respond("select", "document_chunks", [])
+    db.insert_returning("calls", ["call-1"])
+    db.insert_returning("documents", ["doc-transcript"])
+
+    review_mock = mocker.patch("agents.call_reviewer.reviewer.review_call")
+    upsert_mock = mocker.patch(
+        "agents.call_reviewer.persistence.upsert_call_review"
+    )
+
+    resolver = ClientResolver({"client@example.com": "c-1"})
+    team_resolver = pipeline.TeamMemberResolver({})
+
+    pipeline.ingest_call(
+        _record(),  # no summary_text
+        db,
+        client_resolver=resolver,
+        team_resolver=team_resolver,
+        embed_fn=_fake_embed,
+        dry_run=False,
+    )
+
+    review_mock.assert_not_called()
+    upsert_mock.assert_not_called()
+
+
+def test_auto_review_idempotent_when_existing_doc(mocker):
+    """Pre-existing call_review documents row → no LLM call. Saves
+    the ~$0.07 Sonnet cost on Fathom retries / dup deliveries."""
+    db = _FakeDB()
+    db.respond("select", "calls", [])
+    db.respond("select", "documents", [])  # transcript doc lookup
+    db.respond("select", "document_chunks", [])
+    db.respond("select", "documents", [])  # summary doc lookup
+    db.respond("select", "document_chunks", [])
+    # Existence guard hit — return an existing review doc id.
+    db.respond("select", "documents", [{"id": "doc-review-existing"}])
+    db.insert_returning("calls", ["call-1"])
+    db.insert_returning("documents", ["doc-transcript", "doc-summary"])
+
+    review_mock = mocker.patch("agents.call_reviewer.reviewer.review_call")
+    upsert_mock = mocker.patch(
+        "agents.call_reviewer.persistence.upsert_call_review"
+    )
+
+    resolver = ClientResolver({"client@example.com": "c-1"})
+    team_resolver = pipeline.TeamMemberResolver({})
+
+    outcome = pipeline.ingest_call(
+        _record_with_summary(),
+        db,
+        client_resolver=resolver,
+        team_resolver=team_resolver,
+        embed_fn=_fake_embed,
+        dry_run=False,
+    )
+
+    review_mock.assert_not_called()
+    upsert_mock.assert_not_called()
+    assert outcome.errors == []
+
+
+def test_auto_review_failure_does_not_break_ingest(mocker):
+    """review_call raises → ingest_call still returns success, errors
+    list captures the failure, summary doc was already written."""
+    db = _FakeDB()
+    _stage_pipeline_db_for_first_client_ingest(db)
+
+    mocker.patch(
+        "agents.call_reviewer.reviewer.review_call",
+        side_effect=ValueError("simulated parse failure"),
+    )
+    upsert_mock = mocker.patch(
+        "agents.call_reviewer.persistence.upsert_call_review"
+    )
+
+    resolver = ClientResolver({"client@example.com": "c-1"})
+    team_resolver = pipeline.TeamMemberResolver(
+        {"scott@theaipartner.io": "tm-scott"}
+    )
+
+    outcome = pipeline.ingest_call(
+        _record_with_summary(),
+        db,
+        client_resolver=resolver,
+        team_resolver=team_resolver,
+        embed_fn=_fake_embed,
+        dry_run=False,
+    )
+
+    # Pipeline still succeeded (summary doc was written before the
+    # review hook fired).
+    assert outcome.action == "inserted"
+    # upsert never reached (review_call raised first)
+    upsert_mock.assert_not_called()
+    # Error captured in IngestOutcome for diagnostic visibility.
+    assert any("call_review" in e for e in outcome.errors)
+    # Summary doc was written — the tables_written set still includes
+    # documents (transcript + summary).
+    tables_written = {table for op, table, _ in db.ops if op == "insert"}
+    assert "documents" in tables_written
+
+
+def test_ensure_call_review_document_skips_non_client_category(mocker):
+    """Direct unit test for the helper: non-client classification
+    short-circuits at the category guard before any DB query."""
+    from ingestion.fathom.classifier import ClassificationResult
+
+    db = _FakeDB()
+    review_mock = mocker.patch("agents.call_reviewer.reviewer.review_call")
+
+    classification = ClassificationResult(
+        call_category="internal",
+        call_type=None,
+        classification_confidence=0.95,
+        classification_method="participant_match",
+        primary_client_id=None,
+        should_auto_create_client=None,
+    )
+    result = pipeline._ensure_call_review_document(
+        db, _record_with_summary(), "call-1", classification
+    )
+
+    assert result is None
+    review_mock.assert_not_called()
+    # Category guard short-circuits BEFORE the existence query, so no
+    # DB ops fire either.
+    assert db.ops == []
+
+
+def test_ensure_call_review_document_skips_when_no_primary_client_id(mocker):
+    """Direct unit test: client category but null primary_client_id
+    (orphan) skips at the second guard."""
+    from ingestion.fathom.classifier import ClassificationResult
+
+    db = _FakeDB()
+    review_mock = mocker.patch("agents.call_reviewer.reviewer.review_call")
+
+    classification = ClassificationResult(
+        call_category="client",
+        call_type=None,
+        classification_confidence=0.6,
+        classification_method="title_pattern",
+        primary_client_id=None,  # orphan
+        should_auto_create_client=None,
+    )
+    result = pipeline._ensure_call_review_document(
+        db, _record_with_summary(), "call-1", classification
+    )
+
+    assert result is None
+    review_mock.assert_not_called()
+    assert db.ops == []
