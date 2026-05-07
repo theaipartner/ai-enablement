@@ -35,7 +35,7 @@ What the score should weigh:
 
 - WINS ARE NOT JUST ABSENCE OF PAIN. Concrete momentum, milestones, breakthroughs matter. A call full of wins and zero pain points lands at the top of the band. Don't grade neutral just because nothing is on fire.
 
-- CONVERSATION PIVOTS / DODGED QUESTIONS ARE SIGNAL BUT NOT DAMNING. Frequent pivoting suggests something unresolved; one or two over multiple calls is normal conversation. Penalize patterns of avoidance, not single instances.
+- CONVERSATION PIVOTS ARE SIGNAL BUT NOT DAMNING. Frequent pivoting suggests something unresolved; one or two over multiple calls is normal conversation. Penalize patterns of avoidance, not single instances. (The underlying review data uses the field name `dodged_questions`, but in YOUR reasoning output use neutral language — "the conversation pivoted away from", "the topic didn't get addressed", "the discussion moved on from", "the question wasn't directly answered". Avoid "dodged", "dodging", "deflected", "evasive", or similar charged terms — even if the input review describes the moment that way.)
 
 - SENTIMENT ARC IS A STRONG SIGNAL BUT NOT THE WHOLE STORY. A call that ended warm after starting tense is healthier than one that started warm and ended frustrated. The arc also tells you what was happening BEHIND the wins/pain.
 
