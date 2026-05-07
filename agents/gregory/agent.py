@@ -1,9 +1,10 @@
-"""Gregory brain V1.1 — entry point.
+"""Gregory brain V2 — entry point.
 
-Computes per-client health scores by combining deterministic signals
-(call cadence, action items, NPS) with optional Claude-driven concerns,
-and writes one row per invocation to `client_health_scores` (history
-preserved by design).
+Computes per-client health scores by combining the dominant AI call
+signal (Sonnet reasoning over recent call_review documents, weight 0.50)
+with three deterministic signals (call cadence, overdue action items,
+latest NPS), and writes one row per invocation to `client_health_scores`
+(history preserved by design).
 
 Two public entry points:
 
@@ -13,18 +14,20 @@ Two public entry points:
     by the weekly Vercel cron and ad-hoc backfills.
 
 Each invocation opens an `agent_runs` row, computes, writes, and closes
-the run with token / cost / duration telemetry.
+the run with token / cost / duration telemetry. The AI call signal
+opens its own `agent_runs` row inside the per-client compute so token
++ cost accounting is attributable per-signal-per-client.
 
-Architecture is complete in V1.1.0 but the Claude-driven concerns
-generation is gated behind the `GREGORY_CONCERNS_ENABLED` env var
-(default false). With ~22 call_summary documents across 132 active
-clients today, ~85% of clients would have empty input; paying for
-empty calls is wasteful. The flag flips on once summary coverage
-densifies — no code change required.
+V1.1 had a separate concerns.py module gated behind GREGORY_CONCERNS_ENABLED.
+Retired in V2 — the AI call signal subsumes that work (call_review
+documents already contain the LLM-distilled view of pain_points + wins
++ dodged_questions + sentiment_arc that concerns.py was extracting from
+raw summaries). Concerns now flow up directly from compute_ai_call_signal.
 
-Deferred V1.2 signals: Slack engagement (slack_messages cloud table
-empty), NPS (nps_submissions empty). Brain handles missing data
-gracefully; scores get more meaningful as those signals land.
+Deferred V2.1 signals: Slack engagement (slack_messages cloud table
+empty). Brain handles missing data gracefully — the AI signal returns
+neutral 50 when no call_review documents exist for a client, and the
+deterministic signals return neutral 50 for their own missing-data cases.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents.gregory.concerns import generate_concerns
+from agents.gregory.ai_call_signal import compute_ai_call_signal
 from agents.gregory.scoring import build_overall_reasoning, score_signals
 from agents.gregory.signals import compute_all_signals
 from shared.db import get_client
@@ -58,12 +61,22 @@ class HealthComputeResult:
 @dataclass
 class SweepResult:
     """Outcome of compute_health_for_all_active. Per-client outcomes
-    plus simple aggregates for the cron's response body."""
+    plus simple aggregates for the cron's response body.
+
+    duration_ms tracks wall-clock for the entire sweep (start of first
+    client to end of last). avg_per_client_ms is duration_ms divided by
+    total_clients (or 0 if the sweep ran on zero clients). Both feed the
+    cron-ceiling watchpoint logged in docs/followups.md — re-architect
+    when wall-clock duration approaches 80% of the Vercel maxDuration
+    ceiling (i.e. 480s of 600s).
+    """
 
     total_clients: int
     succeeded: int
     failed: int
     insufficient_data: int
+    duration_ms: int = 0
+    avg_per_client_ms: int = 0
     per_client: list[HealthComputeResult] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
 
@@ -94,8 +107,17 @@ def compute_health_for_client(
     )
 
     try:
-        signals_list = compute_all_signals(db, client_id)
-        concerns_list = generate_concerns(db, client_id, run_id=run_id)
+        # AI call signal first (dominant V2 contributor — sorted first
+        # in factors.signals[] so dashboard reads it as the headline).
+        # Returns (Signal, concerns) tuple; concerns flow into
+        # factors.concerns[] without a separate Claude call. Never
+        # raises — see compute_ai_call_signal docstring for failure
+        # semantics (DB blip / LLM blip / parse failure all fall
+        # through to neutral-50 with mode-specific note).
+        ai_signal, concerns_list = compute_ai_call_signal(db, client_id)
+        deterministic_signals = compute_all_signals(db, client_id)
+        signals_list = [ai_signal, *deterministic_signals]
+
         scoring_result = score_signals(signals_list)
         reasoning = build_overall_reasoning(
             signals_list, scoring_result, len(concerns_list)
@@ -187,6 +209,7 @@ def compute_health_for_all_active(
         insufficient_data=0,
     )
 
+    sweep_started = time.monotonic()
     for client in clients:
         client_id = client["id"]
         try:
@@ -211,4 +234,18 @@ def compute_health_for_all_active(
                 extra={"client_id": client_id},
             )
 
+    result.duration_ms = int((time.monotonic() - sweep_started) * 1000)
+    result.avg_per_client_ms = (
+        result.duration_ms // len(clients) if clients else 0
+    )
+    logger.info(
+        "gregory.sweep finished total=%d succeeded=%d failed=%d "
+        "insufficient=%d duration_ms=%d avg_per_client_ms=%d",
+        result.total_clients,
+        result.succeeded,
+        result.failed,
+        result.insufficient_data,
+        result.duration_ms,
+        result.avg_per_client_ms,
+    )
     return result
