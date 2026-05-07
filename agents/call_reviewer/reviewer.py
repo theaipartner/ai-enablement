@@ -131,7 +131,7 @@ def _fetch_call(db, call_id: str) -> dict[str, Any]:
             "id, transcript, primary_client_id, started_at, call_category"
         )
         .eq("id", call_id)
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     row = resp.data

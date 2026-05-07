@@ -202,7 +202,7 @@ def sum_cost_for_run_window(
         db.table("agent_runs")
         .select("llm_cost_usd, llm_input_tokens, llm_output_tokens")
         .eq("agent_name", "call_reviewer")
-        .gte("created_at", started_after_iso)
+        .gte("started_at", started_after_iso)
         .execute()
     )
     rows = resp.data or []
