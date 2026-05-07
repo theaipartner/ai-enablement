@@ -11,6 +11,20 @@ Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (G
 
 ---
 
+## Call Review V1 has no eval coverage
+
+- **What:** `agents/call_reviewer/` has unit tests covering JSON parse + persistence shapes, but no eval coverage of output quality (does the model surface real pain_points / wins / dodged_questions, or hallucinate / pad / miss obvious signals?). May 2026 backfill produced 31 reviews (smoke + apply); spot-checking is the only quality gate today.
+- **Why it matters:** prompt iteration without an eval is iteration in the dark. Once CSMs start using the surface and we get signal on what's wrong (over-flagging dodged questions, under-flagging real pain, generic sentiment_arc), an eval gives us a regression net for tuning.
+- **Next action:** add a golden-set eval when output quality becomes an iteration bottleneck (target: 10-20 hand-graded reviews across the call texture, programmatic checks for "does the model find pain points the human grader marked," etc.). Not blocking V1 ship.
+- **Logged:** 2026-05-07.
+
+## Promote `call_review` exclusion into `match_document_chunks` SQL function
+
+- **What:** `agents/call_reviewer/persistence.py` writes documents rows with `is_active=False` as the V1 retrieval-side safety net — `match_document_chunks` only returns `is_active=true` rows, so review docs never leak into Ella's retrieval. The SQL function's explicit client-scoped-type exclusion list (`call_summary` / `call_transcript_chunk`) does NOT include `call_review` because the `is_active=false` write-time invariant is sufficient at V1.
+- **Why it matters:** the safety gate disappears the moment anything sets `is_active=true` on a review row. V2 will wire review generation into the Fathom ingestion pipeline (likely with a per-call ingest hook), and at that point a small mistake — copy-pasting the summary's `is_active=true` line into the review's INSERT — would silently leak reviews into retrieval. Promote the exclusion into the SQL function via migration so the gate lives in the database, not in caller discipline.
+- **Next action:** when V2 generation lands (or before, if anyone else touches the persistence layer): add a migration that extends `match_document_chunks` to also exclude `document_type='call_review'` from global-mode results, and update `docs/ingestion/metadata-conventions.md` §7 in the same commit.
+- **Logged:** 2026-05-07.
+
 ## Cron auth: all Vercel crons share one project-level CRON_SECRET
 
 - **What:** all Vercel cron endpoints in this project share a single `CRON_SECRET` env var (Vercel project-level convention; Vercel sends this as the `Authorization: Bearer <token>` regardless of which cron entry fires). The env var name is fixed by Vercel's cron infrastructure — not configurable via `vercel.json` or anywhere else. Confirmed empirically during the M6.1 401 saga: a per-cron-namespaced token convention was tried earlier (`FATHOM_BACKFILL_AUTH_TOKEN`, `GREGORY_BRAIN_CRON_AUTH_TOKEN`, `ACCOUNTABILITY_NOTIFICATION_CRON_AUTH_TOKEN`) and required operators to keep `CRON_SECRET` in sync with the custom token, which silently failed at the M6.1 deploy. Refactored to single-source-of-truth in M6.2.
