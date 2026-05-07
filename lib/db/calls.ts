@@ -182,11 +182,29 @@ export type CallActionItem = {
   completed_at: string | null
 }
 
+export type CallReviewItem = {
+  description: string
+  evidence: string
+}
+
+export type CallReviewDodgedItem = CallReviewItem & {
+  who: string
+}
+
+export type CallReview = {
+  pain_points: CallReviewItem[]
+  wins: CallReviewItem[]
+  dodged_questions: CallReviewDodgedItem[]
+  sentiment_arc: string
+  generated_at: string
+}
+
 export type CallDetail = CallRow & {
   primary_client: { id: string; full_name: string } | null
   participants: CallParticipant[]
   action_items: CallActionItem[]
   summary_text: string | null
+  call_review: CallReview | null
 }
 
 export async function getCallById(id: string): Promise<CallDetail | null> {
@@ -200,8 +218,13 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
   if (error) throw error
   if (!call) return null
 
-  const [participantsRes, actionItemsRes, summaryRes, primaryClientRes] =
-    await Promise.all([
+  const [
+    participantsRes,
+    actionItemsRes,
+    summaryRes,
+    reviewRes,
+    primaryClientRes,
+  ] = await Promise.all([
       supabase
         .from('call_participants')
         .select(
@@ -243,6 +266,18 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
+      // call_review: parallel fetch alongside summary. Same metadata
+      // join pattern (filter on metadata->>call_id). Pulled separately
+      // because content is JSON-serialized and we need created_at as
+      // the "Generated at" timestamp on the dashboard.
+      supabase
+        .from('documents')
+        .select('content, created_at')
+        .eq('document_type', 'call_review')
+        .filter('metadata->>call_id', 'eq', id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
       call.primary_client_id
         ? supabase
             .from('clients')
@@ -255,6 +290,7 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
   if (participantsRes.error) throw participantsRes.error
   if (actionItemsRes.error) throw actionItemsRes.error
   if (summaryRes.error) throw summaryRes.error
+  if (reviewRes.error) throw reviewRes.error
   if (primaryClientRes.error) throw primaryClientRes.error
 
   const participants: CallParticipant[] = (
@@ -305,12 +341,60 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
     completed_at: row.completed_at,
   }))
 
+  const call_review = parseCallReview(reviewRes.data)
+
   return {
     ...call,
     primary_client: primaryClientRes.data ?? null,
     participants,
     action_items,
     summary_text: summaryRes.data?.content ?? null,
+    call_review,
+  }
+}
+
+// Parse the JSON-serialized review document content. Defensive:
+// returns null + logs a warning rather than crashing the page if
+// the row exists but the content isn't parseable as the expected
+// shape. Real failures here would be a regression in the writer
+// (agents/call_reviewer/persistence.py), not user-recoverable.
+function parseCallReview(
+  row: { content: string | null; created_at: string } | null,
+): CallReview | null {
+  if (!row || !row.content) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(row.content)
+  } catch (err) {
+    console.warn('call_review JSON.parse failed:', err)
+    return null
+  }
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !Array.isArray((parsed as { pain_points?: unknown }).pain_points) ||
+    !Array.isArray((parsed as { wins?: unknown }).wins) ||
+    !Array.isArray(
+      (parsed as { dodged_questions?: unknown }).dodged_questions,
+    ) ||
+    typeof (parsed as { sentiment_arc?: unknown }).sentiment_arc !==
+      'string'
+  ) {
+    console.warn('call_review shape invalid:', parsed)
+    return null
+  }
+  const obj = parsed as {
+    pain_points: CallReviewItem[]
+    wins: CallReviewItem[]
+    dodged_questions: CallReviewDodgedItem[]
+    sentiment_arc: string
+  }
+  return {
+    pain_points: obj.pain_points,
+    wins: obj.wins,
+    dodged_questions: obj.dodged_questions,
+    sentiment_arc: obj.sentiment_arc,
+    generated_at: row.created_at,
   }
 }
 

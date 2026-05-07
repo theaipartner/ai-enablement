@@ -94,6 +94,123 @@ function ParticipantsTable({
   )
 }
 
+function CallReviewSection({
+  review,
+}: {
+  review: CallDetail['call_review']
+}) {
+  if (review === null) {
+    return (
+      <p className="text-sm text-muted-foreground">No review for this call yet.</p>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-sm font-semibold mb-1">Sentiment arc</h3>
+        <p className="text-sm leading-relaxed">{review.sentiment_arc}</p>
+      </div>
+
+      <ReviewItemList
+        title="Pain points"
+        items={review.pain_points}
+        emptyText="No pain points surfaced."
+      />
+
+      <ReviewItemList
+        title="Wins"
+        items={review.wins}
+        emptyText="No wins surfaced."
+      />
+
+      <ReviewDodgedList items={review.dodged_questions} />
+    </div>
+  )
+}
+
+function ReviewItemList({
+  title,
+  items,
+  emptyText,
+}: {
+  title: string
+  items: Array<{ description: string; evidence: string }>
+  emptyText: string
+}) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2">
+        <span>{title}</span>
+        {items.length > 0 ? (
+          <span className="text-xs font-medium text-muted-foreground tabular-nums">
+            {items.length}
+          </span>
+        ) : null}
+      </h3>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{emptyText}</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {items.map((item, idx) => (
+            <li key={idx} className="text-sm">
+              <p className="font-medium">{item.description}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {item.evidence}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function ReviewDodgedList({
+  items,
+}: {
+  items: Array<{ description: string; evidence: string; who: string }>
+}) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2">
+        <span>Dodged questions</span>
+        {items.length > 0 ? (
+          <span className="text-xs font-medium text-muted-foreground tabular-nums">
+            {items.length}
+          </span>
+        ) : null}
+      </h3>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No dodged questions surfaced.</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {items.map((item, idx) => (
+            <li key={idx} className="text-sm">
+              <div className="flex items-start gap-2">
+                <span
+                  className={
+                    'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide ' +
+                    (item.who === 'csm'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-100 text-slate-700')
+                  }
+                >
+                  {item.who}
+                </span>
+                <p className="font-medium flex-1">{item.description}</p>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5 ml-[3.25rem]">
+                {item.evidence}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function ActionItemsList({
   items,
 }: {
@@ -267,6 +384,21 @@ export default async function CallDetailPage({
             backlog imports (Fathom .txt exports) do not.
           </p>
         )}
+      </section>
+
+      <Separator />
+
+      {/* Section 4.5 — Call review */}
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <SectionHeader title="Call review" />
+          {call.call_review ? (
+            <span className="text-xs text-muted-foreground">
+              Generated {new Date(call.call_review.generated_at).toLocaleString()}
+            </span>
+          ) : null}
+        </div>
+        <CallReviewSection review={call.call_review} />
       </section>
 
       <Separator />
