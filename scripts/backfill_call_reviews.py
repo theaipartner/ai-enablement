@@ -25,13 +25,17 @@ partial failure picks up exactly the calls that didn't land.
 
 Usage:
     .venv/bin/python scripts/backfill_call_reviews.py            # dry-run
+    .venv/bin/python scripts/backfill_call_reviews.py --smoke    # 1 call end-to-end
     .venv/bin/python scripts/backfill_call_reviews.py --apply
     .venv/bin/python scripts/backfill_call_reviews.py --apply --limit 3
 
 Default mode is dry-run — prints the candidate count + the first 5
-call titles, makes ZERO Claude API calls. --apply fires the real work.
---limit N caps the number of calls processed (after the
-already-reviewed filter).
+call titles, makes ZERO Claude API calls. --smoke processes exactly
+one call end-to-end (fetch → Claude → parse → write document → cost
+summary) so real-API surface bugs surface BEFORE a bulk run; see
+docs/claude-handoff.md § "Operational patterns I'm strict about" for
+the working norm. --apply fires the real bulk work. --limit N caps
+the number of calls processed (after the already-reviewed filter).
 
 Env vars (loaded from .env.local):
   ANTHROPIC_API_KEY            — Claude
@@ -219,6 +223,63 @@ def sum_cost_for_run_window(
 
 
 # ---------------------------------------------------------------------------
+# Smoke
+# ---------------------------------------------------------------------------
+
+
+def _run_smoke(
+    db,
+    *,
+    pending: list[dict],
+    started_at_iso: str,
+) -> int:
+    """Process exactly one call end-to-end as a real-API smoke test.
+
+    Picks the most recent unreviewed call from the candidate list
+    (pending is already sorted started_at asc; -1 is most recent).
+    Runs the full path: fetch → Claude → parse → write document →
+    cost summary. Prints the success line and exits 0; on any
+    exception, prints the full traceback and exits 1.
+
+    The chosen call leaves a real call_review documents row behind,
+    so a subsequent --apply correctly skips it (idempotent
+    already-reviewed filter).
+    """
+    import traceback
+
+    if not pending:
+        print(
+            "Smoke test skipped — every candidate already has a review row. "
+            "Delete one or widen the window before --smoke."
+        )
+        return 0
+
+    call = pending[-1]  # most recent
+    title = call.get("title") or "(untitled)"
+    print(f"Smoke: reviewing {title!r} ({call['id']}) {call['started_at'][:10]}...")
+
+    try:
+        review_and_persist(db, call)
+    except Exception:
+        print()
+        print("Smoke test FAILED:")
+        traceback.print_exc()
+        return 1
+
+    cost, in_tok, out_tok = sum_cost_for_run_window(
+        db,
+        started_after_iso=started_at_iso,
+    )
+    print()
+    print(
+        f"Smoke test passed — 1 call reviewed, ${cost:.4f} cost "
+        f"({in_tok:,} in / {out_tok:,} out tokens). "
+        f"Re-run with --apply to process all {len(pending)}."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -231,12 +292,23 @@ def main() -> int:
         help="Actually run reviews. Default is dry-run (count only).",
     )
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Process exactly 1 call end-to-end (most recent client call "
+            "with non-empty transcript, no existing review). Real-API "
+            "smoke test before any bulk --apply."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
         help="Cap the number of calls processed (after already-reviewed filter).",
     )
     args = parser.parse_args()
+    if args.smoke and args.apply:
+        parser.error("--smoke and --apply are mutually exclusive")
 
     db = get_client()
 
@@ -270,6 +342,13 @@ def main() -> int:
     print(f"To review this run:            {len(pending)}")
     print()
 
+    if args.smoke:
+        return _run_smoke(
+            db,
+            pending=pending,
+            started_at_iso=started_at_iso,
+        )
+
     if not args.apply:
         print("First 5 titles that WOULD be reviewed (dry-run):")
         for call in pending[:5]:
@@ -278,7 +357,8 @@ def main() -> int:
         if len(pending) > 5:
             print(f"  ... and {len(pending) - 5} more")
         print()
-        print("Re-run with --apply to actually generate reviews.")
+        print("Re-run with --smoke to verify the full path on 1 call,")
+        print("then --apply to process all candidates.")
         return 0
 
     if not pending:
