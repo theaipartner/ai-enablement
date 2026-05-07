@@ -11,12 +11,9 @@ Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (G
 
 ---
 
-## Wire call_reviewer into Fathom ingestion pipeline
+## ~~Wire call_reviewer into Fathom ingestion pipeline~~ — RESOLVED 2026-05-07
 
-- **What:** today's V1 ships with backfill-only review generation (`scripts/backfill_call_reviews.py`); new calls landing via the Fathom webhook (`api/fathom_events.py` → `ingestion/fathom/pipeline.py`) are NOT auto-reviewed. Fix: add a per-call hook into `pipeline.py` post-`_ensure_summary_document` that calls `agents.call_reviewer.reviewer.review_call` + `upsert_call_review` for any client-category call with a non-null transcript and a non-null `primary_client_id`. Same idempotent persistence pattern as the summary write — re-ingesting the same call won't double-generate.
-- **Why it matters:** the Gregory V2 AI signal reads call_review documents from the last 30 days. Without auto-generation, May 2026's backfill reviews fall out of the lookback window over the next 30 days and the AI signal degrades to "insufficient data" (neutral 50) for every client. The V2 brain's qualitative edge over V1.1 evaporates without this wiring.
-- **Next action:** add the hook in `ingestion/fathom/pipeline.py` after the summary-doc write. Wrap in try/except so a review-generation failure doesn't fail the whole Fathom delivery (same defensive shape as the M6.1 CS Slack post hook). Add a one-call smoke test to `scripts/test_fathom_backfill_locally.py` or equivalent.
-- **Logged:** 2026-05-07.
+Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
 
 ## Gregory brain V2 weight calibration
 

@@ -57,6 +57,14 @@ One AI signal + three deterministic signals. Each emits a `Signal` dict written 
 
 Weights sum to 1.0. Heavy-but-balanced — the AI call signal dominates at half the weight; the deterministic floor handles cadence + NPS while overdue trims to 0.10 since the open-but-not-yet-due count was double-counting and is retired in V2. **Slack engagement** is still absent (the `slack_messages` cloud table is empty per `docs/future-ideas.md`); land it as a fifth signal once cloud Slack ingestion ships and re-balance.
 
+### Auto-review on Fathom webhook ingest (2026-05-07)
+
+The AI signal's input — `call_review` documents — refills automatically as new calls land. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Same try/except fail-soft pattern as the M6.1 CS Slack post hook — review-generation failure never breaks the Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries cost zero LLM tokens.
+
+`review_call` distinguishes pipeline-fired runs via `trigger_type='fathom_pipeline'` (vs `'manual_backfill'` for the one-shot script). Cost rollups can split the two via `agent_runs.trigger_type`.
+
+The first auto-review per call costs ~$0.07 in Sonnet tokens at typical transcript size; 13s wall-clock added to the ~10-15s pipeline overhead leaves comfortable headroom against the 60s Fathom webhook ceiling. If real-world latencies tighten, re-architect to async via a queue.
+
 ### AI call signal failure semantics
 
 The AI call signal is on the critical weekly-cron path; an LLM blip or DB blip on this signal must not take down the entire sweep. `compute_ai_call_signal` NEVER raises — three failure surfaces (documents fetch, Claude call, response parse) each fall through to a neutral-50 Signal + empty concerns. Each failure surface has its own try/except so the resulting note text identifies which surface tripped, which makes operational diagnosis cheap from `agent_runs` telemetry. The agent_runs row for the AI signal is opened only when there are reviews to send (no row written when input is empty), and is closed with `status=error` whenever the LLM or parse path fails.

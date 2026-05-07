@@ -45,7 +45,7 @@ Every Code prompt should include:
 
 ## Operational patterns I'm strict about
 
-- **Never paste secrets to Code.** When a credential is needed, I run the command myself in terminal and paste back only the output Code needs.
+- **Secrets handling:** Code can read secrets directly from `.env.local` when the task requires it (auth headers, API calls during diagnostics, etc.). Drake retains responsibility for reviewing how secrets are used in code paths + rotation if exposure is suspected. Never write secrets into committed code, logs, error output, or persistent files outside `.env.local`.
 - **Discovery before build** for any external integration — read docs, verify with one real authenticated call, inspect actual response shape against assumed adapter shape.
 - **Default: ship highest-priority forward-motion work.** Non-blocking bugs get logged to `docs/followups.md`, deferred until they become a real blocker.
 - **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. The Supabase CLI is broken in our environment; all migration work goes through Supabase Studio + manual ledger registration.
