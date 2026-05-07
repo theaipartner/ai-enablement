@@ -70,6 +70,37 @@ def test_fathom_transcript_chunk_uses_same_document_spec():
     )
 
 
+def test_fathom_call_review_happy_path(mocker):
+    warn = mocker.patch("shared.ingestion.validate.logger.warning")
+    v.validate_document_metadata(
+        _fathom_summary_metadata(),
+        source="fathom",
+        document_type="call_review",
+    )
+    warn.assert_not_called()
+
+
+def test_fathom_call_review_with_optional_keys_passes_silently(mocker):
+    warn = mocker.patch("shared.ingestion.validate.logger.warning")
+    md = _fathom_summary_metadata(
+        prompt_version="v1",
+        model="claude-sonnet-4-6",
+    )
+    v.validate_document_metadata(
+        md, source="fathom", document_type="call_review"
+    )
+    warn.assert_not_called()
+
+
+def test_fathom_call_review_missing_required_raises():
+    md = _fathom_summary_metadata()
+    md.pop("call_id")
+    with pytest.raises(ValueError, match=r"call_id"):
+        v.validate_document_metadata(
+            md, source="fathom", document_type="call_review"
+        )
+
+
 def test_fathom_call_summary_optional_keys_pass_silently(mocker):
     warn = mocker.patch("shared.ingestion.validate.logger.warning")
     md = _fathom_summary_metadata(
