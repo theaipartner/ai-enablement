@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Session M5 — tracker</title>
-<!-- M5 mid-day reframe: post-Scott 1:1, V1 scope reset to "match the Financial Master Sheet so Scott adopts Gregory daily." Pre-pivot engineering chunks deferred to V2. -->
+<title>Session 2026-05-07 — tracker</title>
+<!-- Session 2026-05-07: Call Review V1 ship + Gregory brain V2 (AI-driven health signal) + Fathom pipeline auto-review wiring. Three feature ships in one day; commits 7 + 2 + 9 = 18 across the day; CLAUDE.md and Live System State stay un-updated until Drake verifies deploy of the 9 V2-brain + Fathom-auto-review commits. -->
 
 <style>
   :root {
@@ -21,6 +21,8 @@
     --pill-warn-text: #6a4a14;
     --pill-stretch-bg: #e6ecf3;
     --pill-stretch-text: #1f3a5a;
+    --pill-deploy-bg: #f3d9c4;
+    --pill-deploy-text: #7a3a14;
     --col-planned: #ececea;
     --col-progress: #e7eee4;
     --col-done: #e4e4e2;
@@ -98,19 +100,18 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 14px 14px 18px;
-    min-height: 240px;
   }
 
   .col header {
     display: flex;
-    align-items: baseline;
     justify-content: space-between;
-    padding-bottom: 10px;
-    margin-bottom: 12px;
+    align-items: baseline;
     border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin-bottom: 12px;
   }
 
-  .col header h2 {
+  .col h2 {
     margin: 0;
     font-size: 13px;
     text-transform: uppercase;
@@ -119,22 +120,29 @@
     color: var(--accent);
   }
 
-  .col header .count {
+  .col .count {
     font-family: var(--mono);
-    font-size: 12px;
     color: var(--text-muted);
+    font-size: 13px;
   }
 
-  .col.planned header { border-bottom-color: var(--col-planned); }
-  .col.progress header { border-bottom-color: var(--col-progress); }
-  .col.done header { border-bottom-color: var(--col-done); }
+  .col.planned { background: var(--col-planned); }
+  .col.progress { background: var(--col-progress); }
+  .col.done { background: var(--col-done); }
+
+  .empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 0;
+    padding: 14px 4px;
+  }
 
   .card {
+    background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 10px 12px 11px;
-    margin-bottom: 10px;
-    background: #fdfdfc;
+    border-radius: 4px;
+    padding: 12px 12px 14px;
+    margin-bottom: 12px;
   }
 
   .card:last-child { margin-bottom: 0; }
@@ -144,54 +152,58 @@
     font-size: 12px;
     color: var(--text-muted);
     letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
   }
 
   .card .title {
     font-size: 14.5px;
-    font-weight: 500;
-    margin-top: 2px;
-    color: var(--text);
+    font-weight: 600;
+    margin-bottom: 4px;
   }
 
   .card .subtitle {
     font-size: 13px;
     color: var(--text-dim);
-    margin-top: 4px;
+    margin-bottom: 8px;
   }
 
   .card .pills {
-    margin-top: 8px;
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
   }
 
   .pill {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 10px;
+    font-size: 11.5px;
     background: var(--pill-bg);
     color: var(--pill-text);
-    letter-spacing: 0.01em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-family: var(--mono);
+    letter-spacing: 0.02em;
   }
 
-  .pill.warn { background: var(--pill-warn-bg); color: var(--pill-warn-text); }
-  .pill.stretch { background: var(--pill-stretch-bg); color: var(--pill-stretch-text); }
+  .pill.warn {
+    background: var(--pill-warn-bg);
+    color: var(--pill-warn-text);
+  }
 
-  .empty {
-    font-size: 13px;
-    color: var(--text-muted);
-    font-style: italic;
-    padding: 8px 4px;
+  .pill.stretch {
+    background: var(--pill-stretch-bg);
+    color: var(--pill-stretch-text);
+  }
+
+  .pill.deploy {
+    background: var(--pill-deploy-bg);
+    color: var(--pill-deploy-text);
   }
 
   .blockers {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 16px 18px;
+    padding: 14px 16px 16px;
   }
 
   .blockers h2 {
@@ -231,13 +243,13 @@
 <div class="wrap">
 
   <header class="session-head">
-    <div class="id">Session M5 — Path 2 daily roster + cleanup + Scott onboarding</div>
-    <h1>Path 2 outbound roster + data cleanup + Scott onboarding.</h1>
+    <div class="id">Session 2026-05-07 — Call Review V1 + Gregory brain V2 + Fathom auto-review</div>
+    <h1>Three feature ships: per-call AI review, AI-driven health score, auto-review on ingest.</h1>
     <div class="goal">
-      Today's four priorities follow M5.6's close-out. Path 2 was reshaped by the Zain conversation — it's a daily-pull GET endpoint Make.com hits for the active-client roster (<span style="font-family: var(--mono); font-size: 13px; color: var(--text);">accountability_enabled</span> + <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">nps_enabled</span> + Slack identifiers, joined per-client), not the event-driven UPDATE-listener architecture previously sketched; this replaces the Financial Master Sheet as Zain's daily source. P2 is the manual cleanup pass to land Gregory in a usable state by EOD, P3 is a Drake-led plan around base44 for Nabeel, and P4 is onboarding Scott tomorrow so he starts using Gregory in his daily workflow.
+      Three feature ships in one day, all on top of the M6.x foundation. <strong>Call Review V1</strong> ships the <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_reviewer</span> agent + May 2026 backfill + Calls detail page surface. <strong>Gregory brain V2</strong> adds an AI-driven call-review health signal at 0.50 weight, retires the redundant <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">open_action_items</span> signal + the dormant <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">concerns.py</span> module + the <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">GREGORY_CONCERNS_ENABLED</span> gate, fully resolves the M3.4 never-called-clients-land-green rubric bug. <strong>Fathom pipeline auto-review</strong> wires <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_reviewer</span> into the webhook ingest path so new calls auto-generate reviews and the V2 brain's 30-day lookback refills naturally without backfill scripts.
     </div>
     <div class="meta">
-      <span><strong>Last updated:</strong> Session M5 — end-of-day close-out (P1 Path 2 + P2 cleanup + P3 base44 done; only P4 Scott onboarding remains)</span>
+      <span><strong>Last updated:</strong> Session 2026-05-07 — end-of-day close-out (Call Review V1 deployed; V2 brain + Fathom auto-review code on main, deploy pending Drake's manual step).</span>
       <span><strong>Source of truth:</strong> CLAUDE.md (this is a view, not authoritative)</span>
     </div>
   </header>
@@ -246,15 +258,22 @@
 
     <div class="col planned">
       <header>
-        <h2>Planned</h2>
-        <span class="count">1</span>
+        <h2>Planned (next session)</h2>
+        <span class="count">2</span>
       </header>
 
       <div class="card">
-        <div class="id">P4</div>
-        <div class="title">Onboard Scott on Gregory for daily use starting tomorrow</div>
-        <div class="subtitle">Walkthrough so Scott transitions off the master sheet onto Gregory. Cleanup is fully closed; Tier 2 + Tier 3 ambiguities (18 remaining Tier 2, 15 "Owing Money" standings, 4 Aleks-owned, 67 NPS Standing differences, 4 N/A-as-churned autocreates, 2 positive-transition toggle re-activations) live in <span style="font-family: var(--mono); font-size: 12.5px;">docs/data/m5_cleanup_scott_notes.md</span> for the meeting itself.</div>
-        <div class="pills"><span class="pill">walkthrough</span></div>
+        <div class="id">Cron diagnosis</div>
+        <div class="title">Diagnose why Gregory weekly cron hasn't fired on schedule</div>
+        <div class="subtitle">Endpoint <span style="font-family: var(--mono); font-size: 12.5px;">/api/gregory_brain_cron</span> smoke-tested clean (cold-starts in &lt;300ms, returns valid 401 on bad auth — code path works). 188 cron-triggered <span style="font-family: var(--mono); font-size: 12.5px;">agent_runs</span> rows in last 42d all from one batch on 2026-05-06 (Wednesday, 05:59 UTC) — not the Mondays-09:00 schedule. Likely <span style="font-family: var(--mono); font-size: 12.5px;">CRON_SECRET</span> mismatch in deployed function bundle vs Vercel dashboard, OR scheduler config not picked up. Drake checks Vercel dashboard's Cron Jobs tab for "Last invocation" + "Last status" after V2 deploy lands; diagnosis branches from there.</div>
+        <div class="pills"><span class="pill">diagnostic</span><span class="pill warn">drake-side</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">V2 brain calibration</div>
+        <div class="title">Iterate V2 weights after 2-3 weekly sweeps</div>
+        <div class="subtitle">V2 starting weights are <span style="font-family: var(--mono); font-size: 12.5px;">ai_call_signal 0.50 + call_cadence 0.20 + overdue 0.10 + nps 0.20</span>. Heavy-but-balanced. Revisit when sweep distribution data tells us whether 0.50 on the AI signal is right or compressing everyone toward yellow. Logged in <span style="font-family: var(--mono); font-size: 12.5px;">docs/followups.md</span>.</div>
+        <div class="pills"><span class="pill">followup</span></div>
       </div>
     </div>
 
@@ -264,90 +283,34 @@
         <span class="count">0</span>
       </header>
 
-      <p class="empty">No items in progress. M5.1 manual walk-through superseded by the M5 cleanup script (auto-applied Tier 1; Tier 2 + 3 in scott_notes).</p>
+      <p class="empty">Session wrapping. No items in progress.</p>
     </div>
 
     <div class="col done">
       <header>
         <h2>Done</h2>
-        <span class="count">11</span>
+        <span class="count">3</span>
       </header>
 
       <div class="card">
-        <div class="id">P3</div>
-        <div class="title">base44 plan for Nabeel</div>
-        <div class="subtitle">Drake-led planning task — output is a plan for Nabeel's review. Lives outside the repo (Drake-driven; not a code commit). Marked done at end-of-day close-out.</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill">planning / no code</span></div>
+        <div class="id">Fathom auto-review</div>
+        <div class="title">Wire call_reviewer into Fathom ingestion pipeline</div>
+        <div class="subtitle">Every Fathom webhook delivery for a client-category call with non-null <span style="font-family: var(--mono); font-size: 12.5px;">summary_text</span> now generates a <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> document automatically, synchronously. <span style="font-family: var(--mono); font-size: 12.5px;">_ensure_call_review_document</span> in <span style="font-family: var(--mono); font-size: 12.5px;">ingestion/fathom/pipeline.py</span> fires after summary write succeeds. Three-layer idempotency (category guard / primary-client guard / existence guard) — Fathom retries cost zero LLM tokens. Fail-soft try/except mirroring the M6.1 CS Slack post hook idiom. <span style="font-family: var(--mono); font-size: 12.5px;">review_call</span> gained optional <span style="font-family: var(--mono); font-size: 12.5px;">trigger_type</span> kwarg (default <span style="font-family: var(--mono); font-size: 12.5px;">manual_backfill</span>; pipeline passes <span style="font-family: var(--mono); font-size: 12.5px;">fathom_pipeline</span>). 6 new tests (happy path / no-summary gate / idempotency / failure isolation / category guard / orphan guard) — 405 passing total. <strong>Code on main (commits 10e2eba + f62c061), deploy pending Drake's manual step.</strong></div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill deploy">deploy pending</span></div>
       </div>
 
       <div class="card">
-        <div class="id">Cleanup III</div>
-        <div class="title">M5 cleanup close-out — needs_review walkthrough + misclassification archive</div>
-        <div class="subtitle">2026-05-05 Drake-driven dashboard walkthrough closed every flagged row. <strong>12 merges</strong> via the dashboard merge flow (auto-created duplicates folded into canonical rows; includes the Robert Traffie iMIP duplicate + 3 Nathan Simon dupes). <strong>~13 needs_review detags</strong> (rows confirmed canonical without merge). <strong>3 misclassification archives</strong> via <span style="font-family: var(--mono); font-size: 12.5px;">scripts/archive_misclassified_clients.py</span>: Andrés González (hiring interview → 3 calls reclassified external), Aman (internal teammate → 1 call internal), Branden Bledsoe (Isabel's representative → 1 call repointed to Isabel). 4 linked documents flipped to is_active=false (over-suppress). All RPCs / archive metadata attributed to Gregory Bot UUID. <strong>End-state: 188 non-archived clients, perfect 1:1 with the 188-row master sheet — zero extras, zero unmatched.</strong> Cleanup is fully complete; reconcile dry-run idempotent. 7 followups logged for future classifier tuning + dashboard ergonomics.</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">cleanup fully closed</span></div>
+        <div class="id">Gregory V2</div>
+        <div class="title">AI-driven health signal at 0.50 weight + retire concerns.py + retire open_action_items</div>
+        <div class="subtitle">New <span style="font-family: var(--mono); font-size: 12.5px;">agents/gregory/ai_call_signal.py</span> reads each client's last 30 days of <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> documents and asks Sonnet for a 0-100 contribution + 1-3 sentence reasoning + 0-3 concerns matching the existing dashboard <span style="font-family: var(--mono); font-size: 12.5px;">{text, severity, source_call_ids}</span> shape. Source-call-id hallucination defense filters at parse time. Three failure surfaces (DB blip / LLM blip / parse failure) each fall through to neutral 50 with mode-specific note. V2 weights: <span style="font-family: var(--mono); font-size: 12.5px;">ai 0.50 + cadence 0.20 + overdue 0.10 + nps 0.20</span>. <span style="font-family: var(--mono); font-size: 12.5px;">open_action_items</span> retired (was double-counting). <span style="font-family: var(--mono); font-size: 12.5px;">concerns.py</span> + <span style="font-family: var(--mono); font-size: 12.5px;">GREGORY_CONCERNS_ENABLED</span> gate retired — concerns flow directly from the AI signal. <strong>Never-called-clients-land-green issue (M3.4) fully resolved</strong> — never-called clients now land at score 55 yellow, math pinned by test. Vercel cron <span style="font-family: var(--mono); font-size: 12.5px;">maxDuration</span> bumped 300→600s. Hazel Castillo single-client smoke verified end-to-end pre-push: contribution=38, score=59 yellow, 3 concerns surfaced (1 high + 2 medium), $0.0139 cost, 12.8s wall-clock. Prompt edit neutralizes "dodged" language in narrative output (UI says "Conversation pivots"). 7 commits on main. <strong>Code on main, deploy pending Drake's manual step.</strong></div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill deploy">deploy pending</span></div>
       </div>
 
       <div class="card">
-        <div class="id">Cleanup II</div>
-        <div class="title">M5 cleanup — delta + completeness against canonical CSVs</div>
-        <div class="subtitle">Phase A delta (against <span style="font-family: var(--mono); font-size: 12.5px;">data/master_sheet/master-sheet-05-04/</span>): 24 primary_csm reverts (cascade had reassigned negative-status clients to Scott Chasing during prior apply; CSV had real CSMs). Phase B completeness (<span style="font-family: var(--mono); font-size: 12.5px;">scripts/cleanup_master_sheet_completeness.py</span>): 8 autocreates (4 N/A → churned with metadata.original_master_sheet_status='N/A' for forensics; Mishank, Matthew Gibson, Melvin Dayal, Anthony Huang all created), 180 country fills, 180 start_date fills, 92 phone fills, 1 slack_user_id fill, 29 slack_channels inserts/relinks, 5 primary_csm assignments. Re-running reconcile dry-run after both passes: 0 Tier 1 changes — Gregory exactly matches CSV. End-state: 203 non-archived clients, 15 NULL country/start_date (= non-CSV gap, 203-188).</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">idempotent</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">Cleanup</div>
-        <div class="title">M5 master sheet reconcile — Tier 1 applied (95 writes, 70 unique clients)</div>
-        <div class="subtitle"><span style="font-family: var(--mono); font-size: 12.5px;">scripts/cleanup_master_sheet_reconcile.py</span> — two-phase USA + AUS CSV diff + tiered apply. Phase 2 landed 36 status flips, 32 csm_standing flips (4 cascade-redundant skipped), 22 primary_csm reassignments (16 applied, 6 already matched), 13 trustpilot flips, 8 handover notes. 0 errors, 0 post-apply Bucket B mismatches. All RPCs attributed to Gregory Bot UUID with <span style="font-family: var(--mono); font-size: 12.5px;">cleanup:m5_master_sheet_reconcile</span> note for SQL audit. Tier 2 (44) + Tier 3 (63) ambiguities live in <span style="font-family: var(--mono); font-size: 12.5px;">docs/data/m5_cleanup_scott_notes.md</span> for Scott meeting. Drake's gate adjustments landed: cascade-redundant csm_standing skip, slack_channel coverage filter (126→26), email-mismatch + unmatched-row routing.</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill warn">Tier 2/3 in scott_notes</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">Path 2</div>
-        <div class="title">Accountability + NPS daily roster GET endpoint (Make.com outbound)</div>
-        <div class="subtitle"><span style="font-family: var(--mono); font-size: 12.5px;">api/accountability_roster.py</span> — single-query embedded join on <span style="font-family: var(--mono); font-size: 12.5px;">slack_channels</span>, per-client filter mirrors <span style="font-family: var(--mono); font-size: 12.5px;">getClientById</span>'s selection (most recently created non-archived). Auth via <span style="font-family: var(--mono); font-size: 12.5px;">X-Webhook-Secret</span> header against <span style="font-family: var(--mono); font-size: 12.5px;">MAKE_OUTBOUND_ROSTER_SECRET</span>. Server-side filter excludes NULL <span style="font-family: var(--mono); font-size: 12.5px;">slack_user_id</span>, missing channel, or NULL email — every row in the response is actionable. Live deploy: 100 actionable / 195 non-archived (95 filtered, surfaces a Slack-identity coverage gap rolled into P1). 7-path local harness 22/22 green; 4/4 production probes green (200 with secret / 401 / 401 / 405). Reshaped from prior "event-driven UPDATE listener" framing by yesterday's Make.com walkthrough with Zain.</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deploy verified</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.6</div>
-        <div class="title">Status cascade + Scott Chasing + accountability/NPS toggles + same-day hotfix</div>
-        <div class="subtitle">DB-level cascade so when status moves to a negative value, <span style="font-family: var(--mono); font-size: 12.5px;">csm_standing → at_risk</span> + <span style="font-family: var(--mono); font-size: 12.5px;">accountability_enabled → false</span> + <span style="font-family: var(--mono); font-size: 12.5px;">nps_enabled → false</span> + <span style="font-family: var(--mono); font-size: 12.5px;">primary_csm</span> reassigned to Scott Chasing sentinel. One-directional (off-only); manual overrides not sticky. Migration 0022 (cascade + GUC attribution + Scott Chasing sentinel + <span style="font-family: var(--mono); font-size: 12.5px;">team_members.is_csm</span>). Same-day hotfix for three visual-smoke regressions: stale-closure bug in EditableField (pre-existed since M4) + change_primary_csm RPC unique-key violation (migration 0023, ON CONFLICT pattern).</div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill warn">+ hotfix</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.5</div>
-        <div class="title">Comprehensive filter bar on /clients</div>
-        <div class="subtitle">9-dropdown row replaces the chip + single-CSM-dropdown layout: 5 active multi-selects (Status / Primary CSM / CSM Standing / NPS Standing / Trustpilot), 1 single-value toggle (Needs review), 3 disabled placeholders (Accountability / NPS toggle / Country) signaling next-slice work. New <span style="font-family: var(--mono); font-size: 12.5px;">lib/client-vocab.ts</span> vocab module + reusable <span style="font-family: var(--mono); font-size: 12.5px;">MultiSelectDropdown</span> primitive. URL state: comma-separated multi-values, OR-within / AND-across, status absent-vs-empty sentinel for default-trio pre-check.</div>
-        <div class="pills"><span class="pill">delivered</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.4</div>
-        <div class="title">Airtable NPS Path 1 — schema + receiver + 79-row backfill</div>
-        <div class="subtitle">Migration 0021 added <span style="font-family: var(--mono); font-size: 12.5px;">clients.nps_standing</span> + Gregory Bot sentinel team_member + <span style="font-family: var(--mono); font-size: 12.5px;">update_client_from_nps_segment</span> RPC. Vercel webhook receiver (<span style="font-family: var(--mono); font-size: 12.5px;">api/airtable_nps_webhook.py</span>) auths via shared secret, normalizes Airtable raw segment strings to lowercase, calls RPC. Override-sticky csm_standing semantics enforced inside RPC (auto-derive only when current is null OR most recent history row is Gregory Bot). Make.com automation enabled. Historical 79-row Survery table backfilled — 59 successes, 2 email-mismatch cleanup followups.</div>
-        <div class="pills"><span class="pill">delivered</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.3b</div>
-        <div class="title">Trustpilot vocab rename</div>
-        <div class="subtitle">Migration 0020 — <span style="font-family: var(--mono); font-size: 12.5px;">clients.trustpilot_status</span> 1:1 rename to match the master sheet vocab Scott uses daily (<span style="font-family: var(--mono); font-size: 12.5px;">given→yes / declined→no / not_asked→ask / pending→asked</span>). Pure structural rename, no logic changes. Imperative semantics on <span style="font-family: var(--mono); font-size: 12.5px;">ask</span> (call-to-action, not descriptive).</div>
-        <div class="pills"><span class="pill">delivered</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.3</div>
-        <div class="title">Status vocabulary expansion (`leave` + first DB-level CHECK)</div>
-        <div class="subtitle">Migration 0019 added <span style="font-family: var(--mono); font-size: 12.5px;">leave</span> to the status vocabulary (active / paused / ghost / leave / churned) + first DB-level CHECK constraint on <span style="font-family: var(--mono); font-size: 12.5px;">clients.status</span>. Replaced <span style="font-family: var(--mono); font-size: 12.5px;">update_client_status_with_history</span> RPC to mirror the new allowlist. <span style="font-family: var(--mono); font-size: 12.5px;">leave</span> = CSM decision to let a client go ghost without chasing (distinct from <span style="font-family: var(--mono); font-size: 12.5px;">churned</span> = post-program).</div>
-        <div class="pills"><span class="pill">delivered</span></div>
-      </div>
-
-      <div class="card">
-        <div class="id">M5.2</div>
-        <div class="title">11am EST CSM sync — dashboard onboarding + call titling rollout</div>
-        <div class="subtitle">Drake-led. Walked the team through the V1 client page (7 sections, inline-edit, NPS-entry form), the Calls pages, and the merge feature. Rolled out the three call-title prefixes (<span style="font-family: var(--mono); font-size: 12.5px;">[Client]</span>, <span style="font-family: var(--mono); font-size: 12.5px;">[Discovery]</span>, <span style="font-family: var(--mono); font-size: 12.5px;">[Client x Prospect]</span>) per <span style="font-family: var(--mono); font-size: 12.5px;">docs/conventions/call_titling.md</span>. Drake's follow-on 1:1 with Scott reset V1 scope.</div>
-        <div class="pills"><span class="pill">delivered</span></div>
+        <div class="id">Call Review V1</div>
+        <div class="title">call_reviewer agent + May 2026 backfill + Calls detail page surface</div>
+        <div class="subtitle">New <span style="font-family: var(--mono); font-size: 12.5px;">agents/call_reviewer/</span> module — Sonnet-only, system prompt + <span style="font-family: var(--mono); font-size: 12.5px;">review_call</span> + <span style="font-family: var(--mono); font-size: 12.5px;">upsert_call_review</span>. Generates a four-section structured review per call (pain_points / wins / dodged_questions / sentiment_arc) stored as <span style="font-family: var(--mono); font-size: 12.5px;">documents</span> rows with <span style="font-family: var(--mono); font-size: 12.5px;">source='fathom'</span>, <span style="font-family: var(--mono); font-size: 12.5px;">document_type='call_review'</span>, <span style="font-family: var(--mono); font-size: 12.5px;">is_active=False</span> (retrieval-side safety net). May 2026 backfill complete: <strong>31/31 reviewed, $1.5349 total Sonnet cost</strong>. One-shot script at <span style="font-family: var(--mono); font-size: 12.5px;">scripts/backfill_call_reviews.py</span> with <span style="font-family: var(--mono); font-size: 12.5px;">--smoke</span> / <span style="font-family: var(--mono); font-size: 12.5px;">--apply</span> / <span style="font-family: var(--mono); font-size: 12.5px;">--limit</span> modes; smoke mode is the working norm for all future backfills. Calls detail page surfaces the review as Section 4.5 between Summary and Action items — sentiment_arc paragraph + three list subsections + "Generated &lt;timestamp&gt;" header. "Conversation pivots" UI section name (renamed from "Dodged questions"). Real-API smoke gate caught + closed a TS-vs-Python SDK shape mismatch bug pre-bulk-run (see <span style="font-family: var(--mono); font-size: 12.5px;">docs/claude-handoff.md</span> for the working-norm). <strong>Deployed and verified on production — Drake confirmed via dashboard review of representative samples.</strong></div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed + verified</span></div>
       </div>
 
     </div>
@@ -355,21 +318,34 @@
   </section>
 
   <section class="blockers">
-    <h2>Blockers / Needs from Nabeel + Zain</h2>
+    <h2>Followups + open items</h2>
     <ul>
       <li>
-        <strong>Read on M1.4.3:</strong> does the user-token reply path (Ella's response renders with no APP tag in <span class="ref">#ella-test-drakeonly</span>) address the "looks unprofessional" feedback? Inbound @-mention still targets the bot — Slack architectural constraint, not a code choice. <em>(Open since M1.4.3 ship; still pending.)</em>
-        <div><span class="ref">Unblocks: M1.4.5 pilot rollout to Fernando G / Musa / Jenny / Dhamen / Trevor / Art channels.</span></div>
+        <strong>Gregory cron not firing on schedule.</strong> 0 scheduled-Monday cron invocations in 42d (only one ad-hoc batch on 2026-05-06 Wed). Endpoint code is healthy; likely <span class="ref">CRON_SECRET</span> mismatch between deployed function bundle + Vercel dashboard, OR scheduler config not picked up. Drake checks Vercel Cron Jobs tab post-deploy.
+        <div><span class="ref">Diagnostic gates: "Last invocation: never" → scheduler config; "recent + 401" → secret mismatch; "recent + 200 + no agent_runs" → silent brain bug.</span></div>
       </li>
       <li>
-        <strong>Decision on enabling <span class="ref">GREGORY_CONCERNS_ENABLED</span>:</strong> Gregory brain V1.1's Claude-driven concerns generation produces qualitative watchpoints from recent call summaries. Architecture is fully built and live; flipping the Vercel env var to <span class="ref">true</span> activates it on next Monday's cron run. V2 territory per the adoption-first scope reset — sits on top of adopted V1, not underneath. Revisit once Scott is on Gregory daily and call-summary coverage densifies.
-        <div><span class="ref">Deferred to V2 alongside the rest of the Gregory-concerns surface area.</span></div>
+        <strong>V2 brain weight calibration.</strong> Iterate after 2-3 weekly sweeps. Tier distributions tell us whether 0.50 on the AI signal is right.
+        <div><span class="ref">docs/followups.md → "Gregory brain V2 weight calibration"</span></div>
+      </li>
+      <li>
+        <strong>Brain run wall-clock duration trending toward Vercel cron ceiling.</strong> Watchpoint at <span class="ref">duration_ms &gt; 480000</span> (80% of 600s ceiling). Re-architect (parallelize per-client loop OR move AI signal to separate weekly job) if breached.
+        <div><span class="ref">docs/followups.md → "Brain run wall-clock duration trending toward Vercel cron ceiling"</span></div>
+      </li>
+      <li>
+        <strong>Call Review V1 has no eval coverage.</strong> Hand-graded golden set (10-20 reviews) when output quality becomes an iteration bottleneck.
+        <div><span class="ref">docs/followups.md → "Call Review V1 has no eval coverage"</span></div>
+      </li>
+      <li>
+        <strong>Promote <span class="ref">call_review</span> exclusion into <span class="ref">match_document_chunks</span> SQL function.</strong> Currently safe via <span class="ref">is_active=false</span>; gate disappears if anything ever sets <span class="ref">is_active=true</span>. Resolve when V2 wires generation into the ingestion pipeline (note: Fathom-pipeline auto-review just shipped — this followup is now imminently relevant).
+        <div><span class="ref">docs/followups.md → "Promote call_review exclusion into match_document_chunks SQL function"</span></div>
       </li>
     </ul>
   </section>
 
   <div class="footer">
     Tracker is a view, not a source of truth. If this drifts from CLAUDE.md, CLAUDE.md wins.
+    <strong>CLAUDE.md § Live System State NOT updated this session</strong> — V2 brain + Fathom auto-review code on main but deploy pending Drake's manual step. Live System State will land alongside post-deploy verification.
     Updated by hand as work moves through the session.
   </div>
 
