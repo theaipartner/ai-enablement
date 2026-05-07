@@ -77,6 +77,16 @@ _DOCUMENT_SPECS: dict[tuple[str, str], _Spec] = {
             "classification_confidence", "classification_method",
         }),
     ),
+    # call_reviewer agent output. Stored as a documents row for
+    # dashboard surfacing only — is_active=False at write time so the
+    # row never lands in match_document_chunks results. See
+    # docs/ingestion/metadata-conventions.md §2 "Fathom call reviews"
+    # and the followup in docs/followups.md about promoting the
+    # exclusion into the SQL function when V2 generates these inline.
+    ("fathom", "call_review"): _Spec(
+        required=frozenset({"client_id", "call_id", "call_category", "started_at"}),
+        optional=frozenset({"prompt_version", "model"}),
+    ),
 }
 
 # Source-level fallbacks: applied when no (source, document_type) entry

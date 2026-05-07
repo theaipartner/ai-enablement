@@ -54,6 +54,25 @@ Behavior:
 
 Same `documents.metadata` fields as call summaries above. Additional per-chunk metadata lands in `document_chunks.metadata` (see §4).
 
+### Fathom call reviews
+
+`documents` rows with `source = 'fathom'`, `document_type = 'call_review'`. Output of the `call_reviewer` agent — stored as a documents row for dashboard surfacing on the Calls detail page. **Always written with `is_active = false`** so the row never lands in `match_document_chunks` results; this is a display artifact, not retrieval surface. No chunks; no embedding.
+
+`documents.content` holds the JSON-serialized review (pretty-printed with `indent=2`) — keys: `pain_points`, `wins`, `dodged_questions`, `sentiment_arc`.
+
+`documents.metadata` fields:
+
+| Field | Type | Req | Notes |
+|-------|------|-----|-------|
+| `client_id` | `uuid` (string) | ✓ | Primary client the call is about. Backfill filters on `primary_client_id IS NOT NULL` so this is always populated |
+| `call_id` | `uuid` (string) | ✓ | Links back to `calls.id`; used by the dashboard fetch to join review → call |
+| `call_category` | `text` | ✓ | Denormalized from `calls.call_category` (today: always `'client'` since the backfill filters on it) |
+| `started_at` | `timestamptz` (ISO string) | ✓ | When the call happened. Distinct from `documents.created_at` (when the review was generated) |
+| `prompt_version` | `text` | | Version tag from `agents.call_reviewer.prompt.PROMPT_VERSION`. Lets us attribute reviews to the prompt version that produced them when iterating |
+| `model` | `text` | | The Claude model id (e.g. `claude-sonnet-4-6`) — same purpose as prompt_version, just for model upgrades |
+
+Idempotency: keyed on `(source='fathom', external_id=<calls.external_id>, document_type='call_review')` via the migration-0011 widened unique. Re-running for the same call updates content + metadata in place.
+
 ### Drive documents
 
 `documents` rows with `source = 'drive'`.
