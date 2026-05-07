@@ -94,7 +94,7 @@ Thresholds and band cutoffs are V2 starting points. The math is fully transparen
 
 ### Cron schedule
 
-Weekly, Mondays 09:00 UTC, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. **`maxDuration=600`** (V2 bump from V1.1's 300) to absorb the AI signal's per-client Claude calls; ~25 clients-with-reviews × ~5sec each = ~2 min of LLM time on top of the existing deterministic-only sweep, with 2x headroom.
+Weekly, Mondays 09:00 UTC, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. **`maxDuration=300`** (Vercel Pro plan ceiling — a 600s bump was attempted on V2 ship and rejected at config validation; ship V2 against the existing ceiling and watch real-world sweep duration before deciding on a plan upgrade vs scope split). At ship time the AI signal adds ~25 clients-with-reviews × ~5sec each = ~2 min of LLM time on top of the existing deterministic-only sweep, leaving comfortable headroom against 300s. The cron-ceiling watchpoint in `docs/followups.md` triggers at 80% of 300s (240s).
 
 Reasoning for weekly (not daily): signal change rate is slow (call cadence moves day-to-day for ~5 clients; action-item churn is gradual; call_review documents land per-call so day-to-day variance is bounded by call frequency), and at scale the LLM cost compounds. Re-eval cadence once dashboard usage tells us something. Manual sweeps via `scripts/run_gregory_brain.py --all` between cron runs are fine.
 

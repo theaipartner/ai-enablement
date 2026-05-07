@@ -24,10 +24,10 @@ Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires aut
 
 ## Brain run wall-clock duration trending toward Vercel cron ceiling
 
-- **What:** V2 `gregory_brain_cron.py` now runs at `maxDuration=600` (10 min) to accommodate the AI call signal's per-client Claude calls. SweepResult carries `duration_ms` + `avg_per_client_ms` populated at sweep completion; an INFO log line surfaces both in cron logs without an `agent_runs` query.
-- **Why it matters:** the AI signal adds ~5sec per client-with-reviews on top of the existing per-client deterministic compute. With ~25 clients-with-reviews today and ~188 active clients total, the sweep should comfortably fit under 600s. As reviews-per-client grows (call_review backfill expanding beyond May 2026 OR V2 wires call_review generation into the ingestion pipeline), the math tightens.
-- **Next action:** re-architect (parallelize the per-client loop OR move the AI signal to a separate weekly job that updates `client_health_scores.factors.signals` post-hoc) if `duration_ms` exceeds **480000ms (8 min, 80% of the 600s ceiling)** in any cron sweep. Watch the per-client average too — if it doubles run-over-run, that's an early warning before total duration crosses.
-- **Logged:** 2026-05-07.
+- **What:** V2 `gregory_brain_cron.py` runs at `maxDuration=300` (Vercel Pro plan ceiling). A 600s bump was attempted on V2 ship and rejected at config validation; shipping V2 against the existing 300s ceiling per Drake's call to "watch real-world data before upgrading the plan." `SweepResult` carries `duration_ms` + `avg_per_client_ms` populated at sweep completion; an INFO log line surfaces both in cron logs without an `agent_runs` query.
+- **Why it matters:** the AI signal adds ~5sec per client-with-reviews on top of the existing per-client deterministic compute. At V2 ship time: ~25 clients-with-reviews + ~188 active clients ≈ 2 min of LLM time + deterministic compute, comfortably under 300s. As reviews-per-client grows (Fathom-pipeline auto-review now wired so reviews accumulate organically), the math tightens. The Pro-plan ceiling is the floor; an Enterprise upgrade unlocks 900s+.
+- **Next action:** triggers on duration_ms exceeding **240000ms (4 min, 80% of the 300s ceiling)** in any cron sweep. At that point the decision matrix is: (a) Vercel plan upgrade to lift the ceiling, OR (b) parallelize the per-client loop, OR (c) move the AI signal to a separate weekly job that updates `client_health_scores.factors.signals` post-hoc. The first scheduled cron firing post-V2-deploy is the data point that motivates the choice. Watch the per-client average too — if it doubles run-over-run that's an early warning before total duration crosses.
+- **Logged:** 2026-05-07. Re-baselined to 300s ceiling after Pro plan rejected the 600s bump (same day).
 
 ## Call Review V1 has no eval coverage
 
