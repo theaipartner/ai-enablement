@@ -37,16 +37,17 @@ class Signal(TypedDict):
     note: str
 
 
-# Module-level weight constants. Total weights should sum to 1.0 in
-# scoring.py; placed here so the per-signal contribution is locally
-# obvious. WEIGHT_AI_CALL_SIGNAL added in V2 — the rebalance + the
-# retirement of open_action_items lands in the next commit; weights
-# below temporarily over-sum (1.50) so this constant can land in its
-# own commit with no runtime path yet wired through.
+# Module-level weight constants. Total weights sum to 1.0 (V2 rubric).
+# Heavy-but-balanced: AI call signal dominates at 0.50, deterministic
+# signals fill the remaining 0.50 weighted toward cadence + NPS over
+# action item recency.
+#
+# V1.1 had open_action_items as its own 0.20 signal. Retired in V2 —
+# overdue items are still a signal at 0.10; the "open but not yet due"
+# count was double-counting the same data and not adding signal.
 WEIGHT_AI_CALL_SIGNAL = 0.50
-WEIGHT_CALL_CADENCE = 0.40
-WEIGHT_OPEN_ACTION_ITEMS = 0.20
-WEIGHT_OVERDUE_ACTION_ITEMS = 0.20
+WEIGHT_CALL_CADENCE = 0.20
+WEIGHT_OVERDUE_ACTION_ITEMS = 0.10
 WEIGHT_LATEST_NPS = 0.20
 
 # Neutral contribution for missing data. Combined with the "default to
@@ -114,37 +115,6 @@ def compute_call_cadence(db: Any, client_id: str) -> Signal:
         value=label,
         contribution=contribution,
         note=f"Most recent call {label}.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Open action items count
-# ---------------------------------------------------------------------------
-
-
-def compute_open_action_items(db: Any, client_id: str) -> Signal:
-    """Count of call_action_items where owner_client_id=client AND
-    status='open'. Lower count = healthier. Subtracts 5 per item from
-    a 100 baseline; floor at 0.
-
-    No items → contribution 100 (clean docket); not neutral. An empty
-    docket is genuinely good news, not missing data.
-    """
-    resp = (
-        db.table("call_action_items")
-        .select("id", count="exact", head=True)
-        .eq("owner_client_id", client_id)
-        .eq("status", "open")
-        .execute()
-    )
-    count = resp.count or 0
-    contribution = max(0, 100 - 5 * count)
-    return Signal(
-        name="open_action_items",
-        weight=WEIGHT_OPEN_ACTION_ITEMS,
-        value=str(count),
-        contribution=contribution,
-        note=f"{count} open action item{'s' if count != 1 else ''} on this client.",
     )
 
 
@@ -226,16 +196,20 @@ def compute_latest_nps(db: Any, client_id: str) -> Signal:
 
 
 def compute_all_signals(db: Any, client_id: str) -> list[Signal]:
-    """Compute every V1.1 signal for one client. Order is stable so
-    the factors.signals[] array is deterministic across runs.
+    """Compute the V2 deterministic signals for one client.
 
-    Slack engagement is intentionally omitted in V1.1: slack_messages
-    cloud table is empty (local-only ingestion per docs/future-ideas).
-    Add it as a fifth signal once cloud Slack ingestion lands.
+    The AI call signal (the dominant V2 contributor) is NOT computed
+    here — it's its own module (`ai_call_signal.py`) because it makes
+    a Claude call and returns concerns alongside the Signal. agent.py
+    composes the AI signal + this list into the final factors.signals[]
+    array (with AI signal sorted first per the V2 dashboard order).
+
+    Slack engagement is still omitted — slack_messages cloud table is
+    empty (local-only ingestion per docs/future-ideas.md). Add it as
+    a fourth deterministic signal once cloud Slack ingestion lands.
     """
     return [
         compute_call_cadence(db, client_id),
-        compute_open_action_items(db, client_id),
         compute_overdue_action_items(db, client_id),
         compute_latest_nps(db, client_id),
     ]

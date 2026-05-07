@@ -100,36 +100,6 @@ def test_call_cadence_no_calls_neutral():
 
 
 # ---------------------------------------------------------------------------
-# open_action_items
-# ---------------------------------------------------------------------------
-
-
-def test_open_action_items_zero_is_clean_docket_100():
-    db = _FakeDB(resp_count=0)
-
-    result = signals.compute_open_action_items(db, "client-x")
-
-    assert result["contribution"] == 100
-    assert result["value"] == "0"
-
-
-def test_open_action_items_subtracts_5_per_item():
-    db = _FakeDB(resp_count=4)
-
-    result = signals.compute_open_action_items(db, "client-x")
-
-    assert result["contribution"] == 80  # 100 - 5*4
-
-
-def test_open_action_items_floors_at_0():
-    db = _FakeDB(resp_count=50)
-
-    result = signals.compute_open_action_items(db, "client-x")
-
-    assert result["contribution"] == 0
-
-
-# ---------------------------------------------------------------------------
 # overdue_action_items
 # ---------------------------------------------------------------------------
 
@@ -189,15 +159,16 @@ def test_latest_nps_no_data_neutral():
 # ---------------------------------------------------------------------------
 
 
-def test_compute_all_signals_returns_four_signals_in_order():
-    """Order matters: factors.signals[] indexing is stable across runs."""
+def test_compute_all_signals_returns_three_deterministic_signals_in_order():
+    """V2 deterministic signals only — the AI call signal is composed
+    into the final factors.signals[] array by agent.py (AI signal
+    sorts first per the dashboard ordering)."""
     db = _FakeDB(resp_data=[], resp_count=0)
 
     results = signals.compute_all_signals(db, "client-x")
 
     assert [s["name"] for s in results] == [
         "call_cadence",
-        "open_action_items",
         "overdue_action_items",
         "latest_nps",
     ]
