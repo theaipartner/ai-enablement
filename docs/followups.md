@@ -11,6 +11,27 @@ Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (G
 
 ---
 
+## Wire call_reviewer into Fathom ingestion pipeline
+
+- **What:** today's V1 ships with backfill-only review generation (`scripts/backfill_call_reviews.py`); new calls landing via the Fathom webhook (`api/fathom_events.py` → `ingestion/fathom/pipeline.py`) are NOT auto-reviewed. Fix: add a per-call hook into `pipeline.py` post-`_ensure_summary_document` that calls `agents.call_reviewer.reviewer.review_call` + `upsert_call_review` for any client-category call with a non-null transcript and a non-null `primary_client_id`. Same idempotent persistence pattern as the summary write — re-ingesting the same call won't double-generate.
+- **Why it matters:** the Gregory V2 AI signal reads call_review documents from the last 30 days. Without auto-generation, May 2026's backfill reviews fall out of the lookback window over the next 30 days and the AI signal degrades to "insufficient data" (neutral 50) for every client. The V2 brain's qualitative edge over V1.1 evaporates without this wiring.
+- **Next action:** add the hook in `ingestion/fathom/pipeline.py` after the summary-doc write. Wrap in try/except so a review-generation failure doesn't fail the whole Fathom delivery (same defensive shape as the M6.1 CS Slack post hook). Add a one-call smoke test to `scripts/test_fathom_backfill_locally.py` or equivalent.
+- **Logged:** 2026-05-07.
+
+## Gregory brain V2 weight calibration
+
+- **What:** V2 starting weights are `ai_call_signal 0.50 + call_cadence 0.20 + overdue_action_items 0.10 + latest_nps 0.20`. Heavy-but-balanced — AI signal at half the weight, deterministic floor handles the rest. Drake's call at V2 ship is "iterate after the rubric meets reality."
+- **Why it matters:** the V1.1 weights produced a 93 green / 40 yellow / 0 red distribution that overstated health (zero red was a tell). V2's first sweep distribution will tell us whether 0.50 on the AI signal is too much (one bad review tanks an otherwise-healthy client) or too little (one bad review barely moves the needle on a structurally green client).
+- **Next action:** revisit after 2-3 weekly sweeps. Look at: (a) does the AI signal correlate with intervention decisions CSMs actually make (Slack-able to Lou for spot check)? (b) does the new tier distribution feel realistic — should we expect ~70/20/10 green/yellow/red, or is the AI signal compressing everyone toward yellow? (c) does any signal feel under-weighted (e.g. if cadence at 0.20 isn't penalizing 60+ day silences enough)?
+- **Logged:** 2026-05-07.
+
+## Brain run wall-clock duration trending toward Vercel cron ceiling
+
+- **What:** V2 `gregory_brain_cron.py` now runs at `maxDuration=600` (10 min) to accommodate the AI call signal's per-client Claude calls. SweepResult carries `duration_ms` + `avg_per_client_ms` populated at sweep completion; an INFO log line surfaces both in cron logs without an `agent_runs` query.
+- **Why it matters:** the AI signal adds ~5sec per client-with-reviews on top of the existing per-client deterministic compute. With ~25 clients-with-reviews today and ~188 active clients total, the sweep should comfortably fit under 600s. As reviews-per-client grows (call_review backfill expanding beyond May 2026 OR V2 wires call_review generation into the ingestion pipeline), the math tightens.
+- **Next action:** re-architect (parallelize the per-client loop OR move the AI signal to a separate weekly job that updates `client_health_scores.factors.signals` post-hoc) if `duration_ms` exceeds **480000ms (8 min, 80% of the 600s ceiling)** in any cron sweep. Watch the per-client average too — if it doubles run-over-run, that's an early warning before total duration crosses.
+- **Logged:** 2026-05-07.
+
 ## Call Review V1 has no eval coverage
 
 - **What:** `agents/call_reviewer/` has unit tests covering JSON parse + persistence shapes, but no eval coverage of output quality (does the model surface real pain_points / wins / dodged_questions, or hallucinate / pad / miss obvious signals?). May 2026 backfill produced 31 reviews (smoke + apply); spot-checking is the only quality gate today.

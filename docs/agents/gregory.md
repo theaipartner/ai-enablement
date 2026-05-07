@@ -38,22 +38,30 @@ Top nav only. Two items: **Clients** | **Calls**. User avatar + logout on the ri
 - `/calls/[id]` — detail view
 - `/settings` — placeholder for V1 (auth profile)
 
-## Brain V1.1
+## Brain V2
 
-The "brain" is the agent that computes per-client health scores and writes them to `client_health_scores`. Lives at `agents/gregory/`. Mirrors Ella's layout: `agent.py` (entry), `signals.py` (deterministic signal computations), `scoring.py` (rubric → score + tier), `concerns.py` (Claude-driven qualitative watchpoints), `prompts.py` (concerns prompt). Each invocation opens an `agent_runs` row, runs, writes one `client_health_scores` row per client, closes the run with telemetry.
+The "brain" is the agent that computes per-client health scores and writes them to `client_health_scores`. Lives at `agents/gregory/`. Modules: `agent.py` (entry), `signals.py` (deterministic signal computations), `ai_call_signal.py` (Sonnet-driven call review signal — the dominant V2 contributor), `scoring.py` (rubric → score + tier), `prompts.py` (`AI_CALL_SIGNAL_SYSTEM_PROMPT`). Each invocation opens an `agent_runs` row, runs, writes one `client_health_scores` row per client, closes the run with telemetry. The AI call signal opens its own child `agent_runs` row inside the per-client compute so token + cost accounting is attributable per-signal.
 
-### Signals (V1.1)
+V1.1 had a separate `concerns.py` module gated behind `GREGORY_CONCERNS_ENABLED` that ran Claude over recent call summaries to extract qualitative watchpoints. **Retired in V2** — `call_review` documents already contain the LLM-distilled view of pain_points + wins + dodged_questions + sentiment_arc that concerns.py was extracting from raw summaries. The AI call signal subsumes that work and surfaces concerns alongside the contribution score, eliminating a second Claude call per client and a second source-of-truth for the concerns array. The `GREGORY_CONCERNS_ENABLED` env var is no longer consulted; if set in Vercel it's a no-op.
 
-Four deterministic signals, each emitting a `Signal` dict written verbatim into `factors.signals[]`:
+### Signals (V2)
+
+One AI signal + three deterministic signals. Each emits a `Signal` dict written verbatim into `factors.signals[]`. Order in the array is stable: AI signal first (highest weight, dashboard headline), then the three deterministic signals.
 
 | Signal | Source | Bands / scale | Weight | Missing-data behavior |
 |---|---|---|---|---|
-| `call_cadence` | days since most recent `calls.started_at` where `primary_client_id = client` | <14d → 100; 14-30d → 50; >30d → 0 | 0.40 | "no calls" → neutral 50, note explains |
-| `open_action_items` | count of `call_action_items` where `owner_client_id=client AND status='open'` | 100 baseline, −5 per item, floor 0 | 0.20 | 0 items → 100 (clean docket; not "missing") |
-| `overdue_action_items` | as above, plus `due_date < today` | 100 baseline, −15 per item, floor 0 | 0.20 | 0 items → 100 |
-| `latest_nps` | most recent `nps_submissions.score` for the client | raw 0-10 scaled to 0-100 | 0.20 | "no NPS" → neutral 50 (V1.1 reality: nps_submissions is empty) |
+| `ai_call_signal` | last 30 days of `call_review` documents for the client, sent to Sonnet for a 0-100 contribution + reasoning + 0-3 concerns | LLM-judged 0-100 | **0.50** | "no recent reviews" → neutral 50, note explains; DB blip / LLM blip / parse failure each fall through to neutral 50 with mode-specific note text |
+| `call_cadence` | days since most recent `calls.started_at` where `primary_client_id = client` | <14d → 100; 14-30d → 50; >30d → 0 | 0.20 | "no calls" → neutral 50, note explains |
+| `overdue_action_items` | count of `call_action_items` where `owner_client_id=client AND status='open' AND due_date < today` | 100 baseline, −15 per item, floor 0 | 0.10 | 0 items → 100 |
+| `latest_nps` | most recent `nps_submissions.score` for the client | raw 0-10 scaled to 0-100 | 0.20 | "no NPS" → neutral 50 |
 
-**Slack engagement** is intentionally absent in V1.1 — `slack_messages` cloud table is empty (local-only ingestion per `docs/future-ideas.md`). Add it as a fifth signal once cloud Slack ingestion lands; re-balance weights at that time.
+Weights sum to 1.0. Heavy-but-balanced — the AI call signal dominates at half the weight; the deterministic floor handles cadence + NPS while overdue trims to 0.10 since the open-but-not-yet-due count was double-counting and is retired in V2. **Slack engagement** is still absent (the `slack_messages` cloud table is empty per `docs/future-ideas.md`); land it as a fifth signal once cloud Slack ingestion ships and re-balance.
+
+### AI call signal failure semantics
+
+The AI call signal is on the critical weekly-cron path; an LLM blip or DB blip on this signal must not take down the entire sweep. `compute_ai_call_signal` NEVER raises — three failure surfaces (documents fetch, Claude call, response parse) each fall through to a neutral-50 Signal + empty concerns. Each failure surface has its own try/except so the resulting note text identifies which surface tripped, which makes operational diagnosis cheap from `agent_runs` telemetry. The agent_runs row for the AI signal is opened only when there are reviews to send (no row written when input is empty), and is closed with `status=error` whenever the LLM or parse path fails.
+
+Concerns shape match. The AI signal returns concerns matching the existing dashboard renderer's contract — `{text, severity (low|medium|high), source_call_ids[]}`. `source_call_ids` are defensively filtered against the input-call-ids set at parse time, so a hallucinated UUID can't land in `factors.concerns[]`.
 
 ### Scoring rubric
 
@@ -68,21 +76,19 @@ tier:  >=70 → green
 
 **Insufficient-data default.** When every signal returned the neutral contribution (i.e. nothing is known about the client), the brain ships `score=50, tier=yellow, factors.overall_reasoning='Insufficient signal data; defaulting to yellow.'`. Never green by accident on no data.
 
-Thresholds and band cutoffs are V1.1 starting points. The math is fully transparent in `factors.signals[]` — a reviewer reading the dashboard's "Why this score" expand can recompute the score by hand. Iterate as miscalibration surfaces.
+**Never-called-clients-land-yellow (V2 fix).** V1.1 produced score=70 (green) for never-called clients because `overdue_action_items` returned 100 (clean docket) at 0.20 weight while everything else neutralled at 50. V2's rebalance + AI signal fully resolve this: a never-called client now scores `0.50×50 + 0.20×50 + 0.10×100 + 0.20×50 = 55 → yellow`. The AI signal's 0.50 weight on a neutral 50 default structurally pulls no-data clients out of the green band. Pinned by `test_never_called_client_lands_yellow_not_green` in `tests/agents/gregory/test_scoring.py`.
 
-### Concerns generation (gated)
+Thresholds and band cutoffs are V2 starting points. The math is fully transparent in `factors.signals[]` — a reviewer reading the dashboard's "Why this score" expand can recompute the score by hand. Iterate as miscalibration surfaces.
 
-Concerns are Claude-driven qualitative watchpoints — short text + severity (low/medium/high) + `source_call_ids[]`. Lands in `factors.concerns[]`, which the dashboard's `ConcernsIndicator` reads and renders.
+### Sweep telemetry
 
-The Claude call is gated behind the `GREGORY_CONCERNS_ENABLED` env var (deploy-flippable, no commit needed). **Default OFF for V1.1.0.** Reasoning: the input to the concerns prompt is recent `call_summary` documents — and at the time of M3.4 ship, there are ~22 such documents across 132 active clients. Roughly 85% of clients would have empty input; paying for the LLM call to hand Claude nothing is wasteful. The flag flips to `true` in Vercel env vars once summary coverage densifies (Fathom webhook + cron continue ingesting; this should resolve organically over weeks).
-
-When the flag is on but a particular client has no summaries AND no open action items, the brain still skips the Claude call — same "don't burn tokens for empty input" stance, applied per-client.
-
-Sonnet by default (`shared.claude_client.DEFAULT_MODEL`). Swap to Opus by passing `model='claude-opus-4-7'` if review shows shallow reasoning.
+`SweepResult` carries `duration_ms` + `avg_per_client_ms` populated at sweep completion. The sweep also emits an INFO log line with these values so cron logs surface the trend without requiring `agent_runs` queries. Feeds the cron-ceiling watchpoint logged in `docs/followups.md` — re-architect (parallelize the per-client loop OR move the AI signal to a separate weekly job) if duration exceeds 8 minutes (80% of the 600s ceiling).
 
 ### Cron schedule
 
-Weekly, Mondays 09:00 UTC, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. Reasoning for weekly (not daily): signal change rate is slow (call cadence moves day-to-day for ~5 clients; action-item churn is gradual), and at scale the LLM cost compounds. Re-eval cadence once dashboard usage tells us something. Manual sweeps via `scripts/run_gregory_brain.py --all` between cron runs are fine.
+Weekly, Mondays 09:00 UTC, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. **`maxDuration=600`** (V2 bump from V1.1's 300) to absorb the AI signal's per-client Claude calls; ~25 clients-with-reviews × ~5sec each = ~2 min of LLM time on top of the existing deterministic-only sweep, with 2x headroom.
+
+Reasoning for weekly (not daily): signal change rate is slow (call cadence moves day-to-day for ~5 clients; action-item churn is gradual; call_review documents land per-call so day-to-day variance is bounded by call frequency), and at scale the LLM cost compounds. Re-eval cadence once dashboard usage tells us something. Manual sweeps via `scripts/run_gregory_brain.py --all` between cron runs are fine.
 
 The cron lands an hour after the daily Fathom backfill (08:00 UTC) so any calls / action items ingested overnight are visible to the brain.
 

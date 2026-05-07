@@ -58,33 +58,21 @@ For Ella's deferred work see `docs/agents/ella/future-ideas.md`. For Gregory's k
 
 Activate the dormant Gregory brain pieces and tune the health score to be driven by real call data instead of placeholder neutrals.
 
-### Activate Gregory concerns generation
+### ~~Activate Gregory concerns generation~~ — RESOLVED 2026-05-07
 
-- **What:** flip `GREGORY_CONCERNS_ENABLED` env var to `true` in Vercel Production. The architecture is complete (`agents/gregory/concerns.py`, `prompts.py`, `agent.py`); it's been gated since M3.4 ship while call-summary coverage densified. Concerns generation runs the Claude-driven concern extractor over each client's recent call summaries and writes results into `client_health_scores.factors.concerns[]`.
-- **Why deferred:** at M3.4 ship time only 22 of 132 active clients had `call_summary` documents — paying the LLM cost to hand Claude nothing was the deciding factor. Post-cleanup, the count is closer to coverage that justifies activation.
-- **Revisit trigger:** Batch B active work. Pre-flight: count `documents` rows where `document_type='call_summary'` and the client is non-archived; if coverage is meaningful (~50%+), activate.
-- **Logged:** 2026-05-05.
+Subsumed by the V2 AI call signal. `concerns.py` + the `GREGORY_CONCERNS_ENABLED` gate retired; concerns now flow directly from `agents/gregory/ai_call_signal.py` based on the LLM's read of call_review documents (richer input than the V1.1 raw-summaries approach). See `docs/agents/gregory.md` § "Brain V2".
 
-### Tune concerns generation to run on Fathom summaries
+### ~~Tune concerns generation to run on Fathom summaries~~ — OBSOLETE 2026-05-07
 
-- **What:** the current concerns prompt feeds full transcripts to Claude. Switch to feeding Fathom's auto-generated summaries instead — cheaper per call, faster, and Fathom's summaries already capture the high-signal content. Validate that concern quality doesn't regress.
-- **Why deferred:** the architecture as built reads transcripts because that's what was available at M3.4 design time. With M5 confirming the M4.1 Fathom webhook reliably populates summary documents, the input shape can shift.
-- **Revisit trigger:** after concerns generation activates and a few sweeps confirm the architecture is operationally sound. Then a focused tuning pass.
-- **Logged:** 2026-05-05.
+Concerns are now generated from `call_review` documents (which the call_reviewer agent produces from full transcripts via Sonnet, M6.x). The "transcript vs Fathom-summary" tuning question is moot — the AI call signal reads the higher-signal call_review distillation rather than either of the V1.1 candidate inputs.
 
-### Health score driven by call data
+### ~~Health score driven by call data~~ — RESOLVED 2026-05-07
 
-- **What:** rebalance the M3.4 scoring rubric so concerns + cadence + recency drive most of the score. Currently the rubric assigns 0.4 cadence + 0.2 action items + 0.2 overdue + 0.2 NPS. Once concerns are live, concerns become the dominant qualitative signal and the rubric should reflect that.
-- **Why deferred:** depends on concerns generation activating first (see above) so there's actual concern data to weight. Re-balancing weights against zero-concern data would just bake the placeholder into a new bias.
-- **Revisit trigger:** concerns generation has been running for 2+ weekly cron sweeps and tier distributions look meaningfully different from the current 93 green / 40 yellow / 0 red snapshot.
-- **Logged:** 2026-05-05.
+Delivered. V2 rubric: `ai_call_signal` 0.50 + `call_cadence` 0.20 + `overdue_action_items` 0.10 + `latest_nps` 0.20. The AI signal is the dominant qualitative contributor; `open_action_items` retired (was double-counting with overdue + the AI signal's read of action items). Calibration followup logged in `docs/followups.md`.
 
-### Never-called-clients-land-green rubric fix
+### ~~Never-called-clients-land-green rubric fix~~ — RESOLVED 2026-05-07
 
-- **What:** the M3.4 first all-active sweep produced 93 green / 40 yellow / 0 red. The 93-green count overstates actual health because the rubric treats "0 action items" as 100 (clean docket, not "missing"), and combined with neutral cadence (50, when no calls exist) + neutral NPS (50), the math lands at `0.4×50 + 0.2×100 + 0.2×100 + 0.2×50 = 70 → green`. So a client who has never been called gets graded green.
-- **Why deferred:** part of the broader Batch B rubric overhaul. Resolution options: (a) when `call_cadence` returns the no-calls-on-record case, force `insufficient_data=true` regardless of other signals' contributions; (b) change the `0 action items` interpretation from "100 = clean docket" to "neutral 50 when no calls have occurred." Lean: option (a).
-- **Revisit trigger:** Batch B rubric overhaul, OR if a never-called client's green pill gets called out by a CSM as misleading.
-- **Logged:** 2026-04-29 (M3.4 first all-active sweep, EOD review).
+Delivered by the V2 weight rebalance. Never-called clients now land at score=55 (yellow) under the new weights: `0.50×50 + 0.20×50 + 0.10×100 + 0.20×50 = 55`. The AI signal's 0.50 weight on a neutral-50 default structurally pulls no-data clients out of green. Pinned by `test_never_called_client_lands_yellow_not_green` in `tests/agents/gregory/test_scoring.py`.
 
 ### NPS score piping (V1.5)
 
