@@ -39,7 +39,11 @@ class Signal(TypedDict):
 
 # Module-level weight constants. Total weights should sum to 1.0 in
 # scoring.py; placed here so the per-signal contribution is locally
-# obvious.
+# obvious. WEIGHT_AI_CALL_SIGNAL added in V2 — the rebalance + the
+# retirement of open_action_items lands in the next commit; weights
+# below temporarily over-sum (1.50) so this constant can land in its
+# own commit with no runtime path yet wired through.
+WEIGHT_AI_CALL_SIGNAL = 0.50
 WEIGHT_CALL_CADENCE = 0.40
 WEIGHT_OPEN_ACTION_ITEMS = 0.20
 WEIGHT_OVERDUE_ACTION_ITEMS = 0.20
