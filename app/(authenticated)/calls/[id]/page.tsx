@@ -124,7 +124,7 @@ function CallReviewSection({
         emptyText="No wins surfaced."
       />
 
-      <ReviewDodgedList items={review.dodged_questions} />
+      <ReviewPivotsList items={review.dodged_questions} />
     </div>
   )
 }
@@ -166,7 +166,7 @@ function ReviewItemList({
   )
 }
 
-function ReviewDodgedList({
+function ReviewPivotsList({
   items,
 }: {
   items: Array<{ description: string; evidence: string; who: string }>
@@ -174,7 +174,7 @@ function ReviewDodgedList({
   return (
     <div>
       <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2">
-        <span>Dodged questions</span>
+        <span>Conversation pivots</span>
         {items.length > 0 ? (
           <span className="text-xs font-medium text-muted-foreground tabular-nums">
             {items.length}
@@ -182,7 +182,7 @@ function ReviewDodgedList({
         ) : null}
       </h3>
       {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No dodged questions surfaced.</p>
+        <p className="text-xs text-muted-foreground">No notable pivots surfaced.</p>
       ) : (
         <ul className="space-y-2.5">
           {items.map((item, idx) => (
