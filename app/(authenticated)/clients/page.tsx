@@ -3,23 +3,30 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { FilterBar } from './filter-bar'
 import { ClientsTable } from './clients-table'
 
+// V2 column layout (2026-05-08). Mirror of clients-table.tsx
+// SORTABLE_COLUMNS — kept duplicated rather than imported because the
+// table is a client-tree component and we don't want to drag its imports
+// into the server bundle. Drift risk is low; both sets validated at
+// `next build` type-check time via the SortKey type.
 type SortKey =
   | 'full_name'
   | 'status'
   | 'journey_stage'
   | 'primary_csm_name'
+  | 'nps_standing'
   | 'latest_health_score'
-  | 'last_call_date'
-  | 'open_action_items_count'
+  | 'trustpilot_status'
+  | 'meetings_this_month'
 
 const VALID_SORT_KEYS: SortKey[] = [
   'full_name',
   'status',
   'journey_stage',
   'primary_csm_name',
+  'nps_standing',
   'latest_health_score',
-  'last_call_date',
-  'open_action_items_count',
+  'trustpilot_status',
+  'meetings_this_month',
 ]
 
 // Mirror of FilterBar's STATUS_DEFAULT_SELECTED. Kept duplicated rather
@@ -82,8 +89,10 @@ function sortRows(
   dir: 'asc' | 'desc',
 ): ClientsListRow[] {
   // NULLs always sort to the bottom regardless of direction — matches
-  // SQL's NULLS LAST idiom and the gregory.md spec for V1 default
-  // (last_call_date desc, NULLs last).
+  // SQL's NULLS LAST idiom. Important for the V2 default
+  // (latest_health_score asc, worst first): clients with no Gregory
+  // eval yet have a null score and should not masquerade as "worst" —
+  // they sink to the bottom regardless of direction.
   const sortVal = (row: ClientsListRow): string | number | null => {
     const value = row[sort]
     if (value === null || value === undefined) return null
@@ -110,11 +119,17 @@ export default async function ClientsPage({
   const filters = readFilters(searchParams)
   const rows = await getClientsList(filters)
 
-  const sortRaw = (Array.isArray(searchParams.sort) ? searchParams.sort[0] : searchParams.sort) ?? 'last_call_date'
-  const dirRaw = (Array.isArray(searchParams.dir) ? searchParams.dir[0] : searchParams.dir) ?? 'desc'
+  // V2 default: latest_health_score asc (worst first) — surfaces
+  // clients needing attention at the top now that V2 brain produces
+  // reliable scores. Replaces the V1 default of last_call_date desc
+  // (column removed in this commit). Pre-existing bookmarks with
+  // ?sort=last_call_date or ?sort=open_action_items_count fall through
+  // to this default via the validation below.
+  const sortRaw = (Array.isArray(searchParams.sort) ? searchParams.sort[0] : searchParams.sort) ?? 'latest_health_score'
+  const dirRaw = (Array.isArray(searchParams.dir) ? searchParams.dir[0] : searchParams.dir) ?? 'asc'
   const sort: SortKey = (VALID_SORT_KEYS as string[]).includes(sortRaw)
     ? (sortRaw as SortKey)
-    : 'last_call_date'
+    : 'latest_health_score'
   const dir: 'asc' | 'desc' = dirRaw === 'asc' ? 'asc' : 'desc'
 
   const sorted = sortRows(rows, sort, dir)
