@@ -1,160 +1,175 @@
 # Runbook: Apply Database Migrations
 
-> **Provisional, pending Phase 3.** The CLI workflow described below does not work in this environment — Supabase CLI commands silently route to local Docker instead of cloud Supabase. Until Phase 3 (which will either fix the CLI or build a `scripts/apply_migration.py` wrapper that Director can call), the canonical migration path is: Drake applies SQL via Supabase Studio SQL Editor, Drake registers the ledger row manually (`insert into supabase_migrations.schema_migrations ...`), Director dual-verifies (schema reality + ledger registration) against cloud explicitly. See `docs/known-issues.md` for the standing CLI-broken entry and the dual-verification discipline.
+How to apply `supabase/migrations/*.sql` against the cloud Supabase project, plus how to verify the result. The cloud path is canonical; local development with `supabase start` is a separate workflow and is currently incompatible with cloud apply (see § Preconditions).
 
-How to apply `supabase/migrations/*.sql` against a local or cloud Supabase project, and how to verify the result. Keep this current — every new migration sequence you run should leave behind a log entry at the bottom.
+## Gate model
 
-## Prerequisites
+Migrations are HYBRID-gated under the Director / Builder system. The flow:
 
-- Supabase CLI installed (`supabase --version` — we're on 2.90+)
-- Docker Desktop running (required for local; WSL integration enabled)
-- Shell access in the repo root (`/home/drake/projects/ai-enablement`)
-- A way to run `psql`: either installed locally, or via `docker exec -i supabase_db_ai-enablement psql ...` against the local container
+1. **Director writes the migration SQL** as a new numbered file in `supabase/migrations/<NNNN>_<name>.sql`. Numeric prefix continues from the latest existing migration.
+2. **Drake reviews the SQL diff** before any apply runs. This is the upstream judgment gate — Drake confirms the schema change makes sense. CLAUDE.md § Director / Builder System § Drake's gates § (a) anchors this; the SQL-review portion of migrations is permanent (see § Gate trajectory in CLAUDE.md).
+3. **Director applies via the CLI** — `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` (see § Apply below).
+4. **Director runs dual-verification** post-apply: schema reality (`to_regclass`, `pg_proc`, `information_schema.columns` as appropriate to the migration) AND ledger registration (`supabase_migrations.schema_migrations`).
+5. **Director reports verification result back to Drake.** Drake confirms if anything looked off.
 
-## Apply to Local
+If Director is uncertain about either the SQL or the verification result, surface to Drake before proceeding. Result-uncertainty is gate (b) in CLAUDE.md § Director / Builder System § Drake's gates.
 
-First-time apply on a fresh machine:
+## Preconditions
 
-```bash
-supabase init                          # creates supabase/config.toml if not present
-supabase start                         # spins up Postgres + pgvector + all Supabase services
-```
-
-On first `supabase start`, the CLI pulls images (expect 2-5 minutes). Subsequent starts take ~15 seconds. **Migrations in `supabase/migrations/` are auto-applied** on `supabase start` against a fresh DB — no separate `db push` needed for the first run.
-
-To re-apply migrations after changes (destructive — drops and recreates the local DB):
+**Docker WSL integration must be OFF on this machine.** Verify before any cloud apply:
 
 ```bash
-supabase db reset
+docker ps
+# Must return: "The command 'docker' could not be found in this WSL 2 distro."
+# (Or any other "Docker not reachable" error.)
 ```
 
-To apply only new migrations without resetting:
+If `docker ps` succeeds and shows a running daemon, **STOP**. Disable Docker Desktop's WSL integration first (Docker Desktop → Settings → Resources → WSL Integration → toggle off the Ubuntu distro), then re-verify with `docker ps`.
+
+Reason: Supabase CLI v2.90.0 silently misroutes `db push --linked` when both a linked-cloud project AND a reachable local Docker stack are present. The bug surfaced 2026-04-28 (every migration 0011–0028 then shipped via Studio + manual ledger as a workaround for ~10 days); Phase 3 discovery on 2026-05-08 confirmed the CLI works correctly when there's no reachable local Docker target. See `docs/known-issues.md` for the resolved entries documenting the era.
+
+Other preconditions:
+
+- `.env.local` exists with a valid `SUPABASE_DB_PASSWORD` (URL-quoted via the boilerplate below; the live password contains a `#`).
+- `supabase/.temp/pooler-url` exists and points at the cloud pooler URL. Regenerate via `supabase link --project-ref sjjovsjcfffrftnraocu --dns-resolver https` if the file is missing or the password was rotated.
+- `supabase --version` resolves to 2.90.0 or later. The system CLI is canonical; `npx supabase` invokes the latest published version (2.98.2 as of 2026-05-08) and is acceptable as a fallback if the system CLI ever drifts.
+
+## Apply
+
+Director's working command pattern:
 
 ```bash
-supabase migration up
+DB_PW=$(.venv/bin/python -c "
+from pathlib import Path
+for ln in Path('.env.local').read_text().splitlines():
+    if ln.startswith('SUPABASE_DB_PASSWORD='):
+        print(ln.partition('=')[2].strip().strip('\"').strip(\"'\"))
+        break
+")
+supabase db push --linked --dns-resolver https --password "$DB_PW" --yes
 ```
 
-### Local connection info
+Expected output (verbatim, from the 2026-05-08 Phase 3 discovery test):
 
-`supabase status` prints everything. Shortcut: `postgresql://postgres:postgres@127.0.0.1:54322/postgres`. Studio UI at `http://127.0.0.1:54323`.
+```
+Connecting to remote database...
+Do you want to push these migrations to the remote database?
+ • <NNNN>_<name>.sql
 
-## Seed Data
-
-Seed files live in `supabase/seed/*.sql` and are picked up by the CLI via `[db.seed].sql_paths = ["./seed/*.sql"]` in `supabase/config.toml`. Every seed file must be idempotent — use `ON CONFLICT DO NOTHING` (or a targeted update) so re-runs don't duplicate rows or overwrite manual edits.
-
-**When seeds apply automatically.** `supabase db reset` runs migrations from scratch and then applies every matched seed file in order. This is destructive — it drops the local DB first.
-
-**Applying seeds without a reset (local).** Pipe the seed file directly into the container:
-
-```bash
-docker exec -i supabase_db_ai-enablement psql -U postgres -d postgres \
-  < supabase/seed/team_members.sql
+ [Y/n] y
+Applying migration <NNNN>_<name>.sql...
+Finished supabase db push.
 ```
 
-Idempotent seeds can safely be re-piped any time. Use this when you've added new rows to a seed file and don't want to wipe the DB.
+Notes:
 
-**Applying seeds to cloud.** `supabase db push` doesn't run seed files — it applies only migrations. For cloud, copy-paste the seed SQL into **Studio → SQL Editor** and run it there. Same idempotency guarantee means pasting the same file twice is safe. This is a temporary workflow until we either (a) move seed content into an ordinary migration or (b) build a tiny `scripts/apply_seeds_to_cloud.py` that reads `supabase/seed/*.sql` and pushes via the Postgres connection.
+- **"Connecting to remote database..."** is the canonical confirmation that the CLI is talking to cloud, not a local stack. If this line is missing, hard stop and surface — the routing may have drifted.
+- **The interactive prompt is shown despite `--yes`.** Display quirk only — the auto-answer "y" runs. If the apply ever runs from a wrapper that doesn't connect stdin (e.g., a future `scripts/apply_migration.py`), the wrapper handles auth via `--password` and shouldn't need stdin at all.
+- **Exit code 0** = success. Non-zero exit = failure; capture stderr verbatim and surface.
 
-**Note on partial unique indexes.** Tables with partial unique indexes (e.g. `team_members.email` filtered on `archived_at is null`, from migration `0007_partial_unique_archival.sql`) require the predicate in the `ON CONFLICT` target: `ON CONFLICT (email) WHERE archived_at IS NULL DO NOTHING`. Without the predicate, Postgres can't match the index.
+If the output deviates from this shape (no remote-connecting line, a `DROP CONSTRAINT` error, a DNS error), STOP and surface to Drake. The documented fallback is psycopg2 direct against the pooler URL — see `cloud_supabase.md` § "If `supabase db push` fails with DNS errors".
 
-## Apply to Cloud
+## Dual-verify
 
-Prerequisites: Supabase cloud project created, project ref captured from the dashboard URL (`https://supabase.com/dashboard/project/<ref>`).
+Run BOTH checks after every apply. Single-query verification is forbidden — it can pass against the wrong database.
 
-```bash
-supabase link --project-ref <ref>      # one-time; writes link into supabase/.temp
-supabase db push                       # applies any migrations not yet in remote
+**Schema reality** — confirm the migration's intended objects actually exist. Adjust the queries to match what the migration was supposed to create.
+
+```python
+# Boilerplate: build the cloud connection from .env.local + supabase/.temp/pooler-url.
+# (Same shape as scripts/*.py; reproduced inline here for reference.)
+import re, urllib.parse
+from pathlib import Path
+import psycopg2
+
+env = {}
+for ln in Path(".env.local").read_text().splitlines():
+    if ln.strip() and not ln.startswith("#") and "=" in ln:
+        k, _, v = ln.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+
+pw = urllib.parse.quote(env["SUPABASE_DB_PASSWORD"], safe="")
+m = re.match(r"^(postgresql://[^@]+)@(.+)$", Path("supabase/.temp/pooler-url").read_text().strip())
+url = f"{m.group(1)}:{pw}@{m.group(2)}"
+conn = psycopg2.connect(url, sslmode="require", connect_timeout=15)
+cur = conn.cursor()
+
+# Examples — pick whichever matches the migration:
+cur.execute("select to_regclass('public.<new_table>')")            # new tables
+cur.execute("select * from pg_proc where proname = '<new_func>'")  # new functions / RPCs
+cur.execute("""
+    select column_name, data_type, is_nullable
+    from information_schema.columns
+    where table_schema='public' and table_name='<table>'
+    order by ordinal_position
+""")                                                                # new columns
+cur.execute("""
+    select conname from pg_constraint
+    where conrelid = '<table>'::regclass and contype = 'c'
+""")                                                                # new CHECK constraints
 ```
 
-`supabase db push` is idempotent — it compares `supabase/migrations/` to the remote `supabase_migrations.schema_migrations` table and applies only what's missing. It will prompt for confirmation before executing DDL.
+**Ledger registration** — confirm the version landed in the migrations table:
 
-### Cloud-specific guardrails
-
-- **Always push to a staging project first** if one exists. A fresh cloud project is cheap; an unintended migration against production is not.
-- Before `db push`, run `supabase db diff` to preview what SQL will execute.
-- Do not edit already-applied migrations. To change the schema, write a new migration with the next number.
-
-## Verify After Apply
-
-Run these against whichever environment you just touched. Against local use `docker exec -i supabase_db_ai-enablement psql -U postgres -d postgres -c '...'`; against cloud use `psql $SUPABASE_DB_URL -c '...'` or Studio SQL editor.
-
-**1. Migration history.** All numbered migrations present.
-
-```sql
-select version, name from supabase_migrations.schema_migrations order by version;
+```python
+cur.execute("""
+    select version, name
+    from supabase_migrations.schema_migrations
+    where version = '<NNNN>'
+""")
+# Expect exactly 1 row.
 ```
 
-Expected for schema v1: versions `0001` through `0007`.
+If either returns 0 rows (or unexpected results), the migration didn't fully apply. Recover before declaring done.
 
-**2. Table count.** V1 schema defines 16 public tables.
+**Drift sanity check.** For migrations that should NOT change the public table count (everything except CREATE TABLE / DROP TABLE), run a pre/post snapshot:
 
-```sql
-select count(*) from information_schema.tables where table_schema = 'public';
+```python
+cur.execute("select count(*) from information_schema.tables where table_schema = 'public'")
 ```
 
-Expected: `16`.
+Pre and post counts should match. The 2026-05-08 Phase 3 test used this pattern as the routing-bug integrity check; same pattern catches accidental schema drift.
 
-**3. Extensions.** `pgcrypto` (for `gen_random_uuid()`) and `vector` (pgvector for embeddings).
+## Reporting back to Drake
 
-```sql
-select extname, extversion from pg_extension
-where extname in ('vector', 'pgcrypto') order by extname;
-```
+Director's report after a migration apply should include:
 
-Expected: both rows present.
+- The migration filename and what it changed (one-clause description).
+- The verbatim CLI output (stdout + stderr + exit code).
+- The dual-verify queries run and their results.
+- Any pre/post drift sanity check results.
+- Anything that looked off — even when the apply was clean, if the diff felt unusual or the runtime was unexpected, flag it.
 
-**4. RLS enabled on every table.**
+This report belongs in section 3 (Verification) of Builder's standard end-of-turn report when the migration apply was delegated to Builder, or in Director's chat reply to Drake when Director ran it directly.
 
-```sql
-select relname, relrowsecurity from pg_class
-where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname;
-```
+## Failure modes
 
-Expected: every row shows `relrowsecurity = t`.
+**"Connecting to remote database" missing from output, but apply seems to succeed.** The CLI may have routed elsewhere (regression of the 2026-04-28 bug). HARD STOP. Verify against cloud's ledger via psycopg2 BEFORE assuming success. If cloud's ledger doesn't have the version, the apply went somewhere unexpected — recover via Studio + manual ledger insert and surface to Drake.
 
-**5. `updated_at` triggers attached to the right tables.**
+**`DROP CONSTRAINT ... does not exist`.** Migration 0007's pattern. Inspect with psycopg2 to see actual constraint names; update the migration file; retry. Do not skip the migration.
 
-```sql
-select event_object_table, trigger_name from information_schema.triggers
-where trigger_schema = 'public' order by event_object_table;
-```
+**DNS resolution error during apply.** The Go pgx client bundled in the CLI uses the system resolver, separate from `--dns-resolver https`. Fall back to psycopg2 direct apply — see `cloud_supabase.md` § "If `supabase db push` fails with DNS errors".
 
-Expected: one `set_updated_at` trigger each on `team_members`, `clients`, `slack_channels`, `documents` (four rows). Nothing on tables without `updated_at`.
+**CLI prompts interactively despite `--yes`.** Display quirk — auto-answer "y" runs. If running from a non-interactive wrapper that doesn't connect stdin, the wrapper handles auth via `--password` and shouldn't need stdin at all. Not a real failure.
 
-**6. Partial unique indexes from 0007 in place.**
+**Migration file numeric prefix already exists in cloud's ledger.** The CLI will report "Remote database is up to date" and skip. Verify the local file matches the cloud-applied version (cloud-applied SQL is canonical — never edit an already-applied migration).
 
-```sql
-select indexname from pg_indexes
-where tablename in ('team_members', 'clients')
-  and (indexname like '%email%' or indexname like '%slack_user%')
-order by indexname;
-```
+## Local development workflow (separate, not cloud-relevant)
 
-Expected: `clients_email_active_idx`, `clients_slack_user_id_active_idx`, `team_members_email_active_idx`, `team_members_slack_user_id_active_idx`.
+This runbook previously described local dev via `supabase start` / `supabase db reset` / `supabase migration up`. Those workflows are not used today (Drake's working pattern is cloud-only) and would re-trigger the routing bug if combined with cloud apply.
 
-**7. HNSW vector index on `document_chunks.embedding`.**
+If local dev becomes relevant again:
 
-```sql
-select indexdef from pg_indexes
-where tablename = 'document_chunks' and indexname = 'document_chunks_embedding_hnsw_idx';
-```
+- `supabase init` is already done (`supabase/config.toml` exists, dated 2026-04-21).
+- `supabase start` requires Docker WSL integration enabled — which re-introduces the routing-bug risk.
+- Treat local and cloud workflows as fully separate. Never run `supabase db push --linked` while a local stack is reachable. Disable WSL integration before any cloud apply.
 
-Expected: `... USING hnsw (embedding vector_cosine_ops)`.
+The local-apply commands themselves still work as documented in the Supabase docs; they're just not part of the canonical cloud-apply path Director runs.
 
-## Failure Modes and Recovery
+## Apply log (historical)
 
-**`supabase status` reports "No such container".** The stack isn't running. Run `supabase start`. If that fails with a Docker connection error, Docker Desktop is off (start it) or WSL integration isn't enabled (fix in Docker Desktop settings → Resources → WSL integration).
-
-**`supabase start` hangs on image pull.** Check network and Docker Desktop status. Images live in Docker Hub; a proxy or firewall may be intercepting. Retry `supabase start` after fixing.
-
-**`supabase db push` fails with `DROP CONSTRAINT ... does not exist`.** Migration `0007` assumes Postgres auto-named the original unique constraints `<table>_<column>_key`. If a prior run used different names, the DROP fails. Inspect with `\d team_members` (via `psql`) to see real names, update `0007_partial_unique_archival.sql`, commit, retry. Do not skip the migration — the partial-unique semantics matter.
-
-**Port conflict on `supabase start` (54321/54322/54323 etc.).** Another instance is already running, or another process is on those ports. `supabase stop` first, then `lsof -i :54322` to see what else is holding it.
-
-**Apply succeeded but tables are missing.** Unlikely on a fresh DB; more likely on a cloud DB that had prior content. Check `select * from supabase_migrations.schema_migrations` — if versions are listed, the CLI thinks they succeeded. Inspect the actual DDL in each migration file for conditional logic that may have no-op'd.
-
-**Need to start over locally.** `supabase db reset` drops and recreates the local DB, then re-runs all migrations from scratch. Fast and safe — local is throwaway by design. Do not run `supabase db reset` against a linked cloud project.
-
-## First Apply Log
-
-- **2026-04-20 — local apply against a fresh stack.** Ran `supabase init` → `supabase start` → all 7 migrations auto-applied on first boot. Total wall time ~3 minutes (dominated by first-run image pulls on `supabase start`). Verification queries all passed: 16 tables, both extensions present (pgvector 0.8.0, pgcrypto 1.3), RLS on every table, 4 triggers on the right tables, 4 partial unique indexes, HNSW index on `document_chunks.embedding`. One correction to note: the session prompt said "17 tables" but the schema defines 16 — inventory confirmed against `docs/schema/schema-v1.md` and every migration file. `psql` not installed on the WSL host; used `docker exec -i supabase_db_ai-enablement psql ...` throughout. Cloud apply not yet performed — to follow once local is exercised by the first ingestion pipeline.
+- **2026-04-20** — first local apply against a fresh stack. 7 migrations (0001–0007) auto-applied on `supabase start`. Local-only; cloud not yet apply'd.
+- **2026-04-24** — first cloud apply via CLI. Successful. `supabase db push` worked correctly.
+- **2026-04-28** — CLI routing bug surfaced. M2.2 push reported success but landed in local Docker instead of cloud. Migrations 0011/0012/0013 had to be recovered via Studio.
+- **2026-04-28 to 2026-05-08** — CLI-broken era. Migrations 0011–0028 (18 migrations) applied via Supabase Studio SQL Editor + manual `INSERT INTO supabase_migrations.schema_migrations` + Director-side dual-verify. Drake-handled end-to-end during this window.
+- **2026-05-08 — Phase 3 discovery.** Confirmed the CLI works correctly when Docker WSL integration is off. The bug was specific to the CLI's "is local stack reachable?" branch in the write path. With Docker unreachable, the CLI falls through to the (linked) cloud target. Apply path returned to CLI as canonical; operational layer of migrations moved from Drake-handled to Director-handled per the hybrid gate model. Test was a no-op `0029_phase3_cli_routing_test.sql` apply (comment-only file, applied + cleaned in one session — no schema change shipped).

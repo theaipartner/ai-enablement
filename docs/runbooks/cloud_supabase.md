@@ -55,7 +55,7 @@ PY
 
 ## Applying migrations to cloud
 
-Migrations live in `supabase/migrations/`. `supabase db push` is the canonical tool. On WSL2 specifically, the default system DNS drops AAAA-only records from Supabase's pooler, so always pass `--dns-resolver https`:
+Migrations live in `supabase/migrations/`. **`supabase db push` is the canonical tool, run by Director under the hybrid gate model — see `docs/runbooks/apply_migrations.md` § Gate model and § Preconditions.** On WSL2 specifically, the default system DNS drops AAAA-only records from Supabase's pooler, so always pass `--dns-resolver https`:
 
 ```bash
 DB_PW=$(.venv/bin/python -c "
