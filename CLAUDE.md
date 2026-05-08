@@ -283,7 +283,7 @@ Documentation is not optional and not written "later." It ships alongside the co
 - **Never commit with failing tests.** Run `pytest tests/` first.
 - Never commit secrets. Run `git diff` before every commit to scan for keys.
 
-**Commit policy:** At the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored), commit with a clear message following our convention. Do not commit half-finished work. Do not commit if tests/validation fail. Push to remote at the end of each session.
+**Commit policy:** At the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored), Director commits with a clear message following the convention. Do not commit half-finished work. Do not commit if tests/validation fail. Director pushes when Drake greenlights — typically at gate moments (deploy verification, end of session, or when the deploy needs to be live for further testing). Pure-doc commits can push without an explicit greenlight unless flagged otherwise.
 
 ### Client Identity Resolution (alternate emails / alternate names)
 
