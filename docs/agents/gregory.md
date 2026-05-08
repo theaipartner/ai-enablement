@@ -132,9 +132,9 @@ The cron lands an hour after the daily Fathom backfill (08:00 UTC) so any calls 
 
 ### Clients page — list view
 
-Sortable table, one row per client. Default sort: by health score ascending (worst first) once Gregory exists; by `last_call_date` descending for V1.
+Sortable table, one row per client. **Default sort: `latest_health_score` ascending (worst first)** — V2 brain produces reliable scores, so "the clients needing attention this week" land at the top of the list. NULL-score clients (no Gregory eval yet) sink to the bottom via NULLS-LAST so a freshly-created client doesn't masquerade as "worst." V2 column layout shipped 2026-05-08, replacing the V1 default of `last_call_date desc` (which made sense before V2 brain shipped scores).
 
-Columns:
+Columns (V2, left → right, all 8 sortable):
 
 | Column | Source | Notes |
 |--------|--------|-------|
@@ -142,12 +142,14 @@ Columns:
 | Status | `clients.status` | Color pill (active / paused / ghost / leave / churned). List page default-hides `churned` + `leave`; "Show churned & leave" toggle chip reveals them. Explicit status filter (e.g. `?status=churned`) wins over the default-hide. |
 | Journey stage | `clients.journey_stage` | onboarding / active / churning / churned / alumni |
 | Primary CSM | `client_team_assignments` where role='primary_csm' | Latest active assignment |
-| Health score | `client_health_scores` (latest) | Numeric + tier pill; empty for V1 |
-| Last call | `max(calls.started_at)` where `primary_client_id = client.id` | Days-ago format with color coding |
-| Open action items | count of `call_action_items` where `owner_client_id = client.id` and `status='open'` | "3 open (1 overdue)" if any past due_date |
-| Tags | `clients.tags` | Chip display |
+| NPS standing | `clients.nps_standing` | Pill: Promoter (emerald) / Neutral (amber) / At Risk (rose) / null → muted "—". Mirrors Airtable Survey segment via the M5.4 Path 1 webhook + 0027 NPS-is-gospel auto-derive |
+| Health score | `client_health_scores` (latest) | Numeric + tier pill |
+| Trustpilot | `clients.trustpilot_status` | Pill: Given (emerald) / Declined (rose) / Ask (amber) / Asked (sky) / null → muted "—" |
+| Meetings this mo | derived from `calls.started_at` (current calendar month, UTC) | Integer count; "0" renders as "0" (zero is meaningful, not missing data) |
 
-Search: filter on name + email. Filter chips: status, journey stage, primary CSM, "has open action items".
+Search: filter on name + email. Filter chips: status, primary CSM, csm_standing, nps_standing, trustpilot, country, accountability, NPS toggle, needs_review.
+
+Three columns from the V1 layout were retired in this swap: Last call (with its days-ago color coding + Inactive pill + meetings-this-mo subordinate signal), Open action items (open + overdue counts), Tags chip display. The Last-call freshness signal collapsed into the dedicated Meetings this mo column; Tags renders only on the detail page now (where the needs_review tag still triggers the merge dialog).
 
 ### Clients page — detail view
 
