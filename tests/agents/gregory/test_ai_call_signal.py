@@ -65,6 +65,9 @@ class _FakeDocumentsTable:
     def order(self, *_args, **_kwargs):
         return self
 
+    def limit(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated DB blip")
@@ -72,19 +75,39 @@ class _FakeDocumentsTable:
 
 
 class _FakeDb:
+    """Multi-table fake. `documents` holds the call_review rows tests
+    care about; `agent_runs` + `client_health_scores` support the
+    freshness-skip path's lookups. All three default to empty lists
+    so existing tests keep working without scripting the new tables."""
+
     def __init__(
         self,
         rows: list[dict] | None = None,
         *,
         raise_on_execute: bool = False,
+        agent_runs_rows: list[dict] | None = None,
+        client_health_scores_rows: list[dict] | None = None,
+        agent_runs_raise: bool = False,
+        client_health_scores_raise: bool = False,
     ):
         self._documents = _FakeDocumentsTable(
             rows=rows, raise_on_execute=raise_on_execute
+        )
+        self._agent_runs = _FakeDocumentsTable(
+            rows=agent_runs_rows or [], raise_on_execute=agent_runs_raise
+        )
+        self._client_health_scores = _FakeDocumentsTable(
+            rows=client_health_scores_rows or [],
+            raise_on_execute=client_health_scores_raise,
         )
 
     def table(self, name):
         if name == "documents":
             return self._documents
+        if name == "agent_runs":
+            return self._agent_runs
+        if name == "client_health_scores":
+            return self._client_health_scores
         raise AssertionError(f"unexpected table {name!r}")
 
 
@@ -437,3 +460,362 @@ def test_concerns_with_invalid_severity_drops_severity_keeps_concern(stub_teleme
     assert len(concerns) == 1
     assert concerns[0]["text"] == "Some concern."
     assert "severity" not in concerns[0]  # dropped, not crashed
+
+
+# ---------------------------------------------------------------------------
+# Freshness filter (daily-cron architecture)
+# ---------------------------------------------------------------------------
+#
+# Four paths covered:
+#   1. No prior compute → falls through to LLM compute (recompute path)
+#   2. Prior compute + no new reviews → skips LLM, returns prior Signal
+#      with rewritten note + creates an agent_runs row tagged "skipped"
+#   3. Prior compute + new review since → falls through to LLM compute
+#   4. Prior compute exists but the prior client_health_scores row
+#      doesn't have an ai_call_signal entry (V1.1→V2 transition shape)
+#      → falls through to LLM compute (defensive fallback)
+
+
+def _agent_run_row(
+    *,
+    started_at: str,
+    output_summary: str = "contribution=70 reviews=2 concerns=1",
+):
+    """Mimic an agent_runs row shape — only the columns the freshness
+    queries actually select."""
+    return {
+        "started_at": started_at,
+        "output_summary": output_summary,
+    }
+
+
+def _client_health_scores_row_with_ai_signal(
+    *,
+    contribution: int = 70,
+    note: str = "Original LLM-judged reasoning.",
+    concerns: list | None = None,
+):
+    """A V2-shaped client_health_scores row. factors.signals[] has
+    ai_call_signal as the first entry."""
+    return {
+        "factors": {
+            "signals": [
+                {
+                    "name": "ai_call_signal",
+                    "weight": WEIGHT_AI_CALL_SIGNAL,
+                    "value": "2 reviews, watch",
+                    "contribution": contribution,
+                    "note": note,
+                },
+                {
+                    "name": "call_cadence",
+                    "weight": 0.20,
+                    "value": "5 days ago",
+                    "contribution": 100,
+                    "note": "Most recent call 5 days ago.",
+                },
+            ],
+            "concerns": concerns or [],
+            "overall_reasoning": "Some prior reasoning.",
+        }
+    }
+
+
+def test_freshness_no_prior_compute_falls_through_to_llm(stub_telemetry):
+    """Client with no prior ai_call_signal agent_runs row → fresh
+    compute. Confirms the "first time we see this client" gate."""
+    rows = [
+        _review_doc(
+            "call-aaa", "2026-05-08T08:00:00+00:00", review=_sample_review()
+        ),
+    ]
+    db = _FakeDb(
+        rows=rows,
+        agent_runs_rows=[],  # no prior compute on record
+        client_health_scores_rows=[],
+    )
+    response = json.dumps(
+        {"contribution": 80, "reasoning": "Strong call.", "concerns": []}
+    )
+    with patch(
+        "agents.gregory.ai_call_signal.complete",
+        return_value=_completion(response),
+    ) as comp:
+        signal, _ = acs.compute_ai_call_signal(db, "client-x")
+
+    # Recompute path fired — Sonnet was called, signal is the new value.
+    comp.assert_called_once()
+    assert signal["contribution"] == 80
+    # Note from the new compute, not a "reused" note.
+    assert "Strong call." in signal["note"]
+    assert "reused" not in signal["note"].lower()
+
+
+def test_freshness_no_new_reviews_returns_prior_signal_skips_llm(
+    stub_telemetry,
+):
+    """Prior compute exists + latest call_review created_at <= prior
+    compute started_at → reuse prior Signal verbatim (note rewritten),
+    NO Sonnet call, agent_runs row opened with output_summary starting
+    with 'skipped'."""
+    prior_compute_iso = "2026-05-08T09:00:00+00:00"
+    older_review_iso = "2026-05-07T15:00:00+00:00"
+
+    db = _FakeDb(
+        rows=[
+            # call_review document for this client, but its created_at
+            # predates the prior compute.
+            {
+                "title": "Old review",
+                "content": json.dumps(_sample_review()),
+                "metadata": {"call_id": "call-old", "started_at": older_review_iso},
+                "created_at": older_review_iso,
+            }
+        ],
+        agent_runs_rows=[
+            _agent_run_row(started_at=prior_compute_iso),
+        ],
+        client_health_scores_rows=[
+            _client_health_scores_row_with_ai_signal(
+                contribution=72,
+                note="Earlier-day reasoning that should be preserved.",
+                concerns=[
+                    {
+                        "text": "Watchpoint from earlier compute.",
+                        "severity": "low",
+                        "source_call_ids": ["call-old"],
+                    }
+                ],
+            )
+        ],
+    )
+    with patch("agents.gregory.ai_call_signal.complete") as comp:
+        signal, concerns = acs.compute_ai_call_signal(db, "client-x")
+
+    # Skip path fired — NO Sonnet call.
+    comp.assert_not_called()
+    # Prior signal returned with rewritten note.
+    assert signal["contribution"] == 72
+    assert signal["weight"] == WEIGHT_AI_CALL_SIGNAL
+    assert "reused" in signal["note"].lower() or "no new call_review" in signal["note"].lower()
+    # Original LLM-judged reasoning preserved after the separator.
+    assert "Earlier-day reasoning that should be preserved." in signal["note"]
+    # Prior concerns flow through.
+    assert len(concerns) == 1
+    assert concerns[0]["text"] == "Watchpoint from earlier compute."
+
+    # Telemetry: agent_runs row opened, closed with status=success +
+    # output_summary starting with "skipped".
+    stub_telemetry.start.assert_called_once()
+    assert stub_telemetry.end.call_args.kwargs["status"] == "success"
+    assert stub_telemetry.end.call_args.kwargs["output_summary"].startswith(
+        "skipped"
+    )
+
+
+def test_freshness_new_review_since_prior_compute_triggers_recompute(
+    stub_telemetry,
+):
+    """Prior compute exists + at least one call_review with created_at
+    > prior compute started_at → recompute (LLM call fires)."""
+    prior_compute_iso = "2026-05-07T09:00:00+00:00"
+    new_review_iso = "2026-05-08T08:00:00+00:00"  # AFTER prior compute
+
+    db = _FakeDb(
+        rows=[
+            {
+                "title": "Fresh review",
+                "content": json.dumps(_sample_review()),
+                "metadata": {"call_id": "call-new", "started_at": new_review_iso},
+                "created_at": new_review_iso,
+            }
+        ],
+        agent_runs_rows=[
+            _agent_run_row(started_at=prior_compute_iso),
+        ],
+        client_health_scores_rows=[
+            _client_health_scores_row_with_ai_signal(),
+        ],
+    )
+    response = json.dumps(
+        {
+            "contribution": 65,
+            "reasoning": "New review pulls score down.",
+            "concerns": [],
+        }
+    )
+    with patch(
+        "agents.gregory.ai_call_signal.complete",
+        return_value=_completion(response),
+    ) as comp:
+        signal, _ = acs.compute_ai_call_signal(db, "client-x")
+
+    # Recompute fired — Sonnet called, new contribution.
+    comp.assert_called_once()
+    assert signal["contribution"] == 65
+    assert "New review pulls score down." in signal["note"]
+
+
+def test_freshness_v1_1_transition_falls_through_to_recompute(stub_telemetry):
+    """Prior compute agent_runs row exists, but the most recent
+    client_health_scores row is V1.1-shaped (no ai_call_signal entry
+    in factors.signals[]). Defensive fallback: recompute to land V2
+    shape rather than returning a malformed prior Signal."""
+    prior_compute_iso = "2026-05-08T09:00:00+00:00"
+    older_review_iso = "2026-05-07T15:00:00+00:00"
+
+    db = _FakeDb(
+        rows=[
+            {
+                "title": "Old review",
+                "content": json.dumps(_sample_review()),
+                "metadata": {"call_id": "call-old", "started_at": older_review_iso},
+                "created_at": older_review_iso,
+            }
+        ],
+        agent_runs_rows=[
+            _agent_run_row(started_at=prior_compute_iso),
+        ],
+        client_health_scores_rows=[
+            # V1.1 shape — no ai_call_signal entry.
+            {
+                "factors": {
+                    "signals": [
+                        {
+                            "name": "call_cadence",
+                            "weight": 0.40,
+                            "contribution": 50,
+                            "note": "Most recent call 14 days ago.",
+                        },
+                        {
+                            "name": "open_action_items",
+                            "weight": 0.20,
+                            "contribution": 100,
+                            "note": "0 open.",
+                        },
+                    ],
+                    "concerns": [],
+                }
+            }
+        ],
+    )
+    response = json.dumps(
+        {
+            "contribution": 70,
+            "reasoning": "Recomputed after V1.1 transition.",
+            "concerns": [],
+        }
+    )
+    with patch(
+        "agents.gregory.ai_call_signal.complete",
+        return_value=_completion(response),
+    ) as comp:
+        signal, _ = acs.compute_ai_call_signal(db, "client-x")
+
+    # Recompute fired — defensive fallback past the missing prior signal.
+    comp.assert_called_once()
+    assert signal["contribution"] == 70
+    assert signal["name"] == "ai_call_signal"  # V2 shape
+
+
+def test_freshness_skip_path_records_telemetry_with_skipped_prefix(
+    stub_telemetry,
+):
+    """Explicit assertion: the skip path's agent_runs row has
+    output_summary starting with 'skipped' so cost rollups can split
+    skip from compute via WHERE output_summary LIKE 'skipped%'."""
+    prior_compute_iso = "2026-05-08T09:00:00+00:00"
+    older_review_iso = "2026-05-07T15:00:00+00:00"
+
+    db = _FakeDb(
+        rows=[
+            {
+                "title": "Old review",
+                "content": json.dumps(_sample_review()),
+                "metadata": {"call_id": "call-old", "started_at": older_review_iso},
+                "created_at": older_review_iso,
+            }
+        ],
+        agent_runs_rows=[
+            _agent_run_row(started_at=prior_compute_iso),
+        ],
+        client_health_scores_rows=[
+            _client_health_scores_row_with_ai_signal(),
+        ],
+    )
+    with patch("agents.gregory.ai_call_signal.complete"):
+        acs.compute_ai_call_signal(db, "client-x")
+
+    # start_agent_run called once with the skip-path trigger_metadata
+    # (carries skipped=True + last_compute_at + latest_review_at).
+    stub_telemetry.start.assert_called_once()
+    start_kwargs = stub_telemetry.start.call_args.kwargs
+    assert start_kwargs["agent_name"] == "ai_call_signal"
+    assert start_kwargs["trigger_metadata"]["skipped"] is True
+    assert start_kwargs["trigger_metadata"]["last_compute_at"] == prior_compute_iso
+
+    # end_agent_run called with status=success + 'skipped' prefix.
+    end_kwargs = stub_telemetry.end.call_args.kwargs
+    assert end_kwargs["status"] == "success"
+    assert end_kwargs["output_summary"].startswith("skipped")
+
+
+def test_freshness_excludes_prior_skip_rows_from_last_compute_lookup(
+    stub_telemetry,
+):
+    """The last-compute query MUST exclude prior skip rows. Otherwise
+    a long string of skips could hide a stale "real compute" timestamp
+    and let new reviews go un-recomputed indefinitely. The query
+    iterates the most recent N agent_runs rows and skips entries whose
+    output_summary starts with 'skipped'."""
+    real_compute_iso = "2026-05-01T09:00:00+00:00"  # OLD real compute
+    skip1_iso = "2026-05-06T09:00:00+00:00"
+    skip2_iso = "2026-05-07T09:00:00+00:00"
+    new_review_iso = "2026-05-05T15:00:00+00:00"  # AFTER real compute, BEFORE skips
+
+    db = _FakeDb(
+        rows=[
+            {
+                "title": "Review that landed AFTER real compute",
+                "content": json.dumps(_sample_review()),
+                "metadata": {"call_id": "call-new", "started_at": new_review_iso},
+                "created_at": new_review_iso,
+            }
+        ],
+        # agent_runs ordered desc — skips most recent, real compute oldest.
+        agent_runs_rows=[
+            _agent_run_row(
+                started_at=skip2_iso,
+                output_summary="skipped — fresh (last_compute=2026-05-01...; ...)",
+            ),
+            _agent_run_row(
+                started_at=skip1_iso,
+                output_summary="skipped — fresh (last_compute=2026-05-01...; ...)",
+            ),
+            _agent_run_row(
+                started_at=real_compute_iso,
+                output_summary="contribution=70 reviews=1 concerns=0",
+            ),
+        ],
+        client_health_scores_rows=[
+            _client_health_scores_row_with_ai_signal(),
+        ],
+    )
+    response = json.dumps(
+        {
+            "contribution": 60,
+            "reasoning": "Recomputed because review > real compute.",
+            "concerns": [],
+        }
+    )
+    with patch(
+        "agents.gregory.ai_call_signal.complete",
+        return_value=_completion(response),
+    ) as comp:
+        signal, _ = acs.compute_ai_call_signal(db, "client-x")
+
+    # Recompute fired — the skip-row exclusion correctly identified
+    # real_compute_iso as the last actual compute, saw new_review_iso
+    # is after it, and triggered recompute.
+    comp.assert_called_once()
+    assert signal["contribution"] == 60
