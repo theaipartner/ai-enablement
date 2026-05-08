@@ -11,7 +11,42 @@ Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (G
 
 ---
 
-## ~~Wire call_reviewer into Fathom ingestion pipeline~~ — RESOLVED 2026-05-07
+## NEXT SESSION FIRST ACTION — verify daily cron fired (one-time gate, REMOVE after running)
+
+**This is a one-time verification gate, not a recurring routine.** First action of the next session, before any planned work. Remove this entry from `docs/followups.md` AND the matching pointer from `CLAUDE.md § Next Session Priorities` once the verification has run, regardless of outcome.
+
+**Background.** On 2026-05-08 the gregory_brain cron switched weekly→daily AND gained an `ai_call_signal` freshness filter. The deploy from this session is the first real exercise of both. Tomorrow's 09:00 UTC scheduled fire is the integration smoke; we want to confirm before iterating further.
+
+**Run this query** (against cloud Supabase via `shared.db.get_client()` or psql against the pooler URL):
+
+```sql
+SELECT
+  count(*) AS total_rows,
+  min(started_at) AS earliest,
+  max(started_at) AS latest,
+  count(*) FILTER (WHERE output_summary LIKE 'skipped%') AS skipped_count,
+  count(*) FILTER (WHERE status = 'success') AS success_count,
+  count(*) FILTER (WHERE status = 'error') AS error_count
+FROM agent_runs
+WHERE agent_name = 'gregory'
+  AND trigger_type = 'cron'
+  AND started_at >= '2026-05-08 09:00:00'
+  AND started_at <  '2026-05-08 10:00:00';
+```
+
+Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in the freshness-filter design — but `output_summary` lives on the `ai_call_signal` child runs, not the parent `gregory` runs. **The query above as written will return 0 for `skipped_count` even on a perfectly healthy sweep.** Re-run the same shape against `agent_name='ai_call_signal'` to get the true skip rate. Both queries together give the full picture.
+
+**Three outcomes — three reads:**
+
+1. **`agent_name='gregory'` total_rows ≈ 188, earliest+latest within 09:00–09:59 UTC AND `agent_name='ai_call_signal'` skipped_count > 150** → Scheduled cron fires correctly, freshness filter is doing its job, fully self-running. End-state achieved. Remove this entry + the CLAUDE.md pointer; proceed with planned work.
+
+2. **`agent_name='gregory'` total_rows = 0** → Scheduled trigger still broken. Same three diagnostic gates from prior cron-firing investigation: schedule not picked up, `CRON_SECRET` mismatch (Encrypted env var masking on `vercel env pull` complicates client-side testing), or silent code-path failure. Pause planned work, diagnose this first.
+
+3. **`agent_name='gregory'` total_rows ≈ 188 but `agent_name='ai_call_signal'` skipped_count is LOW (< 50)** → Cron fired but freshness filter has a bug. Investigate why most clients recomputed when they shouldn't have. Most likely culprits: (a) the `_last_successful_compute_iso` jsonb-key filter not matching as expected (UUID type coercion?), (b) an off-by-one in the timestamp comparison (`>` vs `>=` on `latest_review_iso > last_compute_iso`), (c) the V1.1-transition fallback firing for too many clients because the May 2026 sweep rows have a `factors.signals[]` shape we didn't anticipate. Architecturally non-blocking but worth fixing before the next iteration.
+
+**Logged:** 2026-05-07 (one-time gate added at session-close).
+
+---
 
 Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
 

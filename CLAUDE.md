@@ -217,6 +217,8 @@ As of 2026-05-07 (Call Review V1 shipped — agent + May 2026 backfill + Calls d
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
+0. **🔍 ONE-TIME GATE — verify the 2026-05-08 09:00 UTC daily cron fired correctly.** Before any planned work. Run the verification query in `docs/followups.md` § "NEXT SESSION FIRST ACTION — verify daily cron fired" and follow the three-outcome decision tree. Remove that followups entry AND this priority bullet once the verification has run, regardless of outcome — this is a one-time gate added at session-close 2026-05-07, not a recurring routine.
+
 1. **Batch A — CSM accountability visibility (2 of 4 shipped).** Per-call CS summary + daily accountability notification shipped M6.1 (2026-05-05); cron auth consolidated to single `CRON_SECRET` M6.2 (2026-05-06). **Tomorrow's slice:** missed/unrecorded call detection (Google Calendar diff against the `calls` table; gated on Drake's Fathom team-settings sweep closing the duplicate-recording bug). Then: call-tagging dashboard (gated on CSM ops adoption of a tagging convention). See `docs/future-ideas.md` § Batch A.
 
 2. **Batch B — Call review + health score activation.** Queued. Activates Gregory concerns generation (currently gated), tunes it to run on Fathom summaries, rebalances the health score rubric so call data dominates, fixes the never-called-clients-land-green quirk. Adds NPS score piping (V1.5) to extend Path 1 to ingest score alongside segment.
