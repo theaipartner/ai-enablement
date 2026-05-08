@@ -52,6 +52,18 @@ DEFAULT_LOOKBACK_DAYS = 30
 # truncated JSON on detail-heavy multi-call clients.
 _MAX_OUTPUT_TOKENS = 2048
 
+# Trigger type for the agent_runs telemetry rows this module opens.
+# Used by both the actual-compute path AND the freshness-skip path so
+# cost rollups can split the two via output_summary (compute path
+# starts with "contribution=" / "no recent reviews"; skip path starts
+# with "skipped"). Renamed from "weekly_brain" when the cron switched
+# to daily — name is cadence-agnostic now.
+_SCHEDULED_BRAIN_TRIGGER = "scheduled_brain"
+
+# Output-summary prefix used by the freshness-skip path. Stays grep-
+# friendly so cost rollups can do `WHERE output_summary LIKE 'skipped%'`.
+_SKIP_OUTPUT_PREFIX = "skipped"
+
 
 class AiCallSignalConcern(TypedDict, total=False):
     """Same shape as agents.gregory.concerns.Concern — kept identical
@@ -77,14 +89,35 @@ def compute_ai_call_signal(
         list (possibly empty) — never None, so callers can treat it
         as iterable unconditionally.
 
-    Never raises. Three failure paths each fall through to a neutral-50
+    Freshness filter (daily-cron architecture):
+        Before fetching reviews, check whether any new call_review
+        document has landed for this client since the last successful
+        AI signal compute. If not, return the prior Signal + concerns
+        from the most recent client_health_scores row — no LLM call,
+        no documents fetch. Each daily sweep then only burns Sonnet
+        tokens for clients with genuinely new input.
+
+    Never raises. Failure paths each fall through to a neutral-50
     Signal + empty concerns:
       - documents fetch fails (DB blip)
       - Claude call fails (LLM blip / network)
       - response parse fails (model returned malformed JSON or wrong shape)
+      - freshness-skip path can't locate the prior Signal (V1.1 → V2
+        transition or some other gap) → falls through to recompute
     The note text identifies which surface tripped so operational
     diagnosis is cheap.
+
+    NOTE: Freshness applies ONLY to ai_call_signal. The deterministic
+    signals (call_cadence, overdue_action_items, latest_nps) always
+    recompute every sweep — they're cheap and meant to reflect the
+    latest day-of state. Don't extend this optimization beyond the
+    AI signal without a cost-vs-staleness re-evaluation.
     """
+    # ----- 0. Freshness check — skip Sonnet when input hasn't changed -----
+    skip_result = _try_freshness_skip(db, client_id)
+    if skip_result is not None:
+        return skip_result
+
     # ----- 1. Fetch call_review documents -----
     try:
         reviews = _fetch_recent_reviews(db, client_id, lookback_days)
@@ -125,7 +158,7 @@ def compute_ai_call_signal(
     started = time.monotonic()
     run_id = start_agent_run(
         agent_name="ai_call_signal",
-        trigger_type="weekly_brain",
+        trigger_type=_SCHEDULED_BRAIN_TRIGGER,
         trigger_metadata={
             "client_id": client_id,
             "review_count": len(reviews),
@@ -221,6 +254,231 @@ def compute_ai_call_signal(
         ),
         concerns,
     )
+
+
+# ---------------------------------------------------------------------------
+# Freshness-skip path
+# ---------------------------------------------------------------------------
+
+
+def _try_freshness_skip(
+    db: Any, client_id: str
+) -> tuple[Signal, list[AiCallSignalConcern]] | None:
+    """Return (Signal, concerns) when the prior AI signal can be
+    reused; return None when a fresh compute is required.
+
+    Decision rule:
+      1. Find the most recent successful ai_call_signal agent_runs row
+         for this client (Option B — derive freshness state from
+         agent_runs telemetry, no separate column to maintain).
+      2. If no such row exists → fresh compute required (None).
+      3. Find the max created_at on call_review documents for this
+         client.
+      4. If a call_review exists with created_at > the prior compute's
+         started_at → fresh compute required (None).
+      5. Otherwise → reuse prior Signal. Read the most recent
+         client_health_scores row's factors.signals[] for this client,
+         find the ai_call_signal entry, return it verbatim with the
+         note rewritten to indicate the skip.
+
+    Defensive fallback: if step 5 can't locate the prior Signal (e.g.
+    the V1.1 → V2 transition where prior rows had open_action_items
+    instead of ai_call_signal), return None so the caller falls through
+    to a real compute. Never raises.
+
+    Side effect: opens an agent_runs row with status=success and an
+    output_summary starting with "skipped" so cost rollups can split
+    skip rate from compute rate via WHERE output_summary LIKE 'skipped%'.
+
+    Failure semantics: any exception in the freshness-check queries
+    falls through to None (i.e., recompute). Catching here keeps the
+    skip path strictly opportunistic — a DB blip on the freshness
+    check shouldn't leave the brain in a worse state than it was
+    pre-freshness-filter.
+    """
+    try:
+        last_compute_iso = _last_successful_compute_iso(db, client_id)
+    except Exception as exc:
+        logger.warning(
+            "ai_call_signal freshness check (last-compute) failed; "
+            "falling through to recompute",
+            extra={"client_id": client_id, "error": str(exc)[:200]},
+        )
+        return None
+
+    if last_compute_iso is None:
+        # No prior compute on record — first time we see this client
+        # or the V1.1→V2 transition. Recompute.
+        return None
+
+    try:
+        latest_review_iso = _latest_call_review_created_at(db, client_id)
+    except Exception as exc:
+        logger.warning(
+            "ai_call_signal freshness check (latest-review) failed; "
+            "falling through to recompute",
+            extra={"client_id": client_id, "error": str(exc)[:200]},
+        )
+        return None
+
+    # If a new call_review has landed since the last compute → recompute.
+    if latest_review_iso is not None and latest_review_iso > last_compute_iso:
+        return None
+
+    # Inputs unchanged since last compute. Locate the prior Signal.
+    try:
+        prior = _read_prior_ai_signal(db, client_id)
+    except Exception as exc:
+        logger.warning(
+            "ai_call_signal freshness skip: prior signal lookup failed; "
+            "falling through to recompute",
+            extra={"client_id": client_id, "error": str(exc)[:200]},
+        )
+        return None
+    if prior is None:
+        # Defensive: prior client_health_scores row exists per the
+        # last-compute lookup, but its factors.signals[] doesn't
+        # contain an ai_call_signal entry. V1.1→V2 transition shape
+        # is the most likely cause. Recompute to land V2 shape.
+        return None
+
+    prior_signal, prior_concerns = prior
+
+    # Open an agent_runs row for telemetry. Same trigger_type as the
+    # compute path so the run shows up in standard "ai_call_signal
+    # activity since X" queries; output_summary distinguishes skip
+    # from compute for cost rollups.
+    started = time.monotonic()
+    run_id = start_agent_run(
+        agent_name="ai_call_signal",
+        trigger_type=_SCHEDULED_BRAIN_TRIGGER,
+        trigger_metadata={
+            "client_id": client_id,
+            "skipped": True,
+            "last_compute_at": last_compute_iso,
+            "latest_review_at": latest_review_iso,
+        },
+        input_summary=f"client {client_id} (skipped — fresh)",
+    )
+    duration_ms = int((time.monotonic() - started) * 1000)
+    end_agent_run(
+        run_id,
+        status="success",
+        output_summary=(
+            f"{_SKIP_OUTPUT_PREFIX} — fresh "
+            f"(last_compute={last_compute_iso[:19]}; "
+            f"latest_review={(latest_review_iso or 'none')[:19]})"
+        ),
+        duration_ms=duration_ms,
+    )
+
+    # Rewrite the note so the dashboard surfaces the skip provenance
+    # without losing the original LLM-judged reasoning. Original
+    # reasoning is preserved verbatim after a separator.
+    skip_note = (
+        f"AI signal: reused — no new call_review documents since "
+        f"{last_compute_iso[:19]}. Prior reasoning: "
+        f"{prior_signal.get('note', '(no note)')}"
+    )
+    refreshed_signal: Signal = Signal(
+        name=prior_signal["name"],
+        weight=prior_signal["weight"],
+        value=prior_signal.get("value"),
+        contribution=prior_signal["contribution"],
+        note=skip_note,
+    )
+    return (refreshed_signal, prior_concerns)
+
+
+def _last_successful_compute_iso(db: Any, client_id: str) -> str | None:
+    """Most recent successful ai_call_signal agent_runs.started_at for
+    this client. Excludes skip-path rows (their output_summary starts
+    with the skip prefix) so a long string of skips can't trick the
+    freshness check into thinking a real compute happened more recently
+    than it did."""
+    resp = (
+        db.table("agent_runs")
+        .select("started_at, output_summary")
+        .eq("agent_name", "ai_call_signal")
+        .eq("status", "success")
+        .filter("trigger_metadata->>client_id", "eq", client_id)
+        .order("started_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    rows = resp.data or []
+    for row in rows:
+        summary = row.get("output_summary") or ""
+        if summary.startswith(_SKIP_OUTPUT_PREFIX):
+            continue
+        return row.get("started_at")
+    return None
+
+
+def _latest_call_review_created_at(db: Any, client_id: str) -> str | None:
+    """Most recent created_at on a call_review document for this client.
+    Returns the ISO string from the row directly (no parse) — string
+    comparison works for ISO timestamps, which is all the caller needs."""
+    resp = (
+        db.table("documents")
+        .select("created_at")
+        .eq("source", "fathom")
+        .eq("document_type", "call_review")
+        .filter("metadata->>client_id", "eq", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        return None
+    return rows[0].get("created_at")
+
+
+def _read_prior_ai_signal(
+    db: Any, client_id: str
+) -> tuple[Signal, list[AiCallSignalConcern]] | None:
+    """Read the most recent client_health_scores row for this client,
+    extract the ai_call_signal entry from factors.signals[] + the
+    factors.concerns[] array, return as (Signal, concerns).
+
+    Returns None when the most recent row is V1.1-shaped (no
+    ai_call_signal entry) or the lookup fails to find a row.
+    """
+    resp = (
+        db.table("client_health_scores")
+        .select("factors")
+        .eq("client_id", client_id)
+        .order("computed_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        return None
+    factors = rows[0].get("factors") or {}
+    signals = factors.get("signals") or []
+    ai_entry = next(
+        (s for s in signals if isinstance(s, dict) and s.get("name") == "ai_call_signal"),
+        None,
+    )
+    if ai_entry is None:
+        return None
+    # Concerns are stored at the factors level, not per-signal. The
+    # concerns array on the prior row is whatever the prior compute
+    # produced (could be from this same AI signal, could be empty).
+    prior_concerns_raw = factors.get("concerns") or []
+    prior_concerns: list[AiCallSignalConcern] = [
+        c for c in prior_concerns_raw if isinstance(c, dict)
+    ]
+    prior_signal: Signal = Signal(
+        name=ai_entry["name"],
+        weight=ai_entry["weight"],
+        value=ai_entry.get("value"),
+        contribution=ai_entry["contribution"],
+        note=ai_entry.get("note") or "",
+    )
+    return (prior_signal, prior_concerns)
 
 
 # ---------------------------------------------------------------------------
