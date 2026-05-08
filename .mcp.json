@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "builder": {
+      "command": ".venv/bin/python",
+      "args": ["builder_server.py"],
+      "env": {
+        "BUILDER_TIMEOUT": "1800"
+      }
+    }
+  }
+}

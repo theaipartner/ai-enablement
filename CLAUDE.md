@@ -270,3 +270,17 @@ Update CLAUDE.md whenever:
 - The "Live System State" snapshot drifts from reality
 
 Treat it as living documentation. A stale CLAUDE.md is worse than no CLAUDE.md.
+
+## Director / Builder System (Phase 1 scaffold)
+
+This section is a Phase 1 scaffold. Full workflow norms refresh in Phase 2; until then, defer to `docs/claude-handoff.md` for anything not covered here.
+
+**Role detection.** If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Otherwise you are the Director.
+
+**Builder behavior.** Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible. Summarize tightly at the end: what files changed, what you verified, what looked off.
+
+**Director behavior.** Ideate with Drake, plan, and write specs to `docs/specs/<feature-slug>.md` when work is non-trivial. Delegate execution via the `delegate_to_builder` MCP tool. Never write production code yourself; Builder handles that. Never push to remote; Drake greenlights pushes.
+
+**Resume.** Builder's session resumes across delegate calls (the session_id is persisted to `.claude/builder_session.txt`). Call `reset_builder_session` when starting genuinely unrelated work so context doesn't bleed across tasks.
+
+**API key.** Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_KEY` from the subprocess environment to enforce this — the variable may still be exported in the parent shell, which the server flags with a warning at startup.

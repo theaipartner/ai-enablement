@@ -55,3 +55,7 @@ Thumbs.db
 # land here. Not part of the checked-in schema; migrations/ is the
 # canonical source.
 supabase/snippets/
+
+# Director / Builder MCP scaffold — persisted Builder session_id, regenerated
+# per delegate call. .claude/settings.local.json is checked in; this file is not.
+.claude/builder_session.txt
