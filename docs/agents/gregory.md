@@ -88,13 +88,30 @@ tier:  >=70 → green
 
 Thresholds and band cutoffs are V2 starting points. The math is fully transparent in `factors.signals[]` — a reviewer reading the dashboard's "Why this score" expand can recompute the score by hand. Iterate as miscalibration surfaces.
 
+### Freshness filter (daily-cron architecture)
+
+The AI call signal is the only expensive signal in the rubric. To fit the daily sweep within the Vercel Hobby/Pro 300s `maxDuration` ceiling, `compute_ai_call_signal` runs a freshness check before any LLM work — if the client's call_review input set hasn't changed since the last successful compute, the prior Signal is reused verbatim and no Sonnet call fires.
+
+**State source.** Freshness state derives from `agent_runs` rather than a dedicated column on `client_health_scores` — `agent_runs` already records every successful `ai_call_signal` invocation (with `trigger_metadata.client_id` baked in by the existing telemetry); a separate column would duplicate the same fact in two places. Trade-off: a jsonb-key filter on `trigger_metadata->>'client_id'` is the read pattern, which is fine at today's scale (~500 ai_call_signal rows total) but degrades past ~5k rows. Index followup logged in `docs/followups.md`.
+
+**Decision rule.**
+1. Find the most recent `agent_runs` row where `agent_name='ai_call_signal'` AND `status='success'` AND `trigger_metadata->>'client_id'` matches AND `output_summary` does NOT start with `"skipped"`. The skip-row exclusion matters — without it, a long string of skip rows could hide a stale real-compute timestamp and let new reviews go un-recomputed indefinitely.
+2. Find the max `created_at` on `documents` rows for `document_type='call_review'` matching this client.
+3. If (2) > (1) → recompute. Otherwise reuse the prior Signal from the most recent `client_health_scores.factors.signals[]` (find the `ai_call_signal` entry; defensive fallback to recompute if not present, e.g. V1.1→V2 transition).
+
+**Skip path side effects.** Opens an `agent_runs` row with `status='success'` and `output_summary` starting with `"skipped"` — cost rollups split skip-rate from compute-rate via `WHERE output_summary LIKE 'skipped%'`. The new `client_health_scores` row contains the prior AI Signal verbatim (note rewritten to surface skip provenance + preserve original LLM-judged reasoning) PLUS freshly-computed deterministic signals.
+
+**Scope.** Freshness applies ONLY to `ai_call_signal`. The deterministic signals (`call_cadence`, `overdue_action_items`, `latest_nps`) always recompute every sweep — they're cheap and meant to reflect the latest day-of state.
+
+**Accepted 24h-max race.** A Fathom auto-review can land a new `call_review` AFTER the brain has read the freshness timestamp for that client mid-sweep — the new review goes invisible until the next daily sweep, bounded by 24h. This is the explicit trade-off of the daily-cron + freshness-filter architecture; not a bug.
+
 ### Sweep telemetry
 
-`SweepResult` carries `duration_ms` + `avg_per_client_ms` populated at sweep completion. The sweep also emits an INFO log line with these values so cron logs surface the trend without requiring `agent_runs` queries. Feeds the cron-ceiling watchpoint logged in `docs/followups.md` — re-architect (parallelize the per-client loop OR move the AI signal to a separate weekly job) if duration exceeds 8 minutes (80% of the 600s ceiling).
+`SweepResult` carries `duration_ms` + `avg_per_client_ms` populated at sweep completion. The sweep also emits an INFO log line with these values so cron logs surface the trend without requiring `agent_runs` queries. Feeds the cron-ceiling watchpoint logged in `docs/followups.md` — if a daily sweep ever exceeds 240s (80% of 300s), the freshness filter isn't doing enough and we re-evaluate (parallelize the per-client loop OR move the AI signal to a separate weekly job OR upgrade the plan).
 
 ### Cron schedule
 
-Weekly, Mondays 09:00 UTC, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. **`maxDuration=300`** (Vercel Pro plan ceiling — a 600s bump was attempted on V2 ship and rejected at config validation; ship V2 against the existing ceiling and watch real-world sweep duration before deciding on a plan upgrade vs scope split). At ship time the AI signal adds ~25 clients-with-reviews × ~5sec each = ~2 min of LLM time on top of the existing deterministic-only sweep, leaving comfortable headroom against 300s. The cron-ceiling watchpoint in `docs/followups.md` triggers at 80% of 300s (240s).
+**Daily, 09:00 UTC**, via `vercel.json` cron declaration → `api/gregory_brain_cron.py` → `compute_health_for_all_active()`. **`maxDuration=300`** (Vercel Pro plan ceiling). Switched from weekly (Mondays only) to daily on 2026-05-08 alongside the freshness filter — weekly cron meant each sweep accumulated a week of new reviews to process (~30-50 clients × ~5s LLM each, breaching 300s); daily cron with freshness filter means each sweep only fires Sonnet for the ~10 clients with new reviews in the last 24 hours, fitting comfortably under 300s.
 
 Reasoning for weekly (not daily): signal change rate is slow (call cadence moves day-to-day for ~5 clients; action-item churn is gradual; call_review documents land per-call so day-to-day variance is bounded by call frequency), and at scale the LLM cost compounds. Re-eval cadence once dashboard usage tells us something. Manual sweeps via `scripts/run_gregory_brain.py --all` between cron runs are fine.
 
