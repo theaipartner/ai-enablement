@@ -50,6 +50,14 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 
 Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
 
+## Clients list `journey_stage` column sorts alphabetically (not funnel order)
+
+- **What:** the `/clients` list table sorts the Journey stage column alphabetically by underlying value: `business_setup` → `business_setup_activation_done` → `first_closed_deal` → `first_closing_call_taken` → `prospecting` → `ten_k_month`. Funnel order would be: `business_setup` → `business_setup_activation_done` → `prospecting` → `first_closing_call_taken` → `first_closed_deal` → `ten_k_month`. The mismatch matters for at-a-glance reading when CSMs sort by stage to see "where is everyone in the funnel."
+- **Why deferred:** the column is rarely the primary sort surface (default is health-score asc, worst first). Custom sort logic adds complexity for a friction that may never bite.
+- **Next action:** add a per-stage funnel-position constant to `lib/client-vocab.ts` (e.g. derived from the order in `JOURNEY_STAGE_OPTIONS`) and wire `sortRows` in `app/(authenticated)/clients/page.tsx` to consult it for the journey_stage key only. ~10-line change. Other columns keep alphabetical/numeric semantics unchanged.
+- **Revisit trigger:** any CSM Slack-mentioning that the journey-stage sort is confusing OR Drake noticing the order isn't useful during dashboard review.
+- **Logged:** 2026-05-08.
+
 ## Gregory brain V2 weight calibration
 
 - **What:** V2 starting weights are `ai_call_signal 0.50 + call_cadence 0.20 + overdue_action_items 0.10 + latest_nps 0.20`. Heavy-but-balanced — AI signal at half the weight, deterministic floor handles the rest. Drake's call at V2 ship is "iterate after the rubric meets reality."

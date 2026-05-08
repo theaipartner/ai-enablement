@@ -4,7 +4,9 @@ Append-only audit trail for `clients.journey_stage` changes.
 
 ## Purpose
 
-Preserve when a client moved between lifecycle buckets (`onboarding`, `active`, `churning`, `churned`, `alumni`) so the dashboard's Lifecycle & Standing section can show a journey-stage timeline. Same application-layer write pattern as `client_status_history` — the dashboard's edit endpoint writes both `clients.journey_stage` and a new history row in the same transaction.
+Preserve when a client moved between funnel positions (`business_setup`, `business_setup_activation_done`, `prospecting`, `first_closing_call_taken`, `first_closed_deal`, `ten_k_month` per the migration 0028 CHECK on `clients.journey_stage`) so the dashboard's Lifecycle & Standing section can show a journey-stage timeline. Same application-layer write pattern as `client_status_history` — the dashboard's edit endpoint writes both `clients.journey_stage` and a new history row in the same transaction.
+
+**This table has NO CHECK constraint on `journey_stage`** (mirrors the `client_status_history` pattern). The history is append-only audit; if the vocab on `clients.journey_stage` is ever widened or renamed in a future migration, existing history rows with retired values stay valid as historical records. CHECK on history would prevent that.
 
 Seeded at migration time (`0017_client_page_schema_v1.sql`) with one row per non-archived client whose `journey_stage` is non-null. Most existing clients have null `journey_stage`, so the seed produced 0 rows on first run.
 
@@ -32,7 +34,7 @@ Seeded at migration time (`0017_client_page_schema_v1.sql`) with one row per non
 ## Read By
 
 - Gregory dashboard's Lifecycle & Standing section on `/clients/[id]` (journey-stage timeline)
-- Future cohort reporting (e.g. "how long did clients sit in onboarding?")
+- Future cohort reporting (e.g. "how long did clients sit in business_setup before reaching first_closed_deal?")
 
 ## Example Queries
 
@@ -45,7 +47,7 @@ where client_id = $1
 order by changed_at desc;
 ```
 
-Median time spent in onboarding for clients who later went active (rough estimate):
+Median time spent in `business_setup` before transitioning to any later stage (rough estimate):
 
 ```sql
 with stage_changes as (
@@ -55,6 +57,6 @@ with stage_changes as (
 )
 select percentile_cont(0.5) within group (order by extract(epoch from (next_changed_at - changed_at)) / 86400) as median_days
 from stage_changes
-where journey_stage = 'onboarding'
+where journey_stage = 'business_setup'
   and next_changed_at is not null;
 ```
