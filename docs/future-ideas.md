@@ -177,3 +177,17 @@ Build a per-client context vault: credentials, brand assets, hosting info, domai
 - **Why deferred:** capstone of Batch E. Flagged but not specced — depends on B + E being substantially populated before the chatbot has anything meaningful to query.
 - **Revisit trigger:** Batch E + B both have ~4 weeks of populated data.
 - **Logged:** 2026-05-05.
+
+---
+
+## Tooling / Infrastructure (Director's working layer)
+
+Items here aren't Gregory features. They're improvements to the operational layer Director uses day-to-day. Distinct from the agency-product batches above.
+
+### `scripts/apply_migration.py` — migration wrapper
+
+- **What:** a thin Python wrapper Director can call to apply a single migration end-to-end. Reads `supabase/migrations/<NNNN>_<name>.sql`, applies via psycopg2 against the pooler URL (using `SUPABASE_DB_PASSWORD` from `.env.local`), inserts the matching row into `supabase_migrations.schema_migrations`, runs the dual-verify queries (schema reality + ledger registration), returns a structured result. Replaces the raw `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` invocation Director uses today.
+- **Why deferred:** the raw CLI invocation works correctly post-Phase-3 (2026-05-08) and the value of a wrapper is ergonomic, not bug-resilience. Building it before Director hits friction is premature. The hybrid gate model means Drake's SQL review stays upstream regardless — the wrapper doesn't change the gate, it just changes the apply-and-verify mechanism Director uses.
+- **Revisit trigger:** Director feels friction in the CLI-direct path frequently enough to justify the wrapper's build cost. Concrete signals that would tip the balance: (a) the `--password $DB_PW` boilerplate gets re-typed enough to feel error-prone; (b) the dual-verify queries get re-written ad-hoc per migration in ways that miss what a templated wrapper would catch; (c) a CLI behavior change (auto-update, command-flag deprecation, output format shift) breaks the documented `apply_migrations.md` flow and the wrapper would have absorbed that drift.
+- **What it would NOT change:** Drake's SQL review stays the upstream gate. The wrapper handles apply + verify (Director's operational layer per CLAUDE.md § Director / Builder System § Gate trajectory), not the SQL-review gate. Building the wrapper does not move migrations out of the (a) gate set.
+- **Logged:** 2026-05-08 (Phase 3 fix session — wrapper deferred per Drake's "build only when friction surfaces" call).
