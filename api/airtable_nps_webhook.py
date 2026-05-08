@@ -65,16 +65,16 @@ Response shape (200 OK):
     "auto_derive_applied": true|false
   }
 
-NOTE on `auto_derive_applied`: this is a BEST-EFFORT INFERENCE. The
-boolean reports whether the post-RPC csm_standing matches what the
-segment-mapping would produce — i.e., "value matches the mapping," NOT
-"we just wrote it." False positives are possible: if a CSM manually set
-csm_standing='happy' (override-sticky) before a 'promoter' segment
-arrives, the RPC skips the auto-derive but the values still match, and
-this flag will be true. The source of truth for whether an auto-write
-actually happened is `client_standing_history.changed_by` — a Gregory
-Bot UUID on the most recent row means the auto-derive ran. Don't rely
-on this flag for invariants; rely on the history table.
+NOTE on `auto_derive_applied`: as of migration 0027 (NPS-is-gospel),
+the RPC always auto-derives csm_standing from the segment on every
+valid call — there's no override-sticky branch to potentially skip
+the auto-write. The boolean is therefore always `true` on the 200
+success path; preserved in the response shape because Make.com
+consumers may rely on the field. Source of truth for actual writes
+remains `client_standing_history.changed_by` — Gregory Bot UUID on
+the most recent row indicates the auto-derive wrote that history
+row. (The override-sticky semantics this flag was ambiguous about
+were retired in 0027.)
 """
 
 from __future__ import annotations
@@ -132,16 +132,6 @@ _ACCEPTED_SEGMENT_DISPLAY: list[str] = [
     "Neutral",
     "At Risk",
 ]
-
-# Reverse mapping for the auto_derive_applied inference. Mirrors the
-# CASE inside update_client_from_nps_segment — kept in sync by hand.
-# If the RPC's mapping ever changes, change here too.
-_SEGMENT_TO_CSM_STANDING: dict[str, str] = {
-    "promoter": "happy",
-    "neutral": "content",
-    "at_risk": "at_risk",
-}
-
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -354,12 +344,11 @@ class handler(BaseHTTPRequestHandler):
         nps_standing = client_row.get("nps_standing")
         csm_standing = client_row.get("csm_standing")
 
-        # auto_derive_applied: best-effort inference. See module docstring
-        # for the false-positive case. The boolean reports value-matches-
-        # mapping; the source of truth for actual writes is
-        # client_standing_history.changed_by.
-        expected_csm = _SEGMENT_TO_CSM_STANDING.get(normalized_segment)
-        auto_derive_applied = csm_standing == expected_csm
+        # auto_derive_applied: post-0027 (NPS-is-gospel), the RPC
+        # always auto-derives csm_standing from the segment on every
+        # valid call. Always true on the 200 path. Preserved for
+        # response-shape stability — see module docstring.
+        auto_derive_applied = True
 
         _mark_delivery(
             delivery_id,
