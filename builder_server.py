@@ -87,14 +87,51 @@ def _scrubbed_env() -> dict[str, str]:
     return env
 
 
-def _format_footer(cost_usd: float | None, duration_ms: int | None) -> str:
+def _extract_primary_model(payload: dict) -> str | None:
+    """Return the model id that incurred the highest cost in this run.
+
+    The `claude -p --output-format json` payload exposes per-model usage under
+    a top-level `modelUsage` dict (keyed by model id, with `costUSD` per
+    entry). A single run commonly uses multiple models — e.g. the configured
+    primary plus Haiku for auxiliary tasks. The most-expensive model is the
+    one that actually did the work.
+
+    Returns None when `modelUsage` is missing, empty, or otherwise unparseable
+    so the footer can omit the field gracefully rather than crashing.
+    """
+    usage = payload.get("modelUsage")
+    if not isinstance(usage, dict) or not usage:
+        return None
+
+    best_model: str | None = None
+    best_cost = float("-inf")
+    for model_id, stats in usage.items():
+        if not isinstance(stats, dict):
+            continue
+        cost = stats.get("costUSD")
+        if not isinstance(cost, (int, float)):
+            continue
+        if cost > best_cost:
+            best_cost = cost
+            best_model = model_id
+    return best_model
+
+
+def _format_footer(
+    cost_usd: float | None,
+    duration_ms: int | None,
+    model: str | None,
+) -> str:
     cost = f"${cost_usd:.4f}" if isinstance(cost_usd, (int, float)) else "?"
     if isinstance(duration_ms, (int, float)):
         seconds = duration_ms / 1000.0
         time_str = f"{seconds:.1f}s"
     else:
         time_str = "?"
-    return f"\n\n---\n[Builder run — cost: {cost}, time: {time_str}]"
+    parts = [f"cost: {cost}", f"time: {time_str}"]
+    if model:
+        parts.append(f"model: {model}")
+    return f"\n\n---\n[Builder run — {', '.join(parts)}]"
 
 
 @mcp.tool()
@@ -184,7 +221,11 @@ def delegate_to_builder(instructions: str, context: str = "") -> str:
                 f"to {_session_path()}: {exc}"
             )
 
-    footer = _format_footer(payload.get("total_cost_usd"), payload.get("duration_ms"))
+    footer = _format_footer(
+        payload.get("total_cost_usd"),
+        payload.get("duration_ms"),
+        _extract_primary_model(payload),
+    )
     return f"{result_text}{footer}"
 
 
