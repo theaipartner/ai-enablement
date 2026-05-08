@@ -67,7 +67,7 @@ The first auto-review per call costs ~$0.07 in Sonnet tokens at typical transcri
 
 ### AI call signal failure semantics
 
-The AI call signal is on the critical weekly-cron path; an LLM blip or DB blip on this signal must not take down the entire sweep. `compute_ai_call_signal` NEVER raises — three failure surfaces (documents fetch, Claude call, response parse) each fall through to a neutral-50 Signal + empty concerns. Each failure surface has its own try/except so the resulting note text identifies which surface tripped, which makes operational diagnosis cheap from `agent_runs` telemetry. The agent_runs row for the AI signal is opened only when there are reviews to send (no row written when input is empty), and is closed with `status=error` whenever the LLM or parse path fails.
+The AI call signal is on the critical daily-cron path; an LLM blip or DB blip on this signal must not take down the entire sweep. `compute_ai_call_signal` NEVER raises — three failure surfaces (documents fetch, Claude call, response parse) each fall through to a neutral-50 Signal + empty concerns. Each failure surface has its own try/except so the resulting note text identifies which surface tripped, which makes operational diagnosis cheap from `agent_runs` telemetry. The agent_runs row for the AI signal is opened only when there are reviews to send (no row written when input is empty), and is closed with `status=error` whenever the LLM or parse path fails.
 
 Concerns shape match. The AI signal returns concerns matching the existing dashboard renderer's contract — `{text, severity (low|medium|high), source_call_ids[]}`. `source_call_ids` are defensively filtered against the input-call-ids set at parse time, so a hallucinated UUID can't land in `factors.concerns[]`.
 
