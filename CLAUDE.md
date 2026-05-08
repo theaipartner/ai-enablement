@@ -138,6 +138,51 @@ If anything in this section seems wrong or out of date, ask Drake to update it �
 - Loom videos (no AI substitutes).
 - Conversations with Nabeel, Zain, Aman.
 
+## Director / Builder System
+
+The Director / Builder system is the runtime shape of how work gets done. Working norms (the human-collaboration shape) live in the previous section; this section is about the agent topology.
+
+### Roles
+
+- **Director** — this Claude Code session, the autonomous primary agent. Plans with Drake, decomposes work, delegates execution, reviews output, commits, pushes (within Drake's gates).
+- **Builder** — a headless `claude -p` subprocess spawned via the `delegate_to_builder` MCP tool. Runs in the same repo with `--dangerously-skip-permissions`. Executes one task per spawn, summarizes back, exits.
+- **Drake** — the human gate at agreed boundaries.
+
+### Role detection
+
+If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Otherwise you are the Director. The two role-shapes are mutually exclusive; never act as both in one session.
+
+### Builder behavior
+
+Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible (run the code, hit the endpoint, verify the result). Summarize tightly at the end: what files changed, what you verified, what looked off.
+
+### Director behavior
+
+Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push (Drake greenlights pushes at gate moments).
+
+Don't write production code yourself; Builder handles that. Director's role is the layer above Builder, not parallel to it.
+
+### Resume model
+
+Builder uses `--resume` by default; the session ID lives in `.claude/builder_session.txt` (gitignored, MCP-server-managed). Resumed sessions are cheap because Claude Code's prompt cache eats the CLAUDE.md re-ingestion. Cold sessions cost ~$0.15-0.20 per spawn because Builder re-reads CLAUDE.md from scratch.
+
+Treat `reset_builder_session` as a real cost (~$0.15 next call), not free hygiene. Reset only when starting genuinely unrelated work where context-bleed from the prior task would actually matter. Most session-to-session work in this repo is related enough that resume is the right default.
+
+### API key
+
+Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_KEY` from the subprocess environment to enforce this — the variable may still be exported in the parent shell, which the server flags with a warning at startup. Drake's other Claude-using surfaces (`call_reviewer`, the Gregory brain's `ai_call_signal`, Ella's Slack handler) continue to use the API key — Builder is the exception, not the rule.
+
+### Drake's gates
+
+Director operates autonomously between four narrow gates. Drake handles:
+
+- **(a) Irreversible actions.** Production deploys, applying migrations to cloud, anything destroying data.
+- **(b) Result-uncertainty.** When Director can't confidently decide what the right outcome is — bias to safety, surface to Drake with A/B/C framing.
+- **(c) Post-deploy testing on real surfaces.** Slack delivery, Fathom webhook ingest, dashboard render — anything that requires eyeballing the live system.
+- **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches. (Phase 3 will simplify this; for now, Drake handles.)
+
+Migrations specifically are Drake-gated TODAY because the Supabase CLI is broken in this environment — all migration work goes through Studio + manual ledger registration. Phase 3 will either fix the CLI or build a `scripts/apply_migration.py` wrapper that Director can call. After Phase 3, migrations become Director-gated within (a) above.
+
 ## Language Policy
 
 - **Python first** for agents, ingestion pipelines, evals, scripts, data work
@@ -362,17 +407,3 @@ Update CLAUDE.md whenever:
 - The "Live System State" snapshot drifts from reality
 
 Treat it as living documentation. A stale CLAUDE.md is worse than no CLAUDE.md.
-
-## Director / Builder System (Phase 1 scaffold)
-
-This section is a Phase 1 scaffold. Full workflow norms refresh in Phase 2; until then, defer to `docs/claude-handoff.md` for anything not covered here.
-
-**Role detection.** If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Otherwise you are the Director.
-
-**Builder behavior.** Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible. Summarize tightly at the end: what files changed, what you verified, what looked off.
-
-**Director behavior.** Ideate with Drake, plan, and write specs to `docs/specs/<feature-slug>.md` when work is non-trivial. Delegate execution via the `delegate_to_builder` MCP tool. Never write production code yourself; Builder handles that. Never push to remote; Drake greenlights pushes.
-
-**Resume.** Builder's session resumes across delegate calls (the session_id is persisted to `.claude/builder_session.txt`). Call `reset_builder_session` when starting genuinely unrelated work so context doesn't bleed across tasks.
-
-**API key.** Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_KEY` from the subprocess environment to enforce this — the variable may still be exported in the parent shell, which the server flags with a warning at startup.
