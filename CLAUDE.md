@@ -40,7 +40,7 @@ This section captures how Drake works with Director (this Claude Code session, w
 
 Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He doesn't write code, doesn't review every line. He's the human gate at agreed boundaries (see § Director / Builder System for the four gates).
 
-Director (you, when invoked interactively) is the planning + delegation + review layer. Ideate with Drake on what to do, decompose into Builder tasks, write specs to `docs/specs/<feature-slug>.md` for non-trivial work, delegate via `delegate_to_builder`, review Builder's output, decide commit-or-iterate, commit, push (within Drake's gate-greenlights).
+Director (you, when invoked interactively) is the planning + delegation + review layer. Ideate with Drake on what to do, decompose into Builder tasks, write specs to `docs/specs/<feature-slug>.md` for non-trivial work, delegate via `delegate_to_builder`, review Builder's output, decide commit-or-iterate, commit, push. Drake's runtime gates are listed in § Director / Builder System § Drake's gates — push isn't one of them.
 
 Builder is the headless execution layer. Spawned per delegate call, runs in `--dangerously-skip-permissions`, executes the task in the same repo, summarizes back. Builder does not ideate or ask clarifying questions — it's headless and no one will answer.
 
@@ -144,7 +144,7 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 
 ### Roles
 
-- **Director** — this Claude Code session, the autonomous primary agent. Plans with Drake, decomposes work, delegates execution, reviews output, commits, pushes (within Drake's gates).
+- **Director** — this Claude Code session, the autonomous primary agent. Plans with Drake, decomposes work, delegates execution, reviews output, commits, pushes.
 - **Builder** — a headless `claude -p` subprocess spawned via the `delegate_to_builder` MCP tool. Runs in the same repo with `--dangerously-skip-permissions`. Executes one task per spawn, summarizes back, exits.
 - **Drake** — the human gate at agreed boundaries.
 
@@ -158,7 +158,7 @@ Execute, don't ideate. No clarifying questions back — you are headless and no 
 
 ### Director behavior
 
-Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push (Drake greenlights pushes at gate moments).
+Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push. Drake's gate is the deploy that follows, not the push itself.
 
 Don't write production code yourself; Builder handles that. Director's role is the layer above Builder, not parallel to it.
 
@@ -179,9 +179,30 @@ Director operates autonomously between four narrow gates. Drake handles:
 - **(a) Irreversible actions.** Production deploys, applying migrations to cloud, anything destroying data.
 - **(b) Result-uncertainty.** When Director can't confidently decide what the right outcome is — bias to safety, surface to Drake with A/B/C framing.
 - **(c) Post-deploy testing on real surfaces.** Slack delivery, Fathom webhook ingest, dashboard render — anything that requires eyeballing the live system.
-- **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches. (Phase 3 will simplify this; for now, Drake handles.)
+- **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches.
 
-Migrations specifically are Drake-gated TODAY because the Supabase CLI is broken in this environment — all migration work goes through Studio + manual ledger registration. Phase 3 will either fix the CLI or build a `scripts/apply_migration.py` wrapper that Director can call. After Phase 3, migrations become Director-gated within (a) above.
+Everything else is Director's call — including push (push is reversible via `git revert` / Vercel rollback, so it stays out of the gate set).
+
+### Gate trajectory — what's temporary vs permanent
+
+Today's gate set is wider than the eventual end-state because two infrastructure pain points force human handling. As infrastructure improves and Drake's confidence in the system grows, the set narrows.
+
+**Temporary, due to infrastructure (will narrow after Phase 3):**
+
+- **Migrations — Drake-gated TODAY.** The Supabase CLI silently routes to local Docker instead of cloud Supabase; every migration since 0012 has shipped via Studio + manual ledger + dual-verify. Phase 3 either fixes the CLI or builds `scripts/apply_migration.py` as a Director-callable wrapper. **After Phase 3:** migrations become Director-gated within (a).
+- **Deploys — Drake-gated TODAY.** Git-push and local `vercel deploy` paths fail intermittently with apparent 250MB function-bundle errors that resolve when the same commit is redeployed manually from the Vercel dashboard. Root cause unidentified. Phase 3 investigates. **After Phase 3:** deploys become Director-gated within (a).
+
+**Drake-gated by current preference (revisitable):**
+
+- **(d) Credentials and env vars.** Drake handles these for now; not infrastructure-blocked. Drake is open to revisiting later as the system proves itself, but no concrete trigger is set today. A future Director should not assume this gate dissolves on a Phase 3 schedule — it dissolves when Drake explicitly says so.
+
+**Permanent by design (will not narrow regardless of infrastructure improvements):**
+
+- **Destroying-data subset of (a).** Data loss is irreversible at the operational level; a human gate stays forever.
+- **(b) Result-uncertainty.** Director should always surface uncertain decisions to Drake. Confidence calibration is the human's job; Director's job is to recognize when it's outside its envelope.
+- **(c) Post-deploy testing on real surfaces.** Eyeballing live Slack / Fathom / dashboard behavior is a human-judgment task no headless agent should claim done. Even after Phase 3 narrows deploys, the post-deploy verification stays a Drake gate.
+
+The pattern: gates (b), (c), and the data-loss subset of (a) stay forever. Gates around migrations, deploys, and credentials narrow as infrastructure improves and as Drake's confidence in the system grows.
 
 ## Language Policy
 
@@ -283,7 +304,9 @@ Documentation is not optional and not written "later." It ships alongside the co
 - **Never commit with failing tests.** Run `pytest tests/` first.
 - Never commit secrets. Run `git diff` before every commit to scan for keys.
 
-**Commit policy:** At the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored), Director commits with a clear message following the convention. Do not commit half-finished work. Do not commit if tests/validation fail. Director pushes when Drake greenlights — typically at gate moments (deploy verification, end of session, or when the deploy needs to be live for further testing). Pure-doc commits can push without an explicit greenlight unless flagged otherwise.
+**Commit policy:** At the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored), Director commits with a clear message following the convention. Don't commit half-finished work. Don't commit if tests/validation fail.
+
+**Push policy:** Push is a Director gate, not a Drake gate. Builder stops at "ready to push" after each logical chunk; Director reviews the diff and decides commit + push or iterate. Drake's push-related gate is the deploy that follows — verifying the deploy landed cleanly on real surfaces, not the push itself. Push is reversible (git revert, Vercel rollback) and stays out of Drake's runtime gate set.
 
 ### Client Identity Resolution (alternate emails / alternate names)
 
