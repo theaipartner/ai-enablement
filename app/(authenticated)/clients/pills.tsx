@@ -107,8 +107,8 @@ const TRUSTPILOT_CLASSES: Record<string, string> = {
 }
 
 const TRUSTPILOT_LABELS: Record<string, string> = {
-  yes: 'Given',
-  no: 'Declined',
+  yes: 'Yes',
+  no: 'No',
   ask: 'Ask',
   asked: 'Asked',
 }

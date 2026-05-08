@@ -70,15 +70,16 @@ export const NPS_STANDING_LABEL: Record<string, string> = Object.fromEntries(
 
 // ---------------------------------------------------------------------------
 // trustpilot_status — clients.trustpilot_status (CHECK constraint,
-// migration 0020). Labels updated 2026-05-08 alongside the Clients
-// list V2 column swap: "Given" / "Declined" replaced "Yes" / "No" so
-// the filter dropdown labels exactly match the Trustpilot pill in the
-// list table. Underlying values ('yes', 'no', 'ask', 'asked') are
-// unchanged — this is presentation-only.
+// migration 0020). Short labels match the inline-edit dropdown in
+// components/client-detail/adoption-section.tsx — that dropdown is
+// the source of truth (Drake's call 2026-05-08 after a brief
+// "Given"/"Declined" detour was reverted). End state: edit dropdown,
+// filter dropdown, and list-table pill all render "Yes/No/Ask/Asked"
+// for the same underlying values.
 // ---------------------------------------------------------------------------
 export const TRUSTPILOT_OPTIONS = [
-  { value: 'yes', label: 'Given' },
-  { value: 'no', label: 'Declined' },
+  { value: 'yes', label: 'Yes' },
+  { value: 'no', label: 'No' },
   { value: 'ask', label: 'Ask' },
   { value: 'asked', label: 'Asked' },
 ] as const satisfies readonly VocabOption[]
