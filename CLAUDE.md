@@ -235,7 +235,7 @@ Pick these up in order. **Read this section first** when starting a new session 
 
 6. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
 
-**Deferred-decision pending Monday onboarding:** master-sheet-import seed treatment for auto-derive eligibility (137 clients with `changed_by=NULL` history rows are sticky against Path 1 NPS auto-derive). See `docs/followups.md` § "Master-sheet-import seed treatment for auto-derive eligibility."
+**~~Deferred-decision pending Monday onboarding~~** — resolved by NPS-is-gospel migration 0027 (2026-05-08). The 137 master-sheet-seed clients are no longer sticky against Path 1 NPS auto-derive; the override-sticky gate was retired entirely.
 
 ## Ella (sidelined)
 
