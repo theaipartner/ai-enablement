@@ -41,7 +41,7 @@ export function ProfileSection({ client }: { client: ClientDetail }) {
   const swot = (profile.swot ?? {}) as ProfileShape['swot']
 
   return (
-    <Section title="Profile & Background">
+    <Section title="Profile & Background" defaultOpen={false}>
       <div className="space-y-3">
         <EditableField
           label="Niche"

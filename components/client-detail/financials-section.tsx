@@ -27,7 +27,7 @@ function formatDollars(value: unknown): string {
 
 export function FinancialsSection({ client }: { client: ClientDetail }) {
   return (
-    <Section title="Financials">
+    <Section title="Financials" defaultOpen={false}>
       <div className="grid grid-cols-2 gap-4">
         <EditableField
           label="Contracted revenue"
