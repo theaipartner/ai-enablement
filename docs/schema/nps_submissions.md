@@ -29,8 +29,12 @@ Capture promoter/detractor signal as structured data so CSM Co-Pilot can factor 
 
 ## Read By
 
-- CSM Co-Pilot (health score factor; detractor → `alerts` row)
-- Dashboards (trailing NPS, promoter share)
+- Dashboards: the manual `NpsEntryForm` writes to this table; the detail page surfaces individual submissions
+- (Historical) Gregory brain V1.1 `latest_nps` signal read `score` from this table — **retired 2026-05-08**. The signal now reads from `clients.nps_standing` (Airtable mirror via Path 1 + the 0027 NPS-is-gospel auto-derive); see `agents/gregory/signals.py:compute_latest_nps`. This table stayed empty in production through M5 (Airtable Path 1 mirrors segment to `clients.nps_standing`, not numeric score to this table) — the V1 source-of-truth assumption was retired in favor of the column actually populated by production data.
+
+## Future score-piping (V1.5)
+
+Path 1's NPS-is-gospel RPC currently writes only the segment classification (`promoter` / `neutral` / `at_risk`) to `clients.nps_standing`, not the numeric 0-10 score. NPS score piping V1.5 would extend Path 1 to also write `nps_submissions` rows. Followup: see `docs/future-ideas.md` § Batch B.
 
 ## Example Queries
 
