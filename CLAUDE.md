@@ -64,7 +64,7 @@ When Director delegates to Builder, the prompt should include:
 - **Acclimatization checklist** — explicit list of files Builder reads first, with a "confirm in 4-5 bullets" requirement. Catches the case where Builder skims docs.
 - **"What could go wrong" framing as interrogative** — phrase as "think this through yourself, what could go wrong" not as a declaration. Forces Builder to surface risks the prompt didn't anticipate.
 - **Mandatory doc-update instructions** — explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder should say so explicitly.
-- **Hard stops at irreversible / shared-state boundaries** — these substitute for the per-tool permission gates Builder doesn't have. Examples: before applying migrations (Drake runs them), before modifying vercel.json (Drake reviews diff), before deploying (Drake confirms env vars), at smoke-test gates that bill the subscription.
+- **Hard stops at irreversible / shared-state boundaries** — these substitute for the per-tool permission gates Builder doesn't have. Examples: before applying migrations (Drake reviews the SQL diff first), before modifying vercel.json (Drake reviews diff), before deploying (Drake confirms env vars), at smoke-test gates that bill the subscription.
 - **Hard-numerical thresholds** — when a prompt includes a concrete threshold (e.g., "if count exceeds N, stop and surface"), Builder stops at it rather than barreling past. Use thresholds when the failure mode is "we won't notice this until later if it gets out of hand." The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Code stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
 - **Spec-pointer pattern.** For non-trivial work, Director writes a spec to `docs/specs/<feature-slug>.md` first and Builder's prompt is a tight pointer ("read `docs/specs/<feature-slug>.md` and implement").
 - **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
@@ -77,7 +77,7 @@ After Builder finishes meaningful work, Director's review starts at Builder's re
 - **Secrets handling.** Director can read secrets directly from `.env.local` when the task requires it (auth headers, API calls during diagnostics). Never write secrets into committed code, logs, error output, or persistent files outside `.env.local`. Drake retains responsibility for reviewing how secrets are used in code paths + rotation if exposure is suspected.
 - **Discovery before build** for any external integration — read docs, verify with one real authenticated call, inspect actual response shape against assumed adapter shape.
 - **Default: ship highest-priority forward-motion work.** Non-blocking bugs get logged to `docs/known-issues.md`, deferred until they become a real blocker.
-- **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. The Supabase CLI is broken in this environment; all migration work currently goes through Supabase Studio + manual ledger registration (Drake-gated; Phase 3 will simplify).
+- **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. Director runs both verifications post-apply; the discipline is permanent regardless of which apply path is canonical (CLI today, possibly a `scripts/apply_migration.py` wrapper later — see `docs/future-ideas.md`).
 - **Autonomous default when Drake is AFK.** Diagnose + execute the likely fix path autonomously, hard-stop ONLY at human-required steps (smoke tests, irreversible deploys, decisions that need Drake's judgment). Lay out clear A/B/C options for any check-in moment so Drake can resolve via short replies on mobile.
 - **Ephemeral secrets across stateless tool calls.** When Director needs a secret to persist across stateless Bash tool calls, an ephemeral mode-600 `/tmp` file (shred-deleted post-use) is the preferred pattern over `argv` exposure. The "never write secrets to a file" rule is about persistent secret files in repos or home dirs, not ephemeral handoffs between tool calls.
 - **Real-API smoke test before `--apply` on backfills.** Mocked unit tests pass while real-API integration breaks (TS-vs-Python SDK shape, schema column drift). Every backfill script gets a `--smoke` flag that exercises one record end-to-end against the real DB before bulk runs. Working example: `scripts/backfill_call_reviews.py --smoke`.
@@ -194,7 +194,7 @@ Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_K
 
 Director operates autonomously between four narrow gates. Drake handles:
 
-- **(a) Irreversible actions.** Production deploys, applying migrations to cloud, anything destroying data.
+- **(a) Irreversible actions.** Production deploys, anything destroying data, and the SQL review for cloud migrations (the apply + verify steps belong to Director — see § Gate trajectory below).
 - **(b) Result-uncertainty.** When Director can't confidently decide what the right outcome is — bias to safety, surface to Drake with A/B/C framing.
 - **(c) Post-deploy testing on real surfaces.** Slack delivery, Fathom webhook ingest, dashboard render — anything that requires eyeballing the live system.
 - **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches.
@@ -207,7 +207,6 @@ Today's gate set is wider than the eventual end-state because two infrastructure
 
 **Temporary, due to infrastructure (will narrow after Phase 3):**
 
-- **Migrations — Drake-gated TODAY.** The Supabase CLI silently routes to local Docker instead of cloud Supabase; every migration since 0012 has shipped via Studio + manual ledger + dual-verify. Phase 3 either fixes the CLI or builds `scripts/apply_migration.py` as a Director-callable wrapper. **After Phase 3:** migrations become Director-gated within (a).
 - **Deploys — Drake-gated TODAY.** Git-push and local `vercel deploy` paths fail intermittently with apparent 250MB function-bundle errors that resolve when the same commit is redeployed manually from the Vercel dashboard. Root cause unidentified. Phase 3 investigates. **After Phase 3:** deploys become Director-gated within (a).
 
 **Drake-gated by current preference (revisitable):**
@@ -217,10 +216,11 @@ Today's gate set is wider than the eventual end-state because two infrastructure
 **Permanent by design (will not narrow regardless of infrastructure improvements):**
 
 - **Destroying-data subset of (a).** Data loss is irreversible at the operational level; a human gate stays forever.
+- **Migrations — SQL-review portion of (a).** Drake reviews the SQL diff before apply; that judgment gate is permanent. The operational layer (apply + dual-verify) sits with Director — via `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` today, possibly via `scripts/apply_migration.py` later (see `docs/future-ideas.md`). Was Drake-gated end-to-end during the CLI-broken era (2026-04-28 to 2026-05-08) when migrations went through Studio + manual ledger; Phase 3 discovery (2026-05-08) moved apply + verify to Director once the CLI was confirmed correct. The operational mechanism may shift further; the SQL-review gate stays. See `docs/runbooks/apply_migrations.md` § Gate model for operational details.
 - **(b) Result-uncertainty.** Director should always surface uncertain decisions to Drake. Confidence calibration is the human's job; Director's job is to recognize when it's outside its envelope.
 - **(c) Post-deploy testing on real surfaces.** Eyeballing live Slack / Fathom / dashboard behavior is a human-judgment task no headless agent should claim done. Even after Phase 3 narrows deploys, the post-deploy verification stays a Drake gate.
 
-The pattern: gates (b), (c), and the data-loss subset of (a) stay forever. Gates around migrations, deploys, and credentials narrow as infrastructure improves and as Drake's confidence in the system grows.
+The pattern: gates (b), (c), the data-loss subset of (a), and the SQL-review portion of migrations stay forever. Gates around deploys and credentials narrow as infrastructure improves and as Drake's confidence in the system grows; the operational layer of migrations already narrowed (Drake-handled → Director-handled) post-Phase-3.
 
 ## Language Policy
 
