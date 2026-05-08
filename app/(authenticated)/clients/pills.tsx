@@ -66,3 +66,57 @@ export function NeedsReviewPill() {
     </Badge>
   )
 }
+
+// Clients list V2 column swap (2026-05-08). Shape + palette mirrors
+// StatusPill above so the row reads as a coherent strip of pills.
+// Labels MUST match lib/client-vocab.ts NPS_STANDING_OPTIONS labels
+// — filter dropdown and table cell render identical strings for the
+// same data.
+
+const NPS_STANDING_CLASSES: Record<string, string> = {
+  promoter: 'bg-emerald-100 text-emerald-900 border-emerald-200',
+  neutral: 'bg-amber-100 text-amber-900 border-amber-200',
+  at_risk: 'bg-rose-100 text-rose-900 border-rose-200',
+}
+
+const NPS_STANDING_LABELS: Record<string, string> = {
+  promoter: 'Promoter',
+  neutral: 'Neutral',
+  at_risk: 'At Risk',
+}
+
+export function NpsStandingPill({ standing }: { standing: string | null }) {
+  if (!standing) return <span className="text-muted-foreground">—</span>
+  const cls =
+    NPS_STANDING_CLASSES[standing] ??
+    'bg-zinc-100 text-zinc-700 border-zinc-200'
+  const label = NPS_STANDING_LABELS[standing] ?? standing
+  return <Badge className={cn('border', cls)}>{label}</Badge>
+}
+
+// Trustpilot pill — distinct sky/blue treatment on 'asked' so the four
+// states are visually distinguishable at a glance (Given=emerald,
+// Declined=rose, Ask=amber, Asked=sky). Labels match
+// lib/client-vocab.ts TRUSTPILOT_OPTIONS labels exactly.
+
+const TRUSTPILOT_CLASSES: Record<string, string> = {
+  yes: 'bg-emerald-100 text-emerald-900 border-emerald-200',
+  no: 'bg-rose-100 text-rose-900 border-rose-200',
+  ask: 'bg-amber-100 text-amber-900 border-amber-200',
+  asked: 'bg-sky-100 text-sky-900 border-sky-200',
+}
+
+const TRUSTPILOT_LABELS: Record<string, string> = {
+  yes: 'Given',
+  no: 'Declined',
+  ask: 'Ask',
+  asked: 'Asked',
+}
+
+export function TrustpilotPill({ status }: { status: string | null }) {
+  if (!status) return <span className="text-muted-foreground">—</span>
+  const cls =
+    TRUSTPILOT_CLASSES[status] ?? 'bg-zinc-100 text-zinc-700 border-zinc-200'
+  const label = TRUSTPILOT_LABELS[status] ?? status
+  return <Badge className={cn('border', cls)}>{label}</Badge>
+}
