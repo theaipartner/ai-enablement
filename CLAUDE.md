@@ -68,8 +68,9 @@ When Director delegates to Builder, the prompt should include:
 - **Hard-numerical thresholds** — when a prompt includes a concrete threshold (e.g., "if count exceeds N, stop and surface"), Builder stops at it rather than barreling past. Use thresholds when the failure mode is "we won't notice this until later if it gets out of hand." The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Code stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
 - **Spec-pointer pattern.** For non-trivial work, Director writes a spec to `docs/specs/<feature-slug>.md` first and Builder's prompt is a tight pointer ("read `docs/specs/<feature-slug>.md` and implement").
 - **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
+- **Don't restate the report structure in the prompt.** Builder's CLAUDE.md-loaded behavior already specifies the five-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the prompt if the work needs an additional field beyond the standard five (rare).
 
-After Builder finishes meaningful work, Director should ask itself: "explain what this does and what could go wrong." Catches most issues before they compound. Treat Builder's summary as "what Builder intended to do," not "what Builder actually did" — verify before reporting work as done to Drake.
+After Builder finishes meaningful work, Director's review starts at Builder's report (the five-section structure) and spot-checks files only when something feels off. Treat the report as "what Builder intended to do," not "what Builder actually did" — verify the touched-files list against `git diff` before reporting work as done to Drake.
 
 ### Operational patterns Director is strict about
 
@@ -154,7 +155,19 @@ If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Oth
 
 ### Builder behavior
 
-Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible (run the code, hit the endpoint, verify the result). Summarize tightly at the end: what files changed, what you verified, what looked off.
+Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible (run the code, hit the endpoint, verify the result).
+
+**End-of-turn report.** Builder's report is the primary artifact Director uses to decide commit-or-iterate. Director shouldn't have to re-read every changed file to feel confident in the review — that defeats the delegation. Structure the report with these five sections (use them even when a section is empty; an explicit "none" is information):
+
+1. **Files touched.** Group by operation (created / modified / deleted). Repo-relative paths. One line per file with a one-clause description of what changed in it ("added handler for foo", "flipped pronoun on three lines", "pure rename"). Director uses this list to know where to spot-check if anything else feels off.
+2. **What I did, in plain English.** High-level summary at the "added X functionality to Y, refactored Z to use the shared helper" level. Not file contents, not diff hunks. The "why" behind the touched-files list. 3-7 sentences typically.
+3. **Verification.** What ran (tests by name or pattern, smoke scripts by what they exercised, manual checks like "curl'd the endpoint and got 200"), what passed, what failed. If a test is implied by the work but wasn't run, say so explicitly with a reason ("didn't run the full pytest suite because the change was docs-only"). If testing was constrained in a way that doesn't fully cover the change, flag the gap.
+4. **Surprises and judgment calls.** Anything the prompt didn't anticipate. Decisions made that Director might have made differently — name them, even when confident in the call. Risks noticed but not fixed. Errors worked around. Director uses this to decide whether to second-guess.
+5. **Out of scope / deferred.** What was explicitly NOT done that the prompt could be read as covering. What would come next if continuing. Anything noticed that should become a `docs/known-issues.md` or `docs/future-ideas.md` entry. An explicit "none" is fine if the prompt was tight and execution was clean.
+
+The MCP server adds a cost/time/model footer automatically — don't repeat it. If something specific in the work was unusually expensive (e.g., "the test suite re-run ate ~half the runtime"), call it out in the relevant section above so Director can tie cost to outcome.
+
+Director treats the report as "what Builder intended to do," not "what Builder actually did" — Director verifies the touched-files list against the actual `git diff` before reporting work as done to Drake.
 
 ### Director behavior
 
