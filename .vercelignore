@@ -34,3 +34,9 @@ node_modules/
 
 # Supabase local-only artifacts
 supabase/.temp/
+
+# Local ingestion run logs — gitignored, but `vercel deploy` from local
+# doesn't honor .gitignore, so mirror it here. ~13 MB of fathom/slack/
+# course/master-sheet ingestion logs that have no business in a
+# production function bundle.
+data/
