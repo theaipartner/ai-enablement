@@ -179,7 +179,12 @@ Don't write production code yourself; Builder handles that. Director's role is t
 
 Builder uses `--resume` by default; the session ID lives in `.claude/builder_session.txt` (gitignored, MCP-server-managed). Resumed sessions are cheap because Claude Code's prompt cache eats the CLAUDE.md re-ingestion. Cold sessions cost ~$0.15-0.20 per spawn because Builder re-reads CLAUDE.md from scratch.
 
-Treat `reset_builder_session` as a real cost (~$0.15 next call), not free hygiene. Reset only when starting genuinely unrelated work where context-bleed from the prior task would actually matter. Most session-to-session work in this repo is related enough that resume is the right default.
+**Two triggers pay the cold-start tax**, not just one:
+
+1. **`reset_builder_session` was called.** Treat the reset as a real ~$0.15 cost on the next call, not free hygiene. Reset only when starting genuinely unrelated work where context-bleed from the prior task would actually matter.
+2. **Anthropic's prompt cache TTL (~5 minutes) expired between calls.** Even with `--resume` working perfectly, a Builder session that sat idle longer than ~5 minutes pays the cold-start tax on the next call. Not a bug — the prompt cache lives on Anthropic's API side and has a fixed TTL; `--resume` is Claude Code's session-state mechanism, separate from the cache. Cadence matters: tight back-to-back delegate calls stay cached and cheap; idle-then-resume reverts to cold pricing.
+
+Most session-to-session work in this repo is related enough that resume is the right default — but expect a $0.15 hit any time Director picks up a delegate thread after a meaningful pause.
 
 ### API key
 
