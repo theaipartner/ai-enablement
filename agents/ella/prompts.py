@@ -158,7 +158,7 @@ def build_system_prompt(
 
 def _render_client_section(client: dict[str, Any]) -> str:
     full_name = client.get("full_name") or "(unknown client)"
-    journey_stage = client.get("journey_stage") or "active"
+    journey_stage = client.get("journey_stage") or "unknown"
     csm = client.get("primary_csm") or {}
     csm_name = csm.get("full_name") or "(unassigned)"
 

@@ -87,3 +87,32 @@ export const TRUSTPILOT_OPTIONS = [
 export type TrustpilotValue = (typeof TRUSTPILOT_OPTIONS)[number]['value']
 export const TRUSTPILOT_VALUES: readonly TrustpilotValue[] =
   TRUSTPILOT_OPTIONS.map((o) => o.value)
+
+// ---------------------------------------------------------------------------
+// journey_stage — clients.journey_stage (CHECK constraint, migration 0028)
+// ---------------------------------------------------------------------------
+// Six-value funnel taxonomy. Replaced the V1 free-text shape on
+// 2026-05-08; pre-apply data was 100% NULL so no backfill needed.
+// Order in this array IS the funnel order — filter dropdown renders
+// in this order; the list-table column sorts alphabetically by value
+// today (followup logged for custom funnel-position sort if friction
+// surfaces).
+// ---------------------------------------------------------------------------
+export const JOURNEY_STAGE_OPTIONS = [
+  { value: 'business_setup', label: 'Business setup' },
+  {
+    value: 'business_setup_activation_done',
+    label: 'Setup + activation done',
+  },
+  { value: 'prospecting', label: 'Prospecting' },
+  { value: 'first_closing_call_taken', label: 'First closing call' },
+  { value: 'first_closed_deal', label: 'First closed deal' },
+  { value: 'ten_k_month', label: '$10k/month' },
+] as const satisfies readonly VocabOption[]
+
+export type JourneyStageValue = (typeof JOURNEY_STAGE_OPTIONS)[number]['value']
+export const JOURNEY_STAGE_VALUES: readonly JourneyStageValue[] =
+  JOURNEY_STAGE_OPTIONS.map((o) => o.value)
+export const JOURNEY_STAGE_LABEL: Record<string, string> = Object.fromEntries(
+  JOURNEY_STAGE_OPTIONS.map((o) => [o.value, o.label]),
+)

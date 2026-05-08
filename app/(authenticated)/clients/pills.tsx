@@ -3,6 +3,7 @@
 // the table and detail page render them identically.
 
 import { Badge } from '@/components/ui/badge'
+import { JOURNEY_STAGE_LABEL } from '@/lib/client-vocab'
 import { cn } from '@/lib/utils'
 
 const STATUS_CLASSES: Record<string, string> = {
@@ -20,9 +21,14 @@ export function StatusPill({ status }: { status: string }) {
 
 export function JourneyStagePill({ stage }: { stage: string | null }) {
   if (!stage) return <span className="text-muted-foreground">—</span>
+  // Label lookup via the migration-0028 vocab. Defensive: any value
+  // outside the CHECK-constrained vocab (shouldn't reach here
+  // post-0028, but a future widening might land before the vocab
+  // does) falls through to the raw string.
+  const label = JOURNEY_STAGE_LABEL[stage] ?? stage
   return (
     <Badge variant="outline" className="font-normal">
-      {stage}
+      {label}
     </Badge>
   )
 }
