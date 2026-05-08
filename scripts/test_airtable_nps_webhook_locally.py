@@ -2,16 +2,24 @@
 
 Stands up the real `handler` class in a background thread via
 http.server.HTTPServer (same class Vercel instantiates in prod). Runs
-8 paths (2 happy + 6 negative), checks HTTP response + cloud DB state
-for each, cleans up the test client's nps_standing + csm_standing in
-try/finally. Mirrors scripts/test_fathom_webhook_locally.py.
+10 paths (2 happy + 2 NPS-is-gospel + 6 negative), checks HTTP
+response + cloud DB state for each, hard-deletes the seeded fixture
+in try/finally. Mirrors scripts/test_fathom_webhook_locally.py.
 
-Test client: Branden Bledsoe (brandenbledsoe@transcendcu.com) — active,
-csm_standing NULL, no client_standing_history rows pre-test. After
-this run the client will have N standing_history rows attributable to
-Gregory Bot (intentional — clearing csm_standing back to NULL doesn't
-delete history per the 0018 RPC contract). Branden was selected per
-M5.4 receiver chunk: low-profile, not on Drake/Scott's watchlist.
+Test fixture: self-seeded per-run, hard-deleted on teardown. Mirrors
+the M5.9 onboarding harness (`_seed_test_fixture` /
+`_teardown_test_fixture`) — replaced the prior static-Branden
+fixture pattern after Branden was archived in the M5
+misclassification cleanup (2026-05-05). Per-run unique email so
+concurrent harness runs don't collide.
+
+NPS-is-gospel paths (added with migration 0027):
+  - 2b: manual csm_standing='problem' + 'Strong / Promoter' segment
+        → flips to 'happy' (post-0027 the override-sticky branch is
+        gone; segment always wins).
+  - 2c: manual csm_standing='happy' + 'Strong / Promoter' segment
+        → idempotent no-op via the underlying 0018 RPC's IS NOT
+        DISTINCT FROM check; no new history row.
 
 Uses a TEST webhook secret (NOT production). Sets the secret itself
 if AIRTABLE_NPS_WEBHOOK_SECRET is unset, so you can just run:
@@ -32,6 +40,7 @@ import time
 import traceback
 import urllib.request
 import urllib.error
+import uuid
 from http.server import HTTPServer
 from pathlib import Path
 
@@ -48,8 +57,16 @@ from api.airtable_nps_webhook import handler  # noqa: E402 — env-first
 from shared.db import get_client  # noqa: E402
 
 
-# Test client — see module docstring for selection criteria.
-TEST_CLIENT_EMAIL = "brandenbledsoe@transcendcu.com"
+# Per-run unique fixture. Self-seeded at harness start, hard-deleted
+# on teardown. Per-run uuid suffix so concurrent harness invocations
+# don't collide.
+RUN_TOKEN = uuid.uuid4().hex[:10]
+TEST_CLIENT_EMAIL = f"nps-test-{RUN_TOKEN}@nowhere.invalid"
+TEST_CLIENT_FULL_NAME = f"NPS Test Fixture {RUN_TOKEN}"
+GREGORY_BOT_UUID = "cfcea32a-062d-4269-ae0f-959adac8f597"
+
+# Populated by _seed_test_fixture() at harness start.
+_TEST_FIXTURE_ID: str | None = None
 
 
 def _pg_conn():
@@ -234,31 +251,82 @@ def _count_deliveries_with_source(source: str, since_ts: float) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Cleanup
+# Fixture lifecycle (mirrors scripts/test_airtable_onboarding_webhook_locally.py)
 # ---------------------------------------------------------------------------
 
 
-def _reset_test_client() -> None:
-    """Clear nps_standing + csm_standing on the test client. History rows
-    are intentionally NOT deleted (matches the 0018 RPC contract on
-    null-clear: history table preserves the record of past values)."""
-    state = _client_state(TEST_CLIENT_EMAIL)
-    if state["id"] is None:
+def _seed_test_fixture() -> None:
+    """Insert a fresh test client. csm_standing + nps_standing both
+    null at start so test 1's "promoter from clean state" assertion
+    holds. Per-run unique email so concurrent harness runs don't
+    collide."""
+    global _TEST_FIXTURE_ID
+    conn = _pg_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO clients (
+              full_name, email, status, csm_standing, nps_standing,
+              tags, metadata
+            ) VALUES (
+              %s, %s, 'active', NULL, NULL, '{}'::text[],
+              jsonb_build_object('seeded_by', 'test_airtable_nps_webhook_locally')
+            ) RETURNING id;
+            """,
+            (TEST_CLIENT_FULL_NAME, TEST_CLIENT_EMAIL),
+        )
+        _TEST_FIXTURE_ID = str(cur.fetchone()[0])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _teardown_test_fixture() -> None:
+    """Hard-delete the seeded client + its history rows. Synthetic
+    fixture; leaving an archived row + history is just clutter."""
+    if _TEST_FIXTURE_ID is None:
+        return
+    conn = _pg_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM client_standing_history WHERE client_id = %s",
+            (_TEST_FIXTURE_ID,),
+        )
+        cur.execute(
+            "DELETE FROM client_status_history WHERE client_id = %s",
+            (_TEST_FIXTURE_ID,),
+        )
+        cur.execute(
+            "DELETE FROM clients WHERE id = %s",
+            (_TEST_FIXTURE_ID,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _reset_test_client_state() -> None:
+    """Reset the seeded client's nps_standing + csm_standing back to
+    NULL between tests. Used between test 2 and the NPS-is-gospel
+    tests (2b/2c) so each starts from a known clean state. History
+    rows preserved per the 0018 RPC contract on null-clear."""
+    if _TEST_FIXTURE_ID is None:
         return
     db = get_client()
     db.table("clients").update({"nps_standing": None}).eq(
-        "id", state["id"]
+        "id", _TEST_FIXTURE_ID
     ).execute()
-    if state["csm_standing"] is not None:
-        db.rpc(
-            "update_client_csm_standing_with_history",
-            {
-                "p_client_id": state["id"],
-                "p_new_csm_standing": None,
-                "p_changed_by": None,
-                "p_note": "test_airtable_nps_webhook_locally cleanup",
-            },
-        ).execute()
+    db.rpc(
+        "update_client_csm_standing_with_history",
+        {
+            "p_client_id": _TEST_FIXTURE_ID,
+            "p_new_csm_standing": None,
+            "p_changed_by": None,
+            "p_note": "test_airtable_nps_webhook_locally between-test reset",
+        },
+    ).execute()
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +345,7 @@ def _check(name: str, condition: bool, detail: str) -> None:
 
 def test_1_promoter_happy_path(url: str) -> None:
     print("\n[1] Valid payload, segment='Strong / Promoter' → 200, auto-derive=true")
-    _reset_test_client()  # ensure clean starting state
+    _reset_test_client_state()  # ensure clean starting state
     pre = _client_state(TEST_CLIENT_EMAIL)
     _check("1.pre", pre["csm_standing"] is None, f"pre csm_standing={pre['csm_standing']}")
 
@@ -343,6 +411,144 @@ def test_2_at_risk_happy_path(url: str) -> None:
     _check("2.nps_standing", body.get("nps_standing") == "at_risk", f"got {body.get('nps_standing')!r}")
     _check("2.csm_standing", body.get("csm_standing") == "at_risk", f"got {body.get('csm_standing')!r}")
     _check("2.auto_derive", body.get("auto_derive_applied") is True, f"got {body.get('auto_derive_applied')!r}")
+
+
+def _set_manual_csm_standing(value: str) -> None:
+    """Set the seeded fixture's csm_standing manually (changed_by=NULL
+    — a real CSM-ish manual write that pre-0027 would have triggered
+    the override-sticky branch)."""
+    if _TEST_FIXTURE_ID is None:
+        raise RuntimeError("seeded fixture missing — _seed_test_fixture not called")
+    db = get_client()
+    db.rpc(
+        "update_client_csm_standing_with_history",
+        {
+            "p_client_id": _TEST_FIXTURE_ID,
+            "p_new_csm_standing": value,
+            "p_changed_by": None,
+            "p_note": "test fixture — manual override pre-NPS-is-gospel",
+        },
+    ).execute()
+
+
+def test_2b_problem_override_gets_flipped_by_segment(url: str) -> None:
+    """NPS-is-gospel: client with manual csm_standing='problem' (no
+    segment maps to 'problem') receives a 'Strong / Promoter' segment
+    → csm_standing flips to 'happy', latest history row attributed to
+    Gregory Bot. Pre-0027 this would have been blocked by override-
+    sticky (manual judgment wins); post-0027 NPS overwrites."""
+    print("\n[2b] Manual csm_standing='problem' + segment='Strong / Promoter' → flips to 'happy', Gregory Bot history row")
+    _reset_test_client_state()
+    _set_manual_csm_standing("problem")
+    pre = _client_state(TEST_CLIENT_EMAIL)
+    _check(
+        "2b.pre.csm",
+        pre["csm_standing"] == "problem",
+        f"pre csm_standing={pre['csm_standing']}",
+    )
+
+    status, body = _post_with_secret(
+        url,
+        {
+            "client_email": TEST_CLIENT_EMAIL,
+            "segment": "Strong / Promoter",
+            "airtable_record_id": "rec_test_2b_problem_flip",
+        },
+    )
+    _check("2b.status", status == 200, f"got HTTP {status}, body={body}")
+    if not body:
+        return
+    _check(
+        "2b.csm_standing",
+        body.get("csm_standing") == "happy",
+        f"got {body.get('csm_standing')!r} — expected 'happy' (NPS-is-gospel overwrite)",
+    )
+    _check(
+        "2b.auto_derive",
+        body.get("auto_derive_applied") is True,
+        f"got {body.get('auto_derive_applied')!r}",
+    )
+
+    post = _client_state(TEST_CLIENT_EMAIL)
+    _check(
+        "2b.db.csm_flipped",
+        post["csm_standing"] == "happy",
+        f"db csm_standing={post['csm_standing']}",
+    )
+
+    GREGORY_BOT = "cfcea32a-062d-4269-ae0f-959adac8f597"
+    history = _latest_history_changed_by(post["id"])
+    _check(
+        "2b.history.gregory_bot",
+        history == GREGORY_BOT,
+        f"latest history changed_by={history} — expected Gregory Bot",
+    )
+
+
+def test_2c_matching_value_is_idempotent_no_history(url: str) -> None:
+    """When the segment-derived value already matches current
+    csm_standing, the underlying RPC's idempotency kicks in: NO new
+    history row is written. Confirms the 0018 IS NOT DISTINCT FROM
+    check still gates writes after the override-sticky removal."""
+    print("\n[2c] Manual csm_standing='happy' + segment='Strong / Promoter' → idempotent no-op, no new history row")
+    _reset_test_client_state()
+    _set_manual_csm_standing("happy")
+    pre = _client_state(TEST_CLIENT_EMAIL)
+    _check(
+        "2c.pre.csm",
+        pre["csm_standing"] == "happy",
+        f"pre csm_standing={pre['csm_standing']}",
+    )
+
+    # Snapshot history-row count before the call so we can confirm no
+    # new row landed.
+    pre_history_count = _count_history_rows(pre["id"])
+
+    status, body = _post_with_secret(
+        url,
+        {
+            "client_email": TEST_CLIENT_EMAIL,
+            "segment": "Strong / Promoter",
+            "airtable_record_id": "rec_test_2c_idempotent",
+        },
+    )
+    _check("2c.status", status == 200, f"got HTTP {status}, body={body}")
+    if not body:
+        return
+    _check(
+        "2c.csm_standing",
+        body.get("csm_standing") == "happy",
+        f"got {body.get('csm_standing')!r}",
+    )
+    # auto_derive_applied is always True now per the 0027 contract —
+    # but the underlying write should have been a no-op.
+    _check(
+        "2c.auto_derive",
+        body.get("auto_derive_applied") is True,
+        f"got {body.get('auto_derive_applied')!r}",
+    )
+
+    post_history_count = _count_history_rows(pre["id"])
+    _check(
+        "2c.history.no_new_row",
+        post_history_count == pre_history_count,
+        f"history rows pre={pre_history_count} post={post_history_count} — "
+        "expected unchanged (idempotent on matching value)",
+    )
+
+
+def _count_history_rows(client_id: str) -> int:
+    """Count of client_standing_history rows for a given client."""
+    conn = _pg_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM client_standing_history WHERE client_id = %s",
+            (client_id,),
+        )
+        return int(cur.fetchone()[0])
+    finally:
+        conn.close()
 
 
 def test_3_missing_secret(url: str) -> None:
@@ -433,6 +639,10 @@ def main() -> int:
     url = _start_server()
     print(f"Receiver listening at {url}")
 
+    print("\nSeeding test fixture…")
+    _seed_test_fixture()
+    print(f"  fixture_id={_TEST_FIXTURE_ID} email={TEST_CLIENT_EMAIL}")
+
     # Snapshot: count of webhook_deliveries rows for our source before tests.
     start_ts = time.time()
     pre_delivery_count = _count_deliveries_with_source(
@@ -443,6 +653,8 @@ def main() -> int:
     try:
         test_1_promoter_happy_path(url)
         test_2_at_risk_happy_path(url)
+        test_2b_problem_override_gets_flipped_by_segment(url)
+        test_2c_matching_value_is_idempotent_no_history(url)
         test_3_missing_secret(url)
         test_4_wrong_secret(url)
         test_5_invalid_json(url)
@@ -451,9 +663,9 @@ def main() -> int:
         test_8_no_client_match(url)
     finally:
         print("\n" + "=" * 72)
-        print("Cleanup: resetting test client nps_standing + csm_standing to NULL")
+        print(f"Cleanup: hard-deleting seeded fixture {_TEST_FIXTURE_ID}")
         try:
-            _reset_test_client()
+            _teardown_test_fixture()
             post_state = _client_state(TEST_CLIENT_EMAIL)
             print(f"Post-cleanup state: {post_state}")
         except Exception:
