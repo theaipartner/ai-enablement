@@ -32,6 +32,112 @@ These four principles protect the system from lock-in and rebuilds. Apply them t
 | Dev environment | WSL2 Ubuntu on Windows | All dev happens inside WSL. VS Code with Remote-WSL extension. |
 | Secrets | Bitwarden master list + env vars | `.env.local` locally, Vercel env vars in production. See `.env.example` — required keys today: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`. `SUPABASE_DB_PASSWORD` is also set in `.env.local` for ops scripts that connect directly via psycopg2 (migrations, seeds, diagnostics) — not required by webhooks or the agent runtime. |
 
+## Working Norms
+
+This section captures how Drake works with Director (this Claude Code session, when invoked interactively) and Builder (the headless `claude -p` subprocess Director spawns via the `delegate_to_builder` MCP tool). The Director / Builder mechanics live in the next section; this one is about the human-collaboration shape.
+
+### Drake / Director / Builder
+
+Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He doesn't write code, doesn't review every line. He's the human gate at agreed boundaries (see § Director / Builder System for the four gates).
+
+Director (you, when invoked interactively) is the planning + delegation + review layer. Ideate with Drake on what to do, decompose into Builder tasks, write specs to `docs/specs/<feature-slug>.md` for non-trivial work, delegate via `delegate_to_builder`, review Builder's output, decide commit-or-iterate, commit, push (within Drake's gate-greenlights).
+
+Builder is the headless execution layer. Spawned per delegate call, runs in `--dangerously-skip-permissions`, executes the task in the same repo, summarizes back. Builder does not ideate or ask clarifying questions — it's headless and no one will answer.
+
+Drake's role at runtime is now narrower than the old paste-relay model: irreversibles, result-uncertainty, post-deploy testing, env vars / credentials. Director handles all daily operational work without check-in.
+
+### Communication preferences
+
+- **No time references** (dates, days, weeks, "this week," "by tomorrow"). Keep things relative to work state, not calendar.
+- **Direct feedback.** Flag bad moves. If Drake's about to make a wrong call, push back before agreeing. The working norm is "tell me what you actually think, not what I want to hear."
+- **Use analogies for novel technical concepts.** Drake is not deeply technical.
+- **Short messages during active work, longer framing at breakpoints.** Smoke test clicks don't need essays. Scoping a feature does.
+- **Avoid forced-answer prompts (`AskUserQuestion`-style tools) for clarifying questions.** Drake prefers questions laid out in response prose so he can read at his own pace and reply in his own words. Forced-answer tools feel constraining. Lay clarifying questions inline; let Drake answer however suits him.
+- **Option A / B / C framing for tradeoff decisions.** Lay out realistic options, name tradeoffs honestly, give your lean and why, let Drake decide.
+- **Capture decisions in writing as you make them.** Memory-style updates in chat are good. Drake wants to be able to look back and see why calls were made.
+- **Strong leans → make the call.** If you have a strong lean and the consequence of being wrong is recoverable, make the call and note it for Drake to check. Hard stops are reserved for: irreversible actions, credential touches, deploys, migrations, anything where being wrong costs significant cleanup time, decisions with no good default. Don't pile on stops where there's no real boundary.
+
+### Builder prompt structure
+
+When Director delegates to Builder, the prompt should include:
+
+- **Acclimatization checklist** — explicit list of files Builder reads first, with a "confirm in 4-5 bullets" requirement. Catches the case where Builder skims docs.
+- **"What could go wrong" framing as interrogative** — phrase as "think this through yourself, what could go wrong" not as a declaration. Forces Builder to surface risks the prompt didn't anticipate.
+- **Mandatory doc-update instructions** — explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder should say so explicitly.
+- **Hard stops at irreversible / shared-state boundaries** — these substitute for the per-tool permission gates Builder doesn't have. Examples: before applying migrations (Drake runs them), before modifying vercel.json (Drake reviews diff), before deploying (Drake confirms env vars), at smoke-test gates that bill the subscription.
+- **Hard-numerical thresholds** — when a prompt includes a concrete threshold (e.g., "if count exceeds N, stop and surface"), Builder stops at it rather than barreling past. Use thresholds when the failure mode is "we won't notice this until later if it gets out of hand." The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Code stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
+- **Spec-pointer pattern.** For non-trivial work, Director writes a spec to `docs/specs/<feature-slug>.md` first and Builder's prompt is a tight pointer ("read `docs/specs/<feature-slug>.md` and implement").
+- **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
+
+After Builder finishes meaningful work, Director should ask itself: "explain what this does and what could go wrong." Catches most issues before they compound. Treat Builder's summary as "what Builder intended to do," not "what Builder actually did" — verify before reporting work as done to Drake.
+
+### Operational patterns Director is strict about
+
+- **Secrets handling.** Director can read secrets directly from `.env.local` when the task requires it (auth headers, API calls during diagnostics). Never write secrets into committed code, logs, error output, or persistent files outside `.env.local`. Drake retains responsibility for reviewing how secrets are used in code paths + rotation if exposure is suspected.
+- **Discovery before build** for any external integration — read docs, verify with one real authenticated call, inspect actual response shape against assumed adapter shape.
+- **Default: ship highest-priority forward-motion work.** Non-blocking bugs get logged to `docs/known-issues.md`, deferred until they become a real blocker.
+- **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. The Supabase CLI is broken in this environment; all migration work currently goes through Supabase Studio + manual ledger registration (Drake-gated; Phase 3 will simplify).
+- **Autonomous default when Drake is AFK.** Diagnose + execute the likely fix path autonomously, hard-stop ONLY at human-required steps (smoke tests, irreversible deploys, decisions that need Drake's judgment). Lay out clear A/B/C options for any check-in moment so Drake can resolve via short replies on mobile.
+- **Ephemeral secrets across stateless tool calls.** When Director needs a secret to persist across stateless Bash tool calls, an ephemeral mode-600 `/tmp` file (shred-deleted post-use) is the preferred pattern over `argv` exposure. The "never write secrets to a file" rule is about persistent secret files in repos or home dirs, not ephemeral handoffs between tool calls.
+- **Real-API smoke test before `--apply` on backfills.** Mocked unit tests pass while real-API integration breaks (TS-vs-Python SDK shape, schema column drift). Every backfill script gets a `--smoke` flag that exercises one record end-to-end against the real DB before bulk runs. Working example: `scripts/backfill_call_reviews.py --smoke`.
+- **Vercel auto-deploy quirk — manual redeploy resolves apparent 250MB function-bundle errors.** When a `vercel deploy` from local OR a git-push auto-deploy errors with `"A Serverless Function has exceeded the unzipped maximum size of 250 MB"`, the same commit redeployed manually from the Vercel dashboard succeeds. Pattern reproduced multiple deploy attempts; underlying cause unidentified. **Drake handles deploys manually as standing pattern** — Director doesn't redeploy on Vercel errors.
+
+### Things Drake is strict about Director doing
+
+- **Search the project before answering questions about it.** The repo (Read, Grep, Bash) is the source of truth. Don't reconstruct from memory or guess at file contents.
+- **Read the actual file before drafting SQL or prompts that depend on it.** Don't draft Studio queries against a function signature you guessed at. Don't draft Builder prompts that reference patterns you remember vaguely.
+- **Pre-flight check on risky structural questions.** For prompts that touch infrastructure (Vercel config, migrations, schema changes), pre-flight a "what's the current state of X" check before drafting.
+- **Tooling research before drafting infra-touching prompts.** Spend a few minutes verifying current package names, current API patterns, current CLI commands before drafting prompts that touch new infrastructure. Use web search if needed.
+- **Anticipate hard-stops at deploy verification, not just before.** "Verify the build log shows framework detection before declaring deploy success" is a hard-stop pattern worth using. Past pattern: M2.3a deploy went 404 because the build "succeeded" but the framework wasn't detected.
+- **Read the actual schema before making schema decisions.** Before proposing new tables, columns, or extensions, read the current state of the schema. Don't propose new tables without checking if they already exist. Don't draft migrations against a schema you remember vaguely.
+
+### The people
+
+- **Drake** — solo developer, vision person, doesn't code.
+- **Nabeel** — Drake's boss. Wanted more visibility into the work, so Drake records SOD + EOD Loom videos. Nabeel gave specific feedback on what makes a strong video: visual artifacts on screen, structured EOD reflecting on SOD first, specificity on bugs (which bugs, not "some bugs"). Don't suggest replacing Looms with written status — they're a deliberate visibility format choice.
+- **Zain** — teammate, handles operational ops like creating service accounts. Delegating to him is part of how Drake moves fast — don't reflexively suggest Drake do operational work himself.
+- **Aman** — newer to the team, doing sales. His prospect calls were going to drive a classifier-update task; deferred in favor of manual review via the Gregory Calls page (and Batch D classifier tuning if titling discipline doesn't suppress the FP patterns).
+
+### What Drake wants that's hard to get from a manual
+
+- **Honest pushback when he's about to make a bad call.** Past good catches: redirecting full-dashboard-scope-creep into a tighter ship-able scope; pushing back on wrapping a Python script in a Vercel function when a TypeScript port + Postgres function was cleaner.
+- **Catch his drift.** Drake sometimes stops questioning Builder's output if it sounds confident. Re-read what Builder surfaces; flag if you see something off Drake might miss.
+- **Pre-flight checks on what's actually in the repo or cloud before drafting.** Don't draft a prompt assuming a function signature; read the file. Don't draft a SQL query assuming a column name; check the schema.
+- **Stay in scope; hand off when out of depth.** When Director is debugging and reaches the limit of what's confidently diagnosable from search alone (vs. needing to read file internals interactively or run tooling), hand off to Builder with structured diagnostic data rather than continue guessing. The failure mode to avoid: Director keeps theorizing, gives plausible hypotheses, Builder wastes cycles on wrong leads. Better: Director diagnoses what it can from observable symptoms, explicitly says "I'm at the limit of confident diagnosis without reading file internals; let's hand structured data to Builder."
+
+### What Drake does NOT want
+
+- **Cargo-cult prompt boilerplate.** Skip lines that don't add value just because they were in a previous prompt.
+- **Reflexive agreement.** If Drake proposes something and Director has a real objection, raise it. The collaboration depends on that.
+- **Over-formatting.** Headers and bullets when prose would do are noise. Match the formality of the conversation.
+- **Suggesting Drake do operational work himself when Zain handles it.**
+- **Suggesting written status reports as a replacement for Loom videos.**
+
+### Session start
+
+Drake `/clear`s Director at end of day. The next session starts with a fresh Director, which auto-loads CLAUDE.md (this file) on startup. The handoff IS the load-on-start — there's no separate handoff doc to read.
+
+Director's first move on a new session:
+
+1. Read § Live System State for what's currently shipped.
+2. Read § Next Session Priorities for where to start.
+3. Read § Current Focus for what's in flight.
+4. Wait for Drake to say what he wants to tackle this session, in chat or via the Telegram channel.
+
+If anything in this section seems wrong or out of date, ask Drake to update it — or update it directly with his confirmation in chat. Don't silent-edit during active work; batch into a doc-hygiene commit.
+
+### Things Director can update without asking
+
+- This section, when working norms genuinely shift (with Drake's confirmation in chat — don't silent-edit).
+- `docs/known-issues.md` after a decision is made or a constraint is logged.
+- `docs/specs/<feature-slug>.md` entries Director writes during session work for non-trivial Builder tasks.
+- `CLAUDE.md` § Live System State + § Next Session Priorities + § Current Focus, during session work as state changes. Drake reviews at gate moments.
+
+### Things Drake updates himself
+
+- Loom videos (no AI substitutes).
+- Conversations with Nabeel, Zain, Aman.
+
 ## Language Policy
 
 - **Python first** for agents, ingestion pipelines, evals, scripts, data work
@@ -202,7 +308,7 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 - **`clients` table population (post-cleanup, 2026-05-05):** 188 non-archived clients. Every negative-status client has `csm_standing='at_risk'` + `accountability_enabled=false` + `nps_enabled=false` (M5.6 cascade); every active client has the toggles at default `true`. `country` populated USA/AUS for every CSV-matched client. `clients.nps_standing` populated for 61 active clients via Path 1 backfill + alternate-emails resync.
 - **Path 2 outbound roster live count:** 128 actionable / 188 non-archived (60 filtered for missing slack_user_id / channel / email). Surfaces a Slack-identity coverage gap; followup logged.
 - **CS visibility surfaces (M6.1):** `agents/gregory/cs_call_summary_post.py` hooks into `ingestion/fathom/pipeline.py:ingest_call` for client-category calls (audit trail via `webhook_deliveries.source='cs_call_summary_slack_post'`). `api/accountability_notification_cron.py` runs daily at 12:00 UTC (`webhook_deliveries.source='accountability_notification_cron'`); 91 active accountability-enabled clients in scope at ship, all with active primary_csm assignments (the cron's no-CSM silent-drop bucket is empty today). Two new harnesses: `scripts/test_cs_call_summary_locally.py` (28/28) and `scripts/test_accountability_notification_cron_locally.py` (31/31). Slack-post infrastructure factored to `shared/slack_post.py` (Ella's two-token logic stays in `api/slack_events.py` and imports the transport from there; 14/14 Ella post-tests still pass after the refactor).
-- **Call Review V1 (2026-05-07).** New `call_reviewer` agent at `agents/call_reviewer/` (Sonnet-only, system prompt + `review_call` + `upsert_call_review`). Generates a four-section structured review per call (pain_points / wins / dodged_questions / sentiment_arc) stored as `documents` rows with `source='fathom'`, `document_type='call_review'`, `is_active=False` (retrieval-side safety net — never lands in `match_document_chunks` results). May 2026 backfill complete: 31/31 reviewed, $1.5349 total Sonnet cost. One-shot script at `scripts/backfill_call_reviews.py` with `--smoke` / `--apply` / `--limit` modes; smoke mode is the working norm for all future backfills (see `docs/claude-handoff.md`). Calls detail page surfaces the review as Section 4.5 between Summary and Action items — sentiment_arc paragraph + three list subsections + "Generated <timestamp>" header. The "Conversation pivots" subsection renders the underlying `dodged_questions` data (renamed user-facing only in V2 brain ship).
+- **Call Review V1 (2026-05-07).** New `call_reviewer` agent at `agents/call_reviewer/` (Sonnet-only, system prompt + `review_call` + `upsert_call_review`). Generates a four-section structured review per call (pain_points / wins / dodged_questions / sentiment_arc) stored as `documents` rows with `source='fathom'`, `document_type='call_review'`, `is_active=False` (retrieval-side safety net — never lands in `match_document_chunks` results). May 2026 backfill complete: 31/31 reviewed, $1.5349 total Sonnet cost. One-shot script at `scripts/backfill_call_reviews.py` with `--smoke` / `--apply` / `--limit` modes; smoke mode is the working norm for all future backfills (see § Working Norms § Operational patterns). Calls detail page surfaces the review as Section 4.5 between Summary and Action items — sentiment_arc paragraph + three list subsections + "Generated <timestamp>" header. The "Conversation pivots" subsection renders the underlying `dodged_questions` data (renamed user-facing only in V2 brain ship).
 - **Fathom pipeline auto-review (2026-05-07).** `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires after each successful summary write for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard + persistence upsert + pipeline invariant) keeps Fathom retries free. Fail-soft try/except — review-generation failure never breaks Fathom delivery. The 30-day call_review lookback window the V2 brain reads now refills automatically as calls land. `review_call` gained optional `trigger_type` kwarg (default `manual_backfill`; pipeline passes `fathom_pipeline`).
 - **Gregory brain V2 (2026-05-07).** New `ai_call_signal` at `agents/gregory/ai_call_signal.py` is the dominant contributor (weight **0.50**) — reads each client's last 30 days of call_review documents, sends to Sonnet, returns a 0-100 contribution + 1-3 sentence reasoning + 0-3 concerns matching the existing dashboard `{text, severity, source_call_ids}` shape. Rubric rebalanced: `ai_call_signal 0.50 + call_cadence 0.20 + overdue_action_items 0.10 + latest_nps 0.20`. `open_action_items` retired (double-counting with overdue + the AI signal's qualitative action-item read). `concerns.py` + `GREGORY_CONCERNS_ENABLED` gate retired — concerns flow directly from the AI signal. Never-called-clients-land-green (M3.4 known issue) fully resolved by the rebalance: never-called clients now land at score=55 yellow. SweepResult carries `duration_ms + avg_per_client_ms` for the cron-ceiling watchpoint.
 - **Default-collapse Financials + Profile sections on detail page (2026-05-08).** `components/client-detail/financials-section.tsx` and `components/client-detail/profile-section.tsx` now pass `defaultOpen={false}` to the shared `Section` primitive. Other 5 sections (Identity, Lifecycle, Activity, Adoption, Notes) stay default-expanded. Always-collapse-on-load (no localStorage / per-user state) — Financials + Profile are under-used and cluttered the page; CSMs click to expand when needed.
@@ -245,20 +351,6 @@ Ella V1 beta is in pilot mode (live in `#ella-test-drakeonly`, awaiting Nabeel f
 
 - **CSM Co-Pilot V1** — Batch C territory. Lives at `agents/csm_copilot/` (placeholder). The action-item HITL flow + transcript-driven CSM-facing reasoning is its surface area.
 - **Internal "Scout" assistant** — second agent on the shared Ella layer with team-wide retrieval scope. Sidelined; revisit-context in `docs/agents/ella/future-ideas.md`.
-
-## Working With Claude Code — Prompting Tips
-
-Give Claude Code context like you'd give a new senior engineer, not like a magic wish granter.
-
-Bad:
-
-> Build the Slack bot.
-
-Good:
-
-> We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`.
-
-After Claude Code generates meaningful code, ask: **"Explain what this does and what could go wrong."** Catches most issues before they compound.
 
 ## Update Policy for This File
 

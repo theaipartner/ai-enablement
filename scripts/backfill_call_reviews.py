@@ -33,8 +33,8 @@ Default mode is dry-run — prints the candidate count + the first 5
 call titles, makes ZERO Claude API calls. --smoke processes exactly
 one call end-to-end (fetch → Claude → parse → write document → cost
 summary) so real-API surface bugs surface BEFORE a bulk run; see
-docs/claude-handoff.md § "Operational patterns I'm strict about" for
-the working norm. --apply fires the real bulk work. --limit N caps
+CLAUDE.md § Working Norms § "Operational patterns Director is strict
+about" for the working norm. --apply fires the real bulk work. --limit N caps
 the number of calls processed (after the already-reviewed filter).
 
 Env vars (loaded from .env.local):
