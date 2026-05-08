@@ -1,5 +1,7 @@
 # Runbook: Apply Database Migrations
 
+> **Provisional, pending Phase 3.** The CLI workflow described below does not work in this environment — Supabase CLI commands silently route to local Docker instead of cloud Supabase. Until Phase 3 (which will either fix the CLI or build a `scripts/apply_migration.py` wrapper that Director can call), the canonical migration path is: Drake applies SQL via Supabase Studio SQL Editor, Drake registers the ledger row manually (`insert into supabase_migrations.schema_migrations ...`), Director dual-verifies (schema reality + ledger registration) against cloud explicitly. See `docs/known-issues.md` for the standing CLI-broken entry and the dual-verification discipline.
+
 How to apply `supabase/migrations/*.sql` against a local or cloud Supabase project, and how to verify the result. Keep this current — every new migration sequence you run should leave behind a log entry at the bottom.
 
 ## Prerequisites
