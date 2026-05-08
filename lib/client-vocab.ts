@@ -56,7 +56,7 @@ export const CSM_STANDING_VALUES: readonly CsmStandingValue[] =
 // nps_standing — clients.nps_standing (CHECK constraint, migration 0021)
 // ---------------------------------------------------------------------------
 export const NPS_STANDING_OPTIONS = [
-  { value: 'promoter', label: 'Strong / Promoter' },
+  { value: 'promoter', label: 'Promoter' },
   { value: 'neutral', label: 'Neutral' },
   { value: 'at_risk', label: 'At Risk' },
 ] as const satisfies readonly VocabOption[]
@@ -70,14 +70,15 @@ export const NPS_STANDING_LABEL: Record<string, string> = Object.fromEntries(
 
 // ---------------------------------------------------------------------------
 // trustpilot_status — clients.trustpilot_status (CHECK constraint,
-// migration 0020). Short labels match the existing inline-edit dropdown
-// in components/client-detail/adoption-section.tsx; the longer
-// "Yes (review left)" / "No (declined)" form was considered for the
-// M5.5 filter dropdown but rejected to keep both surfaces consistent.
+// migration 0020). Labels updated 2026-05-08 alongside the Clients
+// list V2 column swap: "Given" / "Declined" replaced "Yes" / "No" so
+// the filter dropdown labels exactly match the Trustpilot pill in the
+// list table. Underlying values ('yes', 'no', 'ask', 'asked') are
+// unchanged — this is presentation-only.
 // ---------------------------------------------------------------------------
 export const TRUSTPILOT_OPTIONS = [
-  { value: 'yes', label: 'Yes' },
-  { value: 'no', label: 'No' },
+  { value: 'yes', label: 'Given' },
+  { value: 'no', label: 'Declined' },
   { value: 'ask', label: 'Ask' },
   { value: 'asked', label: 'Asked' },
 ] as const satisfies readonly VocabOption[]
