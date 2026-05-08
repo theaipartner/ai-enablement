@@ -2,7 +2,7 @@
 
 Ops reminders and known gaps specific to Ella that aren't "ideas to build" (those live in `docs/agents/ella/future-ideas.md`).
 
-For Gregory's followups see `docs/followups.md`. For Ella's deferred work see `docs/agents/ella/future-ideas.md`.
+For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work see `docs/agents/ella/future-ideas.md`.
 
 **Entry format.** Short. Four lines:
 

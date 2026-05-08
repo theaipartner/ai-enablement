@@ -556,7 +556,7 @@ def build_plan_for_row(
     # confirmed they're genuinely absent from cloud (0/20 sampled emails
     # found anywhere). Drake's call: auto-create them too, with sheet-side
     # status, accept manual cleanup later. Followup logged in
-    # docs/followups.md (master sheet auto-creates need cross-check).
+    # docs/known-issues.md (master sheet auto-creates need cross-check).
     is_auto_create = matched_id is None and parsed.status is not None
 
     plan = RowPlan(

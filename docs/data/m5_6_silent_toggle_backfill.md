@@ -2,7 +2,7 @@
 
 These 17 clients had `csm_standing = 'at_risk'` before the M5.6 backfill. The backfill flipped `accountability_enabled` and `nps_enabled` from `true` (column default) → `false` on these rows without writing a `client_standing_history` row, because `csm_standing` did not change.
 
-Static snapshot captured 2026-05-03 immediately before applying migration `0022_status_cascade.sql`. Cross-check against the recovery SQL query in `docs/followups.md` § "M5.6 silent-toggle backfill — 17 clients flipped accountability/nps without history row."
+Static snapshot captured 2026-05-03 immediately before applying migration `0022_status_cascade.sql`. Cross-check against the recovery SQL query in `docs/known-issues.md` § "M5.6 silent-toggle backfill — 17 clients flipped accountability/nps without history row."
 
 | status  | full_name        | client_id                            |
 |---------|------------------|--------------------------------------|
@@ -26,4 +26,4 @@ Static snapshot captured 2026-05-03 immediately before applying migration `0022_
 
 **Distribution:** 6 churned, 1 ghost, 10 paused, 0 leave.
 
-If the recovery SQL query in `docs/followups.md` is run today against the post-M5.6-apply state, it should return exactly these 17 client_ids. If the count diverges later, that means: (a) one of the 17 had its `csm_standing` cleared and re-set (creating a real history row, removing it from the silent-toggle set), (b) a CSM has manually flipped `accountability_enabled` or `nps_enabled` back to `true` (the row no longer matches the recovery query's filter), or (c) a future cascade re-fire on one of the 17 (a status transition between negative values) wrote a fresh history row. All three are expected lifecycle outcomes; this snapshot is the immutable "as of M5.6 apply" reference.
+If the recovery SQL query in `docs/known-issues.md` is run today against the post-M5.6-apply state, it should return exactly these 17 client_ids. If the count diverges later, that means: (a) one of the 17 had its `csm_standing` cleared and re-set (creating a real history row, removing it from the silent-toggle set), (b) a CSM has manually flipped `accountability_enabled` or `nps_enabled` back to `true` (the row no longer matches the recovery query's filter), or (c) a future cascade re-fire on one of the 17 (a status transition between negative values) wrote a fresh history row. All three are expected lifecycle outcomes; this snapshot is the immutable "as of M5.6 apply" reference.

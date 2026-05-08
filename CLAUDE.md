@@ -51,7 +51,7 @@ ai-enablement/
 │   ├── architecture.md         # System overview, data flow, component map
 │   ├── collaboration.md        # How Drake and Zain divide work
 │   ├── future-ideas.md         # Gregory V2 batches A–E (active focus)
-│   ├── followups.md            # Gregory real bugs / ops reminders
+│   ├── known-issues.md            # Gregory real bugs / ops reminders
 │   ├── schema/                 # One markdown file per database table
 │   ├── agents/
 │   │   ├── gregory.md          # Gregory full spec + build log (active)
@@ -221,7 +221,7 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-0. **🔍 ONE-TIME GATE — verify the 2026-05-08 09:00 UTC daily cron fired correctly.** Before any planned work. Run the verification query in `docs/followups.md` § "NEXT SESSION FIRST ACTION — verify daily cron fired" and follow the three-outcome decision tree. Remove that followups entry AND this priority bullet once the verification has run, regardless of outcome — this is a one-time gate added at session-close 2026-05-07, not a recurring routine.
+0. **🔍 ONE-TIME GATE — verify the 2026-05-08 09:00 UTC daily cron fired correctly.** Before any planned work. Run the verification query in `docs/known-issues.md` § "NEXT SESSION FIRST ACTION — verify daily cron fired" and follow the three-outcome decision tree. Remove that followups entry AND this priority bullet once the verification has run, regardless of outcome — this is a one-time gate added at session-close 2026-05-07, not a recurring routine.
 
 1. **Meeting tracking — bridge into Task Management.** Primary planned work for next session. Per-client + per-CSM cadence visibility. Late flag when a CSM hasn't had a 1:1 with a client in their expected cadence. Week-2 flag if no meeting in two weeks. End-of-week report to Scott + Nabeel summarizing the cohort. Ships without Fathom org admin (accepts some Fathom data will be missed). Real scoping conversation needed at session-start before any prompt — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
 
@@ -231,7 +231,7 @@ Pick these up in order. **Read this section first** when starting a new session 
 
 4. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking.
 
-5. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/followups.md`). Otherwise leave.
+5. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
 
 6. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
 

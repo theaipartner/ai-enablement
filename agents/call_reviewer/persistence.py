@@ -8,7 +8,7 @@ in `match_document_chunks` results. This is V1's retrieval-side
 safety net (the existing function exclusion list doesn't cover
 `call_review`); when V2 wires generation into the ingestion pipeline,
 the function should be extended to exclude `call_review` explicitly
-via migration. Followup tracked in `docs/followups.md`.
+via migration. Followup tracked in `docs/known-issues.md`.
 
 Idempotency: keyed on (source='fathom', external_id=<calls.external_id>,
 document_type='call_review') via the migration-0011 widened unique.

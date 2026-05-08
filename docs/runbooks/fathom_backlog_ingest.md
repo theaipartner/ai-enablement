@@ -175,7 +175,7 @@ where 'needs_review' = any(tags)
 order by created;
 ```
 
-Grouped against the dry-run's auto-create prediction — count should match exactly. Any pilot-name/email collision in this list is a bug; see `docs/followups.md` § "Auto-created client review workflow" for the hand-merge process.
+Grouped against the dry-run's auto-create prediction — count should match exactly. Any pilot-name/email collision in this list is a bug; see `docs/known-issues.md` § "Auto-created client review workflow" for the hand-merge process.
 
 ### 11. Retrieval spot-check via `shared/kb_query.py`
 

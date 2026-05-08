@@ -81,7 +81,7 @@ _DOCUMENT_SPECS: dict[tuple[str, str], _Spec] = {
     # dashboard surfacing only — is_active=False at write time so the
     # row never lands in match_document_chunks results. See
     # docs/ingestion/metadata-conventions.md §2 "Fathom call reviews"
-    # and the followup in docs/followups.md about promoting the
+    # and the followup in docs/known-issues.md about promoting the
     # exclusion into the SQL function when V2 generates these inline.
     ("fathom", "call_review"): _Spec(
         required=frozenset({"client_id", "call_id", "call_category", "started_at"}),

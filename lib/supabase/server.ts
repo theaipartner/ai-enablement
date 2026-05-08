@@ -23,7 +23,7 @@ export function createClient() {
             // the auth gate in app/(authenticated)/layout.tsx calls
             // getUser() on every render, which does its own session
             // freshness check. (Middleware was dropped in M2.3a due to
-            // Vercel Edge incompat — see followups.md.)
+            // Vercel Edge incompat — see known-issues.md.)
           }
         },
       },

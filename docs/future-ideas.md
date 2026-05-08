@@ -2,7 +2,7 @@
 
 This file enumerates Gregory's V2 work organized into batches A–E. Active focus is **Batch A — CSM accountability visibility**. Each entry has a revisit trigger so it doesn't go stale.
 
-For Ella's deferred work see `docs/agents/ella/future-ideas.md`. For Gregory's known bugs and ops gaps see `docs/followups.md`. For architectural decisions, see `docs/decisions/` (when populated).
+For Ella's deferred work see `docs/agents/ella/future-ideas.md`. For Gregory's known bugs and ops gaps see `docs/known-issues.md`. For architectural decisions, see `docs/decisions/` (when populated).
 
 **Entry format.** Short. Four lines:
 
@@ -68,7 +68,7 @@ Concerns are now generated from `call_review` documents (which the call_reviewer
 
 ### ~~Health score driven by call data~~ — RESOLVED 2026-05-07
 
-Delivered. V2 rubric: `ai_call_signal` 0.50 + `call_cadence` 0.20 + `overdue_action_items` 0.10 + `latest_nps` 0.20. The AI signal is the dominant qualitative contributor; `open_action_items` retired (was double-counting with overdue + the AI signal's read of action items). Calibration followup logged in `docs/followups.md`.
+Delivered. V2 rubric: `ai_call_signal` 0.50 + `call_cadence` 0.20 + `overdue_action_items` 0.10 + `latest_nps` 0.20. The AI signal is the dominant qualitative contributor; `open_action_items` retired (was double-counting with overdue + the AI signal's read of action items). Calibration followup logged in `docs/known-issues.md`.
 
 ### ~~Never-called-clients-land-green rubric fix~~ — RESOLVED 2026-05-07
 
@@ -121,7 +121,7 @@ The flagship V2 feature. AI drafts action item messages from call transcripts, C
 
 **Address only any FP that survives the titling convention rollout.** CSM titling discipline (a separate ops effort) should suppress most of the classifier false-positives we've seen. If hiring-interview / spousal-rep / iMIP patterns keep recurring after CSMs are titling cleanly, fix the classifier. Otherwise leave.
 
-The specific FP entries (hiring-interview, representative-of-existing-client, iMIP) live in `docs/followups.md` with reframe notes — they'll get pulled into Batch D work if the titling rollout doesn't suppress them.
+The specific FP entries (hiring-interview, representative-of-existing-client, iMIP) live in `docs/known-issues.md` with reframe notes — they'll get pulled into Batch D work if the titling rollout doesn't suppress them.
 
 ---
 

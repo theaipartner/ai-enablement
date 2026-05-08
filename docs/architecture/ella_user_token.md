@@ -166,7 +166,7 @@ a Collaborator (the token persists past collaborator status — it's
 bound to the consent grant). Tightens least-privilege; not required.
 
 This will hit again on every future re-install (e.g., scope changes,
-secret rotation). Documented in `docs/followups.md` §
+secret rotation). Documented in `docs/known-issues.md` §
 "Fathom webhook registration UI viewport bug" — same pattern in a
 different vendor; same lesson (provider UIs are friction surfaces
 that re-bite on every re-auth).

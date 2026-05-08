@@ -1,6 +1,6 @@
-# Followups — Gregory
+# Known Issues — Gregory
 
-Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (Gregory V2 batches A–E). Decisions to revisit live in `docs/decisions/` (when populated). Ella's followups live in `docs/agents/ella/followups.md`.
+Real bugs and ops gaps for Gregory, with concrete next actions. Distinct from `docs/future-ideas.md` (Gregory V2 batches A–E — deferred features waiting on a trigger) and `docs/decisions/` (architectural decisions, when populated). Ella's bugs and ops gaps live separately in `docs/agents/ella/followups.md` (kept under that name for now; renamed when an Ella-focused sweep happens).
 
 **Entry format.** Short. Four lines:
 
@@ -13,7 +13,7 @@ Real bugs and ops reminders for Gregory. Ideas live in `docs/future-ideas.md` (G
 
 ## NEXT SESSION FIRST ACTION — verify daily cron fired (one-time gate, REMOVE after running)
 
-**This is a one-time verification gate, not a recurring routine.** First action of the next session, before any planned work. Remove this entry from `docs/followups.md` AND the matching pointer from `CLAUDE.md § Next Session Priorities` once the verification has run, regardless of outcome.
+**This is a one-time verification gate, not a recurring routine.** First action of the next session, before any planned work. Remove this entry from `docs/known-issues.md` AND the matching pointer from `CLAUDE.md § Next Session Priorities` once the verification has run, regardless of outcome.
 
 **Background.** On 2026-05-08 the gregory_brain cron switched weekly→daily AND gained an `ai_call_signal` freshness filter. The deploy from this session is the first real exercise of both. Tomorrow's 09:00 UTC scheduled fire is the integration smoke; we want to confirm before iterating further.
 
@@ -414,7 +414,7 @@ These three are byproducts of Drake's M4 Chunk C triage decisions on the master 
 ## Auto-created client review workflow — human-owned queue, dashboard merge surface live
 
 - **What:** the Fathom ingestion pipeline auto-creates a minimal `clients` row when a transcript's non-team participant doesn't match any existing client by email (primary or `metadata.alternate_emails`) or by name (primary or `metadata.alternate_names`). Auto-created rows carry `tags=['needs_review']` and `metadata.auto_created_from_call_ingestion=true` + `auto_created_from_call_external_id` + `auto_created_from_call_title` + `auto_create_reason` + `auto_created_at` breadcrumbs (see `ingestion/fathom/pipeline.py:_build_auto_create_metadata`). Their associated `calls` land medium-confidence and their `documents` land `is_active=false` — chunks exist but are invisible to `match_document_chunks` until promoted. Promotion (merging into a canonical row, flipping retrievability, reactivating the document) happens via the Gregory dashboard's "Merge into…" flow on the Clients detail page (M3.2 — atomic via `merge_clients` RPC, migration 0015). **There is no agent reviewing these rows; Drake or a CSM does it by hand via the dashboard.** Live cloud state post-M5 cleanup: a manageable handful of `needs_review` rows; the M5 walkthrough closed 12 merges + 13 detags.
-- **Why it matters:** unreviewed `needs_review` rows leave real coaching call context in the KB but invisible to Ella (because `is_active=false` gates the transcript_chunk documents). That's the desired safety behavior for ambiguous matches, but the cost is invisible-until-reviewed content. If auto-create volume climbs (new client roster churn, parser false negatives), the hand-review workflow starts to cost real time. See `docs/followups.md` § "needs_review tag doesn't auto-clear after manual reconciliation" for the related auto-detag automation gap.
+- **Why it matters:** unreviewed `needs_review` rows leave real coaching call context in the KB but invisible to Ella (because `is_active=false` gates the transcript_chunk documents). That's the desired safety behavior for ambiguous matches, but the cost is invisible-until-reviewed content. If auto-create volume climbs (new client roster churn, parser false negatives), the hand-review workflow starts to cost real time. See `docs/known-issues.md` § "needs_review tag doesn't auto-clear after manual reconciliation" for the related auto-detag automation gap.
 - **Next action:** the dashboard merge surface exists. Drain queue when convenient. If hand-review starts feeling heavy, design a grouping / fuzzy-match overlay on top of the existing dashboard that surfaces inferred canonicals (name fuzzy-match, email domain, co-occurrence on same call) and lets a human one-click merge.
 - **Logged:** 2026-04-24 (expanded post-F1.4 with actual queue size + in-queue duplicate list; pruned 2026-05-05 after M5 cleanup walkthrough drained most of the queue).
 
