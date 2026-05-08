@@ -23,7 +23,10 @@
 
 import Link from 'next/link'
 import type { ClientDetail } from '@/lib/db/clients'
-import { CSM_STANDING_OPTIONS } from '@/lib/client-vocab'
+import {
+  CSM_STANDING_OPTIONS,
+  JOURNEY_STAGE_OPTIONS,
+} from '@/lib/client-vocab'
 import { Section, Subsection } from './section'
 import { EditableField } from './editable-field'
 import { NpsEntryForm } from './nps-entry-form'
@@ -157,8 +160,8 @@ export function LifecycleSection({ client }: { client: ClientDetail }) {
         <EditableField
           label="Journey stage"
           value={client.journey_stage}
-          variant="text"
-          placeholder="Stage taxonomy in design — free-text for now"
+          variant="enum"
+          options={JOURNEY_STAGE_OPTIONS}
           onSave={(v) =>
             updateClientJourneyStageAction(
               client.id,
