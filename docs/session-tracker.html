@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Session 2026-05-07 — tracker</title>
-<!-- Session 2026-05-07: Call Review V1 ship + Gregory brain V2 (AI-driven health signal) + Fathom pipeline auto-review wiring. Three feature ships in one day; commits 7 + 2 + 9 = 18 across the day; CLAUDE.md and Live System State stay un-updated until Drake verifies deploy of the 9 V2-brain + Fathom-auto-review commits. -->
+<title>Session 2026-05-08 — tracker</title>
+<!-- Session 2026-05-08: nine substantial feature ships + four operational-norm improvements in a single working session. Working day spans the 2026-05-07 → 2026-05-08 UTC boundary; tracked here as one continuous session per Drake's framing. Commits well into the 30+ range across the day. CLAUDE.md Live System State updated at session-close to reflect current production state. -->
 
 <style>
   :root {
@@ -243,13 +243,13 @@
 <div class="wrap">
 
   <header class="session-head">
-    <div class="id">Session 2026-05-07 — Call Review V1 + Gregory brain V2 + Fathom auto-review</div>
-    <h1>Three feature ships: per-call AI review, AI-driven health score, auto-review on ingest.</h1>
+    <div class="id">Session 2026-05-08 — nine ships + four operational norms</div>
+    <h1>Unusually long session. Nine substantial feature ships, all deployed to production by close-out.</h1>
     <div class="goal">
-      Three feature ships in one day, all on top of the M6.x foundation. <strong>Call Review V1</strong> ships the <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_reviewer</span> agent + May 2026 backfill + Calls detail page surface. <strong>Gregory brain V2</strong> adds an AI-driven call-review health signal at 0.50 weight, retires the redundant <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">open_action_items</span> signal + the dormant <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">concerns.py</span> module + the <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">GREGORY_CONCERNS_ENABLED</span> gate, fully resolves the M3.4 never-called-clients-land-green rubric bug. <strong>Fathom pipeline auto-review</strong> wires <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_reviewer</span> into the webhook ingest path so new calls auto-generate reviews and the V2 brain's 30-day lookback refills naturally without backfill scripts.
+      Working day spanned the UTC date boundary; tracked as one continuous session. The nine ships, in chronological order: <strong>(1)</strong> Call Review V1 — <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_reviewer</span> agent + May 2026 backfill (38 calls reviewed at $1.81 total Sonnet cost) + Calls detail page surface. <strong>(2)</strong> Gregory Health Score V2 — AI signal at 0.50 weight, retired <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">open_action_items</span> + <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">concerns.py</span> + <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">GREGORY_CONCERNS_ENABLED</span> gate, fully resolved the M3.4 never-called-green bug. <strong>(3)</strong> Fathom pipeline auto-review — every new Fathom call auto-generates <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">call_review</span> documents. <strong>(4)</strong> Daily cron + freshness filter — architectural fix for the 300s timeout. <strong>(5)</strong> NPS-is-gospel auto-derive (migration 0027) — override-sticky retired, 16-row backfill. <strong>(6)</strong> <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">latest_nps</span> signal source fix — reads <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">clients.nps_standing</span> instead of empty-table <span style="font-family: var(--mono); font-size: 13px; color: var(--text);">nps_submissions</span>. <strong>(7)</strong> Clients list V2 columns — NPS / Trustpilot / Meetings replaced Tags / Open action items / Last call; default sort flipped to health-score asc. <strong>(8)</strong> Journey stage taxonomy (migration 0028) — six funnel-stage CHECK constraint replaced free-text. <strong>(9)</strong> Default-collapse Financials + Profile sections on detail page.
     </div>
     <div class="meta">
-      <span><strong>Last updated:</strong> Session 2026-05-07 — end-of-day close-out (Call Review V1 deployed; V2 brain + Fathom auto-review code on main, deploy pending Drake's manual step).</span>
+      <span><strong>Last updated:</strong> Session 2026-05-08 — end-of-day close-out (all nine ships deployed + verified; CLAUDE.md Live System State current).</span>
       <span><strong>Source of truth:</strong> CLAUDE.md (this is a view, not authoritative)</span>
     </div>
   </header>
@@ -263,17 +263,17 @@
       </header>
 
       <div class="card">
-        <div class="id">Cron diagnosis</div>
-        <div class="title">Diagnose why Gregory weekly cron hasn't fired on schedule</div>
-        <div class="subtitle">Endpoint <span style="font-family: var(--mono); font-size: 12.5px;">/api/gregory_brain_cron</span> smoke-tested clean (cold-starts in &lt;300ms, returns valid 401 on bad auth — code path works). 188 cron-triggered <span style="font-family: var(--mono); font-size: 12.5px;">agent_runs</span> rows in last 42d all from one batch on 2026-05-06 (Wednesday, 05:59 UTC) — not the Mondays-09:00 schedule. Likely <span style="font-family: var(--mono); font-size: 12.5px;">CRON_SECRET</span> mismatch in deployed function bundle vs Vercel dashboard, OR scheduler config not picked up. Drake checks Vercel dashboard's Cron Jobs tab for "Last invocation" + "Last status" after V2 deploy lands; diagnosis branches from there.</div>
-        <div class="pills"><span class="pill">diagnostic</span><span class="pill warn">drake-side</span></div>
+        <div class="id">Cron verify</div>
+        <div class="title">ONE-TIME GATE — verify daily cron fired correctly at 09:00 UTC</div>
+        <div class="subtitle">First action of the next session, before any planned work. Run the verification query in <span style="font-family: var(--mono); font-size: 12.5px;">docs/followups.md</span> § "NEXT SESSION FIRST ACTION" and follow the three-outcome decision tree (~188 rows + skipped &gt;150 → working / 0 rows → cron broken / ~188 rows + low skip → freshness bug). Remove the followups entry + the CLAUDE.md § Next Session Priorities item 0 once verification has run, regardless of outcome.</div>
+        <div class="pills"><span class="pill">one-time gate</span><span class="pill warn">first-action</span></div>
       </div>
 
       <div class="card">
-        <div class="id">V2 brain calibration</div>
-        <div class="title">Iterate V2 weights after 2-3 weekly sweeps</div>
-        <div class="subtitle">V2 starting weights are <span style="font-family: var(--mono); font-size: 12.5px;">ai_call_signal 0.50 + call_cadence 0.20 + overdue 0.10 + nps 0.20</span>. Heavy-but-balanced. Revisit when sweep distribution data tells us whether 0.50 on the AI signal is right or compressing everyone toward yellow. Logged in <span style="font-family: var(--mono); font-size: 12.5px;">docs/followups.md</span>.</div>
-        <div class="pills"><span class="pill">followup</span></div>
+        <div class="id">Meeting tracking</div>
+        <div class="title">Bridge into Task Management — primary planned work</div>
+        <div class="subtitle">Per-client + per-CSM cadence visibility. Late flag when a CSM hasn't had a 1:1 with a client in their expected cadence. Week-2 flag if no meeting in two weeks. End-of-week report to Scott + Nabeel summarizing the cohort. Ships without Fathom org admin (accepts some Fathom data will be missed). Real scoping conversation needed at session-start before any prompt — don't pre-draft. Supersedes the previously-queued "missed-call detection" piece under Batch A.</div>
+        <div class="pills"><span class="pill">scoping</span><span class="pill stretch">primary</span></div>
       </div>
     </div>
 
@@ -289,27 +289,69 @@
     <div class="col done">
       <header>
         <h2>Done</h2>
-        <span class="count">3</span>
+        <span class="count">9</span>
       </header>
 
       <div class="card">
-        <div class="id">Fathom auto-review</div>
-        <div class="title">Wire call_reviewer into Fathom ingestion pipeline</div>
-        <div class="subtitle">Every Fathom webhook delivery for a client-category call with non-null <span style="font-family: var(--mono); font-size: 12.5px;">summary_text</span> now generates a <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> document automatically, synchronously. <span style="font-family: var(--mono); font-size: 12.5px;">_ensure_call_review_document</span> in <span style="font-family: var(--mono); font-size: 12.5px;">ingestion/fathom/pipeline.py</span> fires after summary write succeeds. Three-layer idempotency (category guard / primary-client guard / existence guard) — Fathom retries cost zero LLM tokens. Fail-soft try/except mirroring the M6.1 CS Slack post hook idiom. <span style="font-family: var(--mono); font-size: 12.5px;">review_call</span> gained optional <span style="font-family: var(--mono); font-size: 12.5px;">trigger_type</span> kwarg (default <span style="font-family: var(--mono); font-size: 12.5px;">manual_backfill</span>; pipeline passes <span style="font-family: var(--mono); font-size: 12.5px;">fathom_pipeline</span>). 6 new tests (happy path / no-summary gate / idempotency / failure isolation / category guard / orphan guard) — 405 passing total. <strong>Code on main (commits 10e2eba + f62c061), deploy pending Drake's manual step.</strong></div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill deploy">deploy pending</span></div>
+        <div class="id">Ship 9</div>
+        <div class="title">Default-collapse Financials + Profile sections on detail page</div>
+        <div class="subtitle"><span style="font-family: var(--mono); font-size: 12.5px;">components/client-detail/financials-section.tsx</span> and <span style="font-family: var(--mono); font-size: 12.5px;">components/client-detail/profile-section.tsx</span> pass <span style="font-family: var(--mono); font-size: 12.5px;">defaultOpen={false}</span> to the shared <span style="font-family: var(--mono); font-size: 12.5px;">Section</span> primitive. Other 5 sections stay default-expanded. Always-collapse-on-load (no localStorage). Two-line code change + docs.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
       </div>
 
       <div class="card">
-        <div class="id">Gregory V2</div>
-        <div class="title">AI-driven health signal at 0.50 weight + retire concerns.py + retire open_action_items</div>
-        <div class="subtitle">New <span style="font-family: var(--mono); font-size: 12.5px;">agents/gregory/ai_call_signal.py</span> reads each client's last 30 days of <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> documents and asks Sonnet for a 0-100 contribution + 1-3 sentence reasoning + 0-3 concerns matching the existing dashboard <span style="font-family: var(--mono); font-size: 12.5px;">{text, severity, source_call_ids}</span> shape. Source-call-id hallucination defense filters at parse time. Three failure surfaces (DB blip / LLM blip / parse failure) each fall through to neutral 50 with mode-specific note. V2 weights: <span style="font-family: var(--mono); font-size: 12.5px;">ai 0.50 + cadence 0.20 + overdue 0.10 + nps 0.20</span>. <span style="font-family: var(--mono); font-size: 12.5px;">open_action_items</span> retired (was double-counting). <span style="font-family: var(--mono); font-size: 12.5px;">concerns.py</span> + <span style="font-family: var(--mono); font-size: 12.5px;">GREGORY_CONCERNS_ENABLED</span> gate retired — concerns flow directly from the AI signal. <strong>Never-called-clients-land-green issue (M3.4) fully resolved</strong> — never-called clients now land at score 55 yellow, math pinned by test. Vercel cron <span style="font-family: var(--mono); font-size: 12.5px;">maxDuration</span> bumped 300→600s. Hazel Castillo single-client smoke verified end-to-end pre-push: contribution=38, score=59 yellow, 3 concerns surfaced (1 high + 2 medium), $0.0139 cost, 12.8s wall-clock. Prompt edit neutralizes "dodged" language in narrative output (UI says "Conversation pivots"). 7 commits on main. <strong>Code on main, deploy pending Drake's manual step.</strong></div>
-        <div class="pills"><span class="pill">delivered</span><span class="pill deploy">deploy pending</span></div>
+        <div class="id">Ship 8</div>
+        <div class="title">Journey stage taxonomy pinned (migration 0028)</div>
+        <div class="subtitle">Six-value funnel CHECK constraint on <span style="font-family: var(--mono); font-size: 12.5px;">clients.journey_stage</span>: <span style="font-family: var(--mono); font-size: 12.5px;">business_setup / business_setup_activation_done / prospecting / first_closing_call_taken / first_closed_deal / ten_k_month</span>. Replaced V1 free-text shape that 0017 + 0018 anticipated formalizing later. Pre-apply data was 100% NULL across all 192 active clients — zero backfill, cheapest possible window. Detail-page edit field switched to enum dropdown. <span style="font-family: var(--mono); font-size: 12.5px;">JourneyStagePill</span> label-aware. Ella prompt fallback updated <span style="font-family: var(--mono); font-size: 12.5px;">"active"</span> → <span style="font-family: var(--mono); font-size: 12.5px;">"unknown"</span>.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
       </div>
 
       <div class="card">
-        <div class="id">Call Review V1</div>
-        <div class="title">call_reviewer agent + May 2026 backfill + Calls detail page surface</div>
-        <div class="subtitle">New <span style="font-family: var(--mono); font-size: 12.5px;">agents/call_reviewer/</span> module — Sonnet-only, system prompt + <span style="font-family: var(--mono); font-size: 12.5px;">review_call</span> + <span style="font-family: var(--mono); font-size: 12.5px;">upsert_call_review</span>. Generates a four-section structured review per call (pain_points / wins / dodged_questions / sentiment_arc) stored as <span style="font-family: var(--mono); font-size: 12.5px;">documents</span> rows with <span style="font-family: var(--mono); font-size: 12.5px;">source='fathom'</span>, <span style="font-family: var(--mono); font-size: 12.5px;">document_type='call_review'</span>, <span style="font-family: var(--mono); font-size: 12.5px;">is_active=False</span> (retrieval-side safety net). May 2026 backfill complete: <strong>31/31 reviewed, $1.5349 total Sonnet cost</strong>. One-shot script at <span style="font-family: var(--mono); font-size: 12.5px;">scripts/backfill_call_reviews.py</span> with <span style="font-family: var(--mono); font-size: 12.5px;">--smoke</span> / <span style="font-family: var(--mono); font-size: 12.5px;">--apply</span> / <span style="font-family: var(--mono); font-size: 12.5px;">--limit</span> modes; smoke mode is the working norm for all future backfills. Calls detail page surfaces the review as Section 4.5 between Summary and Action items — sentiment_arc paragraph + three list subsections + "Generated &lt;timestamp&gt;" header. "Conversation pivots" UI section name (renamed from "Dodged questions"). Real-API smoke gate caught + closed a TS-vs-Python SDK shape mismatch bug pre-bulk-run (see <span style="font-family: var(--mono); font-size: 12.5px;">docs/claude-handoff.md</span> for the working-norm). <strong>Deployed and verified on production — Drake confirmed via dashboard review of representative samples.</strong></div>
+        <div class="id">Ship 7</div>
+        <div class="title">Clients list V2 columns — NPS / Trustpilot / Meetings replace Tags / Open AI / Last call</div>
+        <div class="subtitle">1-to-1 column swap on <span style="font-family: var(--mono); font-size: 12.5px;">app/(authenticated)/clients/clients-table.tsx</span>. New <span style="font-family: var(--mono); font-size: 12.5px;">NpsStandingPill</span> + <span style="font-family: var(--mono); font-size: 12.5px;">TrustpilotPill</span> components matching the existing pill family palettes. Vocab labels updated to match (filter dropdown labels exactly match table pill labels). Default sort flipped from <span style="font-family: var(--mono); font-size: 12.5px;">last_call_date desc</span> to <span style="font-family: var(--mono); font-size: 12.5px;">latest_health_score asc</span> (worst first) — surfaces attention-needing clients at the top now that V2 brain produces reliable scores. Trustpilot label revert later in the day to keep "Yes/No/Ask/Asked" consistent with the inline-edit dropdown source-of-truth.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 6</div>
+        <div class="title"><span style="font-family: var(--mono); font-size: 12.5px;">latest_nps</span> signal source fix</div>
+        <div class="subtitle"><span style="font-family: var(--mono); font-size: 12.5px;">agents/gregory/signals.py:compute_latest_nps</span> now reads from <span style="font-family: var(--mono); font-size: 12.5px;">clients.nps_standing</span> instead of <span style="font-family: var(--mono); font-size: 12.5px;">nps_submissions.score</span> (which stayed empty in production through M5). Mapping: promoter→100, neutral→50 (with distinct "(passive)" note), at_risk→0, NULL→neutral 50. Score-shift on next sweep: at-risk clients drop ~10 points, promoter clients rise ~10 — rubric becomes appropriately discriminating. Fixed Drake-spotted bug on Nolan Rawlings: nps_standing='at_risk' but signal returned neutral 50 like the column wasn't populated.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 5</div>
+        <div class="title">NPS-is-gospel auto-derive (migration 0027)</div>
+        <div class="subtitle">Override-sticky semantics on <span style="font-family: var(--mono); font-size: 12.5px;">update_client_from_nps_segment</span> (M5.4 / 0021) flipped to "NPS is gospel" — every NPS Survey segment write unconditionally auto-derives <span style="font-family: var(--mono); font-size: 12.5px;">csm_standing</span>. <span style="font-family: var(--mono); font-size: 12.5px;">'problem'</span> stays manual-only (no segment maps to it). One-time backfill realigned 16 stale rows (14 master-sheet seeds + 2 stale Gregory Bot auto-derives, zero current CSM manual overrides per dry-run). NPS harness refactored to self-seeded fixture pattern replacing the static-Branden fixture broken since M5.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 4</div>
+        <div class="title">Daily cron + freshness filter — architectural fix for 300s timeout</div>
+        <div class="subtitle">Cron schedule switched weekly→daily and <span style="font-family: var(--mono); font-size: 12.5px;">compute_ai_call_signal</span> gained a freshness check: query <span style="font-family: var(--mono); font-size: 12.5px;">agent_runs</span> for the last successful compute timestamp; if no new <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> documents since, return the prior Signal verbatim and skip the Sonnet call. Skip-path opens an <span style="font-family: var(--mono); font-size: 12.5px;">agent_runs</span> row with <span style="font-family: var(--mono); font-size: 12.5px;">output_summary</span> starting "skipped" so cost rollups split via <span style="font-family: var(--mono); font-size: 12.5px;">WHERE output_summary LIKE 'skipped%'</span>. Each daily sweep fires Sonnet for ~10 clients instead of all 188, fitting 300s ceiling. The <span style="font-family: var(--mono); font-size: 12.5px;">maxDuration: 600</span> bump attempt failed at Vercel Pro plan validation; daily+freshness solves the timeout architecturally rather than by buying ceiling.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 3</div>
+        <div class="title">Fathom pipeline auto-review</div>
+        <div class="subtitle">Every Fathom webhook delivery for a client-category call with non-null <span style="font-family: var(--mono); font-size: 12.5px;">summary_text</span> auto-generates a <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> document, synchronously. <span style="font-family: var(--mono); font-size: 12.5px;">_ensure_call_review_document</span> in <span style="font-family: var(--mono); font-size: 12.5px;">ingestion/fathom/pipeline.py</span> fires after summary write succeeds. Three-layer idempotency keeps Fathom retries free. Fail-soft try/except mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery. The 30-day call_review lookback that the V2 brain reads now refills automatically.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 2</div>
+        <div class="title">Gregory Health Score V2 — AI signal at 0.50 weight</div>
+        <div class="subtitle"><span style="font-family: var(--mono); font-size: 12.5px;">agents/gregory/ai_call_signal.py</span> reads each client's last 30 days of <span style="font-family: var(--mono); font-size: 12.5px;">call_review</span> documents and asks Sonnet for a 0-100 contribution + reasoning + 0-3 concerns matching the existing dashboard <span style="font-family: var(--mono); font-size: 12.5px;">{text, severity, source_call_ids}</span> shape. V2 weights: <span style="font-family: var(--mono); font-size: 12.5px;">ai 0.50 + cadence 0.20 + overdue 0.10 + nps 0.20</span>. <span style="font-family: var(--mono); font-size: 12.5px;">open_action_items</span> retired (was double-counting). <span style="font-family: var(--mono); font-size: 12.5px;">concerns.py</span> + <span style="font-family: var(--mono); font-size: 12.5px;">GREGORY_CONCERNS_ENABLED</span> gate retired — concerns flow directly from the AI signal. Never-called-clients-land-green M3.4 issue fully resolved (now lands at score=55 yellow, math pinned by test). Hazel Castillo single-client smoke verified end-to-end pre-push.</div>
+        <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed</span></div>
+      </div>
+
+      <div class="card">
+        <div class="id">Ship 1</div>
+        <div class="title">Call Review V1 — call_reviewer agent + May 2026 backfill</div>
+        <div class="subtitle">New <span style="font-family: var(--mono); font-size: 12.5px;">agents/call_reviewer/</span> module. Sonnet-only, four-section structured review per call (pain_points / wins / dodged_questions / sentiment_arc) stored as <span style="font-family: var(--mono); font-size: 12.5px;">documents</span> rows with <span style="font-family: var(--mono); font-size: 12.5px;">document_type='call_review'</span>, <span style="font-family: var(--mono); font-size: 12.5px;">is_active=False</span> (retrieval-side safety net). May 2026 backfill: <strong>38 calls reviewed at $1.81 total Sonnet cost</strong> (31 from initial backfill + 7 from end-of-day catchup after the V2 deploy). One-shot script at <span style="font-family: var(--mono); font-size: 12.5px;">scripts/backfill_call_reviews.py</span> with <span style="font-family: var(--mono); font-size: 12.5px;">--smoke</span> mode (working norm for all future backfills — caught a TS-vs-Python SDK shape bug pre-bulk-run). Calls detail page surfaces the review as Section 4.5.</div>
         <div class="pills"><span class="pill">delivered</span><span class="pill stretch">deployed + verified</span></div>
       </div>
 
@@ -318,34 +360,57 @@
   </section>
 
   <section class="blockers">
-    <h2>Followups + open items</h2>
+    <h2>Operational improvements landed this session</h2>
     <ul>
       <li>
-        <strong>Gregory cron not firing on schedule.</strong> 0 scheduled-Monday cron invocations in 42d (only one ad-hoc batch on 2026-05-06 Wed). Endpoint code is healthy; likely <span class="ref">CRON_SECRET</span> mismatch between deployed function bundle + Vercel dashboard, OR scheduler config not picked up. Drake checks Vercel Cron Jobs tab post-deploy.
-        <div><span class="ref">Diagnostic gates: "Last invocation: never" → scheduler config; "recent + 401" → secret mismatch; "recent + 200 + no agent_runs" → silent brain bug.</span></div>
+        <strong>Real-API smoke test before <span class="ref">--apply</span> on backfills.</strong> Working norm logged in <span class="ref">docs/claude-handoff.md</span>. Caught a TS-vs-Python SDK <span class="ref">.maybeSingle()</span> vs <span class="ref">.maybe_single()</span> mismatch in the call_reviewer pre-bulk-run that mocked unit tests + dry-run mode both missed.
       </li>
       <li>
-        <strong>V2 brain weight calibration.</strong> Iterate after 2-3 weekly sweeps. Tier distributions tell us whether 0.50 on the AI signal is right.
-        <div><span class="ref">docs/followups.md → "Gregory brain V2 weight calibration"</span></div>
+        <strong>Secrets-handling norm update.</strong> Code can read secrets directly from <span class="ref">.env.local</span> when the task requires it. Previous "never paste secrets to Code" rule replaced. Updated in <span class="ref">docs/claude-handoff.md</span>.
       </li>
       <li>
-        <strong>Brain run wall-clock duration trending toward Vercel cron ceiling.</strong> Watchpoint at <span class="ref">duration_ms &gt; 480000</span> (80% of 600s ceiling). Re-architect (parallelize per-client loop OR move AI signal to separate weekly job) if breached.
-        <div><span class="ref">docs/followups.md → "Brain run wall-clock duration trending toward Vercel cron ceiling"</span></div>
+        <strong>Vercel auto-deploy quirk documented.</strong> Manual redeploy from the dashboard resolves apparent 250MB function-bundle-size errors that hit the local <span class="ref">vercel deploy</span> path. Added to <span class="ref">docs/claude-handoff.md</span> alongside the smoke-test norm.
+      </li>
+      <li>
+        <strong>Daily cron verification gate.</strong> Top of <span class="ref">docs/followups.md</span> + <span class="ref">CLAUDE.md § Next Session Priorities</span> item 0. One-time, removable after running. Tomorrow's 09:00 UTC is the integration smoke for both the daily-cron switch + the freshness filter.
+      </li>
+    </ul>
+
+    <h2 style="margin-top: 18px;">Open followups carrying to next session</h2>
+    <ul>
+      <li>
+        <strong>Daily cron verification gate.</strong> One-time first-action; remove after running. <span class="ref">docs/followups.md → top entry</span>
+      </li>
+      <li>
+        <strong>V2 brain weight calibration after 2-3 daily sweeps with freshness filter.</strong> Iterate when sweep distribution data tells us whether 0.50 on the AI signal is right or compressing toward yellow.
       </li>
       <li>
         <strong>Call Review V1 has no eval coverage.</strong> Hand-graded golden set (10-20 reviews) when output quality becomes an iteration bottleneck.
-        <div><span class="ref">docs/followups.md → "Call Review V1 has no eval coverage"</span></div>
       </li>
       <li>
-        <strong>Promote <span class="ref">call_review</span> exclusion into <span class="ref">match_document_chunks</span> SQL function.</strong> Currently safe via <span class="ref">is_active=false</span>; gate disappears if anything ever sets <span class="ref">is_active=true</span>. Resolve when V2 wires generation into the ingestion pipeline (note: Fathom-pipeline auto-review just shipped — this followup is now imminently relevant).
-        <div><span class="ref">docs/followups.md → "Promote call_review exclusion into match_document_chunks SQL function"</span></div>
+        <strong>Promote <span class="ref">call_review</span> exclusion into <span class="ref">match_document_chunks</span> SQL function.</strong> Now imminently relevant since auto-review is wired — every Fathom call generates a review document.
+      </li>
+      <li>
+        <strong>agent_runs index when <span class="ref">ai_call_signal</span> row count exceeds 5000.</strong> Today's freshness lookup is a jsonb-key filter; fine at ~500 rows, needs an index past ~5k.
+      </li>
+      <li>
+        <strong>Clients list <span class="ref">journey_stage</span> column sorts alphabetically (not funnel order).</strong> Custom funnel-position sort if friction surfaces.
+      </li>
+      <li>
+        <strong>Fathom auto-review vs brain-sweep freshness — 24h-max race (accepted).</strong> A Fathom auto-review can land a new <span class="ref">call_review</span> AFTER the brain reads the freshness timestamp; the new review goes invisible until the next daily sweep. Documented as accepted trade-off.
+      </li>
+      <li>
+        <strong><span class="ref">merge_clients</span> should migrate <span class="ref">client_health_scores</span> rows on merge.</strong> Surfaced by the Salman Rahman duplicate during V2 sweep verification — the RPC migrates documents but not health scores.
+      </li>
+      <li>
+        <strong>Archived clients reachable via dashboard URL — UX gap.</strong> Direct-URL access to a merged-source archived client UUID 404s instead of redirecting to the merge target. ~5-line fix in <span class="ref">getClientById</span>.
       </li>
     </ul>
   </section>
 
   <div class="footer">
     Tracker is a view, not a source of truth. If this drifts from CLAUDE.md, CLAUDE.md wins.
-    <strong>CLAUDE.md § Live System State NOT updated this session</strong> — V2 brain + Fathom auto-review code on main but deploy pending Drake's manual step. Live System State will land alongside post-deploy verification.
+    <strong>CLAUDE.md § Live System State updated at session-close to reflect current production state.</strong>
     Updated by hand as work moves through the session.
   </div>
 
