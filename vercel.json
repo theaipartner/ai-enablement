@@ -36,7 +36,7 @@
   },
   "crons": [
     { "path": "/api/fathom_backfill", "schedule": "0 8 * * *" },
-    { "path": "/api/gregory_brain_cron", "schedule": "0 9 * * 1" },
+    { "path": "/api/gregory_brain_cron", "schedule": "0 9 * * *" },
     { "path": "/api/accountability_notification_cron", "schedule": "0 12 * * *" }
   ]
 }
