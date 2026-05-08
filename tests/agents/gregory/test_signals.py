@@ -121,37 +121,82 @@ def test_overdue_action_items_subtracts_15_per_item():
 
 
 # ---------------------------------------------------------------------------
-# latest_nps
+# latest_nps — reads clients.nps_standing (Airtable mirror via NPS-is-gospel)
 # ---------------------------------------------------------------------------
 
 
-def test_latest_nps_scales_0_to_10_onto_0_to_100():
-    db = _FakeDB(resp_data=[{"score": 8, "submitted_at": "2026-04-01T00:00:00Z"}])
+def test_latest_nps_promoter_scores_100():
+    db = _FakeDB(resp_data=[{"nps_standing": "promoter"}])
 
     result = signals.compute_latest_nps(db, "client-x")
 
-    assert result["contribution"] == 80
-    assert result["value"] == "8"
+    assert result["name"] == "latest_nps"
+    assert result["contribution"] == 100
+    assert result["value"] == "promoter"
+    assert "promoter" in result["note"].lower()
 
 
-def test_latest_nps_zero_is_zero_not_neutral():
-    """A real NPS of 0 is meaningfully bad, not 'no data'."""
-    db = _FakeDB(resp_data=[{"score": 0, "submitted_at": "2026-04-01T00:00:00Z"}])
+def test_latest_nps_neutral_scores_50_with_passive_note():
+    """Real-data 'neutral' segment maps to contribution 50 — same value
+    as the no-data neutral, but the note must distinguish them so the
+    insufficient_data flag + dashboard rendering can tell which is
+    which."""
+    db = _FakeDB(resp_data=[{"nps_standing": "neutral"}])
+
+    result = signals.compute_latest_nps(db, "client-x")
+
+    assert result["contribution"] == 50
+    assert result["value"] == "neutral"
+    assert "passive" in result["note"].lower()
+    assert "no nps standing" not in result["note"].lower()
+
+
+def test_latest_nps_at_risk_scores_0():
+    """A real at_risk segment is meaningfully bad, not 'no data'."""
+    db = _FakeDB(resp_data=[{"nps_standing": "at_risk"}])
 
     result = signals.compute_latest_nps(db, "client-x")
 
     assert result["contribution"] == 0
-    assert result["value"] == "0"
+    assert result["value"] == "at_risk"
+    assert "at_risk" in result["note"].lower()
 
 
-def test_latest_nps_no_data_neutral():
+def test_latest_nps_null_standing_neutral():
+    """nps_standing=None (column populated but value is null) →
+    NEUTRAL_CONTRIBUTION with the 'no record' note."""
+    db = _FakeDB(resp_data=[{"nps_standing": None}])
+
+    result = signals.compute_latest_nps(db, "client-x")
+
+    assert result["contribution"] == NEUTRAL_CONTRIBUTION
+    assert result["value"] is None
+    assert "no nps standing" in result["note"].lower()
+
+
+def test_latest_nps_client_row_missing_neutral():
+    """Defensive: empty resp.data (client_id not found) falls through
+    to neutral. Shouldn't happen in production — agent.py only passes
+    ids freshly iterated from clients — but cheap to handle."""
     db = _FakeDB(resp_data=[])
 
     result = signals.compute_latest_nps(db, "client-x")
 
     assert result["contribution"] == NEUTRAL_CONTRIBUTION
     assert result["value"] is None
-    assert "nps" in result["note"].lower()
+
+
+def test_latest_nps_unexpected_value_falls_through_to_neutral():
+    """Defense-in-depth past the migration 0021 CHECK constraint.
+    Constraints get widened; we don't want a future
+    'detractor' or 'sleeper' segment to crash the brain."""
+    db = _FakeDB(resp_data=[{"nps_standing": "detractor"}])
+
+    result = signals.compute_latest_nps(db, "client-x")
+
+    assert result["contribution"] == NEUTRAL_CONTRIBUTION
+    assert result["value"] == "detractor"
+    assert "unexpected" in result["note"].lower()
 
 
 # ---------------------------------------------------------------------------

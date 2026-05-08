@@ -156,37 +156,95 @@ def compute_overdue_action_items(db: Any, client_id: str) -> Signal:
 
 
 def compute_latest_nps(db: Any, client_id: str) -> Signal:
-    """Most recent nps_submissions.score for this client, scaled 0-10
-    onto 0-100. No NPS data → neutral (50) with note. nps_submissions
-    is empty in cloud as of M3.4 ship; this signal reads as neutral
-    for every client until NPS ingestion lands.
+    """Map clients.nps_standing → 0-100 contribution. Airtable is the
+    source of truth via the Path 1 webhook (M5.4) + the NPS-is-gospel
+    auto-derive (migration 0027); clients.nps_standing mirrors the
+    Airtable Survey segment classification.
+
+    Mapping:
+      'promoter' → 100
+      'neutral'  → 50
+      'at_risk'  → 0
+      NULL       → NEUTRAL_CONTRIBUTION (50) with explicit "no data" note
+
+    The NULL case and the 'neutral' case both contribute 50 but carry
+    distinct note text — important for score_signals's
+    insufficient_data flag (which checks every-signal-is-neutral) and
+    for the dashboard's "Why this score" expand to disambiguate
+    "no NPS data" from "real-NPS-data-shows-passive".
+
+    Defensive: any unexpected nps_standing value falls through to
+    NEUTRAL_CONTRIBUTION with a flagged note. The CHECK constraint on
+    clients.nps_standing (migration 0021) prevents this in production
+    today, but constraints get widened — cheap insurance against
+    future schema drift.
+
+    Renamed source 2026-05-08: was nps_submissions.score (M3.4 V1.1
+    shape). nps_submissions stayed empty in production through M5;
+    real NPS data lives in clients.nps_standing as a segment string.
     """
     resp = (
-        db.table("nps_submissions")
-        .select("score, submitted_at")
-        .eq("client_id", client_id)
-        .order("submitted_at", desc=True)
+        db.table("clients")
+        .select("nps_standing")
+        .eq("id", client_id)
         .limit(1)
         .execute()
     )
     rows = resp.data or []
     if not rows:
+        # Defensive: client_id not found. Shouldn't happen because
+        # the orchestration in agent.py only passes ids it just
+        # iterated from clients. Fall through to neutral.
         return Signal(
             name="latest_nps",
             weight=WEIGHT_LATEST_NPS,
             value=None,
             contribution=NEUTRAL_CONTRIBUTION,
-            note="No NPS submissions on record (NPS ingestion not yet built).",
+            note="No NPS standing on record.",
         )
 
-    raw = int(rows[0]["score"])
-    contribution = max(0, min(100, raw * 10))
+    standing = rows[0].get("nps_standing")
+    if standing is None:
+        return Signal(
+            name="latest_nps",
+            weight=WEIGHT_LATEST_NPS,
+            value=None,
+            contribution=NEUTRAL_CONTRIBUTION,
+            note="No NPS standing on record.",
+        )
+
+    if standing == "promoter":
+        return Signal(
+            name="latest_nps",
+            weight=WEIGHT_LATEST_NPS,
+            value="promoter",
+            contribution=100,
+            note="NPS standing: promoter (Airtable mirror).",
+        )
+    if standing == "neutral":
+        return Signal(
+            name="latest_nps",
+            weight=WEIGHT_LATEST_NPS,
+            value="neutral",
+            contribution=50,
+            note="NPS standing: neutral (passive).",
+        )
+    if standing == "at_risk":
+        return Signal(
+            name="latest_nps",
+            weight=WEIGHT_LATEST_NPS,
+            value="at_risk",
+            contribution=0,
+            note="NPS standing: at_risk (Airtable mirror).",
+        )
+
+    # Unexpected value — defense-in-depth past the DB CHECK constraint.
     return Signal(
         name="latest_nps",
         weight=WEIGHT_LATEST_NPS,
-        value=str(raw),
-        contribution=contribution,
-        note=f"Latest NPS score: {raw}/10.",
+        value=str(standing),
+        contribution=NEUTRAL_CONTRIBUTION,
+        note=f"Unexpected nps_standing value: {standing!r}. Falling through to neutral.",
     )
 
 
