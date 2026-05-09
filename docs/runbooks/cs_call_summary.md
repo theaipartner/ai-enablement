@@ -26,12 +26,9 @@ If any of those fail, the Fathom webhook delivery still succeeds — the call ro
 
 ## Message format
 
-Plain text mrkdwn (no rich blocks). The hook chooses between two shapes per call:
+Plain text mrkdwn (no rich blocks). Only one shape is posted today — the review-shaped message. When no usable review exists for a call, the hook **skips the Slack post entirely** and records the gap in `webhook_deliveries`. (The pre-2026-05-09 Fathom-`default_summary` fallback was retired; see § "Skip-on-no-review" below.)
 
-1. **Review-shaped (preferred)** — when a `call_review` document exists for the call's `external_id` and parses to a non-degenerate review.
-2. **Fallback** — when the review is missing, malformed, or yields no usable sections. Same shape as the original M6.1 ship.
-
-Both shapes pass through `markdown_to_mrkdwn` (`shared/slack_format.py`) before posting so any rogue Markdown — `###` headers, `**bold**`, `[text](url)` links — is normalized to Slack mrkdwn. The cleanup pass is the safety net; review content rarely contains raw Markdown but the LLM isn't deterministic and Fathom's `default_summary` does emit `###` headers.
+The review-shape passes through `markdown_to_mrkdwn` (`shared/slack_format.py`) before posting so any rogue Markdown the LLM emitted — `###` headers (line-anchored only), `**bold**`, `[text](url)` links — is normalized to Slack mrkdwn. The cleanup pass is the safety net; review content rarely contains raw Markdown but the LLM isn't deterministic.
 
 ### Review-shaped
 
@@ -59,17 +56,20 @@ Section rules:
 - Sentiment is included whenever `sentiment_arc` is a non-empty string (per the reviewer prompt it's always populated).
 - Evidence quotes are wrapped in `_..._` mrkdwn italic.
 - The `Conversation pivots` subsection is the user-facing rename of the review's underlying `dodged_questions` field. The `(who: [who])` suffix marks who did the dodging.
-- If the parsed review yields zero usable sections (all four fields empty / missing / wrong shape), the post falls through to the fallback path.
+- If the parsed review yields zero usable sections (all four fields empty / missing / wrong shape), the post falls through to the **skip path** (no Slack call; audit row records the gap).
 
-### Fallback
+### Skip-on-no-review
 
-```
-*[CSM Name] / [Client Name]*
-[Fathom default_summary, after markdown_to_mrkdwn cleans `###` etc.]
-<https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
-```
+When the call has no `call_review` document, the document JSON is malformed, or `_format_review_message` returns `None` (degenerate render), the hook does NOT post to Slack. Instead it inserts an audit row with:
 
-The fallback is what M6.1 originally posted — the only difference is that the cleanup pass now strips Fathom's `###` Markdown headers (which Slack mrkdwn renders as literal hashes) and converts to `*bold*` mrkdwn instead.
+| Field | Value |
+|---|---|
+| `processing_status` | `'malformed'` |
+| `processing_error` | `'no_review_available'` |
+| `payload.content_source` | `'skipped_no_review'` |
+| `payload.review_fetch_error` | populated only when a DB exception caused the miss (rare) |
+
+Why `'malformed'` and not `'skipped'`: migration 0011's CHECK constraint on `webhook_deliveries.processing_status` only allows `{'received','processed','failed','duplicate','malformed'}` — adding `'skipped'` would require a migration. The dual discriminator (`processing_error='no_review_available'` plus `payload.content_source='skipped_no_review'`) keeps the audit row queryable without one. The same `'malformed'` value is reused by the `no_summary_text` skip path; debuggers disambiguate the two via `processing_error`.
 
 ### Sentinel labels
 
@@ -84,22 +84,25 @@ Per Drake's spec: "if they become a problem we will remove" — surfacing the se
 
 Every audit row's `payload` JSON includes a `content_source` field tagging which path the post took. Values:
 
-- `'call_review'` — the review-shaped message was posted.
-- `'fathom_summary_fallback'` — the fallback message was posted (review missing, malformed, or degenerate).
+| Value | Meaning |
+|---|---|
+| `'call_review'` | Review-shaped message was posted. |
+| `'skipped_no_review'` | No usable review existed; no Slack post was attempted. |
+| ~~`'fathom_summary_fallback'`~~ | **Retired 2026-05-09.** Old rows preserve this value; no new rows carry it. |
 
-Useful for splitting fallback-vs-review rate in audit dashboards. Query example:
+Useful for splitting review-vs-skip rate in audit dashboards. Query example:
 
 ```sql
 SELECT payload->>'content_source' AS content_source,
-       COUNT(*) AS posts,
-       SUM((processing_status = 'processed')::int) AS succeeded
+       COUNT(*) AS rows,
+       SUM((processing_status = 'processed')::int) AS posts_succeeded
 FROM webhook_deliveries
 WHERE source = 'cs_call_summary_slack_post'
   AND received_at > now() - interval '7 days'
 GROUP BY 1;
 ```
 
-When the review fetch itself raises (DB error, not "row simply absent"), the path falls back AND the payload also carries a `review_fetch_error` string for triage. `content_source` stays binary.
+When the review fetch itself raises a DB exception (rare; not "row simply absent"), the path still falls through to skip AND the payload carries a `review_fetch_error` string for triage. `content_source` stays the binary `'call_review'`/`'skipped_no_review'` value either way.
 
 ---
 
@@ -152,7 +155,8 @@ If a CSM expected a call summary in the channel but didn't see one:
    ```
 
    - **No row** → the hook didn't fire for this call. Either the call wasn't a client call (skipped silently — see step 1), or the hook itself raised before reaching the audit insert. Check Vercel function logs for `cs_call_summary_post hook raised`.
-   - **`processing_status='malformed'`, `processing_error='no_summary_text'`** → the Fathom payload didn't include a `default_summary`. Possible causes: Fathom hasn't generated the summary yet (re-summary is delivered as a second webhook fire — check `webhook_deliveries` for a later fathom_webhook delivery on the same external_id), or the call was a TXT-backlog re-ingest (which doesn't carry summaries).
+   - **`processing_status='malformed'`, `processing_error='no_review_available'`** (with `payload.content_source='skipped_no_review'`) → the call has no usable `call_review` document. Either the auto-review hook hasn't run yet (check `documents` for a row with `source='fathom'`, `external_id=<recording_id>`, `document_type='call_review'`), or the review JSON is malformed / degenerate. The pipeline auto-generates reviews after the summary doc is written, so a missing review usually means the review-gen failed; check `agent_runs` for the most recent `call_reviewer` invocation on this call.
+   - **`processing_status='malformed'`, `processing_error='no_summary_text'`** → the Fathom payload didn't include a `default_summary`. Possible causes: Fathom hasn't generated the summary yet (re-summary is delivered as a second webhook fire — check `webhook_deliveries` for a later fathom_webhook delivery on the same external_id), or the call was a TXT-backlog re-ingest (which doesn't carry summaries). Disambiguate from the `no_review_available` skip via `processing_error` (both share `processing_status='malformed'` because of the migration-0011 CHECK constraint — see § Skip-on-no-review above).
    - **`processing_status='failed'`, `processing_error='SLACK_CS_CALL_SUMMARIES_CHANNEL_ID not set'`** → env var missing in Vercel. Set it and redeploy.
    - **`processing_status='failed'`, `processing_error=<slack-error-code>`** → Slack returned `ok=false`. Common errors:
      - `channel_not_found` → channel ID wrong or bot not invited.
@@ -190,7 +194,17 @@ The bot must be a member of `SLACK_CS_CALL_SUMMARIES_CHANNEL_ID`. Steps:
 .venv/bin/python scripts/test_cs_call_summary_locally.py
 ```
 
-Expected: `59/59 checks passed`. Read-only against cloud DB except for one self-seeded test client + CSM (and a few synthetic `call_review` documents seeded for the review-path tests) that get hard-deleted in cleanup. No real Slack posts (the harness mocks `shared.slack_post.post_message`).
+Expected: `65/65 checks passed`. Read-only against cloud DB except for one self-seeded test client + CSM (and a handful of synthetic `call_review` documents seeded for the review-path tests) that get hard-deleted in cleanup. No real Slack posts (the harness mocks `shared.slack_post.post_message` per-test; pytest tests use the `tests/conftest.py` autouse fixture instead — see § Test hermeticity below).
+
+---
+
+## Test hermeticity
+
+Pytest tests under `tests/` are protected from accidentally hitting real Slack by `tests/conftest.py`, which registers an autouse fixture that monkeypatches `shared.slack_post.post_message` (and the import-time-bound re-export at `agents.gregory.cs_call_summary_post.post_message`) to a no-op for every test in the suite. This is belt-and-suspenders alongside the skip-on-no-review path — even if a future test seeds a `call_review` document and engages the post path, the autouse fixture intercepts the call before it reaches `chat.postMessage`.
+
+The conftest's docstring documents the import-time-binding gotcha that made the dual-patch necessary: `from shared.slack_post import post_message` binds `post_message` as a *local* name inside the importing module at import time, so patching only the source module wouldn't intercept the live caller. When a new pytest test imports a module that re-exports `post_message`, add the dotted path to the conftest's monkeypatch list.
+
+The local harness (`scripts/test_cs_call_summary_locally.py`) lives outside `tests/` so the conftest doesn't apply — its existing in-scope `unittest.mock.patch` calls handle Slack mocking instead.
 
 ---
 
@@ -201,6 +215,7 @@ Expected: `59/59 checks passed`. Read-only against cloud DB except for one self-
 | No Slack post for a client call | Bot not invited to channel | `/invite @<bot>` in channel |
 | `webhook_deliveries` audit row marked `failed` with `channel_not_found` | Wrong channel ID in Vercel env | Update `SLACK_CS_CALL_SUMMARIES_CHANNEL_ID` |
 | `webhook_deliveries` audit row marked `malformed` with `no_summary_text` | Fathom webhook payload had no `default_summary` (rare; Fathom re-fires when summary lands) | Wait for the re-fire OR re-deliver from Fathom UI |
+| `webhook_deliveries` audit row marked `malformed` with `no_review_available` (and `payload.content_source='skipped_no_review'`) | The `call_review` document for this call is missing or malformed — the hook deliberately skipped the post | Check `agent_runs` for the most recent `call_reviewer` invocation; if it failed, re-run via `scripts/backfill_call_reviews.py --apply --limit 1` filtered to that call |
 | Fathom webhook 500s after the M6.1 hook is added | Hook raised an unhandled exception | Should be impossible — the hook is wrapped in try/except in `pipeline.py` and never propagates. If it happens, check Vercel logs for the traceback and file a bug |
 | CSM name shows `[unassigned]` | Client has no active primary_csm assignment | Assign via the Gregory dashboard (Section 1 → Primary CSM dropdown) |
 | Client name shows `[unknown client]` | `primary_client_id` doesn't resolve to a clients row | Investigate — likely a stale primary_client_id from a since-archived merge source |
@@ -215,8 +230,9 @@ Expected: `59/59 checks passed`. Read-only against cloud DB except for one self-
 - Cleanup pass: `shared/slack_format.py:markdown_to_mrkdwn`
 - Slack-post helper: `shared/slack_post.py:post_message`
 - Harness: `scripts/test_cs_call_summary_locally.py`
+- Test-hermeticity autouse mock: `tests/conftest.py`
 - webhook_deliveries source label: `cs_call_summary_slack_post`
-- webhook_deliveries audit `payload.content_source`: `'call_review'` or `'fathom_summary_fallback'`
+- webhook_deliveries audit `payload.content_source`: `'call_review'` (post fired) or `'skipped_no_review'` (post skipped). `'fathom_summary_fallback'` retired 2026-05-09; old rows preserved.
 - Build log entry: `docs/agents/gregory.md` § "CS visibility surfaces (M6.1)"
 
 The audit trail is queryable end-to-end: every Fathom client-call delivery produces one fathom_webhook row + one cs_call_summary_slack_post row, both keyed on the same Fathom `external_id` via `call_external_id`. Joinable in SQL:

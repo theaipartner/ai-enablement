@@ -10,24 +10,33 @@ Design constraints (per Drake's spec):
   - Only client calls trigger the post; other categories skip silently.
   - Edge cases (archived client, no primary_csm) post anyway with
     sentinel labels — "if they become a problem we will remove."
+  - Only the review-shaped message is posted. When no usable review
+    exists (missing / malformed / degenerate), NO Slack post is made;
+    an audit row records the skip. The earlier Fathom-`default_summary`
+    fallback was retired because its shape was too cluttered for Slack
+    and isn't the format CSMs rely on.
   - Slack-post failure is NEVER fatal to the Fathom webhook delivery.
     Exceptions are caught + logged; the call row + summary doc are
     more important than the Slack message.
   - Audit trail via `webhook_deliveries` with
     `source='cs_call_summary_slack_post'` so debugging "did the post
     happen for call X" doesn't require grepping Vercel logs. Audit
-    payload includes a `content_source` field tagging which path the
-    post took (`call_review` vs `fathom_summary_fallback`) so future
-    debugging / dashboards can split the two.
+    payload's `content_source` field is one of:
+      - 'call_review'        — review-shaped post fired
+      - 'skipped_no_review'  — no usable review, no Slack post
+    ('fathom_summary_fallback' is retired — old rows keep their value;
+    no new rows carry it.)
+  - Skip-path note: migration 0011's CHECK constraint on
+    `webhook_deliveries.processing_status` only allows
+    {'received','processed','failed','duplicate','malformed'} — adding
+    'skipped' would require a migration. Skip rows therefore use
+    `processing_status='malformed'` + `processing_error='no_review_available'`
+    as the dual discriminator, with `payload.content_source='skipped_no_review'`
+    as the authoritative tag. This overloads 'malformed' slightly (the
+    existing `no_summary_text` skip path uses the same pattern) but
+    keeps SQL queries clean and avoids a migration round-trip.
 
-Message format:
-  Two shapes. The review-shaped message is preferred; the fallback
-  fires only when the call_review document is missing, malformed, or
-  yields a degenerate render. Both go through `markdown_to_mrkdwn` as
-  a safety net so any rogue Markdown the LLM emitted gets cleaned
-  before it hits Slack.
-
-  Review-shaped (preferred):
+Message format (review-shaped — the only shape):
 
     *[CSM Name] / [Client Name]*
 
@@ -45,13 +54,9 @@ Message format:
 
     <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
 
-  Empty sections are omitted entirely (no "None" filler).
-
-  Fallback (when no review available):
-
-    *[CSM Name] / [Client Name]*
-    [Fathom default_summary, after markdown_to_mrkdwn cleans `###` etc.]
-    <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
+Empty sections are omitted entirely (no "None" filler). The whole
+message passes through `markdown_to_mrkdwn` so any rogue Markdown the
+LLM emitted gets cleaned before it hits Slack.
 
 Sentinel labels:
   - `[unassigned]` when no active primary_csm
@@ -90,10 +95,14 @@ _GREGORY_CALL_PATH = "https://ai-enablement-sigma.vercel.app/calls/{call_id}"
 _DELIVERY_SOURCE = "cs_call_summary_slack_post"
 
 # Audit content_source values. Tagged on the audit-row payload so the
-# split between "review available" and "fell back to Fathom summary" is
+# split between "review available" and "skipped, no usable review" is
 # queryable. Treat as enum.
+#   'call_review'        — review-shaped post fired
+#   'skipped_no_review'  — no usable review, no Slack post
+# 'fathom_summary_fallback' is retired — old rows keep their value; no
+# new rows carry it.
 _CONTENT_SOURCE_REVIEW = "call_review"
-_CONTENT_SOURCE_FALLBACK = "fathom_summary_fallback"
+_CONTENT_SOURCE_SKIPPED_NO_REVIEW = "skipped_no_review"
 
 
 def maybe_post_cs_call_summary(
@@ -114,13 +123,17 @@ def maybe_post_cs_call_summary(
         "delivery_id": str,
         "slack_ok": bool,
         "slack_error": str | None,
-        "content_source": "call_review" | "fathom_summary_fallback" | None,
+        "content_source": "call_review" | "skipped_no_review" | None,
       }
 
     NEVER raises. Wraps every internal failure as
     `posted=False, skipped_reason='<reason>'` or in the audit row.
     Caller is the Fathom pipeline; the Fathom webhook delivery must
     not fail because Slack posting failed.
+
+    `summary_text` is unused for posting (the Fathom-summary fallback
+    was retired — see module docstring) but kept in the signature to
+    avoid touching ingestion/fathom/pipeline.py at the call site.
     """
     delivery_id = f"cs_call_summary_{uuid.uuid4()}"
 
@@ -140,8 +153,12 @@ def maybe_post_cs_call_summary(
     # Skip if no summary text (shouldn't happen post-F2.3 for webhook
     # path; possible for backlog re-ingest before summary docs land).
     # Audit row recorded so we can spot if this happens unexpectedly.
-    # The fallback path needs summary_text; without it we have neither
-    # path that can produce a useful message.
+    # In the new no-fallback world this skip is redundant with the
+    # downstream "no review available" skip (no summary → no review
+    # generation → review_text is None → same skip outcome) but kept
+    # because it produces a distinct `processing_error='no_summary_text'`
+    # discriminator in the audit ledger, which is more diagnostic than
+    # the generic "no review available" tag.
     if not summary_text or not summary_text.strip():
         _insert_delivery(
             delivery_id,
@@ -196,8 +213,11 @@ def maybe_post_cs_call_summary(
     csm_name = _resolve_primary_csm_name(db, primary_client_id)
     client_name = _resolve_client_full_name(db, primary_client_id)
 
-    # Try the review-shaped path first. Fall back to the Fathom-summary
-    # shape when the review is missing, malformed, or degenerate.
+    # Fetch the call_review and try to render the review-shaped message.
+    # When no usable review exists (missing / malformed / degenerate),
+    # `review_text` is None — we skip the Slack post entirely and record
+    # the gap in the audit ledger. The Fathom-summary fallback was
+    # retired (see module docstring).
     review, review_fetch_error = _try_get_review(db, fathom_external_id)
     review_text = (
         _format_review_message(
@@ -209,31 +229,55 @@ def maybe_post_cs_call_summary(
         if review is not None
         else None
     )
-    if review_text is not None:
-        text = markdown_to_mrkdwn(review_text)
-        content_source = _CONTENT_SOURCE_REVIEW
-    else:
-        text = markdown_to_mrkdwn(
-            _format_fallback_message(
-                csm_name=csm_name or "[unassigned]",
-                client_name=client_name or "[unknown client]",
-                summary_text=summary_text.strip(),
-                call_id=call_id,
-            )
-        )
-        content_source = _CONTENT_SOURCE_FALLBACK
 
-    payload: dict[str, Any] = {
+    if review_text is None:
+        # No usable review — record the skip and bail. No Slack call.
+        # See module docstring for the
+        # `processing_status='malformed' + processing_error='no_review_available'`
+        # rationale (CHECK-constraint workaround; 'skipped' isn't in the
+        # enum). `content_source='skipped_no_review'` in the payload is
+        # the authoritative discriminator.
+        payload: dict[str, Any] = {
+            "call_id": call_id,
+            "fathom_external_id": fathom_external_id,
+            "csm_name": csm_name,
+            "client_name": client_name,
+            "content_source": _CONTENT_SOURCE_SKIPPED_NO_REVIEW,
+        }
+        if review_fetch_error is not None:
+            payload["review_fetch_error"] = review_fetch_error
+        _insert_delivery(
+            delivery_id,
+            payload=payload,
+            status="malformed",
+            error="no_review_available",
+            call_external_id=fathom_external_id,
+        )
+        logger.info(
+            "cs_call_summary_post: skipped (no review available) "
+            "delivery_id=%s call_id=%s",
+            delivery_id,
+            call_id,
+        )
+        return {
+            "posted": False,
+            "skipped_reason": "no_review_available",
+            "delivery_id": delivery_id,
+            "slack_ok": False,
+            "slack_error": None,
+            "content_source": _CONTENT_SOURCE_SKIPPED_NO_REVIEW,
+        }
+
+    text = markdown_to_mrkdwn(review_text)
+    content_source = _CONTENT_SOURCE_REVIEW
+
+    payload = {
         "call_id": call_id,
         "fathom_external_id": fathom_external_id,
         "csm_name": csm_name,
         "client_name": client_name,
         "content_source": content_source,
     }
-    if review_fetch_error is not None:
-        # Distinguishes "DB error during fetch" from "row simply absent"
-        # without splitting content_source into a third value.
-        payload["review_fetch_error"] = review_fetch_error
 
     # Insert the audit row BEFORE the post so even a Slack-side failure
     # leaves a record. UPDATE to terminal status after the post.
@@ -478,30 +522,6 @@ def _format_review_items(items: Any, *, include_who: bool) -> list[str]:
             line += f" — _{evidence.strip()}_"
         lines.append(line)
     return lines
-
-
-def _format_fallback_message(
-    *,
-    csm_name: str,
-    client_name: str,
-    summary_text: str,
-    call_id: str,
-) -> str:
-    """Build the fallback Slack message — same shape as pre-spec, with
-    the cleanup-pass applied by the caller so `###`-laden Fathom output
-    renders as bold headers in Slack rather than literal hashes.
-
-    Top header emitted as `**...**` Markdown (not `*...*` mrkdwn)
-    because `markdown_to_mrkdwn` runs over the whole message — a
-    single-asterisk header on its own line would otherwise be eaten by
-    the converter's italic regex.
-    """
-    deep_link = _GREGORY_CALL_PATH.format(call_id=call_id)
-    return (
-        f"**{csm_name} / {client_name}**\n"
-        f"{summary_text}\n"
-        f"<{deep_link}|View in Gregory>"
-    )
 
 
 # ---------------------------------------------------------------------------
