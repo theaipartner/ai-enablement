@@ -4,19 +4,21 @@ Mocks Slack at `shared.slack_post.post_message` (so no real chat.postMessage
 fires) and seeds a synthetic test client with a known primary_csm + slack
 channel mapping. Exercises:
 
-  1. Happy path — client call with summary text → 200 ok, audit row
-     processed, message text matches the expected format with the right
-     CSM + client + summary + deep link.
+  1. Happy path — client call with seeded review → 200 ok, audit row
+     processed, message text matches the expected review-shape format
+     with the right CSM + client + Sentiment header + deep link.
   2. Non-client category — internal/external call → silent skip, no
      audit row.
   3. No summary text — client call but empty summary → audit row
      marked malformed, no Slack post attempted.
   4. Channel env var missing — returns failed result without raising,
      audit row marked failed.
-  5. Slack returns ok=false — audit row marked failed; pipeline doesn't
+  5. Slack returns ok=false — seeded review fires the Slack call;
+     ok=false bubbles up; audit row marked failed; pipeline doesn't
      raise.
-  6. Sentinel labels — primary_csm None + client_name None → message
-     renders [unassigned] / [unknown client].
+  6. Sentinel labels — seeded review for an unresolvable client →
+     review-shape message posts with [unassigned] / [unknown client]
+     in the header.
   7. Review-found populated — call_review document with all four
      sections populated → review-shaped message posted, content_source
      audit field set to 'call_review', `markdown_to_mrkdwn` cleanup
@@ -25,12 +27,16 @@ channel mapping. Exercises:
      and empty pain/wins/dodged → message contains only the Sentiment
      section + header + deeplink. Empty sections omitted.
   9. Review-found malformed JSON — call_review row exists but content
-     isn't parseable → fallback path, content_source='fathom_summary_fallback'.
- 10. Review missing — no call_review row for the external_id → fallback
-     path, content_source='fathom_summary_fallback'.
- 11. Cleanup-pass safety net — fallback summary contains raw `###`
-     headers and `**bold**` Markdown → `markdown_to_mrkdwn` strips
-     them so neither `###` nor `**` appears in the posted text.
+     isn't parseable → SKIP path (no Slack post); audit row
+     processing_status='malformed' AND processing_error='no_review_available'
+     AND payload.content_source='skipped_no_review'.
+ 10. Review missing — no call_review row for the external_id → SKIP
+     path (no Slack post); same audit shape as test 9.
+ 11. Cleanup-pass safety net (review-shape) — seeded review whose
+     description / evidence / sentiment_arc fields contain rogue
+     Markdown (`**bold**`, `###`) → the converter cleans them on the
+     review-shape path so neither `**` nor `###` appears in the
+     posted text.
 
 Self-seeded fixture per the M5.9 pattern: per-run unique email,
 hard-deleted in cleanup.
@@ -267,10 +273,22 @@ def _check(name: str, condition: bool, detail: str) -> None:
 
 
 def test_1_happy_path() -> None:
-    print("\n[1] Happy path — client call + summary → posted, audit row processed")
+    print("\n[1] Happy path — client call + seeded review → posted, audit row processed")
     if _FIXTURE_CLIENT_ID is None:
         _check("1.skipped", False, "no fixture")
         return
+
+    import json
+    ext_id = f"fathom-test-{RUN_TOKEN}"
+    review = {
+        "pain_points": [
+            {"description": "Stuck on payment integration", "evidence": "Stripe webhook is silent"},
+        ],
+        "wins": [],
+        "dodged_questions": [],
+        "sentiment_arc": "Started anxious; ended on a clear next step.",
+    }
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
 
     db = get_client()
     captured = {}
@@ -292,8 +310,8 @@ def test_1_happy_path() -> None:
             call_id="00000000-0000-0000-0000-000000000001",
             call_category="client",
             primary_client_id=_FIXTURE_CLIENT_ID,
-            summary_text="Client wants to launch next month. Three blockers: payment, asset review, GHL setup.",
-            fathom_external_id=f"fathom-test-{RUN_TOKEN}",
+            summary_text="(unused — review path takes over)",
+            fathom_external_id=ext_id,
         )
 
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
@@ -312,9 +330,9 @@ def test_1_happy_path() -> None:
         "missing client name",
     )
     _check(
-        "1.text.summary",
-        "launch next month" in text,
-        "missing summary text",
+        "1.text.sentiment_header",
+        "*Sentiment*" in text,
+        "missing *Sentiment* header in review-shape body",
     )
     _check(
         "1.text.deep_link",
@@ -448,6 +466,20 @@ def test_4_channel_env_missing() -> None:
 
 def test_5_slack_ok_false() -> None:
     print("\n[5] Slack returns ok=false → audit row failed, no exception")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("5.skipped", False, "no fixture")
+        return
+
+    import json
+    ext_id = f"fathom-okfalse-{RUN_TOKEN}"
+    review = {
+        "pain_points": [],
+        "wins": [{"description": "Hit a milestone", "evidence": "Shipped the redesign"}],
+        "dodged_questions": [],
+        "sentiment_arc": "Steady, neutral call.",
+    }
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
+
     db = get_client()
     os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_FAIL"
     with patch(
@@ -459,8 +491,8 @@ def test_5_slack_ok_false() -> None:
             call_id="00000000-0000-0000-0000-000000000005",
             call_category="client",
             primary_client_id=_FIXTURE_CLIENT_ID,
-            summary_text="Some summary text",
-            fathom_external_id=f"fathom-okfalse-{RUN_TOKEN}",
+            summary_text="(unused — review path takes over)",
+            fathom_external_id=ext_id,
         )
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
     _check("5.posted", result["posted"] is False, f"posted={result['posted']}")
@@ -485,6 +517,19 @@ def test_5_slack_ok_false() -> None:
 
 def test_6_sentinel_labels() -> None:
     print("\n[6] No primary_csm + missing client → [unassigned] / [unknown client]")
+    import json
+    ext_id = f"fathom-sentinel-{RUN_TOKEN}"
+    review = {
+        "pain_points": [],
+        "wins": [],
+        "dodged_questions": [],
+        "sentiment_arc": "Coasting; nothing flagged.",
+    }
+    # Sentinel-label test: the seeded review's metadata.client_id won't
+    # match the bogus client_id we pass to maybe_post_cs_call_summary —
+    # that's fine, because review lookup is keyed by external_id only.
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
+
     db = get_client()
     captured_text = {}
     os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_SENTINEL"
@@ -507,8 +552,8 @@ def test_6_sentinel_labels() -> None:
             call_id="00000000-0000-0000-0000-000000000006",
             call_category="client",
             primary_client_id=bogus_client_id,
-            summary_text="A summary",
-            fathom_external_id=f"fathom-sentinel-{RUN_TOKEN}",
+            summary_text="(unused — review path takes over)",
+            fathom_external_id=ext_id,
         )
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
     _check("6.posted", result["posted"] is True, f"posted={result['posted']}")
@@ -690,7 +735,7 @@ def test_8_review_found_empty_arrays() -> None:
 
 
 def test_9_review_malformed_json() -> None:
-    print("\n[9] Review present but JSON malformed → fallback path")
+    print("\n[9] Review present but JSON malformed → SKIP path, no Slack post")
     if _FIXTURE_CLIENT_ID is None:
         _check("9.skipped", False, "no fixture")
         return
@@ -699,58 +744,60 @@ def test_9_review_malformed_json() -> None:
     _seed_review_document(external_id=ext_id, content="{ this is not valid json")
 
     db = get_client()
-    captured = {}
     os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_MALFORMED"
 
-    def fake_post(channel_id, text, **kwargs):
-        captured["text"] = text
-        return {"ok": True, "slack_error": None}
-
     with patch(
-        "agents.gregory.cs_call_summary_post.post_message",
-        side_effect=fake_post,
-    ):
+        "agents.gregory.cs_call_summary_post.post_message"
+    ) as mock_post:
         result = maybe_post_cs_call_summary(
             db,
             call_id="00000000-0000-0000-0000-000000000009",
             call_category="client",
             primary_client_id=_FIXTURE_CLIENT_ID,
-            summary_text="Fathom summary text used as fallback.",
+            summary_text="(unused — skip path doesn't post)",
             fathom_external_id=ext_id,
         )
 
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
-    _check("9.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check("9.posted", result["posted"] is False, f"posted={result['posted']}")
+    _check(
+        "9.slack_not_called",
+        not mock_post.called,
+        f"unexpected Slack call (called={mock_post.called})",
+    )
+    _check(
+        "9.skipped_reason",
+        result["skipped_reason"] == "no_review_available",
+        f"skipped_reason={result['skipped_reason']!r}",
+    )
     _check(
         "9.content_source",
-        result["content_source"] == "fathom_summary_fallback",
+        result["content_source"] == "skipped_no_review",
         f"content_source={result['content_source']!r}",
-    )
-
-    text = captured.get("text") or ""
-    _check(
-        "9.fallback_text_present",
-        "Fathom summary text used as fallback." in text,
-        "fallback summary missing from text",
-    )
-    _check(
-        "9.no_review_headers",
-        "*Sentiment*" not in text and "*Pain points*" not in text,
-        "review-shape headers rendered on fallback path",
     )
 
     delivery = _delivery_status(result["delivery_id"])
     _check(
+        "9.audit.processing_status",
+        delivery is not None and delivery["processing_status"] == "malformed",
+        f"audit processing_status mismatch: {delivery}",
+    )
+    _check(
+        "9.audit.processing_error",
+        delivery is not None and delivery["processing_error"] == "no_review_available",
+        f"audit processing_error mismatch: {delivery}",
+    )
+    _check(
         "9.audit.content_source",
         delivery is not None
         and (delivery.get("payload") or {}).get("content_source")
-        == "fathom_summary_fallback",
+        == "skipped_no_review",
         f"audit payload content_source mismatch: {delivery}",
     )
 
 
 def test_10_review_missing() -> None:
-    print("\n[10] No review row for external_id → fallback path")
+    print("\n[10] No review row for external_id → SKIP path, no Slack post")
     if _FIXTURE_CLIENT_ID is None:
         _check("10.skipped", False, "no fixture")
         return
@@ -759,65 +806,87 @@ def test_10_review_missing() -> None:
     # Deliberately do NOT seed a documents row.
 
     db = get_client()
-    captured = {}
     os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_ABSENT"
 
-    def fake_post(channel_id, text, **kwargs):
-        captured["text"] = text
-        return {"ok": True, "slack_error": None}
-
     with patch(
-        "agents.gregory.cs_call_summary_post.post_message",
-        side_effect=fake_post,
-    ):
+        "agents.gregory.cs_call_summary_post.post_message"
+    ) as mock_post:
         result = maybe_post_cs_call_summary(
             db,
             call_id="00000000-0000-0000-0000-00000000000a",
             call_category="client",
             primary_client_id=_FIXTURE_CLIENT_ID,
-            summary_text="Original Fathom summary; the review never landed.",
+            summary_text="(unused — skip path doesn't post)",
             fathom_external_id=ext_id,
         )
 
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
-    _check("10.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check("10.posted", result["posted"] is False, f"posted={result['posted']}")
+    _check(
+        "10.slack_not_called",
+        not mock_post.called,
+        f"unexpected Slack call (called={mock_post.called})",
+    )
+    _check(
+        "10.skipped_reason",
+        result["skipped_reason"] == "no_review_available",
+        f"skipped_reason={result['skipped_reason']!r}",
+    )
     _check(
         "10.content_source",
-        result["content_source"] == "fathom_summary_fallback",
+        result["content_source"] == "skipped_no_review",
         f"content_source={result['content_source']!r}",
-    )
-
-    text = captured.get("text") or ""
-    _check(
-        "10.fallback_summary",
-        "Original Fathom summary" in text,
-        "fallback summary missing",
     )
 
     delivery = _delivery_status(result["delivery_id"])
     _check(
+        "10.audit.processing_status",
+        delivery is not None and delivery["processing_status"] == "malformed",
+        f"audit processing_status mismatch: {delivery}",
+    )
+    _check(
+        "10.audit.processing_error",
+        delivery is not None and delivery["processing_error"] == "no_review_available",
+        f"audit processing_error mismatch: {delivery}",
+    )
+    _check(
         "10.audit.content_source",
         delivery is not None
         and (delivery.get("payload") or {}).get("content_source")
-        == "fathom_summary_fallback",
+        == "skipped_no_review",
         f"audit payload content_source mismatch: {delivery}",
     )
 
 
-def test_11_mrkdwn_safety_net_on_fallback() -> None:
-    print("\n[11] Fallback summary with `###` and `**bold**` → cleaned by mrkdwn pass")
+def test_11_mrkdwn_safety_net_on_review_shape() -> None:
+    print("\n[11] Review-shape with `###` and `**bold**` in fields → cleaned by mrkdwn pass")
     if _FIXTURE_CLIENT_ID is None:
         _check("11.skipped", False, "no fixture")
         return
 
+    import json
     ext_id = f"fathom-mrkdwn-cleanup-{RUN_TOKEN}"
-    raw_summary = (
-        "### Summary\n"
-        "Client wants to launch next month. Three blockers: payment, "
-        "asset review, **GHL setup**.\n\n"
-        "## Action items\n"
-        "- Payment review by Friday\n"
-    )
+    # Rogue Markdown placed in fields where each shape will actually
+    # be line-anchored or cleanly inline — `**bold**` works mid-text
+    # (the converter's bold regex isn't anchored), but `###` only
+    # converts when it lands at line-start. The sentiment_arc field
+    # renders as its own paragraph, so a leading `### Header\n` here
+    # IS line-anchored once the formatter splices it in.
+    review = {
+        "pain_points": [
+            {
+                "description": "Quoted **GHL setup** problem from transcript",
+                "evidence": "Client said **important** thing about launch",
+            }
+        ],
+        "wins": [],
+        "dodged_questions": [],
+        "sentiment_arc": (
+            "### Status header from rogue Markdown\n"
+            "Steady; CSM mentioned **important** progress mid-call."
+        ),
+    }
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
 
     db = get_client()
     captured = {}
@@ -836,32 +905,38 @@ def test_11_mrkdwn_safety_net_on_fallback() -> None:
             call_id="00000000-0000-0000-0000-00000000000b",
             call_category="client",
             primary_client_id=_FIXTURE_CLIENT_ID,
-            summary_text=raw_summary,
+            summary_text="(unused — review path takes over)",
             fathom_external_id=ext_id,
         )
 
     _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
     _check("11.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check(
+        "11.content_source",
+        result["content_source"] == "call_review",
+        f"content_source={result['content_source']!r}",
+    )
+
     text = captured.get("text") or ""
     _check(
         "11.no_triple_hash",
         "###" not in text,
-        f"`###` survived the mrkdwn cleanup pass",
+        "`###` (rogue Markdown inside description) survived the mrkdwn cleanup pass",
     )
     _check(
         "11.no_double_star",
         "**" not in text,
-        "`**bold**` survived the mrkdwn cleanup pass",
-    )
-    _check(
-        "11.bold_normalized",
-        "*Summary*" in text,
-        "expected `*Summary*` mrkdwn header after `### Summary` conversion",
+        "`**bold**` (rogue Markdown inside evidence/sentiment) survived the mrkdwn cleanup pass",
     )
     _check(
         "11.inline_bold_normalized",
         "*GHL setup*" in text,
         "expected `*GHL setup*` mrkdwn after `**GHL setup**` conversion",
+    )
+    _check(
+        "11.sentiment_bold_normalized",
+        "*important*" in text,
+        "expected `*important*` mrkdwn after `**important**` conversion",
     )
 
 
@@ -891,7 +966,7 @@ def main() -> int:
         test_8_review_found_empty_arrays()
         test_9_review_malformed_json()
         test_10_review_missing()
-        test_11_mrkdwn_safety_net_on_fallback()
+        test_11_mrkdwn_safety_net_on_review_shape()
     finally:
         print("\n" + "=" * 72)
         print("Cleanup")
