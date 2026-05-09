@@ -55,6 +55,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any
 
 from agents.ella.slack_handler import handle_slack_event
+from ingestion.slack.realtime_ingest import ingest_message_event
 from shared.slack_post import call_chat_post_message
 
 # Vercel's Python runtime pre-configures the root logger at WARNING
@@ -136,6 +137,14 @@ class handler(BaseHTTPRequestHandler):
                 # why this is acceptable: Slack retries fast on our
                 # missed ack, and the retry branch above catches them.
                 _process_mention(payload)
+            elif event.get("type") == "message":
+                # Ella V2 Batch 1 — cloud Slack ingestion. Every
+                # message in a client channel lands in
+                # `slack_messages`; non-client channels are skipped
+                # with an audit row. Fail-soft: any exception is
+                # caught inside ingest_message_event so Slack's 200
+                # ack still fires below.
+                _ingest_message_event(payload)
 
         # Ack regardless of inner event type. Anything non-200 tells
         # Slack to retry, which we don't want for events we didn't
@@ -213,6 +222,23 @@ class handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
+
+
+def _ingest_message_event(payload: dict[str, Any]) -> None:
+    """Forward a `message` event into the realtime ingestion pipeline.
+
+    Wraps `ingestion.slack.realtime_ingest.ingest_message_event` so the
+    HTTP handler doesn't need to know about audit-row mechanics. The
+    ingestion function is fail-soft (catches all exceptions and
+    records them in the audit ledger) — this wrapper has a defensive
+    outer try/except in case the import or dispatch itself raises.
+    """
+    try:
+        ingest_message_event(payload)
+    except Exception as exc:
+        logger.exception(
+            "slack_webhook: ingest_message_event raised: %s", exc
+        )
 
 
 def _process_mention(payload: dict[str, Any]) -> None:
