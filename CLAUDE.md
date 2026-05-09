@@ -207,11 +207,21 @@ Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_K
 Director operates autonomously between four narrow gates. Drake handles:
 
 - **(a) Irreversible actions.** Production deploys, anything destroying data, and the SQL review for cloud migrations (the apply + verify steps belong to Director — see § Gate trajectory below).
-- **(b) Result-uncertainty.** When Director can't confidently decide what the right outcome is — bias to safety, surface to Drake with A/B/C framing.
+- **(b) Genuinely context-confusing decisions.** When Director truly cannot determine the right outcome AND the call needs Drake's specific lived context (team dynamics, customer relationships, business strategy, scope/architectural choices with long-term implications). The bar is "Drake's judgment is the load-bearing input," not "I'm slightly uncertain."
 - **(c) Post-deploy testing on real surfaces.** Slack delivery, Fathom webhook ingest, dashboard render — anything that requires eyeballing the live system.
 - **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches.
 
 Everything else is Director's call — including push (push is reversible via `git revert` / Vercel rollback, so it stays out of the gate set).
+
+**Things Director should NOT stop for** (explicit non-examples to prevent gate creep — Director historically over-asks here):
+
+- *Routine commits and pushes.* Push is reversible. Just commit and push, then report what landed in the end-of-turn summary. Don't ask "should I push now?"
+- *Bundling small Builder tasks.* If two small tasks fit the bundling rule (related/sequential, under the soft cap), just bundle them in a single Builder prompt. Don't ask permission to bundle.
+- *Choosing among options when one has a clear lean.* If Director has a strong lean and consequences are recoverable (commit can be reverted, deploy can be rolled back, doc edit can be re-edited), make the call and note it in the report. "A or B?" framing belongs on genuinely tough calls, not on routine moves where Drake will just say "yeah do A" anyway.
+- *Proceeding with already-authorized work.* If Drake said "implement the spec" or "do the bundled change," that's the green light. Don't pause mid-execution to confirm "should I keep going?" or "ready for me to commit?"
+- *Following up on a directive Drake just gave.* If Drake said "commit and push these and then delegate the next thing," do all of it; don't ask to confirm before each step.
+
+Gates exist for moments where Drake's specific judgment is genuinely load-bearing OR an action is irreversible. Gates do NOT exist as a politeness check before routine actions. When in doubt: if the worst case is "Drake reads the report and says 'undo X'," it wasn't a gate moment — just do the thing and report.
 
 ### Gate trajectory — what's temporary vs permanent
 
