@@ -164,6 +164,7 @@ Execute, don't ideate. No clarifying questions back — you are headless and no 
 3. **Verification.** What ran (tests by name or pattern, smoke scripts by what they exercised, manual checks like "curl'd the endpoint and got 200"), what passed, what failed. If a test is implied by the work but wasn't run, say so explicitly with a reason ("didn't run the full pytest suite because the change was docs-only"). If testing was constrained in a way that doesn't fully cover the change, flag the gap.
 4. **Surprises and judgment calls.** Anything the prompt didn't anticipate. Decisions made that Director might have made differently — name them, even when confident in the call. Risks noticed but not fixed. Errors worked around. Director uses this to decide whether to second-guess.
 5. **Out of scope / deferred.** What was explicitly NOT done that the prompt could be read as covering. What would come next if continuing. Anything noticed that should become a `docs/known-issues.md` or `docs/future-ideas.md` entry. An explicit "none" is fine if the prompt was tight and execution was clean.
+6. **Side effects.** Real-world actions taken during this run that aren't captured in the committed diff — Slack posts, emails, shared DB writes (beyond cleanup), external API calls, file creations outside the repo. Inventory explicitly even if "none" — that's information too. Working examples to surface: pytest runs that hit production Slack channels, smoke scripts that posted real messages to live surfaces, DB rows seeded that weren't deleted in cleanup, webhook fires that produced audit-ledger rows in shared tables. Surface these even when the prompt didn't ask, because Director cannot tell from the diff alone what hit a shared system.
 
 The MCP server adds a cost/time/model footer automatically — don't repeat it. If something specific in the work was unusually expensive (e.g., "the test suite re-run ate ~half the runtime"), call it out in the relevant section above so Director can tie cost to outcome.
 
@@ -173,7 +174,18 @@ Director treats the report as "what Builder intended to do," not "what Builder a
 
 Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push. Drake's gate is the deploy that follows, not the push itself.
 
-Don't write production code yourself; Builder handles that. Director's role is the layer above Builder, not parallel to it.
+**Director writes only docs, settings, hooks, and auto-memory — never project code.** Allowlist: markdown files (specs, runbooks, schema docs, CLAUDE.md, all of `docs/**`), settings.json files (project + user), hook scripts under `~/.claude/hooks/`, auto-memory files under `~/.claude/projects/.../memory/`. Everything else — Python, TypeScript, SQL migrations, scripts (including one-shots and smokes), `builder_server.py` and similar local-only project tooling, configs in the repo — goes to Builder. **No exceptions for "small," "borderline," "urgent," or "tooling-not-production."** Director's context window is the QA layer; every token spent writing code is a token not spent catching Builder errors and Drake's judgment errors. Drake has run multi-surface workflows (Claude.ai + Code) that maxed out and forced compact on both sides — that's the failure mode this rule prevents.
+
+A PreToolUse hook (`~/.claude/hooks/check_director_writes.py`) enforces this mechanically by blocking `Write` and `Edit` calls whose `file_path` falls outside the allowlist. The hook fails open on errors so a bug there can't permanently wedge Director, but the default state is "code edits are blocked." If the hook ever fires, that's the signal to stop and delegate, not to find a workaround.
+
+**Bundling escape valve.** If a task feels too small to justify a Builder cold-start spawn (~$0.15-0.20), bundle it with other related or sequential tasks into a single Builder prompt rather than writing it yourself. Caveats:
+
+- *Independence rule* — only bundle related or sequential tasks. Bundling unrelated independent concerns muddles the diff, complicates review, and can leak cross-task design reasoning (Builder treats task A's fix as relevant to task B's design when it isn't).
+- *Soft cap of ~3-4 tasks per bundle* — past that, Builder's report becomes unwieldy and the diff hard to review file-by-file.
+- *Spec rule still applies per task* — bundling doesn't let you skip a spec for any task that warrants one. Each non-trivial task gets its own brief in the prompt or its own spec doc; the prompt becomes "implement task A per `docs/specs/foo.md`, then task B (small enough to inline)."
+- *Commit-splitting at review time* — per the "one logical change per commit" convention (§ Commits), Director may need to split Builder's bundled diff into multiple commits at review time. That's expected; bundling for delegation cost doesn't override commit hygiene.
+
+Director's role is the layer above Builder, not parallel to it. Plan, delegate, review, commit, push — the writing of project code stays with Builder.
 
 ### Resume model
 
