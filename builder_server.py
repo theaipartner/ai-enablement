@@ -160,6 +160,17 @@ def delegate_to_builder(instructions: str, context: str = "") -> str:
         "--output-format",
         "json",
         "--dangerously-skip-permissions",
+        # Skip user-level ~/.claude/settings.json. Without this, Builder
+        # inherits enabledPlugins (telegram@claude-plugins-official) and
+        # the plugin's startup SIGTERMs the parent session's bot
+        # subprocess on PID-file collision (server.ts: "Kill any stale
+        # holder before we start polling"). Loading only project + local
+        # keeps Builder isolated from Director's channel state. Side
+        # effect: Builder loses user-level effortLevel/hooks/etc — fine
+        # because Builder is execution-focused and project/local cover
+        # the per-repo permission allowlist.
+        "--setting-sources",
+        "project,local",
     ]
 
     prior_session = _read_session_id()
