@@ -15,7 +15,7 @@ Give agents (Ella, CSM Co-Pilot) a queryable record of Slack activity without ca
 | `slack_ts` | `text` | Not null. Slack message timestamp — unique per message within a channel |
 | `slack_thread_ts` | `text` | Parent message `ts` when in a thread; null otherwise |
 | `slack_user_id` | `text` | Not null. Author's Slack id |
-| `author_type` | `text` | `client`, `team_member`, `bot`, `workflow`, `unknown`. Resolved at ingestion |
+| `author_type` | `text` | `client`, `team_member`, `ella`, `bot`, `workflow`, `unknown`. Resolved at ingestion. `'ella'` requires `SLACK_USER_TOKEN` env var to be set so the realtime handler / pipeline can resolve Ella's Slack user_id via `auth.test`; absent it, Ella's posts fall back to `team_member` (if her id is in `team_members.slack_user_id`) or `unknown` |
 | `text` | `text` | Not null. Normalized message text |
 | `message_type` | `text` | Default `message`. `message`, `thread_reply`, `bot_message`, `workflow_submission` |
 | `message_subtype` | `text` | Tagged at ingestion: `accountability_submission`, `nps_submission`, etc. |
@@ -33,6 +33,7 @@ Give agents (Ella, CSM Co-Pilot) a queryable record of Slack activity without ca
 ## Populated By
 
 - Slack ingestion: historical backfill on install, then real-time events via the Events API
+- Ella V2 Batch 1 (cloud Slack ingestion, shipped 2026-05-09): the realtime handler at `api/slack_events.py` ingests every `message`-event from a client channel via `ingestion/slack/realtime_ingest.py`. The one-shot `scripts/backfill_slack_client_channels.py` populates historical messages. Both paths use the same parser (`ingestion/slack/parser.py`) for author resolution and idempotency on `(slack_channel_id, slack_ts)`.
 
 ## Read By
 

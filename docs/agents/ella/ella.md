@@ -215,6 +215,25 @@ Logged automatically via `agent_runs` and `agent_feedback`:
 - Voice responses
 - Multilingual support
 
+## V2 Ingestion (Batch 1, shipped 2026-05-09)
+
+Cloud Slack ingestion for every client channel. Every `message`-type
+event from a client-mapped Slack channel now lands in
+`slack_messages` in real time (via `api/slack_events.py` →
+`ingestion/slack/realtime_ingest.py`), plus a one-shot historical
+backfill via `scripts/backfill_slack_client_channels.py`. Ella's own
+posts are tagged `author_type='ella'` (resolved at ingest via
+`shared/slack_identity.get_user_id_for_token` against
+`SLACK_USER_TOKEN`) so future logic can both retrieve them for context
+and skip them as response triggers. Existing `app_mention` behavior is
+preserved verbatim — V2 Batch 1 only adds the parallel `message`
+branch. Operational runbook: `docs/runbooks/slack_message_ingest.md`.
+Passive-monitor / KB-relevance / pending-response triggers are V2
+Batches 2/3.
+
 ## Changelog
 
 - v1 (draft): initial spec by Drake
+- v2 batch 1 (2026-05-09): cloud Slack ingestion live for all client
+  channels. New `'ella'` `author_type` for self-recognition. See V2
+  Ingestion section above.
