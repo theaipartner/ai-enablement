@@ -233,6 +233,63 @@ def test_upsert_call_review_flips_is_active_back_to_false():
 
 
 # ---------------------------------------------------------------------------
+# Public reader: find_review_by_call_external_id
+# ---------------------------------------------------------------------------
+
+
+def test_find_review_returns_parsed_dict_when_row_exists():
+    import json
+    existing = {
+        "id": "doc-existing",
+        "content": json.dumps(_VALID_REVIEW),
+        "metadata": {},
+        "is_active": False,
+    }
+    db = _FakeDb(existing=existing)
+    result = p.find_review_by_call_external_id(db, "ext-123")
+    assert result == _VALID_REVIEW
+
+
+def test_find_review_returns_none_when_row_missing():
+    db = _FakeDb(existing=None)
+    assert p.find_review_by_call_external_id(db, "ext-missing") is None
+
+
+def test_find_review_returns_none_when_content_not_valid_json():
+    existing = {
+        "id": "doc-bad",
+        "content": "not json {[}",
+        "metadata": {},
+        "is_active": False,
+    }
+    db = _FakeDb(existing=existing)
+    assert p.find_review_by_call_external_id(db, "ext-bad") is None
+
+
+def test_find_review_returns_none_when_content_parses_to_non_dict():
+    """JSON parses but the top-level value is e.g. a list — not the
+    review shape we expect. Treat as missing."""
+    existing = {
+        "id": "doc-list",
+        "content": "[1, 2, 3]",
+        "metadata": {},
+        "is_active": False,
+    }
+    db = _FakeDb(existing=existing)
+    assert p.find_review_by_call_external_id(db, "ext-list") is None
+
+
+def test_find_review_returns_none_when_content_field_missing():
+    existing = {
+        "id": "doc-no-content",
+        "metadata": {},
+        "is_active": False,
+    }
+    db = _FakeDb(existing=existing)
+    assert p.find_review_by_call_external_id(db, "ext-no-content") is None
+
+
+# ---------------------------------------------------------------------------
 # Assertion gate
 # ---------------------------------------------------------------------------
 

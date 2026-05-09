@@ -1,9 +1,10 @@
 """Per-call CS Slack summary post (Batch A — M6.1).
 
-Posts a one-message Fathom call summary to the cross-CSM Slack channel
-on every successful Fathom webhook delivery for a `call_category='client'`
-call. Hooked into `ingestion.fathom.pipeline.ingest_call` after the
-summary document is written and before the IngestOutcome return.
+Posts a one-message call summary to the cross-CSM Slack channel on every
+successful Fathom webhook delivery for a `call_category='client'` call.
+Hooked into `ingestion.fathom.pipeline.ingest_call` after the summary
+document is written and after the call_review auto-generation hook,
+before the IngestOutcome return.
 
 Design constraints (per Drake's spec):
   - Only client calls trigger the post; other categories skip silently.
@@ -14,18 +15,55 @@ Design constraints (per Drake's spec):
     more important than the Slack message.
   - Audit trail via `webhook_deliveries` with
     `source='cs_call_summary_slack_post'` so debugging "did the post
-    happen for call X" doesn't require grepping Vercel logs.
+    happen for call X" doesn't require grepping Vercel logs. Audit
+    payload includes a `content_source` field tagging which path the
+    post took (`call_review` vs `fathom_summary_fallback`) so future
+    debugging / dashboards can split the two.
 
-Message format (plain text mrkdwn, no rich blocks per Drake's
-"minimal time and energy" framing):
+Message format:
+  Two shapes. The review-shaped message is preferred; the fallback
+  fires only when the call_review document is missing, malformed, or
+  yields a degenerate render. Both go through `markdown_to_mrkdwn` as
+  a safety net so any rogue Markdown the LLM emitted gets cleaned
+  before it hits Slack.
+
+  Review-shaped (preferred):
 
     *[CSM Name] / [Client Name]*
-    [Fathom summary, full text]
+
+    *Sentiment*
+    [sentiment_arc]
+
+    *Pain points*
+    • [description] — _[evidence]_
+
+    *Wins*
+    • [description] — _[evidence]_
+
+    *Conversation pivots*
+    • [description] (who: [who]) — _[evidence]_
+
+    <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
+
+  Empty sections are omitted entirely (no "None" filler).
+
+  Fallback (when no review available):
+
+    *[CSM Name] / [Client Name]*
+    [Fathom default_summary, after markdown_to_mrkdwn cleans `###` etc.]
     <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
 
 Sentinel labels:
   - `[unassigned]` when no active primary_csm
   - `[unknown client]` when primary_client_id resolves to no row
+
+Why headers are emitted as `**Header**` Markdown rather than `*Header*`
+mrkdwn directly: `markdown_to_mrkdwn` normalizes `**Header**` cleanly
+via its bold-stash mechanism, but a single-asterisk `*Header*` is also
+matched by the converter's italic regex and would be re-written to
+`_Header_`. Feeding Markdown source through the converter gets us the
+intended mrkdwn output AND keeps the safety-net pass active for any
+LLM-emitted rogue Markdown in the description / evidence text.
 """
 
 from __future__ import annotations
@@ -36,6 +74,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from agents.call_reviewer.persistence import find_review_by_call_external_id
+from shared.slack_format import markdown_to_mrkdwn
 from shared.slack_post import post_message
 
 logger = logging.getLogger("ai_enablement.cs_call_summary_post")
@@ -48,6 +88,12 @@ _GREGORY_CALL_PATH = "https://ai-enablement-sigma.vercel.app/calls/{call_id}"
 # webhook_deliveries source label. Searchable by SQL; do not change
 # without updating any audit dashboards.
 _DELIVERY_SOURCE = "cs_call_summary_slack_post"
+
+# Audit content_source values. Tagged on the audit-row payload so the
+# split between "review available" and "fell back to Fathom summary" is
+# queryable. Treat as enum.
+_CONTENT_SOURCE_REVIEW = "call_review"
+_CONTENT_SOURCE_FALLBACK = "fathom_summary_fallback"
 
 
 def maybe_post_cs_call_summary(
@@ -68,6 +114,7 @@ def maybe_post_cs_call_summary(
         "delivery_id": str,
         "slack_ok": bool,
         "slack_error": str | None,
+        "content_source": "call_review" | "fathom_summary_fallback" | None,
       }
 
     NEVER raises. Wraps every internal failure as
@@ -87,11 +134,14 @@ def maybe_post_cs_call_summary(
             "delivery_id": delivery_id,
             "slack_ok": False,
             "slack_error": None,
+            "content_source": None,
         }
 
     # Skip if no summary text (shouldn't happen post-F2.3 for webhook
     # path; possible for backlog re-ingest before summary docs land).
     # Audit row recorded so we can spot if this happens unexpectedly.
+    # The fallback path needs summary_text; without it we have neither
+    # path that can produce a useful message.
     if not summary_text or not summary_text.strip():
         _insert_delivery(
             delivery_id,
@@ -110,6 +160,7 @@ def maybe_post_cs_call_summary(
             "delivery_id": delivery_id,
             "slack_ok": False,
             "slack_error": None,
+            "content_source": None,
         }
 
     channel_id = os.environ.get("SLACK_CS_CALL_SUMMARIES_CHANNEL_ID")
@@ -136,6 +187,7 @@ def maybe_post_cs_call_summary(
             "delivery_id": delivery_id,
             "slack_ok": False,
             "slack_error": "channel_not_configured",
+            "content_source": None,
         }
 
     # Resolve labels. Each lookup wrapped in its own try/except so a
@@ -144,23 +196,50 @@ def maybe_post_cs_call_summary(
     csm_name = _resolve_primary_csm_name(db, primary_client_id)
     client_name = _resolve_client_full_name(db, primary_client_id)
 
-    text = _format_message(
-        csm_name=csm_name or "[unassigned]",
-        client_name=client_name or "[unknown client]",
-        summary_text=summary_text.strip(),
-        call_id=call_id,
+    # Try the review-shaped path first. Fall back to the Fathom-summary
+    # shape when the review is missing, malformed, or degenerate.
+    review, review_fetch_error = _try_get_review(db, fathom_external_id)
+    review_text = (
+        _format_review_message(
+            csm_name=csm_name or "[unassigned]",
+            client_name=client_name or "[unknown client]",
+            review=review,
+            call_id=call_id,
+        )
+        if review is not None
+        else None
     )
+    if review_text is not None:
+        text = markdown_to_mrkdwn(review_text)
+        content_source = _CONTENT_SOURCE_REVIEW
+    else:
+        text = markdown_to_mrkdwn(
+            _format_fallback_message(
+                csm_name=csm_name or "[unassigned]",
+                client_name=client_name or "[unknown client]",
+                summary_text=summary_text.strip(),
+                call_id=call_id,
+            )
+        )
+        content_source = _CONTENT_SOURCE_FALLBACK
+
+    payload: dict[str, Any] = {
+        "call_id": call_id,
+        "fathom_external_id": fathom_external_id,
+        "csm_name": csm_name,
+        "client_name": client_name,
+        "content_source": content_source,
+    }
+    if review_fetch_error is not None:
+        # Distinguishes "DB error during fetch" from "row simply absent"
+        # without splitting content_source into a third value.
+        payload["review_fetch_error"] = review_fetch_error
 
     # Insert the audit row BEFORE the post so even a Slack-side failure
     # leaves a record. UPDATE to terminal status after the post.
     _insert_delivery(
         delivery_id,
-        payload={
-            "call_id": call_id,
-            "fathom_external_id": fathom_external_id,
-            "csm_name": csm_name,
-            "client_name": client_name,
-        },
+        payload=payload,
         status="received",
         error=None,
         call_external_id=fathom_external_id,
@@ -170,9 +249,11 @@ def maybe_post_cs_call_summary(
     if result["ok"]:
         _mark_delivery(delivery_id, status="processed", error=None)
         logger.info(
-            "cs_call_summary_post: posted delivery_id=%s call_id=%s",
+            "cs_call_summary_post: posted delivery_id=%s call_id=%s "
+            "content_source=%s",
             delivery_id,
             call_id,
+            content_source,
         )
         return {
             "posted": True,
@@ -180,6 +261,7 @@ def maybe_post_cs_call_summary(
             "delivery_id": delivery_id,
             "slack_ok": True,
             "slack_error": None,
+            "content_source": content_source,
         }
 
     # Slack-side failure. Log + mark audit row failed; never raise.
@@ -199,6 +281,7 @@ def maybe_post_cs_call_summary(
         "delivery_id": delivery_id,
         "slack_ok": False,
         "slack_error": result.get("slack_error"),
+        "content_source": content_source,
     }
 
 
@@ -269,26 +352,153 @@ def _resolve_client_full_name(db, client_id: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Review fetch
+# ---------------------------------------------------------------------------
+
+
+def _try_get_review(
+    db, fathom_external_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (parsed_review_or_None, fetch_error_or_None).
+
+    Wraps `find_review_by_call_external_id` so DB errors during the
+    review lookup don't break the post path. The review is value-add;
+    the Fathom summary fallback always exists. On exception we return
+    (None, str(exc)) so the caller can record the error in the audit
+    payload while still falling through to fallback.
+    """
+    try:
+        return find_review_by_call_external_id(db, fathom_external_id), None
+    except Exception as exc:
+        logger.warning(
+            "cs_call_summary_post: review fetch failed for external_id=%s: %s",
+            fathom_external_id,
+            exc,
+        )
+        return None, str(exc)[:500]
+
+
+# ---------------------------------------------------------------------------
 # Message formatting
 # ---------------------------------------------------------------------------
 
 
-def _format_message(
+def _format_review_message(
+    *,
+    csm_name: str,
+    client_name: str,
+    review: dict[str, Any],
+    call_id: str,
+) -> str | None:
+    """Render the review-shaped Slack message.
+
+    Returns None when the parsed review yields a degenerate render
+    (no sentiment + no pain + no wins + no pivots) — caller falls
+    through to the Fathom-summary fallback.
+
+    Headers emitted as `**Header**` Markdown so `markdown_to_mrkdwn`
+    normalizes them to mrkdwn bold via its bold-stash mechanism.
+    Single-asterisk `*Header*` would survive the bold step but get
+    eaten by the italic regex; double-asterisk Markdown is the safe
+    input shape.
+
+    Section rules:
+      - Empty sections omitted entirely. Caller falls back if ALL
+        sections come back empty.
+      - Sentiment included as long as `sentiment_arc` is a non-empty
+        string.
+      - Evidence wrapped in `_..._` (mrkdwn italic).
+      - Pivots subsection labeled "Conversation pivots" to match the
+        dashboard's user-facing rename of `dodged_questions`.
+    """
+    sections: list[str] = []
+
+    sentiment_arc = review.get("sentiment_arc")
+    if isinstance(sentiment_arc, str) and sentiment_arc.strip():
+        sections.append(f"**Sentiment**\n{sentiment_arc.strip()}")
+
+    pain_lines = _format_review_items(
+        review.get("pain_points"), include_who=False
+    )
+    if pain_lines:
+        sections.append("**Pain points**\n" + "\n".join(pain_lines))
+
+    win_lines = _format_review_items(review.get("wins"), include_who=False)
+    if win_lines:
+        sections.append("**Wins**\n" + "\n".join(win_lines))
+
+    pivot_lines = _format_review_items(
+        review.get("dodged_questions"), include_who=True
+    )
+    if pivot_lines:
+        sections.append("**Conversation pivots**\n" + "\n".join(pivot_lines))
+
+    if not sections:
+        # Degenerate review — empty everywhere. Caller falls back.
+        return None
+
+    deep_link = _GREGORY_CALL_PATH.format(call_id=call_id)
+    body = "\n\n".join(sections)
+    # Top header emitted as `**...**` Markdown (NOT `*...*` mrkdwn) for
+    # the same reason the section headers are: the converter's italic
+    # regex would otherwise eat a single-asterisk pair on a line of its
+    # own. Markdown source is the safe input shape for the converter.
+    return (
+        f"**{csm_name} / {client_name}**\n"
+        f"\n"
+        f"{body}\n"
+        f"\n"
+        f"<{deep_link}|View in Gregory>"
+    )
+
+
+def _format_review_items(items: Any, *, include_who: bool) -> list[str]:
+    """Render a list of review items as bullet lines.
+
+    Tolerant to per-item shape errors: items missing `description` are
+    skipped, items missing `evidence` render the description alone.
+    `include_who` adds the `(who: [who])` suffix used for pivots.
+    """
+    if not isinstance(items, list):
+        return []
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        description = item.get("description")
+        if not isinstance(description, str) or not description.strip():
+            continue
+        line = f"• {description.strip()}"
+        if include_who:
+            who = item.get("who")
+            if isinstance(who, str) and who.strip():
+                line += f" (who: {who.strip()})"
+        evidence = item.get("evidence")
+        if isinstance(evidence, str) and evidence.strip():
+            line += f" — _{evidence.strip()}_"
+        lines.append(line)
+    return lines
+
+
+def _format_fallback_message(
     *,
     csm_name: str,
     client_name: str,
     summary_text: str,
     call_id: str,
 ) -> str:
-    """Build the plain-text Slack message.
+    """Build the fallback Slack message — same shape as pre-spec, with
+    the cleanup-pass applied by the caller so `###`-laden Fathom output
+    renders as bold headers in Slack rather than literal hashes.
 
-    Uses Slack mrkdwn link syntax for the deep-link
-    (`<URL|link text>`) and `*bold*` for the header. No rich blocks
-    per Drake's "minimal time and energy" framing.
+    Top header emitted as `**...**` Markdown (not `*...*` mrkdwn)
+    because `markdown_to_mrkdwn` runs over the whole message — a
+    single-asterisk header on its own line would otherwise be eaten by
+    the converter's italic regex.
     """
     deep_link = _GREGORY_CALL_PATH.format(call_id=call_id)
     return (
-        f"*{csm_name} / {client_name}*\n"
+        f"**{csm_name} / {client_name}**\n"
         f"{summary_text}\n"
         f"<{deep_link}|View in Gregory>"
     )

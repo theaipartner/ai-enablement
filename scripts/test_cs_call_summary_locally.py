@@ -17,6 +17,20 @@ channel mapping. Exercises:
      raise.
   6. Sentinel labels — primary_csm None + client_name None → message
      renders [unassigned] / [unknown client].
+  7. Review-found populated — call_review document with all four
+     sections populated → review-shaped message posted, content_source
+     audit field set to 'call_review', `markdown_to_mrkdwn` cleanup
+     pass produces mrkdwn (no `**` or `###` in output).
+  8. Review-found empty arrays — call_review with sentiment_arc only
+     and empty pain/wins/dodged → message contains only the Sentiment
+     section + header + deeplink. Empty sections omitted.
+  9. Review-found malformed JSON — call_review row exists but content
+     isn't parseable → fallback path, content_source='fathom_summary_fallback'.
+ 10. Review missing — no call_review row for the external_id → fallback
+     path, content_source='fathom_summary_fallback'.
+ 11. Cleanup-pass safety net — fallback summary contains raw `###`
+     headers and `**bold**` Markdown → `markdown_to_mrkdwn` strips
+     them so neither `###` nor `**` appears in the posted text.
 
 Self-seeded fixture per the M5.9 pattern: per-run unique email,
 hard-deleted in cleanup.
@@ -68,6 +82,7 @@ _FIXTURE_CLIENT_ID: str | None = None
 _FIXTURE_CSM_ID: str | None = None
 _FIXTURE_ASSIGNMENT_ID: str | None = None
 _AUDIT_DELIVERY_IDS: list[str] = []
+_SEEDED_DOC_IDS: list[str] = []
 
 
 def _seed_fixture() -> None:
@@ -120,11 +135,65 @@ def _seed_fixture() -> None:
         conn.close()
 
 
+def _seed_review_document(
+    *,
+    external_id: str,
+    content: str,
+    metadata: dict | None = None,
+) -> str:
+    """Insert a documents row carrying a synthetic call_review.
+
+    `content` is taken verbatim — pass valid JSON for review-shape tests
+    or a deliberately broken string for the malformed-JSON test. Returns
+    the documents.id; tracked in `_SEEDED_DOC_IDS` for teardown.
+    """
+    import json
+    conn = _pg_conn()
+    try:
+        cur = conn.cursor()
+        md = metadata or {
+            "client_id": _FIXTURE_CLIENT_ID,
+            "call_id": "00000000-0000-0000-0000-000000000777",
+            "call_category": "client",
+            "started_at": "2026-05-01T12:00:00+00:00",
+            "prompt_version": "v1",
+            "model": "claude-sonnet-4-6",
+        }
+        cur.execute(
+            """
+            INSERT INTO documents (
+              source, external_id, title, content, document_type,
+              metadata, is_active
+            ) VALUES (
+              'fathom', %s, %s, %s, 'call_review', %s::jsonb, false
+            )
+            RETURNING id;
+            """,
+            (
+                external_id,
+                f"Test review {external_id}",
+                content,
+                json.dumps(md),
+            ),
+        )
+        doc_id = str(cur.fetchone()[0])
+        conn.commit()
+        _SEEDED_DOC_IDS.append(doc_id)
+        return doc_id
+    finally:
+        conn.close()
+
+
 def _teardown_fixture() -> None:
     """Hard-delete fixture rows + any audit rows we wrote."""
     conn = _pg_conn()
     try:
         cur = conn.cursor()
+        for doc_id in _SEEDED_DOC_IDS:
+            cur.execute(
+                "DELETE FROM documents WHERE id = %s",
+                (doc_id,),
+            )
         for delivery_id in _AUDIT_DELIVERY_IDS:
             cur.execute(
                 "DELETE FROM webhook_deliveries WHERE webhook_id = %s",
@@ -456,6 +525,346 @@ def test_6_sentinel_labels() -> None:
     )
 
 
+def test_7_review_found_populated() -> None:
+    print("\n[7] Review found, all sections populated → review-shaped message")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("7.skipped", False, "no fixture")
+        return
+
+    import json
+    ext_id = f"fathom-review-full-{RUN_TOKEN}"
+    review = {
+        "pain_points": [
+            {
+                "description": "GHL setup is blocking launch",
+                "evidence": "We can't get the funnel published",
+            }
+        ],
+        "wins": [
+            {
+                "description": "Closed first paying client",
+                "evidence": "Just signed Acme yesterday",
+            }
+        ],
+        "dodged_questions": [
+            {
+                "description": "Sidestepped the revenue question",
+                "who": "client",
+                "evidence": "Pivoted to talking about marketing",
+            }
+        ],
+        "sentiment_arc": "Started anxious; ended energized after we mapped next steps.",
+    }
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
+
+    db = get_client()
+    captured = {}
+    os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_REVIEW"
+
+    def fake_post(channel_id, text, **kwargs):
+        captured["text"] = text
+        return {"ok": True, "slack_error": None}
+
+    with patch(
+        "agents.gregory.cs_call_summary_post.post_message",
+        side_effect=fake_post,
+    ):
+        result = maybe_post_cs_call_summary(
+            db,
+            call_id="00000000-0000-0000-0000-000000000007",
+            call_category="client",
+            primary_client_id=_FIXTURE_CLIENT_ID,
+            summary_text="(unused — review path takes over)",
+            fathom_external_id=ext_id,
+        )
+
+    _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
+    _check("7.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check(
+        "7.content_source",
+        result["content_source"] == "call_review",
+        f"content_source={result['content_source']!r}",
+    )
+
+    text = captured.get("text") or ""
+    _check("7.text.sentiment_header", "*Sentiment*" in text, "missing *Sentiment* header")
+    _check("7.text.pain_header", "*Pain points*" in text, "missing *Pain points* header")
+    _check("7.text.wins_header", "*Wins*" in text, "missing *Wins* header")
+    _check(
+        "7.text.pivots_header",
+        "*Conversation pivots*" in text,
+        "missing *Conversation pivots* header",
+    )
+    _check(
+        "7.text.evidence_italic",
+        "_We can't get the funnel published_" in text,
+        f"missing italic-wrapped evidence in text",
+    )
+    _check(
+        "7.text.who_inline",
+        "(who: client)" in text,
+        "missing (who: client) inline marker on pivot",
+    )
+    _check(
+        "7.text.no_double_star",
+        "**" not in text,
+        f"output still contains ** Markdown bold (converter didn't run)",
+    )
+    _check(
+        "7.text.no_triple_hash",
+        "###" not in text,
+        f"output still contains ### Markdown header",
+    )
+
+    delivery = _delivery_status(result["delivery_id"])
+    _check(
+        "7.audit.content_source",
+        delivery is not None
+        and (delivery.get("payload") or {}).get("content_source") == "call_review",
+        f"audit payload content_source mismatch: {delivery}",
+    )
+
+
+def test_8_review_found_empty_arrays() -> None:
+    print("\n[8] Review found, only sentiment populated → only Sentiment section")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("8.skipped", False, "no fixture")
+        return
+
+    import json
+    ext_id = f"fathom-review-sparse-{RUN_TOKEN}"
+    review = {
+        "pain_points": [],
+        "wins": [],
+        "dodged_questions": [],
+        "sentiment_arc": "Calm coasting call; nothing flagged either way.",
+    }
+    _seed_review_document(external_id=ext_id, content=json.dumps(review))
+
+    db = get_client()
+    captured = {}
+    os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_SPARSE"
+
+    def fake_post(channel_id, text, **kwargs):
+        captured["text"] = text
+        return {"ok": True, "slack_error": None}
+
+    with patch(
+        "agents.gregory.cs_call_summary_post.post_message",
+        side_effect=fake_post,
+    ):
+        result = maybe_post_cs_call_summary(
+            db,
+            call_id="00000000-0000-0000-0000-000000000008",
+            call_category="client",
+            primary_client_id=_FIXTURE_CLIENT_ID,
+            summary_text="(unused — review path takes over)",
+            fathom_external_id=ext_id,
+        )
+
+    _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
+    _check("8.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check(
+        "8.content_source",
+        result["content_source"] == "call_review",
+        f"content_source={result['content_source']!r}",
+    )
+
+    text = captured.get("text") or ""
+    _check("8.has_sentiment", "*Sentiment*" in text, "missing *Sentiment* header")
+    _check(
+        "8.no_pain_header",
+        "*Pain points*" not in text,
+        "*Pain points* header rendered for empty array",
+    )
+    _check(
+        "8.no_wins_header",
+        "*Wins*" not in text,
+        "*Wins* header rendered for empty array",
+    )
+    _check(
+        "8.no_pivots_header",
+        "*Conversation pivots*" not in text,
+        "*Conversation pivots* header rendered for empty array",
+    )
+
+
+def test_9_review_malformed_json() -> None:
+    print("\n[9] Review present but JSON malformed → fallback path")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("9.skipped", False, "no fixture")
+        return
+
+    ext_id = f"fathom-review-malformed-{RUN_TOKEN}"
+    _seed_review_document(external_id=ext_id, content="{ this is not valid json")
+
+    db = get_client()
+    captured = {}
+    os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_MALFORMED"
+
+    def fake_post(channel_id, text, **kwargs):
+        captured["text"] = text
+        return {"ok": True, "slack_error": None}
+
+    with patch(
+        "agents.gregory.cs_call_summary_post.post_message",
+        side_effect=fake_post,
+    ):
+        result = maybe_post_cs_call_summary(
+            db,
+            call_id="00000000-0000-0000-0000-000000000009",
+            call_category="client",
+            primary_client_id=_FIXTURE_CLIENT_ID,
+            summary_text="Fathom summary text used as fallback.",
+            fathom_external_id=ext_id,
+        )
+
+    _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
+    _check("9.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check(
+        "9.content_source",
+        result["content_source"] == "fathom_summary_fallback",
+        f"content_source={result['content_source']!r}",
+    )
+
+    text = captured.get("text") or ""
+    _check(
+        "9.fallback_text_present",
+        "Fathom summary text used as fallback." in text,
+        "fallback summary missing from text",
+    )
+    _check(
+        "9.no_review_headers",
+        "*Sentiment*" not in text and "*Pain points*" not in text,
+        "review-shape headers rendered on fallback path",
+    )
+
+    delivery = _delivery_status(result["delivery_id"])
+    _check(
+        "9.audit.content_source",
+        delivery is not None
+        and (delivery.get("payload") or {}).get("content_source")
+        == "fathom_summary_fallback",
+        f"audit payload content_source mismatch: {delivery}",
+    )
+
+
+def test_10_review_missing() -> None:
+    print("\n[10] No review row for external_id → fallback path")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("10.skipped", False, "no fixture")
+        return
+
+    ext_id = f"fathom-review-absent-{RUN_TOKEN}"
+    # Deliberately do NOT seed a documents row.
+
+    db = get_client()
+    captured = {}
+    os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_ABSENT"
+
+    def fake_post(channel_id, text, **kwargs):
+        captured["text"] = text
+        return {"ok": True, "slack_error": None}
+
+    with patch(
+        "agents.gregory.cs_call_summary_post.post_message",
+        side_effect=fake_post,
+    ):
+        result = maybe_post_cs_call_summary(
+            db,
+            call_id="00000000-0000-0000-0000-00000000000a",
+            call_category="client",
+            primary_client_id=_FIXTURE_CLIENT_ID,
+            summary_text="Original Fathom summary; the review never landed.",
+            fathom_external_id=ext_id,
+        )
+
+    _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
+    _check("10.posted", result["posted"] is True, f"posted={result['posted']}")
+    _check(
+        "10.content_source",
+        result["content_source"] == "fathom_summary_fallback",
+        f"content_source={result['content_source']!r}",
+    )
+
+    text = captured.get("text") or ""
+    _check(
+        "10.fallback_summary",
+        "Original Fathom summary" in text,
+        "fallback summary missing",
+    )
+
+    delivery = _delivery_status(result["delivery_id"])
+    _check(
+        "10.audit.content_source",
+        delivery is not None
+        and (delivery.get("payload") or {}).get("content_source")
+        == "fathom_summary_fallback",
+        f"audit payload content_source mismatch: {delivery}",
+    )
+
+
+def test_11_mrkdwn_safety_net_on_fallback() -> None:
+    print("\n[11] Fallback summary with `###` and `**bold**` → cleaned by mrkdwn pass")
+    if _FIXTURE_CLIENT_ID is None:
+        _check("11.skipped", False, "no fixture")
+        return
+
+    ext_id = f"fathom-mrkdwn-cleanup-{RUN_TOKEN}"
+    raw_summary = (
+        "### Summary\n"
+        "Client wants to launch next month. Three blockers: payment, "
+        "asset review, **GHL setup**.\n\n"
+        "## Action items\n"
+        "- Payment review by Friday\n"
+    )
+
+    db = get_client()
+    captured = {}
+    os.environ["SLACK_CS_CALL_SUMMARIES_CHANNEL_ID"] = "C_TEST_CHANNEL_CLEANUP"
+
+    def fake_post(channel_id, text, **kwargs):
+        captured["text"] = text
+        return {"ok": True, "slack_error": None}
+
+    with patch(
+        "agents.gregory.cs_call_summary_post.post_message",
+        side_effect=fake_post,
+    ):
+        result = maybe_post_cs_call_summary(
+            db,
+            call_id="00000000-0000-0000-0000-00000000000b",
+            call_category="client",
+            primary_client_id=_FIXTURE_CLIENT_ID,
+            summary_text=raw_summary,
+            fathom_external_id=ext_id,
+        )
+
+    _AUDIT_DELIVERY_IDS.append(result["delivery_id"])
+    _check("11.posted", result["posted"] is True, f"posted={result['posted']}")
+    text = captured.get("text") or ""
+    _check(
+        "11.no_triple_hash",
+        "###" not in text,
+        f"`###` survived the mrkdwn cleanup pass",
+    )
+    _check(
+        "11.no_double_star",
+        "**" not in text,
+        "`**bold**` survived the mrkdwn cleanup pass",
+    )
+    _check(
+        "11.bold_normalized",
+        "*Summary*" in text,
+        "expected `*Summary*` mrkdwn header after `### Summary` conversion",
+    )
+    _check(
+        "11.inline_bold_normalized",
+        "*GHL setup*" in text,
+        "expected `*GHL setup*` mrkdwn after `**GHL setup**` conversion",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -478,6 +887,11 @@ def main() -> int:
         test_4_channel_env_missing()
         test_5_slack_ok_false()
         test_6_sentinel_labels()
+        test_7_review_found_populated()
+        test_8_review_found_empty_arrays()
+        test_9_review_malformed_json()
+        test_10_review_missing()
+        test_11_mrkdwn_safety_net_on_fallback()
     finally:
         print("\n" + "=" * 72)
         print("Cleanup")
@@ -485,7 +899,8 @@ def main() -> int:
         try:
             _teardown_fixture()
             print(
-                f"  Hard-deleted fixture (client + csm + assignment) and "
+                f"  Hard-deleted fixture (client + csm + assignment), "
+                f"{len(_SEEDED_DOC_IDS)} review doc(s), and "
                 f"{len(_AUDIT_DELIVERY_IDS)} audit row(s)"
             )
         except Exception:

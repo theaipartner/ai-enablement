@@ -112,6 +112,42 @@ def upsert_call_review(
     return doc_id
 
 
+def find_review_by_call_external_id(
+    db, call_external_id: str
+) -> dict[str, Any] | None:
+    """Return the parsed review JSON for a given Fathom recording id, or None.
+
+    Public reader paired with `upsert_call_review`. Resolves the
+    `documents` row keyed by (source='fathom', external_id=<recording_id>,
+    document_type='call_review') and parses `content` as JSON.
+
+    Returns None when:
+      - No row exists for the given external_id
+      - The row exists but `content` is not valid JSON (defensive — the
+        upsert path always writes valid JSON, but a manual edit or future
+        corruption shouldn't crash the reader)
+      - The row exists but the parsed value isn't a dict
+
+    Does NOT raise on DB errors — caller is the cs_call_summary_post
+    fail-soft path; let the exception propagate so the caller's try/except
+    can record the fetch failure in its audit trail. (The upsert path
+    has the same shape: DB errors propagate.)
+    """
+    row = _find_review_document(db, call_external_id)
+    if row is None:
+        return None
+    content = row.get("content")
+    if not isinstance(content, str):
+        return None
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
