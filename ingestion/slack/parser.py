@@ -16,6 +16,19 @@ Domain subtype tagging (`message_subtype` column):
   - `nps_submission` — workflow messages containing an NPS-style
     numeric rating + free text.
 
+Author-type vocabulary (`author_type` column):
+  - `client`, `team_member`, `bot`, `workflow`, `unknown` (legacy)
+  - `ella` (Ella V2 Batch 1) — Ella's user-token-backed account when
+    `ella_user_id` is passed and the message's `user` matches it.
+    Tagged distinctly so future logic can both retrieve her past
+    messages for context AND skip them as response triggers.
+
+Delete events (`subtype='message_deleted'`) are intentionally ignored
+to preserve audit trail: the delete event payload has the previous
+text in `previous_message`, not in `text`, and overwriting the existing
+row would erase the original ingestion. We treat delete as a system
+event that doesn't change the historical record.
+
 The ingestion spec (`docs/ingestion/metadata-conventions.md`) pins the
 behavior; parser is the single place that decodes a raw Slack event.
 """
@@ -73,6 +86,7 @@ def parse_message(
     channel_id: str,
     client_user_ids: set[str] | None = None,
     team_user_ids: set[str] | None = None,
+    ella_user_id: str | None = None,
 ) -> SlackMessageRecord | None:
     """Return a `SlackMessageRecord` for one Slack event, or None if
     the event isn't a message we want to store.
@@ -81,11 +95,19 @@ def parse_message(
     known Slack user ids for client and team authors; passed in by
     the pipeline so author-type resolution is O(1) per message.
 
+    `ella_user_id` (Ella V2 Batch 1) is the Slack user_id behind
+    `SLACK_USER_TOKEN` — when set, messages from that user resolve
+    to `author_type='ella'` ahead of any other resolution branch.
+    Defaulted to None for backwards compatibility with the local
+    backfill (which doesn't pass it today; it does once the pipeline
+    threads it through, but None remains a safe input).
+
     Events we skip (return None):
       - `type != 'message'` (reactions, channel_join notices that
         ever actually arrive via history — rare)
       - `subtype == 'channel_join'` / `'channel_leave'` and other
-        system messages
+        system messages (including `'message_deleted'`, see module
+        docstring)
     """
     if event.get("type") != "message":
         return None
@@ -117,6 +139,7 @@ def parse_message(
         event,
         client_user_ids=client_user_ids or set(),
         team_user_ids=team_user_ids or set(),
+        ella_user_id=ella_user_id,
     )
 
     text = event.get("text") or ""
@@ -146,7 +169,9 @@ def parse_message(
 
 # System-generated messages that shouldn't land in slack_messages —
 # ingestion cares about human and workflow messages, not Slack's own
-# channel-management chatter.
+# channel-management chatter. `message_deleted` is included to preserve
+# the audit trail: the delete event would otherwise overwrite the
+# existing row's text with `previous_message` data, erasing the original.
 _SYSTEM_SUBTYPES: frozenset[str] = frozenset({
     "channel_join",
     "channel_leave",
@@ -160,6 +185,7 @@ _SYSTEM_SUBTYPES: frozenset[str] = frozenset({
     "reminder_add",
     "bot_add",
     "bot_remove",
+    "message_deleted",
 })
 
 
@@ -168,14 +194,22 @@ def _resolve_author(
     *,
     client_user_ids: set[str],
     team_user_ids: set[str],
+    ella_user_id: str | None = None,
 ) -> tuple[str, str]:
     """Return `(slack_user_id, author_type)` for a message event.
 
     Resolution order:
-      1. Explicit user field → check client / team user-id sets
-      2. bot_id (no user field) → `bot`
-      3. Workflow-sourced message → `workflow`
-      4. Fallback → `unknown` with whatever id we can find
+      1. Explicit user field:
+         a. Matches `ella_user_id` → `ella` (checked FIRST so that
+            even if Ella's user account is also in `team_members`,
+            she gets her own author_type)
+         b. In client_user_ids → `client`
+         c. In team_user_ids → `team_member`
+         d. Workflow-sourced → `workflow`
+         e. Bot indicators (subtype/bot_id) → `bot`
+         f. Otherwise → `unknown`
+      2. bot_id (no user field) → `bot` (or `workflow`)
+      3. Fallback → `unknown` with synthetic id
     """
     subtype = event.get("subtype")
     user_id = event.get("user")
@@ -191,6 +225,12 @@ def _resolve_author(
     )
 
     if user_id:
+        # Ella check first: she's also reachable as `team_member` if
+        # her Slack account is in team_members.slack_user_id, but the
+        # downstream logic needs to distinguish her posts from a
+        # human team member's. Ella always wins.
+        if ella_user_id and user_id == ella_user_id:
+            return user_id, "ella"
         if user_id in client_user_ids:
             return user_id, "client"
         if user_id in team_user_ids:

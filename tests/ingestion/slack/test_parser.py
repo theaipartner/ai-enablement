@@ -123,6 +123,19 @@ def test_parse_returns_none_for_system_messages():
         assert _parse(event) is None, f"expected None for subtype {subtype}"
 
 
+def test_parse_returns_none_for_message_deleted_subtype():
+    """Delete events are intentionally ignored to preserve audit trail.
+    Original ingestion of the message stays; the delete is a no-op."""
+    event = {
+        "type": "message",
+        "subtype": "message_deleted",
+        "deleted_ts": "1745500000.000100",
+        "previous_message": {"text": "original text"},
+        "ts": "1745500900.000100",
+    }
+    assert _parse(event) is None
+
+
 def test_parse_returns_none_for_non_message_event_types():
     assert _parse({"type": "reaction_added", "ts": "1.1"}) is None
 
@@ -171,6 +184,85 @@ def test_message_with_no_user_no_bot_id_falls_back_to_unknown():
     assert record is not None
     assert record.author_type == "unknown"
     assert record.slack_user_id == "__no_author__"
+
+
+# ---------------------------------------------------------------------------
+# Ella author resolution (V2 Batch 1)
+# ---------------------------------------------------------------------------
+
+
+def test_ella_user_id_resolves_to_ella_author_type():
+    """When ella_user_id is set and matches the message's user, the
+    author_type is 'ella' regardless of any team_member overlap."""
+    event = {
+        "type": "message",
+        "user": "UELLA",
+        "text": "Hi from Ella",
+        "ts": "1745500000.000100",
+    }
+    record = parser.parse_message(
+        event,
+        channel_id=CHANNEL,
+        client_user_ids=CLIENT_USERS,
+        team_user_ids=TEAM_USERS,
+        ella_user_id="UELLA",
+    )
+    assert record is not None
+    assert record.author_type == "ella"
+    assert record.slack_user_id == "UELLA"
+
+
+def test_ella_check_takes_precedence_over_team_member_membership():
+    """If Ella's user_id is also in team_user_ids (e.g., she's
+    seeded as a team_members row), Ella wins."""
+    event = {
+        "type": "message",
+        "user": "UELLA",
+        "text": "still Ella",
+        "ts": "1745500001.000100",
+    }
+    record = parser.parse_message(
+        event,
+        channel_id=CHANNEL,
+        client_user_ids=CLIENT_USERS,
+        team_user_ids=TEAM_USERS | {"UELLA"},
+        ella_user_id="UELLA",
+    )
+    assert record is not None
+    assert record.author_type == "ella"
+
+
+def test_ella_user_id_none_does_not_affect_resolution():
+    """Backwards compat: existing callers that don't pass ella_user_id
+    see no behavioral change."""
+    event = {
+        "type": "message",
+        "user": "UCLIENT1",
+        "text": "hello",
+        "ts": "1745500002.000100",
+    }
+    record = _parse(event)
+    assert record is not None
+    assert record.author_type == "client"
+
+
+def test_other_users_not_misclassified_when_ella_user_id_set():
+    """Setting ella_user_id should only affect the matching id."""
+    event = {
+        "type": "message",
+        "user": "UCLIENT1",
+        "text": "hello",
+        "ts": "1745500003.000100",
+    }
+    record = parser.parse_message(
+        event,
+        channel_id=CHANNEL,
+        client_user_ids=CLIENT_USERS,
+        team_user_ids=TEAM_USERS,
+        ella_user_id="UELLA",
+    )
+    assert record is not None
+    assert record.author_type == "client"
 
 
 # ---------------------------------------------------------------------------

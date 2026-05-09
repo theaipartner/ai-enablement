@@ -17,7 +17,9 @@ Per resolved channel:
      follow `conversations.replies` to pull the full thread.
   4. Parse raw events into `SlackMessageRecord`s, with author type
      resolved from pre-fetched `clients.slack_user_id` and
-     `team_members.slack_user_id` sets.
+     `team_members.slack_user_id` sets, plus an optional `ella_user_id`
+     (Ella V2 Batch 1) so her own posts get `author_type='ella'` even
+     if her account is also in `team_members`.
   5. On `--apply`, upsert to `slack_messages` keyed on
      `(slack_channel_id, slack_ts)`. Reports counts of new vs
      refreshed rows by pre-querying the existing ts set.
@@ -31,6 +33,7 @@ retrieval wiring via `document_chunks` is deferred to V1.1.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -43,6 +46,7 @@ from ingestion.slack.client import (
 )
 from ingestion.slack.parser import SlackMessageRecord, parse_message
 from shared.logging import logger
+from shared.slack_identity import get_user_id_for_token
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +119,12 @@ def run_ingest(
 
     client_resolver, team_resolver = _load_resolvers(db)
 
+    # Ella V2 Batch 1: resolve Ella's user_id behind SLACK_USER_TOKEN so
+    # her posts ingest with author_type='ella' rather than 'team_member'.
+    # Token may be unset in local-dev environments — `get_user_id_for_token`
+    # returns None, which the parser already accepts.
+    ella_user_id = get_user_id_for_token(os.environ.get("SLACK_USER_TOKEN"))
+
     # Resolve all targets upfront so the dry-run can surface
     # unresolved ones as blockers before any history fetch.
     for name in client_full_names:
@@ -150,6 +160,7 @@ def run_ingest(
                 slack_client, target.slack_channel_id, oldest_ts,
                 client_user_ids=client_resolver,
                 team_user_ids=team_resolver,
+                ella_user_id=ella_user_id,
             )
         except SlackAPIError as exc:
             outcome.error = f"slack_api_error:{exc.error}"
@@ -310,6 +321,7 @@ def _collect_messages(
     *,
     client_user_ids: set[str],
     team_user_ids: set[str],
+    ella_user_id: str | None = None,
 ) -> tuple[list[SlackMessageRecord], int]:
     """Return (all_records, threads_followed_count)."""
     records: list[SlackMessageRecord] = []
@@ -321,6 +333,7 @@ def _collect_messages(
             channel_id=channel_id,
             client_user_ids=client_user_ids,
             team_user_ids=team_user_ids,
+            ella_user_id=ella_user_id,
         )
         if record is None:
             continue
@@ -339,6 +352,7 @@ def _collect_messages(
                     channel_id=channel_id,
                     client_user_ids=client_user_ids,
                     team_user_ids=team_user_ids,
+                    ella_user_id=ella_user_id,
                 )
                 if record is not None:
                     records.append(record)
