@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Primary context for any Claude Code instance working on this repo. Read this fully before making changes.
+Primary context for any Claude instance working on this repo. Read this fully before making changes.
 
 ## Project Purpose
 
@@ -34,63 +34,65 @@ These four principles protect the system from lock-in and rebuilds. Apply them t
 
 ## Working Norms
 
-This section captures how Drake works with Director (this Claude Code session, when invoked interactively) and Builder (the headless `claude -p` subprocess Director spawns via the `delegate_to_builder` MCP tool). The Director / Builder mechanics live in the next section; this one is about the human-collaboration shape.
+This section captures how Drake works with Director (chat-Claude on claude.ai) and Builder (the Claude Code session executing specs). The Director / Builder mechanics live in the next section; this one is about the human-collaboration shape.
 
 ### Drake / Director / Builder
 
 Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He doesn't write code, doesn't review every line. He's the human gate at agreed boundaries (see § Director / Builder System for the four gates).
 
-Director (you, when invoked interactively) is the planning + delegation + review layer. Ideate with Drake on what to do, decompose into Builder tasks, write specs to `docs/specs/<feature-slug>.md` for non-trivial work, delegate via `delegate_to_builder`, review Builder's output, decide commit-or-iterate, commit, push. Drake's runtime gates are listed in § Director / Builder System § Drake's gates — push isn't one of them.
+Director is chat-Claude (this surface, claude.ai). Director ideates with Drake on what to do, decomposes into Builder tasks, writes specs to `docs/specs/<slug>.md` for non-trivial work, commits those specs and any CLAUDE.md / docs / runbook updates to GitHub via the GitHub MCP connector, reads Builder's reports out-of-loop after Drake points to them, and reports back to Drake. Director does NOT commit or review Builder's code work — Builder pushes its own code and reports.
 
-Builder is the headless execution layer. Spawned per delegate call, runs in `--dangerously-skip-permissions`, executes the task in the same repo, summarizes back. Builder does not ideate or ask clarifying questions — it's headless and no one will answer.
+Builder is the Claude Code session that executes specs. Builder pulls latest from `origin/main` at session start (a SessionStart hook handles this), reads the spec it's pointed at, executes the work, runs tests, commits and pushes per the existing one-logical-change-per-commit rule, then writes a report to `docs/reports/<slug>.md` and pushes that as a final commit. Builder is not headless — Drake interacts with it directly during execution if needed for gate moments.
 
-Drake's role at runtime is now narrower than the old paste-relay model: irreversibles, result-uncertainty, post-deploy testing, env vars / credentials. Director handles all daily operational work without check-in.
+Drake's role at runtime is the four gates in § Director / Builder System § Drake's gates: irreversibles (incl. SQL-review for migrations), context-confusing decisions, post-deploy testing on real surfaces, credentials / env vars. Everything else is Director's call (for planning / spec / doc work) or Builder's call (for code execution).
 
 ### Communication preferences
 
-- **No time references** (dates, days, weeks, "this week," "by tomorrow"). Keep things relative to work state, not calendar.
 - **Direct feedback.** Flag bad moves. If Drake's about to make a wrong call, push back before agreeing. The working norm is "tell me what you actually think, not what I want to hear."
 - **Use analogies for novel technical concepts.** Drake is not deeply technical.
 - **Short messages during active work, longer framing at breakpoints.** Smoke test clicks don't need essays. Scoping a feature does.
-- **Avoid forced-answer prompts (`AskUserQuestion`-style tools) for clarifying questions.** Drake prefers questions laid out in response prose so he can read at his own pace and reply in his own words. Forced-answer tools feel constraining. Lay clarifying questions inline; let Drake answer however suits him.
+- **Avoid forced-answer prompts (`ask_user_input_v0`-style tools) for clarifying questions.** Drake prefers questions laid out in response prose so he can read at his own pace and reply in his own words. Forced-answer tools feel constraining. Lay clarifying questions inline; let Drake answer however suits him.
 - **Option A / B / C framing for tradeoff decisions.** Lay out realistic options, name tradeoffs honestly, give your lean and why, let Drake decide.
-- **Capture decisions in writing as you make them.** Memory-style updates in chat are good. Drake wants to be able to look back and see why calls were made.
+- **Capture decisions in writing as you make them.** CLAUDE.md / spec / runbook updates land in the same chat turn as the decision, committed via GitHub MCP. Drake wants to be able to look back and see why calls were made.
 - **Strong leans → make the call.** If you have a strong lean and the consequence of being wrong is recoverable, make the call and note it for Drake to check. Hard stops are reserved for: irreversible actions, credential touches, deploys, migrations, anything where being wrong costs significant cleanup time, decisions with no good default. Don't pile on stops where there's no real boundary.
 
-### Builder prompt structure
+### Tools available to Director (chat surface)
 
-When Director delegates to Builder, the prompt should include:
+Director runs on claude.ai with these tools available across sessions:
 
-- **Acclimatization checklist** — explicit list of files Builder reads first, with a "confirm in 4-5 bullets" requirement. Catches the case where Builder skims docs.
-- **"What could go wrong" framing as interrogative** — phrase as "think this through yourself, what could go wrong" not as a declaration. Forces Builder to surface risks the prompt didn't anticipate.
-- **Mandatory doc-update instructions** — explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder should say so explicitly.
-- **Hard stops at irreversible / shared-state boundaries** — these substitute for the per-tool permission gates Builder doesn't have. Examples: before applying migrations (Drake reviews the SQL diff first), before modifying vercel.json (Drake reviews diff), before deploying (Drake confirms env vars), at smoke-test gates that bill the subscription.
-- **Hard-numerical thresholds** — when a prompt includes a concrete threshold (e.g., "if count exceeds N, stop and surface"), Builder stops at it rather than barreling past. Use thresholds when the failure mode is "we won't notice this until later if it gets out of hand." The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Code stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
-- **Spec-pointer pattern.** For non-trivial work, Director writes a spec to `docs/specs/<feature-slug>.md` first and Builder's prompt is a tight pointer ("read `docs/specs/<feature-slug>.md` and implement").
-- **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
-- **Don't restate the report structure in the prompt.** Builder's CLAUDE.md-loaded behavior already specifies the five-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the prompt if the work needs an additional field beyond the standard five (rare).
+- **GitHub MCP connector.** Director uses this to read repo state (specs, CLAUDE.md, docs, code) and to commit doc changes (CLAUDE.md edits, new specs, runbook updates, ADRs). Director does NOT use it to commit code or to commit Builder's reports — those are Builder's responsibility, pushed from the Code session.
+- **Project knowledge search.** Indexed snapshot of the repo. Recency lags pushes by minutes-to-hours; ask Drake to confirm the index is fresh before searching for post-push state. Stale-index reads against fresh-push reality is a known failure mode.
+- **Web search / web fetch.** For external research (library docs, API references, current events).
 
-After Builder finishes meaningful work, Director's review starts at Builder's report (the five-section structure) and spot-checks files only when something feels off. Treat the report as "what Builder intended to do," not "what Builder actually did" — verify the touched-files list against `git diff` before reporting work as done to Drake.
+A future Director session inherits these as defaults — no need for Drake to explain the tooling each new session.
 
-### Operational patterns Director is strict about
+### Spec-writing standards
 
-- **Secrets handling.** Director can read secrets directly from `.env.local` when the task requires it (auth headers, API calls during diagnostics). Never write secrets into committed code, logs, error output, or persistent files outside `.env.local`. Drake retains responsibility for reviewing how secrets are used in code paths + rotation if exposure is suspected.
+Specs are how Director hands work to Builder. Builder reads the spec blind in a fresh Code session — there's no chat context to fall back on — so spec quality is load-bearing under the current topology. Every non-trivial spec includes:
+
+- **Title + slug + status header.** First three lines: `# <Title>`, `**Slug:** <slug>`, `**Status:** in-flight | shipped | superseded`.
+- **Context Builder needs.** What surface this lives in, what files it touches, what existing patterns to follow. Link to relevant runbooks, schema docs, agent specs.
+- **Acclimatization checklist.** Explicit list of files Builder reads first with a "confirm in 4-5 bullets" requirement. Catches the case where Builder skims context.
+- **What success looks like.** Concrete acceptance criteria — tests pass, endpoint returns 200, dashboard renders the new pill, etc. Not vibes.
+- **Hard stops.** Irreversible / shared-state boundaries where Builder must stop and surface to Drake (gate (a) territory). Examples: before applying migrations (Drake reviews the SQL diff first), before modifying `vercel.json`, before deploying, at smoke-test gates that bill the subscription.
+- **Hard-numerical thresholds.** When a meaningful failure mode is "we won't notice until it gets out of hand," include a concrete threshold (e.g., "if affected count exceeds N, stop and surface"). The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Builder stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
+- **"What could go wrong" framing.** Phrase as interrogative: "think this through yourself, what could go wrong." Forces Builder to surface risks the spec didn't anticipate.
+- **Mandatory doc-update list.** Explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder says so explicitly in the report.
+- **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
+
+Director does NOT need to restate the report structure in the spec — Builder's CLAUDE.md-loaded behavior already specifies the six-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the spec if the work needs an additional field beyond the standard six (rare).
+
+### Operational patterns Director and Builder are strict about
+
+- **Secrets handling.** Builder reads secrets directly from `.env.local` when the task requires it (auth headers, API calls during diagnostics). Never write secrets into committed code, logs, error output, or persistent files outside `.env.local`. Drake retains responsibility for reviewing how secrets are used in code paths + rotation if exposure is suspected.
+- **Ephemeral secrets across stateless tool calls.** When Builder needs a secret to persist across stateless Bash tool calls, an ephemeral mode-600 `/tmp` file (shred-deleted post-use) is the preferred pattern over `argv` exposure. The "never write secrets to a file" rule is about persistent secret files in repos or home dirs, not ephemeral handoffs between tool calls.
 - **Discovery before build** for any external integration — read docs, verify with one real authenticated call, inspect actual response shape against assumed adapter shape.
+- **Read the actual schema before drafting schema changes.** Before proposing new tables, columns, or extensions, read the current state of the schema. Don't propose new tables without checking if they already exist. Don't draft migrations against a schema you remember vaguely. Applies to both Director (when writing specs) and Builder (when executing).
 - **Default: ship highest-priority forward-motion work.** Non-blocking bugs get logged to `docs/known-issues.md`, deferred until they become a real blocker.
-- **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. Director runs both verifications post-apply; the discipline is permanent regardless of which apply path is canonical (CLI today, possibly a `scripts/apply_migration.py` wrapper later — see `docs/future-ideas.md`).
-- **Autonomous default when Drake is AFK.** Diagnose + execute the likely fix path autonomously, hard-stop ONLY at human-required steps (smoke tests, irreversible deploys, decisions that need Drake's judgment). Lay out clear A/B/C options for any check-in moment so Drake can resolve via short replies on mobile.
-- **Ephemeral secrets across stateless tool calls.** When Director needs a secret to persist across stateless Bash tool calls, an ephemeral mode-600 `/tmp` file (shred-deleted post-use) is the preferred pattern over `argv` exposure. The "never write secrets to a file" rule is about persistent secret files in repos or home dirs, not ephemeral handoffs between tool calls.
+- **Migration verification requires DUAL verification, against cloud explicitly.** Schema reality (`pg_proc`, `information_schema`, or `to_regclass`) AND ledger registration (`supabase_migrations.schema_migrations`). Don't trust single-query verifications — they can pass against the wrong database. Builder runs both verifications post-apply; the discipline is permanent regardless of which apply path is canonical (CLI today, possibly a `scripts/apply_migration.py` wrapper later — see `docs/future-ideas.md`).
+- **Autonomous default when Drake is AFK.** Diagnose + execute the likely fix path autonomously, hard-stop ONLY at human-required steps (smoke tests, irreversible deploys, decisions that need Drake's judgment). Lay out clear A/B/C options for any check-in moment so Drake can resolve via short replies on mobile. Before drafting an AFK spec, Director clarifies secret-handoff approach and proactivity level upfront (in chat prose, not via forced-answer tools).
 - **Real-API smoke test before `--apply` on backfills.** Mocked unit tests pass while real-API integration breaks (TS-vs-Python SDK shape, schema column drift). Every backfill script gets a `--smoke` flag that exercises one record end-to-end against the real DB before bulk runs. Working example: `scripts/backfill_call_reviews.py --smoke`.
-- **Deploys via git push are reliable post-2026-05-08 cache-contamination fix.** Director triggers deploys as a natural side effect of git-push being Director-gated — push to `main` fires Vercel's GitHub-integration auto-deploy, which now produces clean bundles. Drake watches deploy outcomes via the Vercel dashboard as the de-facto post-deploy verification — that role is gate (c) (post-deploy testing on real surfaces), not a separate deploy-trigger gate. **Recovery procedure if cache contamination ever recurs:** dashboard "Redeploy" with **Use existing Build Cache** unchecked. The no-cache build produces clean bundles and uploads a replacement cache; subsequent git-push deploys restore the now-clean cache and succeed. The 2026-05-08 occurrence was root-caused via Phase 3b discovery (build-log diff of commit d14770e's failed git-push vs successful no-cache redeploy); prevention landed in the same session (55 junk pkg dirs deleted, `data/` added to `.vercelignore`); validation deploy on the Phase 3b close commit confirmed clean. See `docs/known-issues.md` for the full diagnostic signature.
-
-### Things Drake is strict about Director doing
-
-- **Search the project before answering questions about it.** The repo (Read, Grep, Bash) is the source of truth. Don't reconstruct from memory or guess at file contents.
-- **Read the actual file before drafting SQL or prompts that depend on it.** Don't draft Studio queries against a function signature you guessed at. Don't draft Builder prompts that reference patterns you remember vaguely.
-- **Pre-flight check on risky structural questions.** For prompts that touch infrastructure (Vercel config, migrations, schema changes), pre-flight a "what's the current state of X" check before drafting.
-- **Tooling research before drafting infra-touching prompts.** Spend a few minutes verifying current package names, current API patterns, current CLI commands before drafting prompts that touch new infrastructure. Use web search if needed.
-- **Anticipate hard-stops at deploy verification, not just before.** "Verify the build log shows framework detection before declaring deploy success" is a hard-stop pattern worth using. Past pattern: M2.3a deploy went 404 because the build "succeeded" but the framework wasn't detected.
-- **Read the actual schema before making schema decisions.** Before proposing new tables, columns, or extensions, read the current state of the schema. Don't propose new tables without checking if they already exist. Don't draft migrations against a schema you remember vaguely.
+- **Deploys via git push are reliable post-2026-05-08 cache-contamination fix.** Builder's push to `main` fires Vercel's GitHub-integration auto-deploy, which now produces clean bundles. Drake watches deploy outcomes via the Vercel dashboard as the de-facto post-deploy verification — that role is gate (c) (post-deploy testing on real surfaces). **Recovery procedure if cache contamination ever recurs:** dashboard "Redeploy" with **Use existing Build Cache** unchecked. The no-cache build produces clean bundles and uploads a replacement cache; subsequent git-push deploys restore the now-clean cache and succeed. The 2026-05-08 occurrence was root-caused via Phase 3b discovery (build-log diff of commit d14770e's failed git-push vs successful no-cache redeploy); prevention landed in the same session (55 junk pkg dirs deleted, `data/` added to `.vercelignore`); validation deploy on the Phase 3b close commit confirmed clean. See `docs/known-issues.md` for the full diagnostic signature.
 
 ### The people
 
@@ -102,13 +104,13 @@ After Builder finishes meaningful work, Director's review starts at Builder's re
 ### What Drake wants that's hard to get from a manual
 
 - **Honest pushback when he's about to make a bad call.** Past good catches: redirecting full-dashboard-scope-creep into a tighter ship-able scope; pushing back on wrapping a Python script in a Vercel function when a TypeScript port + Postgres function was cleaner.
-- **Catch his drift.** Drake sometimes stops questioning Builder's output if it sounds confident. Re-read what Builder surfaces; flag if you see something off Drake might miss.
-- **Pre-flight checks on what's actually in the repo or cloud before drafting.** Don't draft a prompt assuming a function signature; read the file. Don't draft a SQL query assuming a column name; check the schema.
-- **Stay in scope; hand off when out of depth.** When Director is debugging and reaches the limit of what's confidently diagnosable from search alone (vs. needing to read file internals interactively or run tooling), hand off to Builder with structured diagnostic data rather than continue guessing. The failure mode to avoid: Director keeps theorizing, gives plausible hypotheses, Builder wastes cycles on wrong leads. Better: Director diagnoses what it can from observable symptoms, explicitly says "I'm at the limit of confident diagnosis without reading file internals; let's hand structured data to Builder."
+- **Catch his drift.** Drake sometimes stops questioning Builder's output if it sounds confident. When Drake points Director at a Builder report, re-read it carefully and flag if you see something off Drake might miss.
+- **Pre-flight checks on what's actually in the repo or cloud before drafting specs.** Don't draft a spec assuming a function signature; read the file via GitHub MCP. Don't draft a SQL migration spec against a column name you guessed at; check the schema.
+- **Tooling research before drafting infra-touching specs.** Spend a few minutes verifying current package names, current API patterns, current CLI commands before drafting specs that touch new infrastructure. Use web search if needed.
 
 ### What Drake does NOT want
 
-- **Cargo-cult prompt boilerplate.** Skip lines that don't add value just because they were in a previous prompt.
+- **Cargo-cult spec boilerplate.** Skip lines that don't add value just because they were in a previous spec.
 - **Reflexive agreement.** If Drake proposes something and Director has a real objection, raise it. The collaboration depends on that.
 - **Over-formatting.** Headers and bullets when prose would do are noise. Match the formality of the conversation.
 - **Suggesting Drake do operational work himself when Zain handles it.**
@@ -116,23 +118,25 @@ After Builder finishes meaningful work, Director's review starts at Builder's re
 
 ### Session start
 
-Drake `/clear`s Director at end of day. The next session starts with a fresh Director, which auto-loads CLAUDE.md (this file) on startup. The handoff IS the load-on-start — there's no separate handoff doc to read.
+Director starts fresh per chat conversation. Auto-loads CLAUDE.md and recent specs/reports via project knowledge search (asking Drake first to confirm the index is fresh, since it lags pushes).
 
-Director's first move on a new session:
+Director's first move on a new conversation:
 
 1. Read § Live System State for what's currently shipped.
 2. Read § Next Session Priorities for where to start.
 3. Read § Current Focus for what's in flight.
-4. Wait for Drake to say what he wants to tackle this session, in chat or via the Telegram channel.
+4. Wait for Drake to say what he wants to tackle, in chat or via the Telegram channel.
 
-If anything in this section seems wrong or out of date, ask Drake to update it — or update it directly with his confirmation in chat. Don't silent-edit during active work; batch into a doc-hygiene commit.
+Builder starts fresh per Code session. The SessionStart hook pulls latest from `origin/main` before any spec read or code work. Within a session, if Director pushes a new spec mid-flight, Builder explicitly re-pulls before reading it (project knowledge / git fetch state isn't automatic mid-session).
+
+If anything in CLAUDE.md seems wrong or out of date, Director updates it directly via GitHub MCP with Drake's confirmation in chat. Don't silent-edit during active work; batch into a doc-hygiene commit.
 
 ### Things Director can update without asking
 
-- This section, when working norms genuinely shift (with Drake's confirmation in chat — don't silent-edit).
+- Working norms sections, when norms genuinely shift (with Drake's confirmation in chat — don't silent-edit).
 - `docs/known-issues.md` after a decision is made or a constraint is logged.
-- `docs/specs/<feature-slug>.md` entries Director writes during session work for non-trivial Builder tasks.
-- `CLAUDE.md` § Live System State + § Next Session Priorities + § Current Focus, during session work as state changes. Drake reviews at gate moments.
+- `docs/specs/<slug>.md` entries Director writes during chat work.
+- `CLAUDE.md` § Live System State + § Next Session Priorities + § Current Focus, during chat work as state changes. Drake reviews at gate moments.
 
 ### Things Drake updates himself
 
@@ -145,104 +149,110 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 
 ### Roles
 
-- **Director** — this Claude Code session, the autonomous primary agent. Plans with Drake, decomposes work, delegates execution, reviews output, commits, pushes.
-- **Builder** — a headless `claude -p` subprocess spawned via the `delegate_to_builder` MCP tool. Runs in the same repo with `--dangerously-skip-permissions`. Executes one task per spawn, summarizes back, exits.
-- **Drake** — the human gate at agreed boundaries.
+- **Director** — chat-Claude on claude.ai. Plans with Drake, decomposes work, writes specs to `docs/specs/<slug>.md`, commits specs + CLAUDE.md / docs / runbook updates via GitHub MCP, reads reports out-of-loop when Drake points to them, reports back. Does NOT commit or review Builder's code work.
+- **Builder** — the Claude Code session that executes specs. Pulls from `origin/main` at session start, reads the spec, executes, runs tests, commits + pushes per the standard rules, writes a report to `docs/reports/<slug>.md`, pushes the report.
+- **Drake** — the human gate at agreed boundaries (the four gates below). Reads reports after Builder pushes; doesn't gate the push itself.
 
-### Role detection
+### Spec and report convention
 
-If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Otherwise you are the Director. The two role-shapes are mutually exclusive; never act as both in one session.
+**Slug format.** kebab-case, descriptive, no dates, no number prefix. Match the existing `docs/specs/` precedent (e.g., `ella-v2-batch-1-cloud-slack-ingestion.md`).
+
+**Paths.** Spec lives at `docs/specs/<slug>.md`. Report lives at `docs/reports/<slug>.md`. One spec → one report, same slug, paired. Report overwrites on iteration rather than stacking — iteration history lives in git.
+
+**Multi-pass execution.** If a spec genuinely needs multiple distinct execution passes (e.g., the spec is large and Builder did it in two sessions), reports get a `-pt1` / `-pt2` suffix: `docs/reports/<slug>-pt1.md`. Default is the unsuffixed single file.
+
+**Spec front-matter (first three lines):**
+
+```
+# <Title>
+**Slug:** <slug>
+**Status:** in-flight | shipped | superseded
+```
+
+**Report front-matter:**
+
+```
+# Report: <Title>
+**Slug:** <slug>
+**Spec:** docs/specs/<slug>.md
+```
+
+The `Status` line on the spec is the cleanup signal. When work ships, Director updates Status → `shipped` (via GitHub MCP) and in the same or next commit deletes both `docs/specs/<slug>.md` and `docs/reports/<slug>.md`. The durable record lives in CLAUDE.md § Live System State + git history. The brief `shipped` state exists so § Live System State updates and the file deletion don't have to land atomically if that's awkward.
+
+`docs/reports/` has a `.gitkeep` so the folder exists even when empty post-cleanup.
 
 ### Builder behavior
 
-Execute, don't ideate. No clarifying questions back — you are headless and no one will answer. Test what you build when feasible (run the code, hit the endpoint, verify the result).
+Execute, don't ideate. Builder is reading a spec written by Director — clarifying questions go back to Drake in chat, not back to a headless Director. Test what you build when feasible (run the code, hit the endpoint, verify the result).
 
-**End-of-turn report.** Builder's report is the primary artifact Director uses to decide commit-or-iterate. Director shouldn't have to re-read every changed file to feel confident in the review — that defeats the delegation. Structure the report with these five sections (use them even when a section is empty; an explicit "none" is information):
+**Commit and push.** Builder commits per the one-logical-change-per-commit rule (§ Commits) and pushes to `origin/main`. No "stop at ready to push" — the topology change moved Director out of the diff-review loop, so Builder owns push directly. Drake's gates still apply (don't commit with failing tests, never commit secrets, hard stops at irreversible boundaries from the spec) — the loosening is specifically on Director's diff-review step, not on Drake's gates or on Builder's own commit hygiene.
 
-1. **Files touched.** Group by operation (created / modified / deleted). Repo-relative paths. One line per file with a one-clause description of what changed in it ("added handler for foo", "flipped pronoun on three lines", "pure rename"). Director uses this list to know where to spot-check if anything else feels off.
+**End-of-turn report.** After committing the code work, Builder writes a report to `docs/reports/<slug>.md` and commits + pushes that as a final commit (`docs: add report for <slug>` or similar). Structure the report with these six sections (use them even when a section is empty; an explicit "none" is information):
+
+1. **Files touched.** Group by operation (created / modified / deleted). Repo-relative paths. One line per file with a one-clause description of what changed in it ("added handler for foo", "flipped pronoun on three lines", "pure rename"). Drake uses this list to know where to spot-check if anything else feels off.
 2. **What I did, in plain English.** High-level summary at the "added X functionality to Y, refactored Z to use the shared helper" level. Not file contents, not diff hunks. The "why" behind the touched-files list. 3-7 sentences typically.
 3. **Verification.** What ran (tests by name or pattern, smoke scripts by what they exercised, manual checks like "curl'd the endpoint and got 200"), what passed, what failed. If a test is implied by the work but wasn't run, say so explicitly with a reason ("didn't run the full pytest suite because the change was docs-only"). If testing was constrained in a way that doesn't fully cover the change, flag the gap.
-4. **Surprises and judgment calls.** Anything the prompt didn't anticipate. Decisions made that Director might have made differently — name them, even when confident in the call. Risks noticed but not fixed. Errors worked around. Director uses this to decide whether to second-guess.
-5. **Out of scope / deferred.** What was explicitly NOT done that the prompt could be read as covering. What would come next if continuing. Anything noticed that should become a `docs/known-issues.md` or `docs/future-ideas.md` entry. An explicit "none" is fine if the prompt was tight and execution was clean.
-6. **Side effects.** Real-world actions taken during this run that aren't captured in the committed diff — Slack posts, emails, shared DB writes (beyond cleanup), external API calls, file creations outside the repo. Inventory explicitly even if "none" — that's information too. Working examples to surface: pytest runs that hit production Slack channels, smoke scripts that posted real messages to live surfaces, DB rows seeded that weren't deleted in cleanup, webhook fires that produced audit-ledger rows in shared tables. Surface these even when the prompt didn't ask, because Director cannot tell from the diff alone what hit a shared system.
+4. **Surprises and judgment calls.** Anything the spec didn't anticipate. Decisions made that Director might have specced differently — name them, even when confident in the call. Risks noticed but not fixed. Errors worked around. Drake uses this to decide whether to investigate.
+5. **Out of scope / deferred.** What was explicitly NOT done that the spec could be read as covering. What would come next if continuing. Anything noticed that should become a `docs/known-issues.md` or `docs/future-ideas.md` entry. An explicit "none" is fine if the spec was tight and execution was clean.
+6. **Side effects.** Real-world actions taken during this run that aren't captured in the committed diff — Slack posts, emails, shared DB writes (beyond cleanup), external API calls, file creations outside the repo. Inventory explicitly even if "none" — that's information too. Working examples to surface: pytest runs that hit production Slack channels, smoke scripts that posted real messages to live surfaces, DB rows seeded that weren't deleted in cleanup, webhook fires that produced audit-ledger rows in shared tables. Surface these even when the spec didn't ask, because Drake cannot tell from the diff alone what hit a shared system.
 
-The MCP server adds a cost/time/model footer automatically — don't repeat it. If something specific in the work was unusually expensive (e.g., "the test suite re-run ate ~half the runtime"), call it out in the relevant section above so Director can tie cost to outcome.
-
-Director treats the report as "what Builder intended to do," not "what Builder actually did" — Director verifies the touched-files list against the actual `git diff` before reporting work as done to Drake.
+If something in the work was unusually expensive (e.g., "the test suite re-run ate ~half the runtime"), call it out in the relevant section above.
 
 ### Director behavior
 
-Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push. Drake's gate is the deploy that follows, not the push itself.
+Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<slug>.md` (committed via GitHub MCP) and tell Drake the spec is ready. Drake hands the spec to Builder when ready to execute.
 
-**Run the iteration loop end-to-end before reporting to Drake.** When Builder's report shows the work isn't done — failed tests, missed spec items, surprises that need a follow-up turn — iterate via `--resume` without surfacing each cycle to Drake. Drake's check-in cadence is *batch boundaries* (work complete: spec satisfied, tests green, committed, pushed, side-effects inventoried) OR *genuine gate moments* (irreversible action, env vars, context-confusing decision per § Drake's gates). Mid-iteration Builder back-and-forth is Director's loop — strong leans on iteration choices (rerun the same prompt vs. send a tighter follow-up vs. give up and re-spec) are Director's call, not Drake's. The end-of-loop report to Drake includes everything: what shipped, what tests ran, what was committed, what side effects landed, what's deferred. If Director hits a wall (Builder keeps failing the same way, spec turns out to be wrong, real gate moment surfaces), surface to Drake mid-loop with the structured diagnostic — that's gate (b) territory, not a default break.
+Director does NOT review Builder's code work pre-push. The topology has Builder pushing on its own, and Director can't see new pushes automatically — Drake reads the report after Builder lands the work, and points Director at it if there's something to discuss. When Drake points at a report, read it critically — verify what Builder claims it did against the diff if Drake wants a second opinion, flag anything off. The review is real, just out-of-loop.
 
-**Director writes only docs, settings, hooks, and auto-memory — never project code.** Allowlist: markdown files (specs, runbooks, schema docs, CLAUDE.md, all of `docs/**`), settings.json files (project + user), hook scripts under `~/.claude/hooks/`, auto-memory files under `~/.claude/projects/.../memory/`. Everything else — Python, TypeScript, SQL migrations, scripts (including one-shots and smokes), `builder_server.py` and similar local-only project tooling, configs in the repo — goes to Builder. **No exceptions for "small," "borderline," "urgent," or "tooling-not-production."** Director's context window is the QA layer; every token spent writing code is a token not spent catching Builder errors and Drake's judgment errors. Drake has run multi-surface workflows (Claude.ai + Code) that maxed out and forced compact on both sides — that's the failure mode this rule prevents.
+**The push-without-review tradeoff.** The old topology had Director gate-keeping push by reviewing the diff. The new topology removes that gate because Director (chat) can't see new commits without Drake telling it to look. The remaining quality gates are: the spec itself (Director's upstream design check), Drake's four gates, Builder's own commit hygiene (no failing tests, no secrets, one logical change per commit), and Drake's out-of-loop report read. Spec quality becomes load-bearing — a sloppy spec executed blind by Builder and pushed without review can land bad code in `main`. Tighten specs accordingly.
 
-A PreToolUse hook (`~/.claude/hooks/check_director_writes.py`) enforces this mechanically by blocking `Write` and `Edit` calls whose `file_path` falls outside the allowlist. The hook fails open on errors so a bug there can't permanently wedge Director, but the default state is "code edits are blocked." If the hook ever fires, that's the signal to stop and delegate, not to find a workaround.
+**Director's own commits.** Director uses GitHub MCP to commit doc work — CLAUDE.md edits, new specs, runbook updates, ADRs, known-issues entries. These are Drake-present chat-driven changes (Drake reads the diff in chat as Director drafts), so the no-pre-push-review concern doesn't apply. Director does NOT use GitHub MCP to commit code or to commit Builder's reports — those are Builder's responsibility from the Code session.
 
-**Bundling escape valve.** If a task feels too small to justify a Builder cold-start spawn (~$0.15-0.20), bundle it with other related or sequential tasks into a single Builder prompt rather than writing it yourself. Caveats:
+**Bundling escape valve.** If a task feels too small to justify spinning up a fresh Builder session, bundle it with other related or sequential tasks into a single spec. Caveats:
 
 - *Independence rule* — only bundle related or sequential tasks. Bundling unrelated independent concerns muddles the diff, complicates review, and can leak cross-task design reasoning (Builder treats task A's fix as relevant to task B's design when it isn't).
-- *Soft cap of ~3-4 tasks per bundle* — past that, Builder's report becomes unwieldy and the diff hard to review file-by-file.
-- *Spec rule still applies per task* — bundling doesn't let you skip a spec for any task that warrants one. Each non-trivial task gets its own brief in the prompt or its own spec doc; the prompt becomes "implement task A per `docs/specs/foo.md`, then task B (small enough to inline)."
-- *Commit-splitting at review time* — per the "one logical change per commit" convention (§ Commits), Director may need to split Builder's bundled diff into multiple commits at review time. That's expected; bundling for delegation cost doesn't override commit hygiene.
-
-Director's role is the layer above Builder, not parallel to it. Plan, delegate, review, commit, push — the writing of project code stays with Builder.
-
-### Resume model
-
-Builder uses `--resume` by default; the session ID lives in `.claude/builder_session.txt` (gitignored, MCP-server-managed). Resumed sessions are cheap because Claude Code's prompt cache eats the CLAUDE.md re-ingestion. Cold sessions cost ~$0.15-0.20 per spawn because Builder re-reads CLAUDE.md from scratch.
-
-**Two triggers pay the cold-start tax**, not just one:
-
-1. **`reset_builder_session` was called.** Treat the reset as a real ~$0.15 cost on the next call, not free hygiene. Reset only when starting genuinely unrelated work where context-bleed from the prior task would actually matter.
-2. **Anthropic's prompt cache TTL (~5 minutes) expired between calls.** Even with `--resume` working perfectly, a Builder session that sat idle longer than ~5 minutes pays the cold-start tax on the next call. Not a bug — the prompt cache lives on Anthropic's API side and has a fixed TTL; `--resume` is Claude Code's session-state mechanism, separate from the cache. Cadence matters: tight back-to-back delegate calls stay cached and cheap; idle-then-resume reverts to cold pricing.
-
-Most session-to-session work in this repo is related enough that resume is the right default — but expect a $0.15 hit any time Director picks up a delegate thread after a meaningful pause.
-
-### API key
-
-Builder runs on Drake's Max subscription. The MCP server scrubs `ANTHROPIC_API_KEY` from the subprocess environment to enforce this — the variable may still be exported in the parent shell, which the server flags with a warning at startup. Drake's other Claude-using surfaces (`call_reviewer`, the Gregory brain's `ai_call_signal`, Ella's Slack handler) continue to use the API key — Builder is the exception, not the rule.
+- *Soft cap of ~3-4 tasks per bundle* — past that, the spec becomes unwieldy and the report hard to follow.
+- *Spec rule still applies per task* — bundling doesn't let you skip a spec for any task that warrants one. Each non-trivial task gets its own brief in the spec; the spec becomes "implement task A per § A, then task B per § B (small enough to inline)."
+- *Commit-splitting at execution time* — per the "one logical change per commit" convention (§ Commits), Builder splits the bundled work into multiple commits. Bundling for spec efficiency doesn't override commit hygiene.
 
 ### Drake's gates
 
-Director operates autonomously between four narrow gates. Drake handles:
+Builder operates autonomously between four narrow gates. Drake handles:
 
-- **(a) Irreversible actions.** Production deploys, anything destroying data, and the SQL review for cloud migrations (the apply + verify steps belong to Director — see § Gate trajectory below).
-- **(b) Genuinely context-confusing decisions.** When Director truly cannot determine the right outcome AND the call needs Drake's specific lived context (team dynamics, customer relationships, business strategy, scope/architectural choices with long-term implications). The bar is "Drake's judgment is the load-bearing input," not "I'm slightly uncertain."
+- **(a) Irreversible actions.** Production deploys, anything destroying data, and the SQL review for cloud migrations (the apply + verify steps belong to Builder — see § Gate trajectory below).
+- **(b) Genuinely context-confusing decisions.** When Builder truly cannot determine the right outcome AND the call needs Drake's specific lived context (team dynamics, customer relationships, business strategy, scope/architectural choices with long-term implications). The bar is "Drake's judgment is the load-bearing input," not "I'm slightly uncertain."
 - **(c) Post-deploy testing on real surfaces.** Slack delivery, Fathom webhook ingest, dashboard render — anything that requires eyeballing the live system.
 - **(d) Credentials and env vars.** Vercel env var changes, secret rotation, Bitwarden touches.
 
-Everything else is Director's call — including push (push is reversible via `git revert` / Vercel rollback, so it stays out of the gate set).
+Everything else is Builder's call — including push (push is reversible via `git revert` / Vercel rollback, so it stays out of the gate set).
 
-**Things Director should NOT stop for** (explicit non-examples to prevent gate creep — Director historically over-asks here):
+**Things Builder should NOT stop for** (explicit non-examples to prevent gate creep):
 
-- *Routine commits and pushes.* Push is reversible. Just commit and push, then report what landed in the end-of-turn summary. Don't ask "should I push now?"
-- *Bundling small Builder tasks.* If two small tasks fit the bundling rule (related/sequential, under the soft cap), just bundle them in a single Builder prompt. Don't ask permission to bundle.
-- *Choosing among options when one has a clear lean.* If Director has a strong lean and consequences are recoverable (commit can be reverted, deploy can be rolled back, doc edit can be re-edited), make the call and note it in the report. "A or B?" framing belongs on genuinely tough calls, not on routine moves where Drake will just say "yeah do A" anyway.
-- *Proceeding with already-authorized work.* If Drake said "implement the spec" or "do the bundled change," that's the green light. Don't pause mid-execution to confirm "should I keep going?" or "ready for me to commit?"
-- *Following up on a directive Drake just gave.* If Drake said "commit and push these and then delegate the next thing," do all of it; don't ask to confirm before each step.
+- *Routine commits and pushes.* Push is reversible. Just commit and push, then write the report. Don't ask "should I push now?"
+- *Bundling small tasks within a spec.* If the spec includes multiple related/sequential tasks, just execute them in sequence. Don't ask permission to proceed to the next.
+- *Choosing among options when one has a clear lean.* If Builder has a strong lean and consequences are recoverable (commit can be reverted, deploy can be rolled back, doc edit can be re-edited), make the call and note it in the Surprises section of the report.
+- *Following up on a directive Drake just gave.* If Drake said "execute this spec and the next one," do all of it; don't ask to confirm before each step.
 
 Gates exist for moments where Drake's specific judgment is genuinely load-bearing OR an action is irreversible. Gates do NOT exist as a politeness check before routine actions. When in doubt: if the worst case is "Drake reads the report and says 'undo X'," it wasn't a gate moment — just do the thing and report.
 
 ### Gate trajectory — what's temporary vs permanent
 
-Today's gate set is its near-final shape. The two infrastructure pain points that previously forced human handling (Supabase CLI routing bug, Vercel build-cache contamination) are both resolved post-Phase-3/3b. The credentials gate stays as a Drake-by-preference choice, revisitable. Everything else is either permanent by design or already in Director's lane.
+Today's gate set is its near-final shape. The two infrastructure pain points that previously forced human handling (Supabase CLI routing bug, Vercel build-cache contamination) are both resolved post-Phase-3/3b. The credentials gate stays as a Drake-by-preference choice, revisitable. Everything else is either permanent by design or already in Builder's lane.
 
-**No temporary infrastructure-blocked gates today.** Migrations operational layer (apply + dual-verify) moved to Director post-Phase-3 (2026-05-08); Deploys retired entirely as a gate post-Phase-3b (validated 2026-05-08) — git-push being Director-gated implies deploys are too, by side effect via the GitHub integration's auto-deploy trigger. See § Operational patterns above and `docs/known-issues.md` for recovery procedures if either issue recurs.
+**No temporary infrastructure-blocked gates today.** Migrations operational layer (apply + dual-verify) moved to Builder post-Phase-3 (2026-05-08); Deploys retired entirely as a gate post-Phase-3b (validated 2026-05-08) — git-push being Builder-driven implies deploys are too, by side effect via the GitHub integration's auto-deploy trigger. See § Operational patterns above and `docs/known-issues.md` for recovery procedures if either issue recurs.
 
 **Drake-gated by current preference (revisitable):**
 
-- **(d) Credentials and env vars.** Drake handles these for now; not infrastructure-blocked. Drake is open to revisiting later as the system proves itself, but no concrete trigger is set today. A future Director should not assume this gate dissolves on any specific schedule — it dissolves when Drake explicitly says so.
+- **(d) Credentials and env vars.** Drake handles these for now; not infrastructure-blocked. Drake is open to revisiting later as the system proves itself, but no concrete trigger is set today. A future Director / Builder should not assume this gate dissolves on any specific schedule — it dissolves when Drake explicitly says so.
 
 **Permanent by design (will not narrow regardless of infrastructure improvements):**
 
 - **Destroying-data subset of (a).** Data loss is irreversible at the operational level; a human gate stays forever.
-- **Migrations — SQL-review portion of (a).** Drake reviews the SQL diff before apply; that judgment gate is permanent. The operational layer (apply + dual-verify) sits with Director — via `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` today, possibly via `scripts/apply_migration.py` later (see `docs/future-ideas.md`). Was Drake-gated end-to-end during the CLI-broken era (2026-04-28 to 2026-05-08) when migrations went through Studio + manual ledger; Phase 3 discovery (2026-05-08) moved apply + verify to Director once the CLI was confirmed correct. The operational mechanism may shift further; the SQL-review gate stays. See `docs/runbooks/apply_migrations.md` § Gate model for operational details.
-- **(b) Result-uncertainty.** Director should always surface uncertain decisions to Drake. Confidence calibration is the human's job; Director's job is to recognize when it's outside its envelope.
-- **(c) Post-deploy testing on real surfaces.** Eyeballing live Slack / Fathom / dashboard behavior is a human-judgment task no headless agent should claim done. With deploys now retired as a gate (Director triggers via push), Drake's role on deploys reduces to this (c) post-deploy verification — which stays permanent regardless.
+- **Migrations — SQL-review portion of (a).** Drake reviews the SQL diff before apply; that judgment gate is permanent. The operational layer (apply + dual-verify) sits with Builder — via `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` today, possibly via `scripts/apply_migration.py` later (see `docs/future-ideas.md`). Was Drake-gated end-to-end during the CLI-broken era (2026-04-28 to 2026-05-08) when migrations went through Studio + manual ledger; Phase 3 discovery (2026-05-08) moved apply + verify to Builder once the CLI was confirmed correct. The operational mechanism may shift further; the SQL-review gate stays. See `docs/runbooks/apply_migrations.md` § Gate model for operational details.
+- **(b) Result-uncertainty.** Builder should always surface uncertain decisions to Drake. Confidence calibration is the human's job; Builder's job is to recognize when it's outside its envelope.
+- **(c) Post-deploy testing on real surfaces.** Eyeballing live Slack / Fathom / dashboard behavior is a human-judgment task no agent should claim done. With deploys retired as a gate (Builder triggers via push), Drake's role on deploys reduces to this (c) post-deploy verification — which stays permanent regardless.
 
-The pattern: gates (b), (c), the data-loss subset of (a), and the SQL-review portion of migrations stay forever. The credentials gate (d) narrows when Drake explicitly relaxes it. Migrations operational layer narrowed post-Phase-3 (Drake-handled → Director-handled); deploys retired entirely as a gate post-Phase-3b (validated 2026-05-08).
+The pattern: gates (b), (c), the data-loss subset of (a), and the SQL-review portion of migrations stay forever. The credentials gate (d) narrows when Drake explicitly relaxes it.
 
 ## Language Policy
 
@@ -263,7 +273,9 @@ ai-enablement/
 │   ├── architecture.md         # System overview, data flow, component map
 │   ├── collaboration.md        # How Drake and Zain divide work
 │   ├── future-ideas.md         # Gregory V2 batches A–E (active focus)
-│   ├── known-issues.md            # Gregory real bugs / ops reminders
+│   ├── known-issues.md         # Real bugs / ops reminders
+│   ├── specs/                  # Director-written specs Builder executes
+│   ├── reports/                # Builder-written reports after execution
 │   ├── schema/                 # One markdown file per database table
 │   ├── agents/
 │   │   ├── gregory.md          # Gregory full spec + build log (active)
@@ -283,14 +295,6 @@ ai-enablement/
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
 │   └── crm/                    # (planned)
 ├── api/                        # Vercel Python serverless functions (8 deployed)
-│   ├── slack_events.py         # Ella's Slack handler
-│   ├── fathom_events.py        # Fathom realtime webhook
-│   ├── fathom_backfill.py      # Daily cron — Fathom backlog backstop
-│   ├── gregory_brain_cron.py   # Weekly cron — Gregory brain sweep
-│   ├── airtable_nps_webhook.py # Path 1 inbound: Airtable NPS receiver (M5.4)
-│   ├── accountability_roster.py # Path 2 outbound: Make.com daily-pull GET (M5.7+)
-│   ├── airtable_onboarding_webhook.py # Path 3 inbound: onboarding form receiver (M5.9)
-│   └── accountability_notification_cron.py # Daily 7am EST per-CSM accountability alert (M6.1, Batch A)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
 ├── components/                 # Dashboard UI — top-nav, ui/* primitives, client-detail/*
 ├── lib/                        # Dashboard utilities — db/, supabase/, etc.
@@ -344,9 +348,9 @@ Documentation is not optional and not written "later." It ships alongside the co
 - **Never commit with failing tests.** Run `pytest tests/` first.
 - Never commit secrets. Run `git diff` before every commit to scan for keys.
 
-**Commit policy:** At the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored), Director commits with a clear message following the convention. Don't commit half-finished work. Don't commit if tests/validation fail.
+**Commit policy.** Builder commits at the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored) with a clear message following the convention. Don't commit half-finished work. Don't commit if tests/validation fail. Director commits doc work (CLAUDE.md, specs, runbooks, ADRs) via GitHub MCP as Drake confirms changes in chat.
 
-**Push policy:** Push is a Director gate, not a Drake gate. Builder stops at "ready to push" after each logical chunk; Director reviews the diff and decides commit + push or iterate. Drake's push-related gate is the deploy that follows — verifying the deploy landed cleanly on real surfaces, not the push itself. Push is reversible (git revert, Vercel rollback) and stays out of Drake's runtime gate set.
+**Push policy.** Builder pushes its own code commits and report commits. Director does not gate push — push is reversible (`git revert`, Vercel rollback) and stays out of the gate set. Drake's push-related role is post-deploy verification on real surfaces (gate (c)), not pre-push review.
 
 ### Client Identity Resolution (alternate emails / alternate names)
 
@@ -436,9 +440,7 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-0. **🔍 ONE-TIME GATE — verify the 2026-05-08 09:00 UTC daily cron fired correctly.** Before any planned work. Run the verification query in `docs/known-issues.md` § "NEXT SESSION FIRST ACTION — verify daily cron fired" and follow the three-outcome decision tree. Remove that followups entry AND this priority bullet once the verification has run, regardless of outcome — this is a one-time gate added at session-close 2026-05-07, not a recurring routine.
-
-1. **Meeting tracking — bridge into Task Management.** Primary planned work for next session. Per-client + per-CSM cadence visibility. Late flag when a CSM hasn't had a 1:1 with a client in their expected cadence. Week-2 flag if no meeting in two weeks. End-of-week report to Scott + Nabeel summarizing the cohort. Ships without Fathom org admin (accepts some Fathom data will be missed). Real scoping conversation needed at session-start before any prompt — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
+1. **Meeting tracking — bridge into Task Management.** Primary planned work for next session. Per-client + per-CSM cadence visibility. Late flag when a CSM hasn't had a 1:1 with a client in their expected cadence. Week-2 flag if no meeting in two weeks. End-of-week report to Scott + Nabeel summarizing the cohort. Ships without Fathom org admin (accepts some Fathom data will be missed). Real scoping conversation needed at session-start before any spec — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
 
 2. **Batch A — CSM accountability visibility (remaining: call-tagging dashboard).** Per-call CS summary + daily accountability notification shipped M6.1 (2026-05-05); cron auth consolidated to single `CRON_SECRET` M6.2 (2026-05-06); missed-call detection rolled into Item 1's meeting tracking work. Remaining: call-tagging dashboard (gated on CSM ops adoption of a tagging convention). See `docs/future-ideas.md` § Batch A.
 
