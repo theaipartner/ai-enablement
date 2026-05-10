@@ -13,13 +13,13 @@ Run `timeout 5 git pull origin main 2>&1 | tail -5` from the repo root via the B
 
 An "executable spec" is a file under `docs/specs/<slug>.md` where:
 
-- Line 3 of the file matches `**Status:** in-flight` exactly (per CLAUDE.md § Spec and report convention).
+- One of the first ~5 lines matches `**Status:** in-flight` exactly (per CLAUDE.md § Spec and report convention). Actual specs put a blank line between the `# Title` and the `**Slug:**` / `**Status:**` block, so don't assume a fixed line number — scan.
 - No matching `docs/reports/<slug>.md` file exists. Slug = filename minus `.md`.
 
 For each `.md` file under `docs/specs/`:
 
-- Read just the first 3 lines.
-- If line 3 doesn't match `**Status:** ...`, flag the file as `(unparseable status — skipping)` and exclude it from the executable set. Don't fail the whole command on one bad file.
+- Read the first ~5 lines.
+- If none of them match `**Status:** ...`, flag the file as `(unparseable status — skipping)` and exclude it from the executable set. Don't fail the whole command on one bad file.
 - If status is `shipped` or `superseded`, skip silently.
 - If status is `in-flight` AND `docs/reports/<slug>.md` exists, skip silently (already reported).
 - If status is `in-flight` AND no matching report exists, it's executable.
