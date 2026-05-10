@@ -138,6 +138,7 @@ def build_system_prompt(
     thread_history: list[dict[str, Any]] | None = None,
     *,
     speaker: "SpeakerIdentity | None" = None,
+    recent_channel_context: str | None = None,
 ) -> str:
     """Assemble the full system prompt for one Ella turn.
 
@@ -160,8 +161,21 @@ def build_system_prompt(
         _render_speaker_section(client, speaker),
         _render_client_section(client),
         _render_context_section(retrieved_chunks, thread_history),
+        _render_recent_channel_context_section(recent_channel_context),
     ]
     return "\n\n".join(s for s in sections if s)
+
+
+def _render_recent_channel_context_section(text: str | None) -> str:
+    """Render the last N channel turns block (Task 5 of Batch 1.5).
+
+    `text` is a pre-formatted multi-line string from
+    `agents.ella.retrieval.fetch_recent_channel_context`. We just wrap
+    it with a header so Ella knows what she's looking at.
+    """
+    if not text:
+        return ""
+    return "# RECENT CHANNEL CONTEXT (last 15 turns in this channel, oldest first)\n\n" + text
 
 
 def _render_speaker_section(

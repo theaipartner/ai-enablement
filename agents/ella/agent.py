@@ -27,7 +27,11 @@ from typing import Any
 from agents.ella.escalation import escalate
 from agents.ella.identity import SpeakerIdentity, resolve_speaker_identity
 from agents.ella.prompts import build_system_prompt
-from agents.ella.retrieval import ContextBundle, retrieve_context_for_client
+from agents.ella.retrieval import (
+    ContextBundle,
+    fetch_recent_channel_context,
+    retrieve_context_for_client,
+)
 from shared.claude_client import complete
 from shared.db import get_client
 from shared.logging import end_agent_run, logger, start_agent_run
@@ -97,7 +101,13 @@ def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> E
     client_for_prompt = dict(channel_client)
     client_for_prompt["primary_csm"] = context.primary_csm
 
-    system_prompt = build_system_prompt(client_for_prompt, context.chunks, speaker=speaker)
+    recent_channel_context = _fetch_recent_context_for_event(event_data)
+    system_prompt = build_system_prompt(
+        client_for_prompt,
+        context.chunks,
+        speaker=speaker,
+        recent_channel_context=recent_channel_context,
+    )
     response_text, confidence = _call_claude(
         system_prompt, query_text, context, run_id=run_id
     )
@@ -220,6 +230,16 @@ def _detect_and_strip_escalation(response_text: str) -> tuple[str, str | None]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _fetch_recent_context_for_event(event_data: dict[str, Any]) -> str:
+    """Thin wrapper around `fetch_recent_channel_context` so the agent's
+    test seam is stable when we tune N or the budget."""
+    channel = event_data.get("channel")
+    trigger_ts = event_data.get("ts") or event_data.get("event_ts")
+    if not channel or not trigger_ts:
+        return ""
+    return fetch_recent_channel_context(channel, before_ts=trigger_ts)
 
 
 def _resolve_channel_client(slack_channel_id: str | None) -> dict[str, Any] | None:

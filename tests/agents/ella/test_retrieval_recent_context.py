@@ -1,0 +1,149 @@
+"""Tests for `agents.ella.retrieval.fetch_recent_channel_context` (Task 5)."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from agents.ella import retrieval
+
+
+class _FakeQuery:
+    def __init__(self, parent, table):
+        self.parent = parent
+        self.table = table
+
+    def select(self, _cols):
+        return self
+
+    def eq(self, _col, _val):
+        return self
+
+    def is_(self, _col, _val):
+        return self
+
+    def lt(self, _col, _val):
+        return self
+
+    def in_(self, _col, _vals):
+        return self
+
+    def order(self, _col, **_kwargs):
+        return self
+
+    def limit(self, _n):
+        return self
+
+    def execute(self):
+        rows = self.parent.responses.get(self.table, [])
+        return SimpleNamespace(data=rows)
+
+
+class _FakeDB:
+    def __init__(self, responses):
+        self.responses = responses
+
+    def table(self, name):
+        return _FakeQuery(self, name)
+
+
+def _patch_db(mocker, responses):
+    mocker.patch("agents.ella.retrieval.get_client", return_value=_FakeDB(responses))
+
+
+def test_fetch_recent_returns_empty_string_when_no_args():
+    assert retrieval.fetch_recent_channel_context("", before_ts="1.0") == ""
+    assert retrieval.fetch_recent_channel_context("C1", before_ts="") == ""
+
+
+def test_fetch_recent_returns_empty_when_no_messages(mocker):
+    _patch_db(mocker, {"slack_messages": [], "clients": [], "team_members": []})
+    assert retrieval.fetch_recent_channel_context("C1", before_ts="1.0") == ""
+
+
+def test_fetch_recent_renders_lines_oldest_first(mocker):
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": [
+                # Returned desc → script reverses to oldest-first.
+                {
+                    "slack_ts": "100.2",
+                    "slack_user_id": "U2",
+                    "author_type": "ella",
+                    "text": "second message",
+                    "sent_at": "2026-05-08T14:24:00+00:00",
+                },
+                {
+                    "slack_ts": "100.1",
+                    "slack_user_id": "U1",
+                    "author_type": "team_member",
+                    "text": "first message",
+                    "sent_at": "2026-05-08T14:23:00+00:00",
+                },
+            ],
+            "clients": [],
+            "team_members": [
+                {"slack_user_id": "U1", "full_name": "Drake"},
+                {"slack_user_id": "U2", "full_name": "Ella"},
+            ],
+        },
+    )
+
+    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
+    # Oldest first
+    lines = out.split("\n")
+    assert len(lines) == 2
+    assert lines[0] == "[14:23] team_member Drake: first message"
+    assert lines[1] == "[14:24] ella Ella: second message"
+
+
+def test_fetch_recent_renders_unknown_users_with_raw_id(mocker):
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": [
+                {
+                    "slack_ts": "100.1",
+                    "slack_user_id": "U_UNKNOWN",
+                    "author_type": "bot",
+                    "text": "hi",
+                    "sent_at": "2026-05-08T14:23:00+00:00",
+                },
+            ],
+            "clients": [],
+            "team_members": [],
+        },
+    )
+
+    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
+    assert out == "[14:23] bot U_UNKNOWN: hi"
+
+
+def test_fetch_recent_truncates_at_max_chars(mocker):
+    """When the assembled context exceeds the cap, drop the oldest lines
+    and prepend a truncation marker."""
+    long_text = "x" * 200
+    rows = [
+        {
+            "slack_ts": f"100.{i}",
+            "slack_user_id": "U1",
+            "author_type": "team_member",
+            "text": long_text,
+            "sent_at": f"2026-05-08T14:{i:02d}:00+00:00",
+        }
+        for i in range(15)
+    ]
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": rows,
+            "team_members": [{"slack_user_id": "U1", "full_name": "Drake"}],
+            "clients": [],
+        },
+    )
+
+    # max_chars=500 will fit ~2 lines.
+    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0", max_chars=500)
+    assert out.startswith("[...earlier messages truncated...]")
+    # At least one full message line preserved.
+    assert "Drake: " in out

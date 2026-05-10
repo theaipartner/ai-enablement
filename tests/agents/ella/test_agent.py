@@ -80,6 +80,10 @@ def _patch_common(
             chunks=[], client=dict(_CLIENT), primary_csm=dict(_PRIMARY_CSM)
         ),
     )
+    mocker.patch(
+        "agents.ella.agent._fetch_recent_context_for_event",
+        return_value="",
+    )
     build_prompt = mocker.patch(
         "agents.ella.agent.build_system_prompt",
         return_value="[stub prompt]",
@@ -148,6 +152,21 @@ def test_respond_to_mention_direct_answer_returns_text(mocker):
     # Retrieval is scoped to the CHANNEL's client id (not the speaker's).
     spies.retrieve.assert_called_once_with("c-1", "<@UBOT> how do I start with cold calling?")
     spies.escalate.assert_not_called()
+
+
+def test_respond_to_mention_plumbs_recent_channel_context_into_prompt(mocker):
+    """Task 5: recent-channel-context string reaches build_system_prompt."""
+    spies = _patch_common(mocker)
+    mocker.patch(
+        "agents.ella.agent._fetch_recent_context_for_event",
+        return_value="[14:23] team_member Drake: prior turn\n[14:24] ella Ella: prior reply",
+    )
+
+    agent.respond_to_mention(_event())
+
+    build_kwargs = spies.build_prompt.call_args.kwargs
+    assert "prior turn" in build_kwargs["recent_channel_context"]
+    assert "prior reply" in build_kwargs["recent_channel_context"]
 
 
 def test_respond_to_mention_advisor_speaker_real_author_in_metadata(mocker):

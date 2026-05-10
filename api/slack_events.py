@@ -263,17 +263,21 @@ def _process_mention(payload: dict[str, Any]) -> None:
         return
 
     channel = result.get("channel_id")
-    thread_ts = result.get("thread_ts")
     text = result["text"]
 
     try:
-        _post_to_slack(channel=channel, text=text, thread_ts=thread_ts)
+        _post_to_slack(channel=channel, text=text)
     except Exception as exc:
         logger.exception("slack_webhook: chat.postMessage raised: %s", exc)
 
 
-def _post_to_slack(*, channel: str, text: str, thread_ts: str | None) -> None:
+def _post_to_slack(*, channel: str, text: str) -> None:
     """POST Ella's reply to Slack via chat.postMessage.
+
+    Batch 1.5: always posts to the main channel. V1 threaded the
+    response under the triggering message — Drake's V2 direction is
+    main-channel-only so the new last-N-turns context window (Task 5)
+    serves as the conversational thread.
 
     Two-token strategy (M1.4):
       1. If `SLACK_USER_TOKEN` is set, post via the user token (`xoxp-`).
@@ -292,8 +296,6 @@ def _post_to_slack(*, channel: str, text: str, thread_ts: str | None) -> None:
     Tokens and request bodies are NEVER logged.
     """
     body: dict[str, Any] = {"channel": channel, "text": text}
-    if thread_ts:
-        body["thread_ts"] = thread_ts
 
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if user_token:
@@ -301,9 +303,8 @@ def _post_to_slack(*, channel: str, text: str, thread_ts: str | None) -> None:
             ok, slack_error = _call_chat_post_message(user_token, body)
             if ok:
                 logger.info(
-                    "slack.postMessage ok via user-token: channel=%s thread_ts=%s",
+                    "slack.postMessage ok via user-token: channel=%s",
                     channel,
-                    thread_ts,
                 )
                 return
             logger.warning(
@@ -333,9 +334,8 @@ def _post_to_slack(*, channel: str, text: str, thread_ts: str | None) -> None:
         ok, slack_error = _call_chat_post_message(bot_token, body)
         if ok:
             logger.info(
-                "slack.postMessage ok via bot-token: channel=%s thread_ts=%s",
+                "slack.postMessage ok via bot-token: channel=%s",
                 channel,
-                thread_ts,
             )
         else:
             # Bot path also failed at the Slack-app layer. Log loudly

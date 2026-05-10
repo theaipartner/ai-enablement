@@ -81,7 +81,7 @@ def test_user_token_success_does_not_fall_back(monkeypatch):
         return _slack_ok_response({"ok": True, "ts": "1234.5678"})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts="111.222")
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST"], (
         "Expected exactly one Slack call with the user token; "
@@ -114,7 +114,7 @@ def test_user_token_http_4xx_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True, "ts": "1234.5678"})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"], (
         f"Expected user attempt then bot fallback; got {seen_tokens}"
@@ -139,7 +139,7 @@ def test_user_token_http_5xx_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"]
 
@@ -168,7 +168,7 @@ def test_user_token_ok_false_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"]
 
@@ -191,7 +191,7 @@ def test_user_token_not_in_channel_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"]
 
@@ -216,7 +216,7 @@ def test_user_token_network_timeout_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"]
 
@@ -243,7 +243,7 @@ def test_user_token_json_decode_error_falls_back_to_bot(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxp-USER-TEST", "xoxb-BOT-TEST"]
 
@@ -267,7 +267,7 @@ def test_no_user_token_uses_bot_directly(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxb-BOT-TEST"], (
         "When SLACK_USER_TOKEN is unset, _post_to_slack must call "
@@ -289,7 +289,7 @@ def test_empty_user_token_treated_as_unset(monkeypatch):
         return _slack_ok_response({"ok": True})
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert seen_tokens == ["xoxb-BOT-TEST"]
 
@@ -313,7 +313,7 @@ def test_both_paths_fail_raises_for_caller_to_log(monkeypatch):
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
         with pytest.raises(urllib.error.URLError):
-            se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+            se._post_to_slack(channel="C1", text="hi")
 
 
 def test_both_paths_ok_false_logs_but_does_not_raise(monkeypatch, caplog):
@@ -334,7 +334,7 @@ def test_both_paths_ok_false_logs_but_does_not_raise(monkeypatch, caplog):
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
         # No exception expected
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
     assert call_count["n"] == 2, "Both paths should be tried"
 
@@ -357,7 +357,7 @@ def test_bot_token_unset_when_user_token_succeeds_does_not_break(monkeypatch):
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
         # Should not raise even though SLACK_BOT_TOKEN is unset.
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
 
 def test_no_token_raises_runtime_error(monkeypatch):
@@ -368,7 +368,7 @@ def test_no_token_raises_runtime_error(monkeypatch):
     monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
 
     with pytest.raises(RuntimeError, match="SLACK_BOT_TOKEN not set"):
-        se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+        se._post_to_slack(channel="C1", text="hi")
 
 
 def test_token_never_appears_in_log_output(monkeypatch, caplog):
@@ -389,7 +389,7 @@ def test_token_never_appears_in_log_output(monkeypatch, caplog):
 
     with patch("shared.slack_post.urllib.request.urlopen", side_effect=fake_urlopen):
         with caplog.at_level(logging.DEBUG):
-            se._post_to_slack(channel="C1", text="hi", thread_ts=None)
+            se._post_to_slack(channel="C1", text="hi")
 
     log_text = caplog.text
     assert "DO-NOT-LEAK-USER" not in log_text, "User token leaked into log output!"
