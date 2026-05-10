@@ -128,9 +128,28 @@ debugging "did we ingest user X's message?" without joining tables.
 
 The bot's user_id isn't in the channel's member list. Run
 `scripts/invite_ella_and_bot_to_client_channels.py --apply` to invite
-the bot (and Ella) to every client-mapped channel. Backfill hard-stops
-on this case so the operator notices rather than silently skipping
-channels.
+the bot (and Ella) to every client-mapped channel. Backfill logs each
+`bot_not_in_channel` channel as `[SKIPPED]`, continues to the next
+channel, and prints a per-error-type count in the end-of-run summary
+(e.g. `Errors: 129 (bot_not_in_channel: 129)`). The run exits 0 if
+the only errors are `bot_not_in_channel` — they're a known operational
+state, not a failure. Other per-channel errors (network, auth,
+rate-limit) still exit 1.
+
+### Symptom: a client has multiple Slack channels and only one backfills
+
+`scripts/backfill_slack_client_channels.py --channel-id <X>` filters
+the `slack_channels` lookup by channel id, but the underlying
+`run_ingest` pipeline takes `client_full_names` and resolves them via
+`_resolve_client_target`, which picks the FIRST channel returned by
+`select * from slack_channels where client_id = <id>`. So if client X
+has two channels mapped, passing `--channel-id` for either of them
+ingests whichever channel `_resolve_client_target` happens to pick —
+not the one you asked for. Workaround: call `run_ingest` directly with
+`extra_channel_names=[<slack-channel-name-without-#>]`, which goes
+through `_resolve_channel_name_target` (Slack API lookup) and ingests
+the specific channel. See `docs/reports/ella-v2-batch-1-finish-rollout.md`
+for a working example.
 
 ### Symptom: edits aren't refreshing the row
 
