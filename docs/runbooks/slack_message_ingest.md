@@ -106,6 +106,7 @@ debugging "did we ingest user X's message?" without joining tables.
 
 ### Symptom: a message I sent isn't in `slack_messages`
 
+0. **First check (private channels).** If you're testing in a private channel (🔒) and no row appears in `webhook_deliveries`: verify both `message.channels` AND `message.groups` event subscriptions exist on the Slack app, and that `channels:history` AND `groups:history` scopes are granted on the bot token. Missing `message.groups` is a silent failure mode — Slack accepts the subscription save without complaint, the URL stays verified, but no events fire for private channels. This was the 2026-05-10 root cause for "live ingestion not operational" — see `docs/known-issues.md` § ~~Ella V2 Batch 1 — realtime live ingestion not operational~~ for the full diagnostic signature.
 1. Check `webhook_deliveries WHERE source='slack_message_ingest'
    AND payload->>'slack_channel_id'='<channel_id>' AND processed_at >
    now() - interval '5 minutes'`. If no row exists, the event never
@@ -200,6 +201,8 @@ Event subscriptions to enable:
 
 - `app_mention` (existing)
 - `message.channels`, `message.groups` (NEW for V2 Batch 1)
+
+Both `message.channels` AND `message.groups` event subscriptions are required. Client channels are typically private (🔒), and `message.channels` only fires for public (`#`) channels; `message.groups` is what fires for private channels. Until both are subscribed, realtime ingestion appears completely broken for private channels — events simply never reach the handler. Bot scopes `channels:history` AND `groups:history` are both required to back these subscriptions. Caught the hard way 2026-05-10: backfill landed 3,641 rows cleanly while the realtime path was 0-rows for two days because only `message.channels` was subscribed; `message.groups` was added, app reinstalled, and the path lit up immediately.
 
 ## Future considerations (NOT in this batch)
 
