@@ -21,6 +21,7 @@ layer calls when Ella is @mentioned. The flow:
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,29 @@ from shared.logging import end_agent_run, logger, start_agent_run
 # to the handler.
 _ESCALATION_MARKER = "[ESCALATE]"
 
+# Bare-mention threshold. After mention-stripping, anything shorter
+# than this (in trimmed chars) is treated as a bare @-mention — we
+# skip the LLM call and return a canned warm opener. The threshold
+# is liberal: "@Ella hi" (2 chars after strip) and "@Ella" (0 chars)
+# both go through this path; "@Ella how" (3 chars) does too;
+# "@Ella what's up" (8 chars) doesn't and gets a full response.
+_BARE_MENTION_MAX_CHARS = 5
+
+# Warm openers used when Ella is @-mentioned with no substantive
+# follow-up. Kept varied so the response doesn't feel scripted.
+_BARE_OPENERS_WITH_NAME = (
+    "Hey {name} — what's up?",
+    "Hi {name}, what can I help with?",
+    "Hey {name}, what do you need?",
+    "Hi {name} — fire away.",
+)
+_BARE_OPENERS_NO_NAME = (
+    "Hey — what's up?",
+    "Hi, what can I help with?",
+    "What do you need?",
+    "Fire away.",
+)
+
 
 @dataclass(frozen=True)
 class EllaResponse:
@@ -60,11 +84,20 @@ class EllaResponse:
 def respond_to_mention(event_data: dict[str, Any]) -> EllaResponse:
     """Handle one Slack @mention. See module docstring."""
     speaker = resolve_speaker_identity(event_data.get("user"))
+    stripped_text = (event_data.get("text") or "").strip()
+
+    # Task 6 of Batch 1.5: bare @-mentions skip the LLM and return a
+    # canned warm opener. Passing an empty user message to the LLM was
+    # an error path in V1 (audit run 88556dea raised
+    # `messages.0: user messages must have non-empty content`).
+    if len(stripped_text) < _BARE_MENTION_MAX_CHARS:
+        return _handle_bare_mention(event_data, speaker, stripped_text)
+
     run_id = start_agent_run(
         agent_name="ella",
         trigger_type="slack_mention",
         trigger_metadata=_redact_event(event_data, speaker),
-        input_summary=(event_data.get("text") or "")[:200],
+        input_summary=stripped_text[:200],
     )
     try:
         return _run(event_data, speaker, run_id)
@@ -72,6 +105,53 @@ def respond_to_mention(event_data: dict[str, Any]) -> EllaResponse:
         logger.exception("ella.respond_to_mention failed: %s", exc)
         end_agent_run(run_id, status="error", error_message=str(exc))
         raise
+
+
+def _handle_bare_mention(
+    event_data: dict[str, Any],
+    speaker: SpeakerIdentity,
+    stripped_text: str,
+) -> EllaResponse:
+    """Return a canned warm response without an LLM call.
+
+    Logged as `agent_runs` with `trigger_type='bare_mention'` and
+    minimal token usage so the per-run telemetry stays clean and the
+    cost reporter sees these for free.
+    """
+    run_id = start_agent_run(
+        agent_name="ella",
+        trigger_type="bare_mention",
+        trigger_metadata=_redact_event(event_data, speaker),
+        input_summary=stripped_text[:200],
+    )
+    response = _pick_bare_response(speaker)
+    end_agent_run(
+        run_id,
+        status="success",
+        output_summary=response[:200],
+        confidence_score=1.0,
+    )
+    return EllaResponse(
+        response_text=response,
+        confidence=1.0,
+        escalated=False,
+        agent_run_id=run_id,
+    )
+
+
+def _pick_bare_response(speaker: SpeakerIdentity) -> str:
+    """Random warm opener — uses the speaker's first name when known,
+    falls back to no-name variants when role is unresolvable or the
+    display name is a placeholder (e.g., '(unverified)').
+    """
+    if (
+        speaker.role in ("client", "advisor")
+        and speaker.display_name
+        and not speaker.display_name.startswith("(")
+    ):
+        first_name = speaker.display_name.split()[0]
+        return random.choice(_BARE_OPENERS_WITH_NAME).format(name=first_name)
+    return random.choice(_BARE_OPENERS_NO_NAME)
 
 
 def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> EllaResponse:

@@ -271,6 +271,87 @@ def test_respond_to_mention_escalates_when_marker_mid_response(mocker):
 # ---------------------------------------------------------------------------
 
 
+def test_bare_mention_skips_llm_and_returns_canned_response(mocker):
+    """Task 6: stripped text <5 chars → no Claude call, canned warm opener."""
+    mocker.patch("agents.ella.agent.start_agent_run", return_value="run-bare")
+    end = mocker.patch("agents.ella.agent.end_agent_run")
+    mocker.patch(
+        "agents.ella.agent.resolve_speaker_identity",
+        return_value=SpeakerIdentity(
+            slack_user_id="U_DRAKE", display_name="Drake", role="advisor"
+        ),
+    )
+    retrieve = mocker.patch("agents.ella.agent._retrieve_context")
+    claude = mocker.patch("agents.ella.agent._call_claude")
+
+    event = _event(text="hi")  # event text becomes "<@UBOT> hi" → stripped → "<@UBOT> hi"
+    # Override directly so the stripped form is short.
+    event["text"] = "hi"
+    result = agent.respond_to_mention(event)
+
+    assert result.escalated is False
+    assert "Drake" in result.response_text or "Hi" in result.response_text or "Hey" in result.response_text
+    assert result.agent_run_id == "run-bare"
+
+    # No retrieval, no Claude call.
+    retrieve.assert_not_called()
+    claude.assert_not_called()
+
+    # agent_runs logged with trigger_type='bare_mention'.
+    end.assert_called_once()
+    assert end.call_args.kwargs["status"] == "success"
+
+
+def test_bare_mention_empty_text_uses_no_name_opener(mocker):
+    mocker.patch("agents.ella.agent.start_agent_run", return_value="run-bare")
+    mocker.patch("agents.ella.agent.end_agent_run")
+    mocker.patch(
+        "agents.ella.agent.resolve_speaker_identity",
+        return_value=SpeakerIdentity(
+            slack_user_id="U_X", display_name="(unverified)", role="unresolvable"
+        ),
+    )
+    claude = mocker.patch("agents.ella.agent._call_claude")
+
+    event = _event(text="")
+    event["text"] = ""
+    result = agent.respond_to_mention(event)
+
+    # No name in any of the no-name openers.
+    assert "unverified" not in result.response_text
+    assert "(" not in result.response_text
+    claude.assert_not_called()
+
+
+def test_bare_mention_records_trigger_type_bare_mention(mocker):
+    start = mocker.patch("agents.ella.agent.start_agent_run", return_value="run-bare")
+    mocker.patch("agents.ella.agent.end_agent_run")
+    mocker.patch(
+        "agents.ella.agent.resolve_speaker_identity",
+        return_value=SpeakerIdentity(
+            slack_user_id="U_DRAKE", display_name="Drake", role="advisor"
+        ),
+    )
+
+    event = _event(text="hi")
+    event["text"] = "hi"
+    agent.respond_to_mention(event)
+
+    start.assert_called_once()
+    assert start.call_args.kwargs["trigger_type"] == "bare_mention"
+
+
+def test_substantive_mention_uses_normal_path(mocker):
+    """Threshold is <5 chars; 5 chars goes through the LLM path."""
+    spies = _patch_common(mocker)
+    event = _event(text="<@UBOT> what's up there pal")
+
+    agent.respond_to_mention(event)
+
+    # Reached the LLM call, not the bare path.
+    spies.call_claude.assert_called_once()
+
+
 def test_respond_to_mention_skips_when_channel_has_no_client(mocker):
     """V2 design: gate on channel mapping (was: gate on speaker→client lookup)."""
     mocker.patch("agents.ella.agent.start_agent_run", return_value="run-abc")
