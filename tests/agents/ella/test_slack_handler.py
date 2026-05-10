@@ -1,17 +1,20 @@
-"""Wiring tests for `agents.ella.slack_handler`.
+"""Wiring tests for `agents.ella.slack_handler` (post-Batch-1.5).
 
-Mocks the database and the agent core so no Supabase / no Claude.
-Verifies the routing rules from the handler module docstring:
+Mocks the database, the speaker resolver, and the agent core so no
+Supabase / no Claude. Verifies the routing rules from the handler
+module docstring:
 
   - non-app_mention events are dropped
   - channels not mapped to a client are dropped
-  - unknown askers are dropped
-  - client askers pass through with the original event
-  - team-member askers get the event rewritten to the channel's
-    client and `is_team_test=True` stamped
+  - client / advisor / unresolvable speakers all pass through; the
+    real `user` field is preserved (Batch 1.5 fix — V1 rewrote it to
+    the channel-mapped client's slack_user_id and lost the real author)
+  - advisor (team_member) speakers get `is_team_test=True` stamped
+  - mention tokens are stripped from text before hand-off
 
-The agent core (`respond_to_mention`) is the seam we mock — we
-assert on what the handler hands it, since that's the contract.
+The agent core (`respond_to_mention`) and the identity resolver are
+the seams we mock — we assert on what the handler hands the agent,
+since that's the contract.
 """
 
 from __future__ import annotations
@@ -22,31 +25,26 @@ import pytest
 
 from agents.ella import slack_handler
 from agents.ella.agent import EllaResponse
+from agents.ella.identity import SpeakerIdentity
 
 
 # ---------------------------------------------------------------------------
-# Test doubles for the supabase client
+# Test doubles for the supabase client (slack_channels lookup only)
 # ---------------------------------------------------------------------------
 
 
 class _FakeQuery:
-    """Records the chain of `.select(...).eq(...).is_(...).execute()`
-    calls and returns whatever the parent FakeDB has queued up."""
-
     def __init__(self, parent: "_FakeDB", table: str):
         self.parent = parent
         self.table = table
-        self.filters: dict[str, object] = {}
 
     def select(self, _cols):
         return self
 
-    def eq(self, col, val):
-        self.filters[col] = val
+    def eq(self, _col, _val):
         return self
 
-    def is_(self, col, val):
-        self.filters[f"{col}__is"] = val
+    def is_(self, _col, _val):
         return self
 
     def execute(self):
@@ -68,8 +66,7 @@ def _patch_db(mocker, responses: dict[str, list[dict]]):
     return db
 
 
-def _patch_agent(mocker, *, escalated: bool = False) -> SimpleNamespace:
-    """Patch out `respond_to_mention` so it returns a known shape."""
+def _patch_agent(mocker, *, escalated: bool = False):
     response = EllaResponse(
         response_text="here's the answer",
         confidence=1.0,
@@ -82,6 +79,13 @@ def _patch_agent(mocker, *, escalated: bool = False) -> SimpleNamespace:
         "agents.ella.slack_handler.respond_to_mention", return_value=response
     )
     return mock
+
+
+def _patch_identity(mocker, identity: SpeakerIdentity):
+    return mocker.patch(
+        "agents.ella.slack_handler.resolve_speaker_identity",
+        return_value=identity,
+    )
 
 
 def _event_callback(
@@ -152,28 +156,8 @@ def test_handler_ignores_when_channel_row_missing(mocker):
     agent_mock.assert_not_called()
 
 
-def test_handler_ignores_unknown_asker(mocker):
-    agent_mock = _patch_agent(mocker)
-    _patch_db(
-        mocker,
-        {
-            "slack_channels": [
-                {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
-            ],
-            "team_members": [],
-            "clients": [],
-        },
-    )
-
-    result = slack_handler.handle_slack_event(_event_callback(user="U_RANDOM"))
-
-    assert result["responded"] is False
-    assert result["reason"] == "unknown_asker"
-    agent_mock.assert_not_called()
-
-
 # ---------------------------------------------------------------------------
-# Routing: client asker passes through unchanged
+# Routing: client / advisor / unresolvable speakers all pass through
 # ---------------------------------------------------------------------------
 
 
@@ -185,9 +169,16 @@ def test_handler_routes_client_mention_to_agent(mocker):
             "slack_channels": [
                 {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
             ],
-            "team_members": [],          # asker is not a team member
-            "clients": [{"id": "client-uuid-1"}],  # asker IS a client
         },
+    )
+    _patch_identity(
+        mocker,
+        SpeakerIdentity(
+            slack_user_id="U_CLIENT_1",
+            display_name="Javi Pena",
+            role="client",
+            client_id="client-uuid-1",
+        ),
     )
 
     result = slack_handler.handle_slack_event(
@@ -196,6 +187,7 @@ def test_handler_routes_client_mention_to_agent(mocker):
 
     agent_mock.assert_called_once()
     agent_event = agent_mock.call_args.args[0]
+    # Real user_id flows through unchanged — no impersonation.
     assert agent_event["user"] == "U_CLIENT_1"
     assert agent_event["text"] == "how do I cold call?"
     assert agent_event["channel"] == "C_CHAN_1"
@@ -219,9 +211,16 @@ def test_handler_uses_ts_when_thread_ts_absent(mocker):
             "slack_channels": [
                 {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
             ],
-            "team_members": [],
-            "clients": [{"id": "client-uuid-1"}],
         },
+    )
+    _patch_identity(
+        mocker,
+        SpeakerIdentity(
+            slack_user_id="U_CLIENT_1",
+            display_name="Javi Pena",
+            role="client",
+            client_id="client-uuid-1",
+        ),
     )
 
     payload = _event_callback(thread_ts=None, ts="1745000000.000999")
@@ -232,12 +231,8 @@ def test_handler_uses_ts_when_thread_ts_absent(mocker):
     assert agent_event["thread_ts"] == "1745000000.000999"
 
 
-# ---------------------------------------------------------------------------
-# Routing: team-member asker triggers test mode
-# ---------------------------------------------------------------------------
-
-
-def test_handler_team_member_rewrites_user_and_flags_test(mocker):
+def test_handler_advisor_passes_through_with_is_team_test(mocker):
+    """Batch 1.5: advisor's user_id flows through verbatim. V1 impersonation removed."""
     agent_mock = _patch_agent(mocker)
     _patch_db(
         mocker,
@@ -245,11 +240,16 @@ def test_handler_team_member_rewrites_user_and_flags_test(mocker):
             "slack_channels": [
                 {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
             ],
-            # asker IS a team member — checked first
-            "team_members": [{"id": "tm-uuid-drake"}],
-            # team-member branch then fetches the channel client's slack id
-            "clients": [{"slack_user_id": "U_CLIENT_1"}],
         },
+    )
+    _patch_identity(
+        mocker,
+        SpeakerIdentity(
+            slack_user_id="U_DRAKE",
+            display_name="Drake",
+            role="advisor",
+            team_member_id="tm-uuid-drake",
+        ),
     )
 
     result = slack_handler.handle_slack_event(
@@ -258,9 +258,8 @@ def test_handler_team_member_rewrites_user_and_flags_test(mocker):
 
     agent_mock.assert_called_once()
     agent_event = agent_mock.call_args.args[0]
-    # User rewritten to the channel's client's slack id so the
-    # agent's client resolution lands on that client.
-    assert agent_event["user"] == "U_CLIENT_1"
+    # Real user_id preserved — no rewrite to channel-mapped client.
+    assert agent_event["user"] == "U_DRAKE"
     assert agent_event["is_team_test"] is True
     assert agent_event["text"] == "testing"
 
@@ -268,7 +267,9 @@ def test_handler_team_member_rewrites_user_and_flags_test(mocker):
     assert result["is_team_test"] is True
 
 
-def test_handler_team_member_skips_when_channel_client_has_no_slack_id(mocker):
+def test_handler_unresolvable_speaker_still_responds(mocker):
+    """Unresolvable speakers no longer get dropped — the agent uses a
+    safer-fallback prompt path (Task 2). Handler just hands off."""
     agent_mock = _patch_agent(mocker)
     _patch_db(
         mocker,
@@ -276,16 +277,26 @@ def test_handler_team_member_skips_when_channel_client_has_no_slack_id(mocker):
             "slack_channels": [
                 {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
             ],
-            "team_members": [{"id": "tm-uuid-drake"}],
-            "clients": [{"slack_user_id": None}],  # client lacks slack_user_id
         },
     )
+    _patch_identity(
+        mocker,
+        SpeakerIdentity(
+            slack_user_id="U_RANDOM",
+            display_name="(unverified)",
+            role="unresolvable",
+        ),
+    )
 
-    result = slack_handler.handle_slack_event(_event_callback(user="U_DRAKE"))
+    result = slack_handler.handle_slack_event(_event_callback(user="U_RANDOM"))
 
-    assert result["responded"] is False
-    assert result["reason"] == "team_test_client_missing_slack_id"
-    agent_mock.assert_not_called()
+    agent_mock.assert_called_once()
+    agent_event = agent_mock.call_args.args[0]
+    assert agent_event["user"] == "U_RANDOM"
+    assert "is_team_test" not in agent_event
+
+    assert result["responded"] is True
+    assert result["is_team_test"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -320,9 +331,16 @@ def test_handler_accepts_bare_event_dict(mocker):
             "slack_channels": [
                 {"slack_channel_id": "C_CHAN_1", "client_id": "client-uuid-1"},
             ],
-            "team_members": [],
-            "clients": [{"id": "client-uuid-1"}],
         },
+    )
+    _patch_identity(
+        mocker,
+        SpeakerIdentity(
+            slack_user_id="U_CLIENT_1",
+            display_name="Javi Pena",
+            role="client",
+            client_id="client-uuid-1",
+        ),
     )
 
     bare = _event_callback()["event"]

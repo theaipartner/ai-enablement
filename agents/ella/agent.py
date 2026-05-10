@@ -3,35 +3,20 @@
 `respond_to_mention(event_data)` is the function the Slack interface
 layer calls when Ella is @mentioned. The flow:
 
-  1. Start an `agent_runs` row via `shared.logging.start_agent_run`.
-  2. Resolve the client from the Slack user id in the event.
-  3. Retrieve context via `agents.ella.retrieval`.
-  4. Build the system prompt via `agents.ella.prompts`.
-  5. Call Claude via `_call_claude` (real call into
-     `shared.claude_client.complete` — token costs land on the run).
-  6. Detect the [ESCALATE] marker at the start of the response. If
-     Ella signaled an escalation, the marker is stripped and
-     `escalate()` is called. Ella's own warm ack (now marker-free)
-     is preserved verbatim on the returned `EllaResponse` — the
-     system prompt trains her to write a short, warm message
-     (default cheerful / humble sparingly / emotional patterns).
-     A canned ack would flatten the emotional-escalation
-     distinction, which is the tone we care most about getting
-     right.
+  1. Start an `agent_runs` row via `shared.logging.start_agent_run`
+     with the real speaker's identity stamped into `trigger_metadata`
+     (Task 1 of Batch 1.5 — V1 collapsed the speaker into the
+     channel-mapped client; V2 keeps them distinct).
+  2. Resolve the speaker (real @-mention author) via
+     `agents.ella.identity` and the channel-mapped client (for
+     retrieval scoping) separately.
+  3. Retrieve context via `agents.ella.retrieval` using the channel-
+     mapped client's id.
+  4. Build the system prompt via `agents.ella.prompts` with both the
+     speaker and the channel-mapped client passed in.
+  5. Call Claude via `_call_claude`.
+  6. Detect the [ESCALATE] marker and route accordingly.
   7. End the agent_run with terminal status and return `EllaResponse`.
-
-Escalation is marker-based, not numeric. The system prompt instructs
-Ella to prefix every escalation response with the literal token
-[ESCALATE] on its own line; the detector checks for that token at the
-start of the response (after lstripping) and strips it before the
-text is returned to the handler or written to `escalations.context` —
-the client never sees the control token. This replaced a substring-
-matching approach that missed acks where Ella personalized by naming
-the advisor ("get Lou looped in") instead of using the literal phrase
-"your advisor," which is the behavior the system prompt rewards. The
-`confidence` field on `EllaResponse` is kept for telemetry continuity
-— 1.0 for direct answers, 0.0 for escalations — but is no longer the
-gate.
 """
 
 from __future__ import annotations
@@ -40,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agents.ella.escalation import escalate
+from agents.ella.identity import SpeakerIdentity, resolve_speaker_identity
 from agents.ella.prompts import build_system_prompt
 from agents.ella.retrieval import ContextBundle, retrieve_context_for_client
 from shared.claude_client import complete
@@ -69,28 +55,29 @@ class EllaResponse:
 
 def respond_to_mention(event_data: dict[str, Any]) -> EllaResponse:
     """Handle one Slack @mention. See module docstring."""
+    speaker = resolve_speaker_identity(event_data.get("user"))
     run_id = start_agent_run(
         agent_name="ella",
         trigger_type="slack_mention",
-        trigger_metadata=_redact_event(event_data),
+        trigger_metadata=_redact_event(event_data, speaker),
         input_summary=(event_data.get("text") or "")[:200],
     )
     try:
-        return _run(event_data, run_id)
+        return _run(event_data, speaker, run_id)
     except Exception as exc:
         logger.exception("ella.respond_to_mention failed: %s", exc)
         end_agent_run(run_id, status="error", error_message=str(exc))
         raise
 
 
-def _run(event_data: dict[str, Any], run_id: str) -> EllaResponse:
-    slack_user_id = event_data.get("user")
-    client = _resolve_client_from_slack_user(slack_user_id)
-    if client is None:
+def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> EllaResponse:
+    channel_id = event_data.get("channel")
+    channel_client = _resolve_channel_client(channel_id)
+    if channel_client is None:
         # Pilot channels should always have a resolvable client —
-        # `ella_enabled=true` is set per channel with a client_id.
-        # If we see one anyway, log and skip rather than crash.
-        reason = f"no_client_for_slack_user_id:{slack_user_id}"
+        # `slack_channels.client_id` is set per channel. If we see
+        # one anyway, log and skip rather than crash.
+        reason = f"no_client_for_channel:{channel_id}"
         logger.warning("Ella: %s", reason)
         end_agent_run(run_id, status="skipped", output_summary=reason)
         return EllaResponse(
@@ -101,16 +88,16 @@ def _run(event_data: dict[str, Any], run_id: str) -> EllaResponse:
         )
 
     query_text = event_data.get("text") or ""
-    context = _retrieve_context(client["id"], query_text)
+    context = _retrieve_context(channel_client["id"], query_text)
 
     # Stitch the primary CSM dict onto the client dict so prompts.py
     # has a single bag of profile data to render from. ContextBundle
     # stays the canonical retrieval shape; the prompt just needs the
     # flat view.
-    client_for_prompt = dict(client)
+    client_for_prompt = dict(channel_client)
     client_for_prompt["primary_csm"] = context.primary_csm
 
-    system_prompt = build_system_prompt(client_for_prompt, context.chunks)
+    system_prompt = build_system_prompt(client_for_prompt, context.chunks, speaker=speaker)
     response_text, confidence = _call_claude(
         system_prompt, query_text, context, run_id=run_id
     )
@@ -118,23 +105,18 @@ def _run(event_data: dict[str, Any], run_id: str) -> EllaResponse:
     if _is_escalation(response_text):
         # Strip the control token before anything downstream sees it —
         # the client doesn't need to see it, and neither does the CSM
-        # reviewing the escalations row. `proposed_action` is
-        # intentionally omitted; its contract is "what the agent
-        # wanted to do, for a reviewer to approve / reject / edit" —
-        # in V1 there's no approval UI and Ella's response has
-        # already been posted to the client by the time this row
-        # lands. The cleaned ack is on the row via
-        # `context.ella_response` for reference.
+        # reviewing the escalations row.
         client_text = _strip_escalation_marker(response_text)
         escalation_id = escalate(
             reason="ella_escalated",
             context={
                 "query_text": query_text,
                 "ella_response": client_text,
-                "client_id": client["id"],
-                "event": _redact_event(event_data),
+                "client_id": channel_client["id"],
+                "speaker": _speaker_to_dict(speaker),
+                "event": _redact_event(event_data, speaker),
             },
-            client_id=client["id"],
+            client_id=channel_client["id"],
             agent_run_id=run_id,
         )
         end_agent_run(
@@ -236,27 +218,66 @@ def _strip_escalation_marker(response_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_client_from_slack_user(slack_user_id: str | None) -> dict[str, Any] | None:
-    """Look up the active client row for this Slack user id."""
-    if not slack_user_id:
+def _resolve_channel_client(slack_channel_id: str | None) -> dict[str, Any] | None:
+    """Look up the active client mapped to this Slack channel.
+
+    Retrieval scope is the channel's client regardless of who's
+    speaking — Ella answers questions about THIS client's curriculum
+    + calls, even when a team_member is the one asking. The speaker
+    identity is resolved separately (see `agents.ella.identity`) for
+    prompt addressing.
+    """
+    if not slack_channel_id:
         return None
     db = get_client()
-    resp = (
+    chan = (
+        db.table("slack_channels")
+        .select("client_id")
+        .eq("slack_channel_id", slack_channel_id)
+        .execute()
+    )
+    rows = chan.data or []
+    if not rows or not rows[0].get("client_id"):
+        return None
+    client_id = rows[0]["client_id"]
+    client = (
         db.table("clients")
         .select("*")
-        .eq("slack_user_id", slack_user_id)
+        .eq("id", client_id)
         .is_("archived_at", "null")
         .execute()
     )
-    rows = resp.data or []
-    return rows[0] if rows else None
+    return client.data[0] if client.data else None
 
 
-def _redact_event(event_data: dict[str, Any]) -> dict[str, Any]:
+def _speaker_to_dict(speaker: SpeakerIdentity) -> dict[str, Any]:
+    return {
+        "slack_user_id": speaker.slack_user_id,
+        "display_name": speaker.display_name,
+        "role": speaker.role,
+        "client_id": speaker.client_id,
+        "team_member_id": speaker.team_member_id,
+    }
+
+
+def _redact_event(
+    event_data: dict[str, Any], speaker: SpeakerIdentity | None = None
+) -> dict[str, Any]:
     """Keep only fields useful for logging; drop Slack payload bulk.
 
     `is_team_test` is included when the Slack handler stamps it onto
     the event so we can later filter team-test runs out of client
-    interaction metrics."""
+    interaction metrics.
+
+    Batch 1.5: also adds `real_author_role`, `real_author_name`,
+    `real_author_id` so future analytics on `agent_runs.trigger_metadata`
+    can see the real @-mention author rather than the V1 impersonated
+    channel-client.
+    """
     keys = ("user", "channel", "ts", "thread_ts", "event_ts", "is_team_test")
-    return {k: event_data.get(k) for k in keys if event_data.get(k) is not None}
+    out: dict[str, Any] = {k: event_data.get(k) for k in keys if event_data.get(k) is not None}
+    if speaker is not None and speaker.slack_user_id:
+        out["real_author_role"] = speaker.role
+        out["real_author_name"] = speaker.display_name
+        out["real_author_id"] = speaker.client_id or speaker.team_member_id
+    return out

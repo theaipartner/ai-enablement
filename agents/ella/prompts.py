@@ -29,9 +29,12 @@ prompt module never has to know about ContextBundle.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from shared.kb_query import Chunk
+
+if TYPE_CHECKING:
+    from agents.ella.identity import SpeakerIdentity
 
 # Surface tags Ella is allowed to see in the client section. Anything
 # not on this list (internal-only flags, billing notes, etc.) is
@@ -131,6 +134,8 @@ def build_system_prompt(
     client: dict[str, Any],
     retrieved_chunks: list[Chunk],
     thread_history: list[dict[str, Any]] | None = None,
+    *,
+    speaker: "SpeakerIdentity | None" = None,
 ) -> str:
     """Assemble the full system prompt for one Ella turn.
 
