@@ -31,37 +31,45 @@ Four upgrades to how Ella handles Slack conversation flow, all surfaced during p
 
 **Common revisit trigger for all four: after CSM Co-Pilot V1 ships.** CSM Co-Pilot is the next agent build and the higher business priority. Ella's V2 polish waits for that to land so we don't fragment focus.
 
-### V2.1 — Reply outside thread when contextually appropriate
+### ~~V2.1 — Reply outside thread when contextually appropriate~~ — SUPERSEDED 2026-05-10
+
+Superseded by Batch 1.5's main-channel-only response decision (Task 5). Drake's V2 direction is "always main channel, last-N-turns context window replaces threading as the conversational scaffold." The mixed in-channel-vs-in-thread heuristic this entry proposed is no longer needed — the answer is just "always main channel." Original entry preserved below.
 
 - **What:** today Ella always replies in-thread via `thread_ts` (set in `agents/ella/slack_handler.py` to the original mention's `ts` or thread root). Want her to sometimes reply in the main channel instead — quick acknowledgments ("got it, looking now") in channel; longer / multi-paragraph responses in thread. Today's threading is correct-but-stiff: a "yes" answer in a thread feels weirdly formal.
 - **Why deferred:** the rule for in-channel-vs-in-thread isn't crisp. Picking wrong is worse than always-thread. Needs either a heuristic (response length? whether the question itself was threaded?) or a content classification step. Both are V2 territory.
 - **Why this matters:** pilot clients are getting tone-perfect content from Ella but the conversational shape feels like a chatbot. Mixing channel + thread replies based on context is what a human teammate does.
 - **Revisit trigger:** after CSM Co-Pilot V1 ships.
-- **Logged:** 2026-04-27 (M1.3 testing in `#ella-test-drakeonly`).
+- **Logged:** 2026-04-27 (M1.3 testing in `#ella-test-drakeonly`); superseded 2026-05-10 (Batch 1.5 ship).
 
-### V2.2 — Read prior thread context when @-mentioned mid-thread
+### ~~V2.2 — Read prior thread context when @-mentioned mid-thread~~ — SUPERSEDED 2026-05-10
+
+Superseded by Batch 1.5's recent-channel-context window (Task 5). Instead of fetching thread history per mention, Ella now sees the last 15 messages in the channel before the trigger — sourced from `slack_messages` (cloud-mirrored realtime ingestion) via `agents.ella.retrieval.fetch_recent_channel_context`. Doesn't require a Slack API call per mention; doesn't depend on thread structure; uses the same data Batch 2's passive monitoring will use. Original entry preserved below.
 
 - **What:** when Ella is @-mentioned inside an existing Slack thread (not at thread root), she only sees the mentioning message — the thread's prior turns are invisible to her. The agent should fetch the full thread history via Slack's `conversations.replies` API, format the turns into the existing `thread_history` plumbing in `agents/ella/prompts.py:_render_context_section` (which already accepts a `thread_history` arg, currently unused), and include it in the system prompt so she has conversational context.
 - **Why deferred:** requires a Slack API call (`conversations.replies` with `channel` + `ts`) on every mid-thread mention, plus token-budget management for long threads. Scope-wise it's ~50 lines but it's surface area we don't need for the V1 pilot use case (most pilot mentions are at thread root).
 - **Why this matters:** as pilot adoption grows, threaded back-and-forth conversations will become normal. Today, asking Ella "and what about Y?" in a thread where she just answered about X gets a confused response because she doesn't see the X exchange.
 - **Revisit trigger:** after CSM Co-Pilot V1 ships, OR a pilot client visibly hits the "Ella forgot the thread" failure mode.
-- **Logged:** 2026-04-27 (M1.3 testing).
+- **Logged:** 2026-04-27 (M1.3 testing); superseded 2026-05-10 (Batch 1.5 ship).
 
-### V2.3 — Respond to bare @-mentions
+### ~~V2.3 — Respond to bare @-mentions~~ — COMPLETED 2026-05-10
+
+Completed in Batch 1.5 Task 6. `agents/ella/agent.py:_handle_bare_mention` branches when stripped text is <5 chars, picks a randomized warm opener from `_BARE_OPENERS_WITH_NAME` (or `_NO_NAME` for unresolvable speakers), and logs an `agent_runs` row with `trigger_type='bare_mention'` and no token consumption. Original entry preserved below.
 
 - **What:** today, mentioning `@Ella` alone (no follow-up message) produces no reply — the agent extracts an empty string after `_strip_mentions` and presumably the LLM returns nothing useful. Should respond to bare pings with a friendly conversational opener like "Hey, what's up?" or "I'm here — what do you need?" so the interaction doesn't feel dead.
 - **Why deferred:** trivial fix (~10 lines: detect empty stripped text in `agents/ella/slack_handler.py`, return a canned warm response without going through the agent). But "trivial" multiplies fast — there's no reason to ship this in isolation when V2.1/V2.2/V2.4 all touch the same module.
 - **Why this matters:** a Slack ping with no reply feels broken even when nothing was technically wrong. Pilot clients will mention Ella out of curiosity ("hey @Ella"); a silent response erodes trust.
 - **Revisit trigger:** after CSM Co-Pilot V1 ships, batched with the rest of V2.x.
-- **Logged:** 2026-04-27 (M1.3 testing).
+- **Logged:** 2026-04-27 (M1.3 testing); completed 2026-05-10 (Batch 1.5 ship).
 
-### V2.4 — Speaker identification beyond the channel's mapped client
+### ~~V2.4 — Speaker identification beyond the channel's mapped client~~ — COMPLETED 2026-05-10
+
+Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker_identity` looks up the real `slack_user_id` against `clients` and `team_members` independently of the channel mapping; `agents/ella/prompts.py:_render_speaker_section` renders an audience-aware persona block (client vs advisor vs unresolvable). The audit (`docs/reports/ella-interaction-audit.md`) surfaced that the bug was wider than first thought — `agent_runs.trigger_metadata.user` was itself wrong-by-construction (V1 handler impersonated the channel client) — so Batch 1.5 also stamped `real_author_role/name/id` into trigger_metadata for honest analytics. Original entry preserved below.
 
 - **What:** Ella currently treats every speaker in a pilot channel as the channel's mapped client. In `#ella-test-drakeonly` (mapped to Javi Pena per the test fixture), she addresses Drake as "Javi" because the channel→client resolution defaults to the channel's mapped row. In real client channels with multiple participants (Scott + the client + maybe a partner or assistant), she'd mis-attribute every non-client message as the client. The fix: resolve each Slack message's `user` field to the right `clients` or `team_members` row via `slack_user_id`, and pass that resolved identity into the prompt's "who is asking right now" section.
 - **Why deferred:** plumbing change across `slack_handler.py` (asker resolution lookup), `agent.py` (asker context passed through), `prompts.py` (new section for the asker if they're not the channel's mapped client). Not hard but touches multiple files and has prompt-engineering implications (how does Ella address a non-client speaker in a client channel? "Scott, I see Javi is asking..."?). V2 scope.
 - **Why this matters:** as soon as a pilot channel has more than one human participant, mis-attribution is visible and weird. Today this doesn't happen because most pilot mentions come from the mapped client themselves. The day Scott jumps into a pilot channel to clarify something and Ella calls him "Javi," credibility takes a hit.
 - **Revisit trigger:** after CSM Co-Pilot V1 ships, OR first time a non-mapped-client human messages Ella in a pilot channel and the mis-attribution is visible.
-- **Logged:** 2026-04-27 (M1.3 testing — observed Drake being addressed as "Javi").
+- **Logged:** 2026-04-27 (M1.3 testing — observed Drake being addressed as "Javi"); completed 2026-05-10 (Batch 1.5 ship).
 
 ---
 
