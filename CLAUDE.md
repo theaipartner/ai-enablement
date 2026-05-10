@@ -177,7 +177,7 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 **Spec:** docs/specs/<slug>.md
 ```
 
-The `Status` line on the spec is the cleanup signal. When work ships, Director updates Status → `shipped` (via GitHub MCP) and in the same or next commit deletes both `docs/specs/<slug>.md` and `docs/reports/<slug>.md`. The durable record lives in CLAUDE.md § Live System State + git history. The brief `shipped` state exists so § Live System State updates and the file deletion don't have to land atomically if that's awkward.
+**Cleanup cadence.** When work ships, Director updates the spec's `Status:` to `shipped` (via GitHub MCP) but leaves both spec and report files in place during the working day. Drake batches the deletion of all `shipped` spec/report pairs at end of day in a single doc-hygiene commit. Rationale: keeping shipped pairs around mid-day makes it easier to refer back to recent work without git-spelunking; EOD batching keeps the long-term repo clean. Director must NEVER delete a spec or report without an explicit "delete now" or "EOD cleanup" cue from Drake — silent deletion is a hard rule against. The durable record lives in CLAUDE.md § Live System State + git history once the EOD cleanup lands.
 
 `docs/reports/` has a `.gitkeep` so the folder exists even when empty post-cleanup.
 
