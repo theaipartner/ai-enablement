@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/drake/.claude/hooks/pull_main.py --timeout 30",
+            "timeout": 35
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/drake/.claude/hooks/pull_main.py --timeout 5",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
