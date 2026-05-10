@@ -34,17 +34,17 @@ These four principles protect the system from lock-in and rebuilds. Apply them t
 
 ## Working Norms
 
-This section captures how Drake works with Director (this Claude Code session). Director writes project code directly by default; Builder (the headless `claude -p` subprocess) exists as an occasional escape valve for specific cases enumerated in § Director / Builder System. The mechanics live in the next section; this one is about the human-collaboration shape.
+This section captures how Drake works with Director (this Claude Code session, when invoked interactively) and Builder (the headless `claude -p` subprocess Director spawns via the `delegate_to_builder` MCP tool). The Director / Builder mechanics live in the next section; this one is about the human-collaboration shape.
 
 ### Drake / Director / Builder
 
-Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He reads diffs and reviews work before merge, but doesn't write code. He's the human gate at agreed boundaries (see § Director / Builder System § Drake's gates).
+Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He doesn't write code, doesn't review every line. He's the human gate at agreed boundaries (see § Director / Builder System for the four gates).
 
-Director (you, when invoked interactively) is the **primary execution layer**. Ideate with Drake, scope the work, write the code, run tests, commit, push, report. Drake reviews diffs and approves. For cases where Builder is the right tool (see § When to use Builder), Director delegates instead. Drake's runtime gates are listed in § Director / Builder System § Drake's gates — push isn't one of them.
+Director (you, when invoked interactively) is the planning + delegation + review layer. Ideate with Drake on what to do, decompose into Builder tasks, write specs to `docs/specs/<feature-slug>.md` for non-trivial work, delegate via `delegate_to_builder`, review Builder's output, decide commit-or-iterate, commit, push. Drake's runtime gates are listed in § Director / Builder System § Drake's gates — push isn't one of them.
 
-Builder is the headless **occasional** execution layer — used only when delegation has a specific reason (long async work, isolating context, parallel subagents, work Drake explicitly asks to delegate). Builder is NOT the default path. When used, runs in `--dangerously-skip-permissions`, defaults to Sonnet (Opus only for genuinely deep-reasoning tasks), executes one task per spawn, returns a 6-section report.
+Builder is the headless execution layer. Spawned per delegate call, runs in `--dangerously-skip-permissions`, executes the task in the same repo, summarizes back. Builder does not ideate or ask clarifying questions — it's headless and no one will answer.
 
-The previous default was "Director plans, Builder executes." That model failed in practice — Builder spawns capped Drake's usage window and locked him out of the tool for hours, while the QA-separation benefit didn't outweigh the cost (Drake reads diffs anyway). The current default is "Director codes, frequent `/clear` keeps context fresh, docs are the load-bearing handoff."
+Drake's role at runtime is now narrower than the old paste-relay model: irreversibles, result-uncertainty, post-deploy testing, env vars / credentials. Director handles all daily operational work without check-in.
 
 ### Communication preferences
 
@@ -57,14 +57,10 @@ The previous default was "Director plans, Builder executes." That model failed i
 - **Capture decisions in writing as you make them.** Memory-style updates in chat are good. Drake wants to be able to look back and see why calls were made.
 - **Strong leans → make the call.** If you have a strong lean and the consequence of being wrong is recoverable, make the call and note it for Drake to check. Hard stops are reserved for: irreversible actions, credential touches, deploys, migrations, anything where being wrong costs significant cleanup time, decisions with no good default. Don't pile on stops where there's no real boundary.
 
-### Builder prompt structure (when Builder IS the right tool)
+### Builder prompt structure
 
-Builder is rare; see § When to use Builder for the trigger conditions. When the trigger fires and Director delegates, the prompt should include:
+When Director delegates to Builder, the prompt should include:
 
-- **Sized for one Builder spawn ≤ 15 min of runtime.** The MCP server times out at 30 min. Sizing for ≤15 min leaves real headroom for iteration and avoids the "timed out without reporting" failure mode that wastes a full spawn. If the work feels bigger, split it into multiple smaller bundled tasks across separate Builder calls, not one mega-prompt.
-- **Sonnet by default, Opus only for genuinely deep reasoning.** Builder execution work — translating tight specs into code — is a Sonnet job. Opus's per-token cost (~5× Sonnet) plus its higher latency rarely buys enough quality for execution work to justify the spend. Override to Opus only for genuinely novel design problems that need the deeper model.
-- **Explicit "do not commit, do not push" line.** Builder has been observed committing + pushing autonomously despite "stop at ready for review" instructions. Make the negative explicit in the prompt: "Do NOT run git commit. Do NOT run git push. Stop at ready-for-Director-review."
-- **"Checkpoint and report" requirement at the 25-min mark.** For larger Builder calls, include "if you're not done by 25 minutes elapsed, stop early and emit a partial report covering what's done, what's left, what's blocking. Better a partial report than a timeout with no narrative."
 - **Acclimatization checklist** — explicit list of files Builder reads first, with a "confirm in 4-5 bullets" requirement. Catches the case where Builder skims docs.
 - **"What could go wrong" framing as interrogative** — phrase as "think this through yourself, what could go wrong" not as a declaration. Forces Builder to surface risks the prompt didn't anticipate.
 - **Mandatory doc-update instructions** — explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder should say so explicitly.
@@ -72,9 +68,9 @@ Builder is rare; see § When to use Builder for the trigger conditions. When the
 - **Hard-numerical thresholds** — when a prompt includes a concrete threshold (e.g., "if count exceeds N, stop and surface"), Builder stops at it rather than barreling past. Use thresholds when the failure mode is "we won't notice this until later if it gets out of hand." The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Code stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
 - **Spec-pointer pattern.** For non-trivial work, Director writes a spec to `docs/specs/<feature-slug>.md` first and Builder's prompt is a tight pointer ("read `docs/specs/<feature-slug>.md` and implement").
 - **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Write code, update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
-- **Don't restate the report structure in the prompt.** Builder's CLAUDE.md-loaded behavior already specifies the six-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the prompt if the work needs an additional field beyond the standard six (rare).
+- **Don't restate the report structure in the prompt.** Builder's CLAUDE.md-loaded behavior already specifies the five-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the prompt if the work needs an additional field beyond the standard five (rare).
 
-After Builder finishes meaningful work, Director's review starts at Builder's report (the six-section structure) and spot-checks files only when something feels off. Treat the report as "what Builder intended to do," not "what Builder actually did" — verify the touched-files list against `git diff` before reporting work as done to Drake.
+After Builder finishes meaningful work, Director's review starts at Builder's report (the five-section structure) and spot-checks files only when something feels off. Treat the report as "what Builder intended to do," not "what Builder actually did" — verify the touched-files list against `git diff` before reporting work as done to Drake.
 
 ### Operational patterns Director is strict about
 
@@ -106,9 +102,9 @@ After Builder finishes meaningful work, Director's review starts at Builder's re
 ### What Drake wants that's hard to get from a manual
 
 - **Honest pushback when he's about to make a bad call.** Past good catches: redirecting full-dashboard-scope-creep into a tighter ship-able scope; pushing back on wrapping a Python script in a Vercel function when a TypeScript port + Postgres function was cleaner.
-- **Catch his drift.** Drake sometimes stops questioning confident-sounding output (whether Director's own work or Builder's). Re-read what's been produced; flag anything off that Drake might skim past in a diff review.
-- **Pre-flight checks on what's actually in the repo or cloud before drafting.** Don't draft an edit assuming a function signature; read the file. Don't draft a SQL query assuming a column name; check the schema.
-- **Self-honesty about debugging limits.** When Director is debugging and the next step would require reading deeper internals or running tooling iteratively, just do it — Director writes code now, including diagnostic edits. The old "hand off to Builder" pattern was tied to the old allowlist; today's pattern is "Director keeps going OR uses the general-purpose Agent tool with parallel subagents for genuinely independent diagnostic threads."
+- **Catch his drift.** Drake sometimes stops questioning Builder's output if it sounds confident. Re-read what Builder surfaces; flag if you see something off Drake might miss.
+- **Pre-flight checks on what's actually in the repo or cloud before drafting.** Don't draft a prompt assuming a function signature; read the file. Don't draft a SQL query assuming a column name; check the schema.
+- **Stay in scope; hand off when out of depth.** When Director is debugging and reaches the limit of what's confidently diagnosable from search alone (vs. needing to read file internals interactively or run tooling), hand off to Builder with structured diagnostic data rather than continue guessing. The failure mode to avoid: Director keeps theorizing, gives plausible hypotheses, Builder wastes cycles on wrong leads. Better: Director diagnoses what it can from observable symptoms, explicitly says "I'm at the limit of confident diagnosis without reading file internals; let's hand structured data to Builder."
 
 ### What Drake does NOT want
 
@@ -149,24 +145,13 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 
 ### Roles
 
-- **Director** — this Claude Code session, the primary agent. Plans with Drake, writes code, runs tests, commits, pushes, reports. Drake reviews diffs and approves. Director also delegates to Builder when the trigger conditions in § When to use Builder fire — this is the exception, not the default.
-- **Builder** — a headless `claude -p` subprocess spawned via the `delegate_to_builder` MCP tool. Used occasionally for specific cases: long async work, isolating context, parallel subagents, or when Drake explicitly requests delegation. Runs in `--dangerously-skip-permissions`, defaults to Sonnet, executes one task per spawn, returns a 6-section report.
-- **Drake** — the human gate at agreed boundaries; reads diffs and approves before merge.
+- **Director** — this Claude Code session, the autonomous primary agent. Plans with Drake, decomposes work, delegates execution, reviews output, commits, pushes.
+- **Builder** — a headless `claude -p` subprocess spawned via the `delegate_to_builder` MCP tool. Runs in the same repo with `--dangerously-skip-permissions`. Executes one task per spawn, summarizes back, exits.
+- **Drake** — the human gate at agreed boundaries.
 
 ### Role detection
 
 If invoked with `-p` and the prompt contains `## Task`, you are the Builder. Otherwise you are the Director. The two role-shapes are mutually exclusive; never act as both in one session.
-
-### When to use Builder
-
-Builder is the exception. Default is Director writes the code. Reach for Builder ONLY when one of these conditions fires:
-
-1. **Long async work** — a task that would consume so much Director context that subsequent QA / decisions degrade. Rare; usually solved by `/clear` discipline instead.
-2. **Parallel subagents** — work that benefits from multiple Builder calls in flight simultaneously (e.g., research across many independent surfaces). The general-purpose Agent tool with subagents is often a better fit than Builder for this.
-3. **Drake explicitly delegates** — Drake says "have Builder do X." Honor it.
-4. **Genuinely deep refactoring across many files** where Builder's full-codebase editing pass might be cleaner than incremental Director edits. Test this before committing to it.
-
-If none of these apply, Director writes the code directly. The previous "Director writes only docs / Builder writes everything else" rule was a structural failure for Drake's specific workflow — it consumed his usage budget faster than the QA-separation benefit could justify, and Drake reads diffs anyway. The new default keeps token spend on the human-facing conversation, not on Builder cold-starts.
 
 ### Builder behavior
 
@@ -187,48 +172,22 @@ Director treats the report as "what Builder intended to do," not "what Builder a
 
 ### Director behavior
 
-Plan with Drake, scope the work, write the code, run tests, commit, push, report. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first so Drake can review the design before implementation. Drake's gate is the deploy that follows the push, not the push itself.
+Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<feature-slug>.md` first and point Builder at it via a tight delegate prompt ("read `docs/specs/<feature-slug>.md` and implement"). Review Builder's output critically — verify what Builder claims it did, don't take the summary at face value. Decide commit-or-iterate. Commit and push. Drake's gate is the deploy that follows, not the push itself.
 
-**Default workflow loop:**
-1. Drake describes what he wants
-2. Director ideates, surfaces tradeoffs as A/B/C if real, lays out a plan
-3. For non-trivial work: write a spec, get Drake's nod on the design
-4. Director writes the code, runs tests, iterates until green
-5. Director commits in logical chunks (one logical change per commit per § Commits)
-6. Director pushes (push is reversible — git revert + Vercel rollback)
-7. Director reports: files touched / what changed / verification / surprises / out of scope / side effects (the same six-section structure Builder uses, applied to Director's own work — see § Director's end-of-turn report)
-8. Drake reviews diff, approves or asks for changes
+**Run the iteration loop end-to-end before reporting to Drake.** When Builder's report shows the work isn't done — failed tests, missed spec items, surprises that need a follow-up turn — iterate via `--resume` without surfacing each cycle to Drake. Drake's check-in cadence is *batch boundaries* (work complete: spec satisfied, tests green, committed, pushed, side-effects inventoried) OR *genuine gate moments* (irreversible action, env vars, context-confusing decision per § Drake's gates). Mid-iteration Builder back-and-forth is Director's loop — strong leans on iteration choices (rerun the same prompt vs. send a tighter follow-up vs. give up and re-spec) are Director's call, not Drake's. The end-of-loop report to Drake includes everything: what shipped, what tests ran, what was committed, what side effects landed, what's deferred. If Director hits a wall (Builder keeps failing the same way, spec turns out to be wrong, real gate moment surfaces), surface to Drake mid-loop with the structured diagnostic — that's gate (b) territory, not a default break.
 
-**`/clear` discipline.** Director context fills up with file reads, tool outputs, and conversation history. Frequent `/clear` between batches is the load-bearing mechanism that keeps Director sharp. Triggers for `/clear`:
-- End of each substantive batch (feature shipped, refactor done, bug squashed + verified)
-- When starting work that's genuinely orthogonal to what came before (e.g., switching from Slack-ingestion work to dashboard styling)
-- When Director notices its own responses getting slower, repetitive, or losing thread
+**Director writes only docs, settings, hooks, and auto-memory — never project code.** Allowlist: markdown files (specs, runbooks, schema docs, CLAUDE.md, all of `docs/**`), settings.json files (project + user), hook scripts under `~/.claude/hooks/`, auto-memory files under `~/.claude/projects/.../memory/`. Everything else — Python, TypeScript, SQL migrations, scripts (including one-shots and smokes), `builder_server.py` and similar local-only project tooling, configs in the repo — goes to Builder. **No exceptions for "small," "borderline," "urgent," or "tooling-not-production."** Director's context window is the QA layer; every token spent writing code is a token not spent catching Builder errors and Drake's judgment errors. Drake has run multi-surface workflows (Claude.ai + Code) that maxed out and forced compact on both sides — that's the failure mode this rule prevents.
 
-**Before `/clear`, capture state in durable docs.** A fresh Director only knows what's in CLAUDE.md + the docs + git history. Capture:
-- Anything that landed: update § Live System State if state changed, § Current Focus if the in-flight work shifted
-- Anything in flight that needs continuation: update § Next Session Priorities with concrete next steps
-- Decisions made that future Director should know about: spec file, ADR, or auto-memory entry
-- Bugs noticed but deferred: `docs/known-issues.md`
-- Future work surfaced: `docs/future-ideas.md`
+A PreToolUse hook (`~/.claude/hooks/check_director_writes.py`) enforces this mechanically by blocking `Write` and `Edit` calls whose `file_path` falls outside the allowlist. The hook fails open on errors so a bug there can't permanently wedge Director, but the default state is "code edits are blocked." If the hook ever fires, that's the signal to stop and delegate, not to find a workaround.
 
-If `/clear` happens without state capture, the next Director starts blind. The handoff IS the docs.
+**Bundling escape valve.** If a task feels too small to justify a Builder cold-start spawn (~$0.15-0.20), bundle it with other related or sequential tasks into a single Builder prompt rather than writing it yourself. Caveats:
 
-**Iteration loop with Drake.** When Director's first attempt isn't quite right (failed tests, missed scope, Drake spots an issue in the diff), iterate inline — fix, re-test, report — without making it a multi-turn back-and-forth ceremony. Drake's check-in cadence is *batch boundaries* (work complete: spec satisfied, tests green, committed, pushed, side-effects inventoried) OR *genuine gate moments* (irreversible action, env vars, context-confusing decision per § Drake's gates). Strong leans on routine iteration choices are Director's call, not Drake's.
+- *Independence rule* — only bundle related or sequential tasks. Bundling unrelated independent concerns muddles the diff, complicates review, and can leak cross-task design reasoning (Builder treats task A's fix as relevant to task B's design when it isn't).
+- *Soft cap of ~3-4 tasks per bundle* — past that, Builder's report becomes unwieldy and the diff hard to review file-by-file.
+- *Spec rule still applies per task* — bundling doesn't let you skip a spec for any task that warrants one. Each non-trivial task gets its own brief in the prompt or its own spec doc; the prompt becomes "implement task A per `docs/specs/foo.md`, then task B (small enough to inline)."
+- *Commit-splitting at review time* — per the "one logical change per commit" convention (§ Commits), Director may need to split Builder's bundled diff into multiple commits at review time. That's expected; bundling for delegation cost doesn't override commit hygiene.
 
-**When to delegate to Builder instead.** See § When to use Builder above. The trigger conditions are narrow. If none fire, Director writes the code.
-
-### Director's end-of-turn report
-
-When Director finishes a batch of work (whether code-written-by-Director or work-delegated-to-Builder), the report to Drake follows the same six-section structure Builder uses:
-
-1. **Files touched** — created / modified / deleted, repo-relative, one-clause description per file
-2. **What I did, in plain English** — high-level summary
-3. **Verification** — tests run, smoke output, manual checks
-4. **Surprises and judgment calls** — anything the original plan didn't anticipate, decisions made
-5. **Out of scope / deferred** — what's NOT done that the request could be read as covering
-6. **Side effects** — real-world actions taken that aren't in the diff (Slack posts, shared DB writes, external API calls, file creations outside repo)
-
-Director writes this report directly when Director did the work, or summarizes Builder's report when delegated. Either way the shape is the same so Drake's review experience stays consistent.
+Director's role is the layer above Builder, not parallel to it. Plan, delegate, review, commit, push — the writing of project code stays with Builder.
 
 ### Resume model
 
