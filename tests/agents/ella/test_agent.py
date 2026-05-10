@@ -84,7 +84,7 @@ def _patch_common(
         "agents.ella.agent.build_system_prompt",
         return_value="[stub prompt]",
     )
-    confidence = 0.0 if agent._is_escalation(response_text) else 1.0
+    confidence = 0.0 if "[ESCALATE]" in response_text else 1.0
     call_claude = mocker.patch(
         "agents.ella.agent._call_claude",
         return_value=(response_text, confidence),
@@ -175,12 +175,17 @@ def test_respond_to_mention_advisor_speaker_real_author_in_metadata(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_respond_to_mention_escalates_when_response_starts_with_marker(mocker):
-    ack_body = (
-        "Good question — let me get Lou looped in so you can talk this "
-        "through with your advisor directly."
+def test_respond_to_mention_escalates_when_marker_at_end(mocker):
+    """V2 convention: marker at END of response, handoff note after it."""
+    ack = (
+        "That's a hard place to be — let me loop in <@U09JYRAENPJ> on "
+        "this one, Scott will follow up directly."
     )
-    marked_response = f"[ESCALATE]\n{ack_body}"
+    handoff = (
+        "Client is feeling stuck on a personal-judgment call. Worth a "
+        "direct conversation."
+    )
+    marked_response = f"{ack}\n\n[ESCALATE]\n{handoff}"
     spies = _patch_common(mocker, response_text=marked_response)
 
     result = agent.respond_to_mention(_event(text="should I fire this client?"))
@@ -189,22 +194,57 @@ def test_respond_to_mention_escalates_when_response_starts_with_marker(mocker):
     assert result.escalation_reason == "ella_escalated"
     assert result.escalation_id == "esc-xyz"
     assert "[ESCALATE]" not in result.response_text
-    assert result.response_text == ack_body
+    # Everything before the marker, rstripped.
+    assert result.response_text == ack
     assert result.confidence == 0.0
     assert result.agent_run_id == "run-abc"
 
     spies.escalate.assert_called_once()
     esc_kwargs = spies.escalate.call_args.kwargs
-    assert esc_kwargs["context"]["ella_response"] == ack_body
+    assert esc_kwargs["context"]["ella_response"] == ack
     assert "[ESCALATE]" not in esc_kwargs["context"]["ella_response"]
-    # Batch 1.5: speaker dict lands on escalations.context for the
-    # CSM reviewing the row.
+    # Batch 1.5: handoff note from after the marker lands on the row.
+    assert esc_kwargs["context"]["handoff_reasoning"] == handoff
+    # speaker dict on the row for the reviewing CSM.
     assert esc_kwargs["context"]["speaker"]["role"] == "client"
     assert esc_kwargs["context"]["speaker"]["display_name"] == "Test Client"
-    assert "proposed_action" not in esc_kwargs or esc_kwargs["proposed_action"] is None
 
     end_kwargs = spies.end.call_args.kwargs
     assert end_kwargs["status"] == "escalated"
+
+
+def test_respond_to_mention_escalates_when_marker_at_start(mocker):
+    """Legacy V1 shape still triggers — marker anywhere works."""
+    marked = "[ESCALATE]\nLegacy V1 handoff note."
+    spies = _patch_common(mocker, response_text=marked)
+
+    result = agent.respond_to_mention(_event())
+
+    assert result.escalated is True
+    assert result.response_text == ""  # nothing before the marker
+    esc_kwargs = spies.escalate.call_args.kwargs
+    assert esc_kwargs["context"]["handoff_reasoning"] == "Legacy V1 handoff note."
+
+
+def test_respond_to_mention_escalates_when_marker_mid_response(mocker):
+    """The exact audit-flagged leak shape — Ella generated client-facing
+    text + [ESCALATE] + handoff text mid-response. V1 detector missed
+    this; V2 catches it and strips correctly."""
+    leak = (
+        "This one's worth a direct conversation with Scott.\n\n"
+        "[ESCALATE]\n"
+        "Javi asked about repurposing call recordings into curriculum."
+    )
+    spies = _patch_common(mocker, response_text=leak)
+
+    result = agent.respond_to_mention(_event())
+
+    assert result.escalated is True
+    assert "[ESCALATE]" not in result.response_text
+    assert "repurposing call recordings" not in result.response_text
+    assert result.response_text == "This one's worth a direct conversation with Scott."
+    esc_kwargs = spies.escalate.call_args.kwargs
+    assert "repurposing call recordings" in esc_kwargs["context"]["handoff_reasoning"]
 
 
 # ---------------------------------------------------------------------------
@@ -260,77 +300,61 @@ def test_respond_to_mention_raises_and_closes_run_on_exception(mocker):
 
 
 # ---------------------------------------------------------------------------
-# Escalation marker detection — direct unit coverage
+# `_detect_and_strip_escalation` — direct unit coverage
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "text",
+    "raw,client_text,handoff",
     [
-        # Canonical shape: marker on its own line, ack below.
-        "[ESCALATE]\nAbel, let me loop in your advisor on this one.",
-        # Inline separator (space) instead of newline — still a valid prefix.
-        "[ESCALATE] Short ack.",
-        # Leading whitespace / newlines that Claude sometimes emits.
-        "\n[ESCALATE]\nAbel, let me loop in your advisor.",
-        "   [ESCALATE] short ack.",
+        # V2 canonical: ack first, then [ESCALATE], then handoff.
+        (
+            "Quick ack here.\n\n[ESCALATE]\nHandoff note for advisor.",
+            "Quick ack here.",
+            "Handoff note for advisor.",
+        ),
+        # V1 legacy shape: marker at start.
+        (
+            "[ESCALATE]\nLegacy handoff.",
+            "",
+            "Legacy handoff.",
+        ),
+        # Audit-flagged mid-response leak shape — V1 detector missed this.
+        (
+            "Client-facing text.\n[ESCALATE]\nLeaked handoff note.",
+            "Client-facing text.",
+            "Leaked handoff note.",
+        ),
+        # Inline marker (space separator instead of newline).
+        (
+            "ack [ESCALATE] handoff",
+            "ack",
+            "handoff",
+        ),
+        # Marker at end with no handoff after it.
+        (
+            "Just an ack.\n[ESCALATE]",
+            "Just an ack.",
+            "",
+        ),
+        # No marker — return verbatim with None.
+        (
+            "Plain answer, no marker.",
+            "Plain answer, no marker.",
+            None,
+        ),
+        # Empty input.
+        ("", "", None),
     ],
 )
-def test_is_escalation_matches_marker_prefix(text):
-    assert agent._is_escalation(text) is True
+def test_detect_and_strip_escalation(raw, client_text, handoff):
+    ct, hf = agent._detect_and_strip_escalation(raw)
+    assert ct == client_text
+    assert hf == handoff
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        # Escalation-style prose without the marker.
-        "Let me loop in your advisor on this one.",
-        "Let me get Lou looped in so you can talk this through.",
-        # Non-escalation answer.
-        "Your advisor is Lou — they cover that on the next call.",
-        # Marker appears mid-string, not a handoff signal under the
-        # start-only detector (Task 4 will loosen this — see test_agent_task4.py).
-        "Here's my answer. If this doesn't resolve it, we can [ESCALATE] later.",
-        # Case-sensitive: lowercase doesn't count.
-        "[escalate]\nAbel, let me loop in your advisor.",
-        "",
-    ],
-)
-def test_is_escalation_misses_non_marked_text(text):
-    assert agent._is_escalation(text) is False
-
-
-# ---------------------------------------------------------------------------
-# Marker stripping — direct unit coverage
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        (
-            "[ESCALATE]\nAbel, let me loop in your advisor.",
-            "Abel, let me loop in your advisor.",
-        ),
-        (
-            "[ESCALATE] short ack.",
-            "short ack.",
-        ),
-        (
-            "[ESCALATE]\n\n\nSpacing varies.",
-            "Spacing varies.",
-        ),
-        (
-            "   [ESCALATE]\nLeading whitespace is tolerated.",
-            "Leading whitespace is tolerated.",
-        ),
-        # Idempotent on unmarked text.
-        (
-            "No marker here — just an answer.",
-            "No marker here — just an answer.",
-        ),
-        ("", ""),
-    ],
-)
-def test_strip_escalation_marker(raw, expected):
-    assert agent._strip_escalation_marker(raw) == expected
+def test_detect_and_strip_escalation_lowercase_not_matched():
+    """Case-sensitive: lowercase doesn't count."""
+    ct, hf = agent._detect_and_strip_escalation("[escalate]\nlowercase doesn't trigger")
+    assert ct == "[escalate]\nlowercase doesn't trigger"
+    assert hf is None

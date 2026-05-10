@@ -102,16 +102,19 @@ def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> E
         system_prompt, query_text, context, run_id=run_id
     )
 
-    if _is_escalation(response_text):
-        # Strip the control token before anything downstream sees it —
-        # the client doesn't need to see it, and neither does the CSM
-        # reviewing the escalations row.
-        client_text = _strip_escalation_marker(response_text)
+    client_text, handoff_context = _detect_and_strip_escalation(response_text)
+    if handoff_context is not None:
+        # Marker found anywhere in the response. `client_text` is what
+        # the client sees; `handoff_context` is the advisor-facing
+        # paragraph Ella wrote after [ESCALATE]. Stored on
+        # escalations.context.handoff_reasoning so a reviewing CSM
+        # sees Ella's framing of the handoff (V1 lost this).
         escalation_id = escalate(
             reason="ella_escalated",
             context={
                 "query_text": query_text,
                 "ella_response": client_text,
+                "handoff_reasoning": handoff_context,
                 "client_id": channel_client["id"],
                 "speaker": _speaker_to_dict(speaker),
                 "event": _redact_event(event_data, speaker),
@@ -184,33 +187,34 @@ def _call_claude(
         run_id=run_id,
     )
     text = result.text.strip()
-    confidence = 0.0 if _is_escalation(text) else 1.0
+    confidence = 0.0 if _ESCALATION_MARKER in text else 1.0
     return text, confidence
 
 
-def _is_escalation(response_text: str) -> bool:
-    """Detect the [ESCALATE] marker at the start of the response.
+def _detect_and_strip_escalation(response_text: str) -> tuple[str, str | None]:
+    """Find the first `[ESCALATE]` anywhere in the response and split.
 
-    Case-sensitive, exact bracket form. Leading whitespace /
-    newlines are stripped before the check so Claude's occasional
-    leading newline doesn't cause a miss. Mid-string mentions of
-    [ESCALATE] (e.g., Ella explaining what escalation means, or
-    echoing a user who typed it) are deliberately not matched — only
-    a prefix signals a handoff.
+    Returns `(client_text, handoff_context)`. If the marker is found,
+    `client_text` is everything before the marker (rstripped of
+    trailing whitespace) and `handoff_context` is everything after
+    (lstripped). If the marker is absent, returns `(response_text, None)`.
+
+    Batch 1.5 change: V1 only matched the marker at the start of the
+    response (after `.lstrip()`). The audit surfaced 2 production
+    runs where Ella generated client-facing text + `\\n[ESCALATE]\\n` +
+    handoff text, and the leaked handoff text reached the client.
+    The looser detector catches both shapes — start-of-response and
+    mid-response — at the cost of also stripping conversational
+    references to the literal token in Ella's own text. That's an
+    accepted trade-off; the marker is a control token and the prompt
+    instructs Ella not to use it in prose anyway.
     """
-    return response_text.lstrip().startswith(_ESCALATION_MARKER)
-
-
-def _strip_escalation_marker(response_text: str) -> str:
-    """Remove the [ESCALATE] marker and the whitespace between it and
-    the ack body. Idempotent: returns the text unchanged if no marker
-    is present at the start.
-    """
-    leading_stripped = response_text.lstrip()
-    if not leading_stripped.startswith(_ESCALATION_MARKER):
-        return response_text
-    remainder = leading_stripped[len(_ESCALATION_MARKER):]
-    return remainder.lstrip()
+    idx = response_text.find(_ESCALATION_MARKER)
+    if idx < 0:
+        return response_text, None
+    before = response_text[:idx].rstrip()
+    after = response_text[idx + len(_ESCALATION_MARKER):].lstrip()
+    return before, after
 
 
 # ---------------------------------------------------------------------------
