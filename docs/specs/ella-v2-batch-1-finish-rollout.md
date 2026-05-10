@@ -1,7 +1,7 @@
 # Ella V2 Batch 1 — finish operational rollout
 
 **Slug:** ella-v2-batch-1-finish-rollout
-**Status:** in-flight
+**Status:** shipped
 
 ## Context
 
