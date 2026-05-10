@@ -56,6 +56,7 @@ from typing import Any
 
 from agents.ella.slack_handler import handle_slack_event
 from ingestion.slack.realtime_ingest import ingest_message_event
+from shared.slack_identity import get_user_id_for_token
 from shared.slack_post import call_chat_post_message
 
 # Vercel's Python runtime pre-configures the root logger at WARNING
@@ -146,6 +147,20 @@ class handler(BaseHTTPRequestHandler):
                 # ack still fires below.
                 _ingest_message_event(payload)
 
+                # Ella V2 Batch 1.5 (Task 7) — dual-trigger detection.
+                # If this message @-mentions Ella's human user_id AND
+                # not the bot user_id, also treat it as an app_mention.
+                # (Messages that contain BOTH mentions are handled by
+                # the natural app_mention event Slack fires alongside;
+                # we de-dupe to avoid double-response.)
+                if _should_dual_trigger(event):
+                    logger.info(
+                        "slack_webhook: dual-trigger on message channel=%s user=%s",
+                        event.get("channel"),
+                        event.get("user"),
+                    )
+                    _process_mention(_build_app_mention_from_message(payload))
+
         # Ack regardless of inner event type. Anything non-200 tells
         # Slack to retry, which we don't want for events we didn't
         # subscribe to.
@@ -222,6 +237,52 @@ class handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
+
+
+def _should_dual_trigger(event: dict[str, Any]) -> bool:
+    """Decide whether a `message` event should also fire Ella's
+    app_mention response path (Task 7 of Batch 1.5).
+
+    Returns True when:
+      - The message text contains `<@<human_ella_user_id>>` (resolved
+        from `SLACK_USER_TOKEN` via auth.test, cached per-process).
+      - The message text does NOT contain `<@<bot_user_id>>` — those
+        get handled by the parallel `app_mention` event Slack fires.
+      - The message author is neither the bot nor the human Ella
+        account (don't trigger on self-responses or response loops).
+
+    Any exception or missing token resolves to False (fail-soft —
+    don't trigger if anything is ambiguous).
+    """
+    try:
+        text = event.get("text") or ""
+        human_uid = get_user_id_for_token(os.environ.get("SLACK_USER_TOKEN"))
+        if not human_uid:
+            return False
+        if f"<@{human_uid}>" not in text:
+            return False
+        bot_uid = get_user_id_for_token(os.environ.get("SLACK_BOT_TOKEN"))
+        if bot_uid and f"<@{bot_uid}>" in text:
+            # Will be handled by the parallel app_mention event.
+            return False
+        author = event.get("user")
+        if author and author in (bot_uid, human_uid):
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("slack_webhook: dual-trigger check raised: %s", exc)
+        return False
+
+
+def _build_app_mention_from_message(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reshape a `message`-event payload so the existing app_mention
+    path can process it. Just flips `event.type` to `app_mention` and
+    leaves everything else verbatim — channel, user, text (with the
+    `<@U...>` mention syntax already in place), ts, thread_ts.
+    """
+    inner = dict(payload.get("event") or {})
+    inner["type"] = "app_mention"
+    return {**payload, "event": inner}
 
 
 def _ingest_message_event(payload: dict[str, Any]) -> None:
