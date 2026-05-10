@@ -10,9 +10,13 @@ reports per-channel counts WITHOUT inserting. `--smoke` is the same
 as default but limited to one channel; `--apply` actually upserts to
 `slack_messages`.
 
-Hard-stops if any channel returns `bot_not_in_channel` — the bot needs
-to be a member before history can be fetched. Run
-`scripts/invite_ella_and_bot_to_client_channels.py --apply` first.
+Channels where the bot isn't a member (`bot_not_in_channel`) are
+logged, skipped, and counted separately in the end-of-run summary;
+they do NOT fail the run. Run
+`scripts/invite_ella_and_bot_to_client_channels.py --apply` to add
+the bot to channels you want backfilled. Other per-channel errors
+(network, auth, rate-limit) still log and count, and DO fail the
+run with exit 1.
 
 Usage:
     .venv/bin/python scripts/backfill_slack_client_channels.py            # dry-run, all channels
@@ -157,25 +161,6 @@ def main() -> int:
         dry_run=dry_run,
     )
 
-    not_in_channel = [
-        o for o in report.outcomes if o.error == "bot_not_in_channel"
-    ]
-    if not_in_channel:
-        # Hard-stop: bot needs to be invited before we can fetch history.
-        # Surface explicitly so the operator runs the invite script.
-        print()
-        print(
-            f"HARD-STOP: {len(not_in_channel)} channel(s) returned "
-            "bot_not_in_channel. Run "
-            "`scripts/invite_ella_and_bot_to_client_channels.py --apply` "
-            "before proceeding."
-        )
-        for o in not_in_channel[:10]:
-            t = o.resolved
-            print(f"  - {t.client_name or '?'} ({t.slack_channel_id})")
-        if not args.smoke:
-            return 4
-
     # Per-channel report.
     print()
     print("=" * 72)
@@ -185,12 +170,15 @@ def main() -> int:
     total_inserts = 0
     total_updates = 0
     errors: list[tuple[str, str]] = []
+    error_counts: dict[str, int] = {}
     for outcome in report.outcomes:
         t = outcome.resolved
         label = f"{t.client_name or '?'} ({t.slack_channel_id or '?'})"
         if outcome.error:
             errors.append((label, outcome.error))
-            print(f"  [ERROR] {label}: {outcome.error}")
+            error_counts[outcome.error] = error_counts.get(outcome.error, 0) + 1
+            tag = "SKIPPED" if outcome.error == "bot_not_in_channel" else "ERROR"
+            print(f"  [{tag}] {label}: {outcome.error}")
             continue
         total_msgs += outcome.messages_in_window
         total_inserts += outcome.messages_inserted
@@ -208,11 +196,15 @@ def main() -> int:
           f"inserts={total_inserts} updates={total_updates}")
     print(f"Slack API calls: {report.total_api_calls}")
     if errors:
-        print(f"Errors: {len(errors)}")
+        breakdown = ", ".join(f"{k}: {v}" for k, v in sorted(error_counts.items()))
+        print(f"Errors: {len(errors)} ({breakdown})")
     if dry_run:
         print()
         print("(dry-run — no slack_messages rows written)")
-    return 0 if not errors else 1
+    # bot_not_in_channel is a known operational state (bot not yet
+    # invited), not a failure. Only fail the run on other error types.
+    fatal = [e for e in errors if e[1] != "bot_not_in_channel"]
+    return 0 if not fatal else 1
 
 
 if __name__ == "__main__":
