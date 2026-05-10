@@ -181,6 +181,8 @@ The `Status` line on the spec is the cleanup signal. When work ships, Director u
 
 `docs/reports/` has a `.gitkeep` so the folder exists even when empty post-cleanup.
 
+`/run` is the conventional trigger from a Code session — typing `/run` finds the single in-flight spec under `docs/specs/` without a matching report and executes it per § Builder behavior. See `.claude/commands/run.md` for the command's logic; if zero or multiple specs match, `/run` reports and stops rather than guessing.
+
 ### Builder behavior
 
 Execute, don't ideate. Builder is reading a spec written by Director — clarifying questions go back to Drake in chat, not back to a headless Director. Test what you build when feasible (run the code, hit the endpoint, verify the result).
