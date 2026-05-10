@@ -155,10 +155,92 @@ def build_system_prompt(
     """
     sections = [
         _BASE_PROMPT,
+        _render_speaker_section(client, speaker),
         _render_client_section(client),
         _render_context_section(retrieved_chunks, thread_history),
     ]
     return "\n\n".join(s for s in sections if s)
+
+
+def _render_speaker_section(
+    client: dict[str, Any], speaker: "SpeakerIdentity | None"
+) -> str:
+    """Render the WHO IS SPEAKING block — audience-aware behavior.
+
+    Branches on `speaker.role`:
+      - 'client': speaker is the channel-mapped client (or another
+        client; the channel-mapped name is canonical for retrieval
+        context). V1 persona stays as-is, with "your advisor" → the
+        actual advisor name everywhere.
+      - 'advisor': speaker is a team_member. Address by name, do NOT
+        escalate to other advisors, answer directly.
+      - 'unresolvable': safer fallback. No name. Don't emit ESCALATE.
+      - None (no speaker info threaded through): preserve V1 default
+        behavior (client persona, addressed by channel-mapped name).
+    """
+    csm = (client.get("primary_csm") or {})
+    advisor_name = csm.get("full_name") or "(unassigned)"
+    advisor_first_name = advisor_name.split()[0] if advisor_name and advisor_name != "(unassigned)" else "(unassigned)"
+    advisor_slack_id = csm.get("slack_user_id")
+    channel_client_name = client.get("full_name") or "(unknown client)"
+    channel_client_first = channel_client_name.split()[0] if channel_client_name and channel_client_name != "(unknown client)" else "(unknown client)"
+
+    if speaker is None:
+        # No speaker resolved — V1 default. Treat the channel-mapped
+        # client as the speaker so the existing prompt body still works.
+        role = "client"
+        display_name = channel_client_name
+        first_name = channel_client_first
+    else:
+        role = speaker.role
+        display_name = speaker.display_name
+        first_name = display_name.split()[0] if display_name and not display_name.startswith("(") else display_name
+
+    lines = [
+        "# WHO IS SPEAKING",
+        "",
+        f"Speaker: {display_name}",
+        f"Role: {role}",
+        f"This channel is mapped to client: {channel_client_name}",
+        f"That client's advisor: {advisor_name}",
+    ]
+    if advisor_slack_id:
+        # Slack-side mention syntax — Ella uses this directly in
+        # response text when she escalates (Task 3).
+        lines.append(f"Advisor Slack mention syntax: <@{advisor_slack_id}>")
+
+    if role == "client":
+        lines.extend([
+            "",
+            f"You are speaking to {first_name}. Address them by first name when natural.",
+            f"When you refer to their advisor in conversation, use the name {advisor_first_name} — never the generic phrase \"your advisor\".",
+        ])
+    elif role == "advisor":
+        lines.extend([
+            "",
+            f"You are speaking with {display_name}, an advisor on this team — NOT the channel's mapped client ({channel_client_name}).",
+            "Address them by name. They are asking on behalf of the client or about the curriculum / operations directly.",
+            "Do NOT escalate to other advisors or to Scott — advisors handle their own escalation if needed.",
+            f"Do NOT emit the {_ESCALATE_LITERAL_FOR_PROMPT} token; it has no purpose in advisor conversations.",
+            "Answer questions about this client's data, the curriculum, or operational topics directly. If genuinely outside your knowledge, say so plainly without redirecting to anyone else.",
+        ])
+    else:  # unresolvable
+        lines.extend([
+            "",
+            "You don't have a verified identity for the speaker.",
+            "Treat them politely as a generic asker. Avoid using a name.",
+            f"Do NOT emit the {_ESCALATE_LITERAL_FOR_PROMPT} token; identity-uncertain interactions don't route to advisors.",
+            "Answer factual KB questions if you can; defer politely otherwise.",
+        ])
+
+    return "\n".join(lines)
+
+
+# Avoid putting the literal control token into the prompt instructions
+# below; this constant is interpolated where we need to reference it
+# by name. Keeping a single source so a future rename only touches
+# one place.
+_ESCALATE_LITERAL_FOR_PROMPT = "[ESCALATE]"
 
 
 def _render_client_section(client: dict[str, Any]) -> str:
