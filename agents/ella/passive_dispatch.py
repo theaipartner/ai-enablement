@@ -37,9 +37,17 @@ from shared.slack_post import post_message
 
 logger = logging.getLogger("ai_enablement.ella.passive_dispatch")
 
-# Delay before the cron may generate the response. Spec § Goal: "CSMs
-# have a 3-5 min window to interject"; pick the midpoint.
-_RESPOND_AFTER_DELAY = timedelta(minutes=4)
+# Delay before the cron may generate the response. Per Drake's 2026-05-11
+# call (post-spec): CSMs structurally don't respond inside any realistic
+# window because they're in meetings, so the CSM-interjection rationale
+# the 4-min midpoint was buying us is mostly theoretical. Dropped to 1 min
+# for snappier client UX. Real-world perceived latency is 1-2 min because
+# the per-minute cron tick is the floor above this delay. The full queue +
+# cron + intervention-check machinery stays in place pending production
+# data on how often `cancelled_csm_intervened` actually fires; if the
+# count is ~0 after meaningful traffic, Batch 2.4 rips out the queue and
+# moves to synchronous response from the ingest fork.
+_RESPOND_AFTER_DELAY = timedelta(minutes=1)
 
 # Audit-ledger source label for the escalation DM. Separate from the
 # realtime-ingest source so analytics can split escalation traffic from
