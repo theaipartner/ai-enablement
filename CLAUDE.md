@@ -40,7 +40,7 @@ This section captures how Drake works with Director (chat-Claude on claude.ai) a
 
 Drake is the strategic and judgment layer — vision, product calls, architecture decisions. He doesn't write code, doesn't review every line. He's the human gate at agreed boundaries (see § Director / Builder System for the four gates).
 
-Director is chat-Claude (this surface, claude.ai). Director ideates with Drake on what to do, decomposes into Builder tasks, writes specs to `docs/specs/<slug>.md` for non-trivial work, commits those specs and any CLAUDE.md / docs / runbook updates to GitHub via the GitHub MCP connector, reads Builder's reports out-of-loop after Drake points to them, and reports back to Drake. Director does NOT commit or review Builder's code work — Builder pushes its own code and reports.
+Director is chat-Claude (this surface, claude.ai). Director ideates with Drake on what to do, decomposes into Builder tasks, writes specs to `docs/specs/<slug>.md` for non-trivial work, persists those specs and any CLAUDE.md / docs / runbook updates (via filesystem MCP on desktop, or GitHub MCP on mobile), commits + pushes them to GitHub via the GitHub MCP connector, reads Builder's reports out-of-loop after Drake points to them, and reports back to Drake. Director does NOT commit or review Builder's code work — Builder pushes its own code and reports.
 
 Builder is the Claude Code session that executes specs. Builder pulls latest from `origin/main` at session start (a SessionStart hook handles this), reads the spec it's pointed at, executes the work, runs tests, commits and pushes per the existing one-logical-change-per-commit rule, then writes a report to `docs/reports/<slug>.md` and pushes that as a final commit. Builder is not headless — Drake interacts with it directly during execution if needed for gate moments.
 
@@ -53,16 +53,17 @@ Drake's role at runtime is the four gates in § Director / Builder System § Dra
 - **Short messages during active work, longer framing at breakpoints.** Smoke test clicks don't need essays. Scoping a feature does.
 - **Avoid forced-answer prompts (`ask_user_input_v0`-style tools) for clarifying questions.** Drake prefers questions laid out in response prose so he can read at his own pace and reply in his own words. Forced-answer tools feel constraining. Lay clarifying questions inline; let Drake answer however suits him.
 - **Option A / B / C framing for tradeoff decisions.** Lay out realistic options, name tradeoffs honestly, give your lean and why, let Drake decide.
-- **Capture decisions in writing as you make them.** CLAUDE.md / spec / runbook updates land in the same chat turn as the decision, committed via GitHub MCP. Drake wants to be able to look back and see why calls were made.
+- **Capture decisions in writing as you make them.** CLAUDE.md / spec / runbook updates land in the same chat turn as the decision — written via filesystem MCP (desktop) or GitHub MCP (mobile), then committed + pushed via GitHub MCP. Drake wants to be able to look back and see why calls were made.
 - **Strong leans → make the call.** If you have a strong lean and the consequence of being wrong is recoverable, make the call and note it for Drake to check. Hard stops are reserved for: irreversible actions, credential touches, deploys, migrations, anything where being wrong costs significant cleanup time, decisions with no good default. Don't pile on stops where there's no real boundary.
 - **Time references mean workflow position, not calendar position.** When Drake says "EOD," "end of session," or "today," these refer to the *workflow phase* (the end of the current focused work session), not the literal calendar end of day. Director historically misread "EOD" as "before midnight tonight" and made urgency calls that didn't match Drake's intent. When in doubt about which sense applies, ask Drake to clarify rather than guess.
 
 ### Tools available to Director (chat surface)
 
-Director runs on claude.ai with these tools available across sessions:
+Director runs on claude.ai with these tools available across sessions. Two surfaces depending on Drake's device — detect by looking at the loaded tool list at conversation start.
 
-- **GitHub MCP connector.** Director uses this to read repo state (specs, CLAUDE.md, docs, code) and to commit doc changes (CLAUDE.md edits, new specs, runbook updates, ADRs). Director does NOT use it to commit code or to commit Builder's reports — those are Builder's responsibility, pushed from the Code session.
-- **Project knowledge search.** Indexed snapshot of the repo. Recency lags pushes by minutes-to-hours; ask Drake to confirm the index is fresh before searching for post-push state. Stale-index reads against fresh-push reality is a known failure mode.
+- **Filesystem MCP (desktop only).** Direct read/write access to the repo at `/home/drake/projects/ai-enablement` via the Anthropic filesystem MCP server (wired through Claude Desktop with a `wsl.exe -- bash -ic` wrapper; setup history in past reports). When available, this is the **primary** surface for reading specs, reports, code, schema, docs (reads live disk state, no index lag) AND for writing new specs, CLAUDE.md edits, runbook updates, known-issues entries. Filesystem MCP is filesystem-only — it has no git capability, so after a write Director still uses GitHub MCP below to commit + push. Two-step write-then-commit handshake; the durable record lives in git either way.
+- **GitHub MCP connector (desktop + mobile).** Director uses this to commit + push doc changes to `origin/main` after a filesystem MCP write, AND as the fallback read/write surface when on mobile (filesystem MCP isn't available on the claude.ai mobile app). On mobile, Director reads via GitHub MCP's `get_file_contents` and writes via `push_files` or `create_or_update_file` in a single step. Director does NOT use GitHub MCP to commit code or to commit Builder's reports — those are Builder's responsibility, pushed from the Code session.
+- **Project knowledge search (tertiary).** Indexed snapshot of the repo. Recency lags pushes by minutes-to-hours and the index can drift from disk. Use only for fuzzy semantic search across the codebase when you don't know the file path; prefer filesystem MCP or GitHub MCP for any specific file you can name. Ask Drake to confirm the index is fresh before treating it as ground truth for post-push state.
 - **Web search / web fetch.** For external research (library docs, API references, current events).
 
 A future Director session inherits these as defaults — no need for Drake to explain the tooling each new session.
@@ -119,7 +120,7 @@ Director does NOT need to restate the report structure in the spec — Builder's
 
 ### Session start
 
-Director starts fresh per chat conversation. Auto-loads CLAUDE.md and recent specs/reports via project knowledge search (asking Drake first to confirm the index is fresh, since it lags pushes).
+Director starts fresh per chat conversation. On desktop, loads CLAUDE.md and any recent specs/reports via filesystem MCP (live disk state). On mobile, loads via GitHub MCP. Project knowledge search is the fallback when neither names a file Director needs.
 
 Director's first move on a new conversation:
 
@@ -150,7 +151,7 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 
 ### Roles
 
-- **Director** — chat-Claude on claude.ai. Plans with Drake, decomposes work, writes specs to `docs/specs/<slug>.md`, commits specs + CLAUDE.md / docs / runbook updates via GitHub MCP, reads reports out-of-loop when Drake points to them, reports back. Does NOT commit or review Builder's code work.
+- **Director** — chat-Claude on claude.ai. Plans with Drake, decomposes work, writes specs to `docs/specs/<slug>.md`, persists doc changes via filesystem MCP (desktop) or GitHub MCP (mobile), then commits + pushes via GitHub MCP, reads reports out-of-loop when Drake points to them, reports back. Does NOT commit or review Builder's code work.
 - **Builder** — the Claude Code session that executes specs. Pulls from `origin/main` at session start, reads the spec, executes, runs tests, commits + pushes per the standard rules, writes a report to `docs/reports/<slug>.md`, pushes the report.
 - **Drake** — the human gate at agreed boundaries (the four gates below). Reads reports after Builder pushes; doesn't gate the push itself.
 
@@ -178,7 +179,7 @@ The Director / Builder system is the runtime shape of how work gets done. Workin
 **Spec:** docs/specs/<slug>.md
 ```
 
-**Cleanup cadence.** When work ships, Director updates the spec's `Status:` to `shipped` (via GitHub MCP) but leaves both spec and report files in place during the working day. Drake batches the deletion of all `shipped` spec/report pairs at end of day in a single doc-hygiene commit. Rationale: keeping shipped pairs around mid-day makes it easier to refer back to recent work without git-spelunking; EOD batching keeps the long-term repo clean. Director must NEVER delete a spec or report without an explicit "delete now" or "EOD cleanup" cue from Drake — silent deletion is a hard rule against. The durable record lives in CLAUDE.md § Live System State + git history once the EOD cleanup lands.
+**Cleanup cadence.** When work ships, Director updates the spec's `Status:` to `shipped` (via filesystem MCP on desktop, GitHub MCP on mobile, then committed via GitHub MCP) but leaves both spec and report files in place during the working day. Drake batches the deletion of all `shipped` spec/report pairs at end of day in a single doc-hygiene commit. Rationale: keeping shipped pairs around mid-day makes it easier to refer back to recent work without git-spelunking; EOD batching keeps the long-term repo clean. Director must NEVER delete a spec or report without an explicit "delete now" or "EOD cleanup" cue from Drake — silent deletion is a hard rule against. The durable record lives in CLAUDE.md § Live System State + git history once the EOD cleanup lands.
 
 `docs/reports/` has a `.gitkeep` so the folder exists even when empty post-cleanup.
 
@@ -212,13 +213,13 @@ If something in the work was unusually expensive (e.g., "the test suite re-run a
 
 ### Director behavior
 
-Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<slug>.md` (committed via GitHub MCP) and tell Drake the spec is ready. Drake hands the spec to Builder when ready to execute.
+Plan with Drake. Decompose the work into discrete Builder tasks. For non-trivial work, write a spec to `docs/specs/<slug>.md` (written via filesystem MCP on desktop or GitHub MCP on mobile, then committed + pushed via GitHub MCP) and tell Drake the spec is ready. Drake hands the spec to Builder when ready to execute.
 
 Director does NOT review Builder's code work pre-push. The topology has Builder pushing on its own, and Director can't see new pushes automatically — Drake reads the report after Builder lands the work, and points Director at it if there's something to discuss. When Drake points at a report, read it critically — verify what Builder claims it did against the diff if Drake wants a second opinion, flag anything off. The review is real, just out-of-loop.
 
 **The push-without-review tradeoff.** The old topology had Director gate-keeping push by reviewing the diff. The new topology removes that gate because Director (chat) can't see new commits without Drake telling it to look. The remaining quality gates are: the spec itself (Director's upstream design check), Drake's four gates, Builder's own commit hygiene (no failing tests, no secrets, one logical change per commit), and Drake's out-of-loop report read. Spec quality becomes load-bearing — a sloppy spec executed blind by Builder and pushed without review can land bad code in `main`. Tighten specs accordingly.
 
-**Director's own commits.** Director uses GitHub MCP to commit doc work — CLAUDE.md edits, new specs, runbook updates, ADRs, known-issues entries. These are Drake-present chat-driven changes (Drake reads the diff in chat as Director drafts), so the no-pre-push-review concern doesn't apply. Director does NOT use GitHub MCP to commit code or to commit Builder's reports — those are Builder's responsibility from the Code session.
+**Director's own commits.** Director writes doc work — CLAUDE.md edits, new specs, runbook updates, ADRs, known-issues entries — via filesystem MCP on desktop or GitHub MCP on mobile, then commits + pushes via GitHub MCP. On desktop this is a two-step handshake (filesystem MCP writes to disk; GitHub MCP picks up the diff and pushes); on mobile it's one step via GitHub MCP's `push_files`. Either way, Director commits + pushes itself after a doc write rather than asking Drake to do it. These are Drake-present chat-driven changes (Drake reads the diff in chat as Director drafts), so the no-pre-push-review concern doesn't apply. Director does NOT use GitHub MCP to commit code or to commit Builder's reports — those are Builder's responsibility from the Code session.
 
 **Bundling escape valve.** If a task feels too small to justify spinning up a fresh Builder session, bundle it with other related or sequential tasks into a single spec. Caveats:
 

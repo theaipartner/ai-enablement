@@ -165,6 +165,13 @@ Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker
 - **Logged:** 2026-04-22.
 - **Superseded by Ella V2 Batch 2.3 (2026-05-11):** the column was renamed `passive_monitoring_enabled` and is now actively read by `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor` (gate for the passive-monitor fork) and `api/passive_ella_cron.py:_lookup_channel` (gate re-check during queue drain). Per-channel toggle is the operational mechanism for the passive-monitoring rollout per `docs/runbooks/ella_passive_monitoring.md`. The reactive @-mention path still doesn't gate on this column — it runs in every client-mapped channel — so the "beta gate for Ella's responses" framing of the original entry is partially superseded: passive responses gate per-channel; reactive responses don't.
 
+## Rip the passive-response queue + per-minute cron once the CSM-intervention path is proven unused
+
+- **What:** the Batch 2.3 architecture has a 1-min delayed response queue (`pending_ella_responses` table + `api/passive_ella_cron.py`) so CSMs can interject before Ella responds. The design rationale assumes CSMs are watchful inside that window. Drake's read (2026-05-11): CSMs are structurally in meetings and don't intervene in a 1-min window, so the queue + cron + CSM-intervention check are buying us nothing while costing real complexity. The rip: synchronous dispatch from the realtime-ingest fork instead of queued, plus a migration dropping `pending_ella_responses`. The Haiku decision module, the four-outcome pipeline, the kill switches, the escalation DM path all stay.
+- **Why deferred:** prerequisite metric required first. Wait until `SELECT count(*) FROM pending_ella_responses WHERE status='cancelled_csm_intervened'` returns 0 after ≥7 days of `ELLA_PASSIVE_MONITORING_ENABLED=true` in production AND ≥3 channels with `passive_monitoring_enabled=true` AND ≥50 total `respond_*` decisions persisted. If the count is >0, the intervention path is real and this rip doesn't ship as-written; Drake reassesses then. The Slack webhook 3-sec SLA is a real constraint to address in the rip (background thread vs hybrid vs accepted latency — mirror whatever `api/slack_events.py`'s reactive @-mention path does today).
+- **Revisit trigger:** the prerequisite metric clears, OR enough traffic + days have passed that we have confidence in the answer either way.
+- **Logged:** 2026-05-11.
+
 ## Team-test mode flag
 
 - **What:** when a team member (`author_type=team_member`) @mentions Ella, stamp the `agent_runs` row with `trigger_metadata.is_team_test = true` so real-usage analytics can filter out test traffic. Ella still responds normally — the flag is telemetry-only.
