@@ -277,7 +277,7 @@ def _resolve_channel_name_target(
             "is_private": channel.get("is_private", False),
             "is_archived": channel.get("is_archived", False),
             "client_id": None,
-            "ella_enabled": False,
+            "passive_monitoring_enabled": False,
         }).execute()
         db_row_exists = True
 

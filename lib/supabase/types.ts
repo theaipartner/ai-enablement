@@ -1017,11 +1017,64 @@ export type Database = {
           },
         ]
       }
+      pending_ella_responses: {
+        Row: {
+          agent_run_id: string
+          created_at: string
+          error_message: string | null
+          haiku_decision: string
+          haiku_reasoning: string | null
+          id: string
+          respond_after_ts: string
+          responded_at: string | null
+          slack_channel_id: string
+          status: string
+          triggering_message_slack_user_id: string
+          triggering_message_ts: string
+        }
+        Insert: {
+          agent_run_id: string
+          created_at?: string
+          error_message?: string | null
+          haiku_decision: string
+          haiku_reasoning?: string | null
+          id?: string
+          respond_after_ts: string
+          responded_at?: string | null
+          slack_channel_id: string
+          status?: string
+          triggering_message_slack_user_id: string
+          triggering_message_ts: string
+        }
+        Update: {
+          agent_run_id?: string
+          created_at?: string
+          error_message?: string | null
+          haiku_decision?: string
+          haiku_reasoning?: string | null
+          id?: string
+          respond_after_ts?: string
+          responded_at?: string | null
+          slack_channel_id?: string
+          status?: string
+          triggering_message_slack_user_id?: string
+          triggering_message_ts?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pending_ella_responses_agent_run_id_fkey"
+            columns: ["agent_run_id"]
+            isOneToOne: false
+            referencedRelation: "agent_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       slack_channels: {
         Row: {
           client_id: string | null
           created_at: string
-          ella_enabled: boolean
+          passive_monitoring_enabled: boolean
           id: string
           is_archived: boolean
           is_private: boolean
@@ -1033,7 +1086,7 @@ export type Database = {
         Insert: {
           client_id?: string | null
           created_at?: string
-          ella_enabled?: boolean
+          passive_monitoring_enabled?: boolean
           id?: string
           is_archived?: boolean
           is_private: boolean
@@ -1045,7 +1098,7 @@ export type Database = {
         Update: {
           client_id?: string | null
           created_at?: string
-          ella_enabled?: boolean
+          passive_monitoring_enabled?: boolean
           id?: string
           is_archived?: boolean
           is_private?: boolean

@@ -568,7 +568,7 @@ def _ensure_slack_channel(
                     "is_private": False,
                     "is_archived": False,
                     "client_id": client_id,
-                    "ella_enabled": False,
+                    "passive_monitoring_enabled": False,
                     "metadata": {"created_via": CREATED_VIA},
                 }
             ).execute()

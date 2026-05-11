@@ -259,7 +259,7 @@ def build_channel_payload(
         "client_email": client_email,
         "is_private": True,
         "is_archived": False,
-        "ella_enabled": False,
+        "passive_monitoring_enabled": False,
         "metadata": {},
     }
 
@@ -695,7 +695,7 @@ def apply_channels(
             "client_id": client_id,
             "is_private": p["is_private"],
             "is_archived": p["is_archived"],
-            "ella_enabled": p["ella_enabled"],
+            "passive_monitoring_enabled": p["passive_monitoring_enabled"],
         }
         client.table("slack_channels").upsert(
             payload, on_conflict="slack_channel_id"

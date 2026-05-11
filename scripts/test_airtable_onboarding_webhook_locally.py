@@ -339,7 +339,7 @@ def _seed_update_fixture() -> None:
             """
             INSERT INTO slack_channels (
               slack_channel_id, name, is_private, is_archived,
-              client_id, ella_enabled, metadata
+              client_id, passive_monitoring_enabled, metadata
             ) VALUES (%s, %s, false, false, %s, false,
               jsonb_build_object('seeded_by', 'test_airtable_onboarding_webhook_locally'));
             """,
