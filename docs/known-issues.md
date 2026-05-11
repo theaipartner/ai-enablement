@@ -48,6 +48,36 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 
 ---
 
+## Ella audit dashboard (`/ella/runs`) — 5 follow-up fixes flagged during validation
+
+- **What:** Drake validated the Batch 2.2 audit dashboard in production on 2026-05-11 and flagged five distinct items requiring follow-up fixes. The specific items were not enumerated in the chat session; they'll be captured here when Drake re-engages with the dashboard and writes them up. Five issues total — each gets either its own followup line below this entry, or a single bundled spec, depending on whether they cluster.
+- **Why it matters:** the dashboard is shipped but has known rough edges. Without capturing the specific issues, they could get lost in the post-handoff context drop. The 5 flagged items represent the gap between "the dashboard works" and "the dashboard is ready for CSM use beyond Drake."
+- **Next action:** Drake fills in the five specific items below this entry when he next engages with the dashboard. If they cluster (e.g., "filter UX issues" + "detail-view rendering bugs" + "performance"), bundle into a single fix spec. If they're independent, capture as individual followups. Either way, the gap closes when the five items are addressed.
+- **Logged:** 2026-05-11.
+
+## `/run` slash command requires `/run .` to invoke — bug
+
+- **What:** The `/run` slash command in `.claude/commands/run.md` is designed to find the single in-flight spec under `docs/specs/` without a matching report and execute it. In practice it doesn't fire on `/run` alone or `/run ` (with trailing space); the user has to type `/run .` (with a trailing period or arg) for the command to invoke. Likely cause: the `disable-model-invocation: true` directive in the command frontmatter requires an argument for the command to be recognized as user-invoked vs. model-attempted, but the no-arg invocation path treats it as the latter and silently drops it.
+- **Why it matters:** every Builder session adds friction. Drake has to remember to type `/run .` (with the trailing token) rather than `/run`, which is the more natural shape. Doesn't break anything — workaround is known — but compounds over time as the convention scales.
+- **Next action:** investigate the command frontmatter. Two likely fixes: (a) remove `disable-model-invocation: true` if model-invocation isn't a real concern for this command, OR (b) make the command accept a no-arg shape by adjusting the command body to handle "no spec specified" cleanly. ~15-min Builder task once someone can read the actual Code-side slash-command runtime to understand why no-arg invocation drops. Drake mentioned in chat he has a fix queued — that note's preserved here as a hand-off pointer.
+- **Logged:** 2026-05-11.
+
+## Partial report on Builder hard stop — Builder norm not yet codified
+
+- **What:** Today's Builder behavior on hard-stop is: surface the issue in chat to Drake (since Drake is in the loop on the Code session) and wait. If Drake walks away or aborts, there's no automatic "write what got done so far" step. The work that completed before the hard stop sits as committed code on `main`, but Director has no async-readable artifact describing it. Asymmetric with Builder's end-of-task report flow, which produces a report only when work completes.
+- **Why it matters:** Director-and-Drake conversation about what to do next has to be synchronous (Drake summarizes Builder's chat output) instead of async (Director reads a partial report). Cost is real — every hard-stop incident adds Drake-summarization overhead.
+- **Next action:** add a paragraph to CLAUDE.md § Director / Builder System § Builder behavior. Suggested wording: "When Builder encounters a hard stop and cannot proceed without Drake or Director input, Builder writes a partial report at `docs/reports/<slug>.md` describing what was completed (with commit hashes), what was attempted and blocked, the specific block (error message, missing schema, unresolvable ambiguity), and what input would unblock it. Then Builder exits cleanly. The partial report uses the same six-section structure as a normal report — the empty sections still get filled with explicit 'none' or 'blocked by X.'" This Builder-norm change is the integration item; the spec itself is the placeholder.
+- **Logged:** 2026-05-11.
+
+## File MCP for chat (Director side) — Drake has fix queued
+
+- **What:** Today's GitHub MCP requires Director (chat-Claude) to rewrite full files on every edit. This is slow and high-token-cost on a 70KB CLAUDE.md — every small surgical change becomes a full file rewrite. Drake has a fix queued (a file MCP that supports `str_replace`-style targeted edits in chat, mirroring Builder's `str_replace` tool). Not urgent today but worth tracking.
+- **Why it matters:** Director's effective rate-limit on doc edits is much lower than Builder's because of the full-file-rewrite pattern. Once the file MCP lands, Director can do surgical doc edits as fast as Builder can, which speeds up the "in-chat doc hygiene" loop materially.
+- **Next action:** Drake ships the file MCP when ready. No Director-side action needed — Director starts using `str_replace`-style operations once the new MCP is available. Until then, Director continues writing specs for Builder to execute when surgical edits would be too painful via full-file rewrite.
+- **Logged:** 2026-05-11.
+
+---
+
 Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
 
 ## Fathom auto-review vs brain-sweep freshness — 24h-max race (accepted)
