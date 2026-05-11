@@ -575,6 +575,8 @@ Earlier-symptom note kept for the future-Director: the 2026-04-29 M3.3 push exhi
 
 **Logged:** 2026-04-29 (M3.3 — original empty-builds-tree symptom); rewritten 2026-05-08 (Phase 3b discovery — root-caused via build-log diff of commit d14770e's failed git-push vs successful no-cache redeploy); resolved 2026-05-08 (Phase 3b close — validation deploy on the four-commit fix session pushed cleanly without manual redeploy, confirming the clean cache held).
 
+**See also:** § ~~Vercel auto-deploys silently failed on recent pushes to main (intermittent)~~ — RESOLVED 2026-05-11. That entry covers the second occurrence of the same 250 MB error message, with a different root cause (Vercel-build-created `.next/` and `node_modules/` slipping past `.vercelignore` into every Python function bundle, growing the bundle close to and then past the 250 MB cap as we added more Python functions / heavier deps). Resolution path was per-function `excludeFiles` in `vercel.json` rather than cache eviction. Future Director / Builder should see both contamination-and-bundle-size issues as related-but-distinct: contamination is "wrong stuff in the cache"; bundle-size is "bundle is right around the limit." When the 250 MB error next recurs, check `vercel.json` first for missing `excludeFiles` entries on any newly-added Python function.
+
 ## ~~Ella V2 Batch 1 — realtime live ingestion not operational (Slack-app-config gap)~~ — RESOLVED 2026-05-10
 
 Resolved 2026-05-10 — root cause was a missing `message.groups` event subscription. Client channels are private (🔒), and `message.channels` alone fires only for public (`#`) channels; `message.groups` is what fires for private channels. Drake added the subscription, reinstalled the Slack app, and retested end-to-end with a fresh post in `#ella-test-drakeonly` — `webhook_deliveries` and `slack_messages` rows landed within seconds. Both `channels:history` and `groups:history` scopes are now active on the bot token. The original entry is preserved below for diagnostic reference (the symptom signature plus the four-step Slack-app-config checklist remains useful if any future event-subscription change leaves the path silently broken in the same way).
@@ -584,13 +586,37 @@ Resolved 2026-05-10 — root cause was a missing `message.groups` event subscrip
 - **Next action:** Drake checks the Slack app config (gate d) in this order: (1) Event Subscriptions → confirm `message.channels` AND `message.groups` are subscribed and the Request URL `https://ai-enablement-sigma.vercel.app/api/slack_events` shows "Verified"; (2) OAuth & Permissions → confirm `channels:history` + `groups:history` scopes are granted; (3) confirm the app was reinstalled in the workspace after the most recent scope/event-subscription change; (4) compare the Slack app's signing secret against Vercel's `SLACK_SIGNING_SECRET` env var (a mismatch would 401 every delivery, which never reaches the audit-write code so it stays invisible from the cloud side — only `vercel logs` would show it). Once any of those flip, a follow-up test post in `#ella-test-drakeonly` should produce a fresh `webhook_deliveries` row + a fresh `slack_messages` row within ~10 seconds.
 - **Logged:** 2026-05-10 (Ella V2 Batch 1 finish-rollout Task 3 finding); resolved 2026-05-10 (root cause `message.groups` subscription missing).
 
-## Vercel auto-deploys silently failed on recent pushes to main (intermittent)
+## ~~Vercel auto-deploys silently failed on recent pushes to main (intermittent)~~ — RESOLVED 2026-05-11
 
-- **What:** Pushes to `main` did not trigger successful Vercel deploys for some unknown number of recent commits on 2026-05-10. Manual "Redeploy" via the Vercel dashboard fixed it. Distinct from the 2026-05-08 build-cache-contamination signature (see § ~~Vercel build cache can carry forward bloated function bundles~~ below) — that one fails during "Deploying outputs..." with a 250 MB error and required unchecking "Use existing Build Cache" on redeploy. This intermittent failure resolved with a plain Redeploy without touching the build-cache toggle, suggesting a different failure mode (build error, GitHub-integration trigger missing the push, or something else upstream of the build).
-- **Why it matters:** Builder + Director both rely on git-push auto-deploy as the primary deploy mechanism per CLAUDE.md § Operational patterns ("Deploys via git push are reliable post-2026-05-08 cache-contamination fix"). If push-driven deploys silently no-op, code can land in `main` without making it to production, and the staleness is invisible until someone tests the live surface.
-- **Next action:** Next time this recurs, check the Vercel dashboard before redeploying — open the failed deployment and capture the actual failure signature (build log, GitHub integration status, anything in the deployment metadata). Once we have the signature, decide whether it warrants a real fix or stays as "redeploy on noticing." Drake's gate-(c) post-deploy verification on the dashboard is the existing catch surface, which works.
-- **Why not urgent:** Redeploy works. The failure is visible (red status on the Vercel dashboard). No production data corruption — just a stale deploy.
-- **Logged:** 2026-05-10.
+Resolved 2026-05-11 by the `vercel-python-bundle-size-diagnose-and-reduce` spec. Root cause was different from the 2026-05-08 cache-contamination signature: every Python function bundle was sitting at **exactly 253.42 MB** (3.42 MB OVER the 250 MB cap), where the dominant contributor was `.next/cache/webpack: 129.73 MB` AND `node_modules/` (Next.js production deps — swc-linux-x64-gnu, typescript/lib, lucide-react, lightningcss, ts-morph). Both are Vercel-build-phase artifacts: `.vercelignore` filters the initial upload, but Vercel's build creates `.next/` and `node_modules/` AFTER the ignore is applied, so they slip into every `@vercel/python` function bundle.
+
+The intermittent vs reliable pattern was bundle size oscillating right at the limit — sometimes the transitive-dep resolution produced bundles fractionally under 250 MB (build passes); sometimes slightly over (build fails). Manual Redeploy "worked" because cache state varied between invocations.
+
+Resolution: add `"excludeFiles": "{.next,node_modules}/**"` to every Python function entry in `vercel.json`. Drops bundle size from 543 MB (after fresh build) → ~123 MB. 127 MB of headroom under the cap. Validated via preview deploy (`ai-enablement-i664mcjog`, succeeded) + production auto-deploy on commit `3e71753` to `main`.
+
+**Diagnostic signature kept for future-Builder reference:**
+
+Pre-fix (failed deploys):
+```
+Error: 9 functions exceeded the uncompressed maximum size of 250 MB.
+Large dependencies:
+• .next/cache/webpack: 129.73 MB
+• node_modules/@next/swc-linux-x64-gnu: 125.32 MB
+• node_modules/next/dist: 82.61 MB
+• node_modules/typescript/lib: 22.48 MB
+• node_modules/lucide-react/dist: 19.87 MB
+• cryptography/hazmat/bindings: 13.28 MB
+• zstandard/_cffi.cpython-312-x86_64-linux-gnu.so: 11.58 MB
+• zstandard/backend_c.cpython-312-x86_64-linux-gnu.so: 11.02 MB
+• pyroaring.cpython-312-x86_64-linux-gnu.so: 7.59 MB
+• pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so: 4.53 MB
+```
+
+Note that pyiceberg / pyroaring / zstandard / hive_metastore are dead-code from `supabase -> storage3 -> pyiceberg` — we never call Storage. Excluding those would shave another ~25 MB but adds ImportError-risk; current headroom doesn't need it.
+
+**Revisit triggers:** (a) adding a new Python function — copy the existing `excludeFiles` pattern; (b) adding a new heavy dep to `requirements.txt`; (c) upgrading `@vercel/python` builder version (4.3.1 → 4.x.x); (d) the 250 MB error message appears again — check `vercel.json` first for missing `excludeFiles` entries.
+
+**Logged:** 2026-05-10 (intermittent-failure observation, no root cause); rewritten 2026-05-11 (root-caused via `vercel inspect --logs` on a failed deploy showing per-function bundle composition + iterative preview deploys); resolved 2026-05-11 (production auto-deploy on commit `3e71753` succeeded after `excludeFiles` glob landed; full diagnostic + fix in `docs/reports/vercel-python-bundle-size-diagnose-and-reduce.md`, runbook in `docs/runbooks/vercel_python_bundle_size.md`).
 
 ## Backfill `--channel-id` flag doesn't strictly scope when a client has multiple channels
 
