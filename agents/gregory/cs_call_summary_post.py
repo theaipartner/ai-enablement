@@ -36,27 +36,22 @@ Design constraints (per Drake's spec):
     existing `no_summary_text` skip path uses the same pattern) but
     keeps SQL queries clean and avoids a migration round-trip.
 
-Message format (review-shaped — the only shape):
+Message format (sentiment-only — the only shape):
 
     *[CSM Name] / [Client Name]*
 
     *Sentiment*
     [sentiment_arc]
 
-    *Pain points*
-    • [description] — _[evidence]_
-
-    *Wins*
-    • [description] — _[evidence]_
-
-    *Conversation pivots*
-    • [description] (who: [who]) — _[evidence]_
-
     <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
 
-Empty sections are omitted entirely (no "None" filler). The whole
-message passes through `markdown_to_mrkdwn` so any rogue Markdown the
-LLM emitted gets cleaned before it hits Slack.
+The previous review-shape post additionally rendered Pain points, Wins,
+and Conversation pivots sections. Those were dropped 2026-05-11 — CSMs
+click through to Gregory for the full review; the Slack post is a
+sentiment-only at-a-glance signal. When `sentiment_arc` is missing or
+empty, the post is skipped entirely (same shape as the degenerate-review
+check). The whole message passes through `markdown_to_mrkdwn` so any
+rogue Markdown the LLM emitted gets cleaned before it hits Slack.
 
 Sentinel labels:
   - `[unassigned]` when no active primary_csm
@@ -434,26 +429,17 @@ def _format_review_message(
     review: dict[str, Any],
     call_id: str,
 ) -> str | None:
-    """Render the review-shaped Slack message.
+    """Render the sentiment-only Slack message.
 
-    Returns None when the parsed review yields a degenerate render
-    (no sentiment + no pain + no wins + no pivots) — caller falls
-    through to the Fathom-summary fallback.
+    Returns None when `sentiment_arc` is missing or empty — caller treats
+    that as a degenerate review and skips the Slack post entirely.
 
     Headers emitted as `**Header**` Markdown so `markdown_to_mrkdwn`
     normalizes them to mrkdwn bold via its bold-stash mechanism.
     Single-asterisk `*Header*` would survive the bold step but get
     eaten by the italic regex; double-asterisk Markdown is the safe
-    input shape.
-
-    Section rules:
-      - Empty sections omitted entirely. Caller falls back if ALL
-        sections come back empty.
-      - Sentiment included as long as `sentiment_arc` is a non-empty
-        string.
-      - Evidence wrapped in `_..._` (mrkdwn italic).
-      - Pivots subsection labeled "Conversation pivots" to match the
-        dashboard's user-facing rename of `dodged_questions`.
+    input shape — applies to both the top `**CSM / Client**` header
+    and the `**Sentiment**` section header.
     """
     sections: list[str] = []
 
@@ -461,32 +447,12 @@ def _format_review_message(
     if isinstance(sentiment_arc, str) and sentiment_arc.strip():
         sections.append(f"**Sentiment**\n{sentiment_arc.strip()}")
 
-    pain_lines = _format_review_items(
-        review.get("pain_points"), include_who=False
-    )
-    if pain_lines:
-        sections.append("**Pain points**\n" + "\n".join(pain_lines))
-
-    win_lines = _format_review_items(review.get("wins"), include_who=False)
-    if win_lines:
-        sections.append("**Wins**\n" + "\n".join(win_lines))
-
-    pivot_lines = _format_review_items(
-        review.get("dodged_questions"), include_who=True
-    )
-    if pivot_lines:
-        sections.append("**Conversation pivots**\n" + "\n".join(pivot_lines))
-
     if not sections:
-        # Degenerate review — empty everywhere. Caller falls back.
+        # Missing or empty sentiment — degenerate render. Caller skips.
         return None
 
     deep_link = _GREGORY_CALL_PATH.format(call_id=call_id)
     body = "\n\n".join(sections)
-    # Top header emitted as `**...**` Markdown (NOT `*...*` mrkdwn) for
-    # the same reason the section headers are: the converter's italic
-    # regex would otherwise eat a single-asterisk pair on a line of its
-    # own. Markdown source is the safe input shape for the converter.
     return (
         f"**{csm_name} / {client_name}**\n"
         f"\n"
@@ -494,34 +460,6 @@ def _format_review_message(
         f"\n"
         f"<{deep_link}|View in Gregory>"
     )
-
-
-def _format_review_items(items: Any, *, include_who: bool) -> list[str]:
-    """Render a list of review items as bullet lines.
-
-    Tolerant to per-item shape errors: items missing `description` are
-    skipped, items missing `evidence` render the description alone.
-    `include_who` adds the `(who: [who])` suffix used for pivots.
-    """
-    if not isinstance(items, list):
-        return []
-    lines: list[str] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        description = item.get("description")
-        if not isinstance(description, str) or not description.strip():
-            continue
-        line = f"• {description.strip()}"
-        if include_who:
-            who = item.get("who")
-            if isinstance(who, str) and who.strip():
-                line += f" (who: {who.strip()})"
-        evidence = item.get("evidence")
-        if isinstance(evidence, str) and evidence.strip():
-            line += f" — _{evidence.strip()}_"
-        lines.append(line)
-    return lines
 
 
 # ---------------------------------------------------------------------------

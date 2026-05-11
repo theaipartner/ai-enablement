@@ -633,22 +633,20 @@ def test_7_review_found_populated() -> None:
 
     text = captured.get("text") or ""
     _check("7.text.sentiment_header", "*Sentiment*" in text, "missing *Sentiment* header")
-    _check("7.text.pain_header", "*Pain points*" in text, "missing *Pain points* header")
-    _check("7.text.wins_header", "*Wins*" in text, "missing *Wins* header")
     _check(
-        "7.text.pivots_header",
-        "*Conversation pivots*" in text,
-        "missing *Conversation pivots* header",
+        "7.text.no_pain_section",
+        "*Pain points*" not in text,
+        "*Pain points* section rendered (should have been dropped in sentiment-only format)",
     )
     _check(
-        "7.text.evidence_italic",
-        "_We can't get the funnel published_" in text,
-        f"missing italic-wrapped evidence in text",
+        "7.text.no_wins_section",
+        "*Wins*" not in text,
+        "*Wins* section rendered (should have been dropped in sentiment-only format)",
     )
     _check(
-        "7.text.who_inline",
-        "(who: client)" in text,
-        "missing (who: client) inline marker on pivot",
+        "7.text.no_pivots_section",
+        "*Conversation pivots*" not in text,
+        "*Conversation pivots* section rendered (should have been dropped in sentiment-only format)",
     )
     _check(
         "7.text.no_double_star",
@@ -873,17 +871,13 @@ def test_11_mrkdwn_safety_net_on_review_shape() -> None:
     # renders as its own paragraph, so a leading `### Header\n` here
     # IS line-anchored once the formatter splices it in.
     review = {
-        "pain_points": [
-            {
-                "description": "Quoted **GHL setup** problem from transcript",
-                "evidence": "Client said **important** thing about launch",
-            }
-        ],
+        "pain_points": [],
         "wins": [],
         "dodged_questions": [],
         "sentiment_arc": (
             "### Status header from rogue Markdown\n"
-            "Steady; CSM mentioned **important** progress mid-call."
+            "Steady; CSM mentioned **important** progress mid-call. "
+            "Quoted **GHL setup** problem from transcript."
         ),
     }
     _seed_review_document(external_id=ext_id, content=json.dumps(review))
