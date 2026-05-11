@@ -265,3 +265,15 @@ Batches 2/3.
 - v2 batch 1 (2026-05-09): cloud Slack ingestion live for all client
   channels. New `'ella'` `author_type` for self-recognition. See V2
   Ingestion section above.
+
+## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
+
+This snapshot lifts the orientation paragraph that previously lived in CLAUDE.md § Ella (active focus). Read it for a single-page "what is Ella today" view; the rest of this file (Behavior Specification, Data Flow, Retrieval Strategy, Build log) carries the deeper detail. Full batch-by-batch shipped detail lives in `docs/state.md`.
+
+Ella V2 is the active multi-batch focus alongside Gregory. State as of 2026-05-11:
+
+- **Batch 1 — cloud Slack ingestion (shipped 2026-05-09):** realtime + backfill into `slack_messages` for 8 channels (3,641 messages); live ingestion verified operational after `message.groups` event subscription was added 2026-05-10.
+- **Batch 1.5 — behavioral fixes (shipped 2026-05-10):** speaker identity resolution, audience-aware prompt, advisor @-mention on escalation, loosened `[ESCALATE]` detector, main-channel-only responses with last-15-turn context, bare-mention handler, dual-trigger detection. Validated in `#ella-test-drakeonly`.
+- **Batch 2.2 — audit dashboard (shipped 2026-05-11):** `/ella/runs` + `/ella/runs/[id]` with summary band, filter bar, anomaly views. 5 follow-up fixes flagged during validation (placeholder in `docs/known-issues.md`).
+- **Batch 2.3 — passive monitoring (code shipped 2026-05-11; rollout gated on Drake's (a) migration SQL review + (d) env-var setup + (c) post-deploy validation):** passive trigger pipeline + Haiku decision module + queue table + per-minute cron drainer + escalation DM path + firm-after-first prompt + 40 new tests. Default-stance stay-out. Dual kill switches default OFF at ship. See `docs/state.md` Batch 2.3 entry for full detail and `docs/runbooks/ella_passive_monitoring.md` for ops.
+- **Batch 2.1 — Slack messages as retrieval surface** is queued after 2.3 due to anonymization/cross-client privacy constraints.
