@@ -37,8 +37,11 @@ The pyiceberg / pyroaring / zstandard / hive_metastore subtree (~25 MB of dead-c
 - **Preview deploy** with the final glob: `vercel deploy --yes` produced `ai-enablement-i664mcjog` which built and deployed successfully. Vercel only prints size analysis on FAILED builds; the successful preview is itself the proof every function is under 250 MB.
 - **Python module-load smoke** locally: `import api.slack_events`, `import api.fathom_events`, all 9 Python function modules — every one loads without ImportError. Belt-and-suspenders against the spec's "exclude too aggressively → ImportError at runtime" failure mode (low-risk for `.next/` + `node_modules/` since no Python code imports from either).
 - **Full test suite**: `.venv/bin/python -m pytest tests/` → 507 passed (same baseline as before the change — confirms no Python-side regression).
-- **Production auto-deploy on commit `3e71753` (the fix)**: succeeded as `ai-enablement-2lkjmvz7j`, `● Ready`, 3m duration. Confirmed via `vercel ls --yes`.
-- **Two follow-on auto-deploys validate intermittent failure resolution**: commit `7e86cc7` (doc updates) auto-deploy + this report's commit auto-deploy. Both succeed → the failure isn't hiding behind cache state.
+- **Three production auto-deploys in a row succeed** (intermittent-failure resolution gate, spec § Phase 3 step 4):
+  1. `3e71753` (the `excludeFiles` fix) → `ai-enablement-2lkjmvz7j`, `● Ready`, 3m duration.
+  2. `7e86cc7` (the docs commit) → `ai-enablement-9n3c0cbuf`, `● Ready`, 3m duration.
+  3. The report commit → `ai-enablement-815r1vyw5`, `● Ready`, 3m duration.
+  Three consecutive successful production auto-deploys confirm the failure was bundle-size-at-the-cap, not transient infrastructure, and the fix holds.
 - **Local `vercel build --prod`** ran pip install for all 9 functions; 8 succeeded with the new exclude glob accepted (`builds.json` shows `error: null`); the 9th had a local-only WSL `PermissionError` on `supabase/snippets/Untitled query 399.sql` (Supabase Studio scratchpad file with restrictive owner perms) — environmental, doesn't affect cloud builds.
 
 ## 4. Surprises and judgment calls
@@ -67,10 +70,10 @@ The pyiceberg / pyroaring / zstandard / hive_metastore subtree (~25 MB of dead-c
 
 ## 6. Side effects
 
-- **Three production auto-deploys triggered** by commits to `main`:
+- **Three production auto-deploys triggered** by commits to `main`, all `● Ready`:
   1. `3e71753` — the `vercel.json` fix → `ai-enablement-2lkjmvz7j` (Ready, 3m duration). The first deploy after the fix; the intermittent-failure resolution gate.
-  2. `7e86cc7` — the docs commit (known-issues + runbook + CLAUDE.md update) → second follow-on auto-deploy. Validation 2 of 3.
-  3. This report's commit (when it lands) → third follow-on auto-deploy. Validation 3 of 3.
+  2. `7e86cc7` — the docs commit (known-issues + runbook + CLAUDE.md update) → `ai-enablement-9n3c0cbuf` (Ready, 3m duration). Validation 2 of 3.
+  3. This report's earlier commit → `ai-enablement-815r1vyw5` (Ready, 3m duration). Validation 3 of 3.
 - **One preview deploy** for fix-validation: `ai-enablement-i664mcjog` (Ready). No production traffic touched.
 - **One previous failed preview deploy** when testing the `".next/**"`-only glob: the build correctly reported the 543 MB size and the deploy errored, producing no usable URL. No traffic touched.
 - **No env vars set or rotated.** No DB migrations. No data writes. No Slack posts (preview deploys don't fire any of the existing cron / webhook paths against production data).
