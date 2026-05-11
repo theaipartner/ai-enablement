@@ -36,9 +36,14 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # USD per million tokens. Update when Anthropic publishes new pricing.
 _PRICING_PER_MILLION: dict[str, dict[str, Decimal]] = {
-    "claude-opus-4-7":   {"input": Decimal("15.00"), "output": Decimal("75.00")},
-    "claude-sonnet-4-6": {"input": Decimal("3.00"),  "output": Decimal("15.00")},
-    "claude-haiku-4-5":  {"input": Decimal("1.00"),  "output": Decimal("5.00")},
+    "claude-opus-4-7":            {"input": Decimal("15.00"), "output": Decimal("75.00")},
+    "claude-sonnet-4-6":          {"input": Decimal("3.00"),  "output": Decimal("15.00")},
+    "claude-haiku-4-5":           {"input": Decimal("1.00"),  "output": Decimal("5.00")},
+    # Date-suffixed Haiku alias used by Ella V2 Batch 2.3 passive
+    # monitoring. Same per-token rates as the unsuffixed alias; both
+    # entries kept so callers using either model string get accurate
+    # cost attribution.
+    "claude-haiku-4-5-20251001":  {"input": Decimal("1.00"),  "output": Decimal("5.00")},
 }
 
 
