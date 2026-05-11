@@ -306,7 +306,7 @@ def _lookup_channel(db, slack_channel_id: str | None) -> dict[str, Any] | None:
         db.table("slack_channels")
         .select(
             "id,slack_channel_id,client_id,is_archived,"
-            "passive_monitoring_enabled"
+            "passive_monitoring_enabled,test_mode"
         )
         .eq("slack_channel_id", slack_channel_id)
         .limit(1)
@@ -443,6 +443,7 @@ def _maybe_dispatch_passive_monitor(
             triggering_message_text=record.text or "",
             author_type=record.author_type,
             channel_client_id=channel_client_id,
+            test_mode=bool(channel_row.get("test_mode")),
         )
         evaluation = evaluate_passive_trigger(payload)
         persist_passive_evaluation(evaluation)

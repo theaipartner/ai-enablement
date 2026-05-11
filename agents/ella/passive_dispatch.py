@@ -75,6 +75,14 @@ def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
         "haiku_reasoning": decision.reasoning,
         "skip_reason": evaluation.skip_reason,
     }
+    # Tag test-mode runs so audit queries can filter test traffic out of
+    # production metrics:
+    #   AND (trigger_metadata->>'test_mode_run' IS NULL
+    #     OR trigger_metadata->>'test_mode_run' != 'true')
+    # Only stamped when the channel's `slack_channels.test_mode=True` —
+    # production passive runs never carry this flag.
+    if payload.test_mode:
+        trigger_metadata["test_mode_run"] = True
     input_summary = (payload.triggering_message_text or "")[:200]
 
     run_id = start_agent_run(

@@ -108,7 +108,15 @@ _SAFER_FALLBACK_DECISION = "skip"
 
 @dataclass(frozen=True)
 class PassiveTriggerPayload:
-    """The information the passive monitor needs from the ingest layer."""
+    """The information the passive monitor needs from the ingest layer.
+
+    `test_mode` (default False) is the channel-level smoke-test flag from
+    `slack_channels.test_mode`. When True, Gate 2 (author-type) accepts
+    `team_member` messages in addition to `client` messages so Drake can
+    smoke-test Ella as himself before flipping passive monitoring on for
+    production channels. Other author types (ella / bot / workflow /
+    unknown) still skip regardless of test_mode.
+    """
 
     slack_channel_id: str
     triggering_message_ts: str
@@ -116,6 +124,7 @@ class PassiveTriggerPayload:
     triggering_message_text: str
     author_type: str
     channel_client_id: str
+    test_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -203,14 +212,23 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
             skip_reason="kill_switch",
         )
 
-    # Gate 2: Author-type gate. Only client messages trigger passive
-    # monitoring. CSM @-Ella goes through the reactive path.
-    if payload.author_type != "client":
+    # Gate 2: Author-type gate. Production design is clients-only —
+    # passive monitor watches client channels for client questions,
+    # not for CSM coordination. CSM @-Ella goes through the reactive
+    # path instead.
+    #
+    # `slack_channels.test_mode=True` opens a controlled exception so
+    # Drake can smoke-test as himself in #ella-test-drakeonly. Under
+    # test_mode, team_member messages are accepted; ella / bot /
+    # workflow / unknown still skip (Ella responding to her own posts
+    # or to system messages is undesirable in every mode).
+    allowed_types = ("client", "team_member") if payload.test_mode else ("client",)
+    if payload.author_type not in allowed_types:
         return PassiveEvaluation(
             payload=payload,
             decision=PassiveDecision(
                 decision=_SAFER_FALLBACK_DECISION,
-                reasoning=f"non-client author_type={payload.author_type}",
+                reasoning=f"non-allowed author_type={payload.author_type} (test_mode={payload.test_mode})",
             ),
             skip_reason="non_client_author",
         )
