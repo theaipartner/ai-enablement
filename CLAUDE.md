@@ -364,7 +364,7 @@ Documentation is not optional and not written "later." It ships alongside the co
 
 **Commit policy.** Builder commits at the end of each meaningful unit of work (a feature complete, a migration applied, a file fully refactored) with a clear message following the convention. Don't commit half-finished work. Don't commit if tests/validation fail. Director writes specs only; every non-spec doc change (CLAUDE.md, runbooks, known-issues, future-ideas, ADRs, schema docs) is Builder's, bundled into whatever spec produces the underlying work.
 
-**Push policy.** Builder pushes its own code commits and report commits. Director does not gate push — push is reversible (`git revert`, Vercel rollback) and stays out of the gate set. Drake's push-related role is post-deploy verification on real surfaces (gate (c)), not pre-push review.
+**Push policy.** Push at end of logical task, not per commit. Multiple commits can land in one push; single-push-per-task is the rule (the 2026-05-11 EOD doc-hygiene cascade exposed how 16 cascading pushes were noisier than the underlying work warranted). Builder pushes its own code commits and report commits. Director does not gate push — push is reversible (`git revert`, Vercel rollback) and stays out of the gate set. Drake's push-related role is post-deploy verification on real surfaces (gate (c)), not pre-push review.
 
 ### Client Identity Resolution (alternate emails / alternate names)
 
