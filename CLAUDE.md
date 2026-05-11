@@ -445,23 +445,35 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Meeting tracking — bridge into Task Management.** Primary planned work for next session. Per-client + per-CSM cadence visibility. Late flag when a CSM hasn't had a 1:1 with a client in their expected cadence. Week-2 flag if no meeting in two weeks. End-of-week report to Scott + Nabeel summarizing the cohort. Ships without Fathom org admin (accepts some Fathom data will be missed). Real scoping conversation needed at session-start before any spec — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
+1. **Ella V2 Batch 2.3 — passive monitoring.** Big spec, needs its own scoping pass before any code. Drake scopes when ready. This is the next major Ella build — expands Ella's surface from @-mention-only to passively-observing-channel-traffic so she can offer help unprompted when the channel context warrants. Run volume will scale 5-10× from today's 28 V1 runs once 2.3 is live; Batch 2.2's audit dashboard (`/ella/runs`) is the operational surface that makes that volume manageable.
 
-2. **Batch A — CSM accountability visibility (remaining: call-tagging dashboard).** Per-call CS summary + daily accountability notification shipped M6.1 (2026-05-05); cron auth consolidated to single `CRON_SECRET` M6.2 (2026-05-06); missed-call detection rolled into Item 1's meeting tracking work. Remaining: call-tagging dashboard (gated on CSM ops adoption of a tagging convention). See `docs/future-ideas.md` § Batch A.
+2. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Scheduled after 2.3 because 2.1 has anonymization and cross-client privacy constraints that need their own scoping pass. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Will need a per-client retrieval-scope gate similar to the call-summary retrieval pattern.
 
-3. **Batch B — Call review + health score activation (mostly delivered 2026-05-07/08; remaining: NPS score piping V1.5).** Call Review V1 + Gregory V2 brain (AI signal at 0.50, concerns subsumed) + the health-score rubric rebalance + the never-called-clients-land-green fix all shipped today. The remaining piece is **NPS score piping (V1.5)**: extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard. See `docs/future-ideas.md` § Batch B.
+3. **Meeting tracking — bridge into Task Management.** Gregory-side, was previous current focus before Ella jumped the queue. Per-client + per-CSM cadence visibility, late flags, end-of-week report to Scott + Nabeel. Real scoping conversation needed at session-start before any spec — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
 
-4. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking.
+4. **Batch A — CSM accountability visibility (remaining: call-tagging dashboard).** Per-call CS summary + daily accountability notification shipped M6.1 (2026-05-05); cron auth consolidated to single `CRON_SECRET` M6.2 (2026-05-06); missed-call detection rolled into Item 3's meeting tracking work. Remaining: call-tagging dashboard (gated on CSM ops adoption of a tagging convention). See `docs/future-ideas.md` § Batch A.
 
-5. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
+5. **Batch B — Call review + health score activation (mostly delivered 2026-05-07/08; remaining: NPS score piping V1.5).** Call Review V1 + Gregory V2 brain (AI signal at 0.50, concerns subsumed) + the health-score rubric rebalance + the never-called-clients-land-green fix all shipped 2026-05-07/08. The remaining piece is **NPS score piping (V1.5)**: extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard. See `docs/future-ideas.md` § Batch B.
 
-6. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
+6. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking.
+
+7. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
+
+8. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
 
 **~~Deferred-decision pending Monday onboarding~~** — resolved by NPS-is-gospel migration 0027 (2026-05-08). The 137 master-sheet-seed clients are no longer sticky against Path 1 NPS auto-derive; the override-sticky gate was retired entirely.
 
-## Ella (sidelined)
+## Ella (active focus)
 
-Ella V1 beta is in pilot mode (live in `#ella-test-drakeonly`, awaiting Nabeel feedback before pilot rollout to remaining 6 channels). V2 polish work and Ella-specific docs live in `docs/agents/ella/`. Active focus is Gregory; Ella resumes once V2 CS-focus pivot stabilizes.
+Ella V2 is now the active multi-batch focus alongside Gregory. State as of 2026-05-11:
+
+- **Batch 1 — cloud Slack ingestion (shipped 2026-05-09):** realtime + backfill into `slack_messages` for 8 channels (3,641 messages); live ingestion verified operational after `message.groups` event subscription was added 2026-05-10.
+- **Batch 1.5 — behavioral fixes (shipped 2026-05-10):** speaker identity resolution, audience-aware prompt, advisor @-mention on escalation, loosened `[ESCALATE]` detector, main-channel-only responses with last-15-turn context, bare-mention handler, dual-trigger detection. Validated in `#ella-test-drakeonly`.
+- **Batch 2.2 — audit dashboard (shipped 2026-05-11):** `/ella/runs` + `/ella/runs/[id]` with summary band, filter bar, anomaly views. 5 follow-up fixes flagged during validation (placeholder in `docs/known-issues.md`).
+- **Batch 2.3 — passive monitoring** is queued next (see § Next Session Priorities #1).
+- **Batch 2.1 — Slack messages as retrieval surface** is queued after 2.3 due to anonymization/cross-client privacy constraints (§ Next Session Priorities #2).
+
+Ella-specific docs continue to live in `docs/agents/ella/`.
 
 ## Other agents / future
 
