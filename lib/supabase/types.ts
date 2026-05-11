@@ -1081,6 +1081,7 @@ export type Database = {
           metadata: Json
           name: string
           slack_channel_id: string
+          test_mode: boolean
           updated_at: string
         }
         Insert: {
@@ -1093,6 +1094,7 @@ export type Database = {
           metadata?: Json
           name: string
           slack_channel_id: string
+          test_mode?: boolean
           updated_at?: string
         }
         Update: {
@@ -1105,6 +1107,7 @@ export type Database = {
           metadata?: Json
           name?: string
           slack_channel_id?: string
+          test_mode?: boolean
           updated_at?: string
         }
         Relationships: [

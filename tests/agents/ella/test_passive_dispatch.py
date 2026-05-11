@@ -107,14 +107,15 @@ def fake_db(monkeypatch):
     return db
 
 
-def _payload():
+def _payload(test_mode=False, author_type="client"):
     return PassiveTriggerPayload(
         slack_channel_id="C123",
         triggering_message_ts="1745500100.000100",
         triggering_message_slack_user_id="UCLIENT1",
         triggering_message_text="Hey is the curriculum updated?",
-        author_type="client",
+        author_type=author_type,
         channel_client_id="cli-uuid",
+        test_mode=test_mode,
     )
 
 
@@ -297,3 +298,40 @@ def test_cost_accounting_writes_haiku_model_and_tokens(fake_db):
     assert cost_update["llm_model"] == "claude-haiku-4-5-20251001"
     assert cost_update["llm_input_tokens"] == 120
     assert cost_update["llm_output_tokens"] == 15
+
+
+# ---------------------------------------------------------------------------
+# test_mode tagging (Batch 2.3 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_test_mode_run_tagged_in_trigger_metadata(fake_db):
+    """When the payload carries test_mode=True, persist_passive_evaluation
+    stamps `test_mode_run: True` into trigger_metadata so audit queries
+    can filter test traffic out of production metrics."""
+    ev = PassiveEvaluation(
+        payload=_payload(test_mode=True, author_type="team_member"),
+        decision=_decision(decision="skip"),
+        skip_reason="haiku_skip",
+    )
+
+    pd.persist_passive_evaluation(ev)
+
+    insert = fake_db.agent_runs_inserts[0]
+    assert insert["trigger_metadata"]["test_mode_run"] is True
+
+
+def test_production_run_does_not_carry_test_mode_run_flag(fake_db):
+    """Default test_mode=False on the payload → no test_mode_run key in
+    trigger_metadata. Production audit queries with
+    `trigger_metadata->>'test_mode_run' IS NULL` rely on this."""
+    ev = PassiveEvaluation(
+        payload=_payload(),  # default test_mode=False
+        decision=_decision(),
+        skip_reason="csm_directed",
+    )
+
+    pd.persist_passive_evaluation(ev)
+
+    insert = fake_db.agent_runs_inserts[0]
+    assert "test_mode_run" not in insert["trigger_metadata"]

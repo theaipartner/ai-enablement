@@ -97,7 +97,7 @@ def _stub_env(monkeypatch):
     monkeypatch.delenv("ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD", raising=False)
 
 
-def _payload(text="What's the next step?", author_type="client", channel="C1"):
+def _payload(text="What's the next step?", author_type="client", channel="C1", test_mode=False):
     return PassiveTriggerPayload(
         slack_channel_id=channel,
         triggering_message_ts="1745500100.000100",
@@ -105,6 +105,7 @@ def _payload(text="What's the next step?", author_type="client", channel="C1"):
         triggering_message_text=text,
         author_type=author_type,
         channel_client_id="client-uuid-1",
+        test_mode=test_mode,
     )
 
 
@@ -177,6 +178,62 @@ def test_gate_ella_author_skips(fake_db, monkeypatch):
     _stub_recent_context(monkeypatch)
 
     ev = evaluate_passive_trigger(_payload(author_type="ella"))
+
+    assert ev.decision.decision == "skip"
+    assert ev.skip_reason == "non_client_author"
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 — test_mode bypass (Batch 2.3 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_test_mode_accepts_team_member(fake_db, monkeypatch):
+    """When the channel is test_mode-enabled, team_member messages
+    pass Gate 2 and proceed through the rest of the pipeline. Validates
+    Drake's smoke-test workflow."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [_chunk(similarity=0.8)])
+    _stub_recent_context(monkeypatch)
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.complete",
+        lambda **kw: SimpleNamespace(
+            text='{"decision":"respond_substantive","reasoning":"test"}',
+            input_tokens=10, output_tokens=5,
+            cost_usd=Decimal("0.00001"), model="haiku", raw=None,
+        ),
+    )
+
+    ev = evaluate_passive_trigger(_payload(author_type="team_member", test_mode=True))
+
+    # Past Gate 2 — no non_client_author skip.
+    assert ev.skip_reason != "non_client_author"
+    assert ev.decision.decision == "respond_substantive"
+
+
+def test_test_mode_still_rejects_ella_author(fake_db, monkeypatch):
+    """test_mode is NOT a blanket bypass. Ella, bot, workflow, and
+    unknown still skip regardless of channel test_mode — Ella responding
+    to her own posts is undesirable in every mode."""
+    _stub_kb(monkeypatch, [_chunk()])
+    _stub_recent_context(monkeypatch)
+
+    for author_type in ("ella", "bot", "workflow", "unknown"):
+        ev = evaluate_passive_trigger(
+            _payload(author_type=author_type, test_mode=True)
+        )
+        assert ev.decision.decision == "skip", f"{author_type} should skip"
+        assert ev.skip_reason == "non_client_author", f"{author_type} skip_reason"
+
+
+def test_test_mode_default_false_keeps_production_behavior(fake_db, monkeypatch):
+    """Default test_mode=False on every other channel preserves the
+    clients-only Gate 2 behavior. team_member skips by default."""
+    _stub_kb(monkeypatch, [_chunk()])
+    _stub_recent_context(monkeypatch)
+
+    ev = evaluate_passive_trigger(_payload(author_type="team_member"))  # default test_mode=False
 
     assert ev.decision.decision == "skip"
     assert ev.skip_reason == "non_client_author"
