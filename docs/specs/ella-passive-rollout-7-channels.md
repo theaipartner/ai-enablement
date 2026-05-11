@@ -1,6 +1,6 @@
 # Ella passive monitoring rollout to 7 client channels
 **Slug:** ella-passive-rollout-7-channels
-**Status:** in-flight
+**Status:** shipped
 
 ## Context
 
