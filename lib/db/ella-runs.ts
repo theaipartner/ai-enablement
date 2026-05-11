@@ -127,6 +127,130 @@ function extractTriggerField(
   return typeof v === 'string' ? v : null
 }
 
+// --- Trigger-metadata shape adapters --------------------------------------
+//
+// Two `agent_runs.trigger_metadata` shapes coexist:
+//
+//   Reactive @-mention (Batch 1.5) writes via _redact_event:
+//     channel, user, ts, thread_ts, event_ts, is_team_test,
+//     real_author_role, real_author_name, real_author_id
+//
+//   Passive monitor (Batch 2.3) writes via persist_passive_evaluation:
+//     triggering_slack_channel_id, triggering_message_slack_user_id,
+//     triggering_message_ts, channel_client_id, author_type,
+//     haiku_decision, haiku_reasoning, skip_reason, [test_mode_run]
+//
+// Before this fix the dashboard read only the reactive keys, leaving
+// every passive_monitor row rendered as "unknown / unknown." These
+// adapters give every caller a single key-shape-agnostic accessor.
+
+function extractChannelId(
+  trigger_metadata: Record<string, unknown> | null,
+): string | null {
+  return (
+    extractTriggerField(trigger_metadata, 'channel') ??
+    extractTriggerField(trigger_metadata, 'triggering_slack_channel_id')
+  )
+}
+
+function extractAuthorSlackUserId(
+  trigger_metadata: Record<string, unknown> | null,
+): string | null {
+  return (
+    extractTriggerField(trigger_metadata, 'user') ??
+    extractTriggerField(trigger_metadata, 'triggering_message_slack_user_id')
+  )
+}
+
+// Maps the passive-path `author_type` Slack vocabulary onto the
+// reactive-path `real_author_role` vocabulary so the audit dashboard's
+// role-pill component sees the same value space across both shapes.
+function deriveAuthorRoleFromAuthorType(
+  authorType: string | null,
+): string | null {
+  if (!authorType) return null
+  switch (authorType) {
+    case 'client':
+      return 'client'
+    case 'team_member':
+      return 'advisor'
+    case 'ella':
+      return 'ella'
+    case 'bot':
+    case 'workflow':
+      return 'system'
+    case 'unknown':
+      return 'unresolvable'
+    default:
+      return null
+  }
+}
+
+function extractAuthorRole(
+  trigger_metadata: Record<string, unknown> | null,
+): string | null {
+  return (
+    extractTriggerField(trigger_metadata, 'real_author_role') ??
+    deriveAuthorRoleFromAuthorType(
+      extractTriggerField(trigger_metadata, 'author_type'),
+    )
+  )
+}
+
+function extractAuthorName(
+  trigger_metadata: Record<string, unknown> | null,
+  userNameMap: Map<string, string>,
+): string | null {
+  // Reactive runs carry real_author_name directly (resolved at write
+  // time via agents.ella.identity). Passive runs don't — look up the
+  // speaker's slack_user_id against the prefetched clients/team_members
+  // name map.
+  const direct = extractTriggerField(trigger_metadata, 'real_author_name')
+  if (direct) return direct
+  const userId = extractAuthorSlackUserId(trigger_metadata)
+  if (!userId) return null
+  return userNameMap.get(userId) ?? null
+}
+
+async function fetchUserNameMap(
+  supabase: ReturnType<typeof createAdminClient>,
+  runs: RawRunRow[],
+): Promise<Map<string, string>> {
+  // Per-batch resolver for the speaker's slack_user_id. We only need to
+  // resolve names for runs that don't already carry real_author_name in
+  // their trigger_metadata (i.e. passive_monitor runs and any older
+  // pre-Batch-1.5 reactive runs).
+  const map = new Map<string, string>()
+  const needsResolve = new Set<string>()
+  for (const r of runs) {
+    if (extractTriggerField(r.trigger_metadata, 'real_author_name')) continue
+    const userId = extractAuthorSlackUserId(r.trigger_metadata)
+    if (userId) needsResolve.add(userId)
+  }
+  if (needsResolve.size === 0) return map
+
+  const userIds = Array.from(needsResolve)
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', userIds)
+    .is('archived_at', null)
+  for (const c of clients ?? []) {
+    if (c.slack_user_id && c.full_name) map.set(c.slack_user_id, c.full_name)
+  }
+  const { data: tms } = await supabase
+    .from('team_members')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', userIds)
+    .is('archived_at', null)
+  for (const t of tms ?? []) {
+    if (t.slack_user_id && t.full_name && !map.has(t.slack_user_id)) {
+      map.set(t.slack_user_id, t.full_name)
+    }
+  }
+  return map
+}
+
 async function fetchSlackResponseTexts(
   supabase: ReturnType<typeof createAdminClient>,
   runs: RawRunRow[],
@@ -137,7 +261,7 @@ async function fetchSlackResponseTexts(
   // landing shortly after the run start. Done as one batched query.
   const out = new Map<string, string>()
   const runsWithChannel = runs.filter(
-    (r) => extractTriggerField(r.trigger_metadata, 'channel'),
+    (r) => extractChannelId(r.trigger_metadata),
   )
   if (runsWithChannel.length === 0) return out
 
@@ -145,7 +269,7 @@ async function fetchSlackResponseTexts(
   // thread_ts) compute the run's started_at + 5 min window.
   const channelToRuns = new Map<string, RawRunRow[]>()
   for (const r of runsWithChannel) {
-    const ch = extractTriggerField(r.trigger_metadata, 'channel')!
+    const ch = extractChannelId(r.trigger_metadata)!
     const arr = channelToRuns.get(ch) ?? []
     arr.push(r)
     channelToRuns.set(ch, arr)
@@ -224,7 +348,15 @@ function computeAnomalyFlags(args: {
     flags.push('A')
   }
   // Check B': real_author_id != channel-mapped client_id (or role=advisor).
-  const realRole = extractTriggerField(run.trigger_metadata, 'real_author_role')
+  // The role read uses the adapter so passive runs' author_type maps
+  // consistently (e.g. team_member -> advisor). For real_author_id the
+  // reactive path writes it explicitly; passive runs don't carry an
+  // equivalent (channel_client_id is on the metadata but represents
+  // the CHANNEL's mapped client, not the speaker's resolved client id).
+  // B' on passive runs effectively triggers when the resolved role is
+  // 'advisor' — that matches the production design where a team_member
+  // posting in a client channel under test_mode should be flagged.
+  const realRole = extractAuthorRole(run.trigger_metadata)
   const realId = extractTriggerField(run.trigger_metadata, 'real_author_id')
   if (realRole === 'advisor' || (realRole === 'client' && channelClientId && realId && realId !== channelClientId)) {
     flags.push('B_prime')
@@ -290,6 +422,7 @@ export async function getEllaRunsList(
   const runs = (rawRuns ?? []) as RawRunRow[]
 
   const channelMap = await fetchChannelMap(supabase)
+  const userNameMap = await fetchUserNameMap(supabase, runs)
   const responseTexts = await fetchSlackResponseTexts(supabase, runs)
   const escalationIds = await fetchEscalationRunIds(
     supabase,
@@ -300,7 +433,7 @@ export async function getEllaRunsList(
   // Project + filter (channel / role / anomaly filters happen in JS
   // since they touch joined data).
   let projected: EllaRunsListRow[] = runs.map((r) => {
-    const ch = extractTriggerField(r.trigger_metadata, 'channel')
+    const ch = extractChannelId(r.trigger_metadata)
     const channelInfo = ch ? channelMap.get(ch) : undefined
     const slackText = responseTexts.get(r.id) ?? null
     const flags = computeAnomalyFlags({
@@ -318,8 +451,8 @@ export async function getEllaRunsList(
       slack_channel_id: ch,
       channel_name: channelInfo?.name ?? null,
       channel_client_name: channelInfo?.client_name ?? null,
-      real_author_role: extractTriggerField(r.trigger_metadata, 'real_author_role'),
-      real_author_name: extractTriggerField(r.trigger_metadata, 'real_author_name'),
+      real_author_role: extractAuthorRole(r.trigger_metadata),
+      real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
       input_summary: r.input_summary,
       llm_input_tokens: r.llm_input_tokens,
       llm_output_tokens: r.llm_output_tokens,
@@ -368,12 +501,19 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
 
   const r = row as RawRunRow
   const channelMap = await fetchChannelMap(supabase)
-  const ch = extractTriggerField(r.trigger_metadata, 'channel')
+  const userNameMap = await fetchUserNameMap(supabase, [r])
+  const ch = extractChannelId(r.trigger_metadata)
   const channelInfo = ch ? channelMap.get(ch) : undefined
   const responseTexts = await fetchSlackResponseTexts(supabase, [r])
   const escalationIds = await fetchEscalationRunIds(supabase, [r.id])
 
-  const trigger_ts = extractTriggerField(r.trigger_metadata, 'ts')
+  // Reactive path stores the triggering message ts under `ts`; passive
+  // path stores it under `triggering_message_ts`. thread_ts is reactive-
+  // only — passive runs have no thread and the surrounding-thread-context
+  // block below correctly short-circuits when thread_ts is null.
+  const trigger_ts =
+    extractTriggerField(r.trigger_metadata, 'ts') ??
+    extractTriggerField(r.trigger_metadata, 'triggering_message_ts')
   const thread_ts = extractTriggerField(r.trigger_metadata, 'thread_ts')
 
   // Surrounding thread context — last 15 messages in same channel/thread
@@ -465,8 +605,8 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     slack_channel_id: ch,
     channel_name: channelInfo?.name ?? null,
     channel_client_name: channelInfo?.client_name ?? null,
-    real_author_role: extractTriggerField(r.trigger_metadata, 'real_author_role'),
-    real_author_name: extractTriggerField(r.trigger_metadata, 'real_author_name'),
+    real_author_role: extractAuthorRole(r.trigger_metadata),
+    real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
     input_summary: r.input_summary,
     output_summary: r.output_summary,
     error_message: r.error_message,
@@ -530,7 +670,7 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
 
   const anomaly_count_today = runs.filter((r) => {
     if (new Date(r.started_at).getTime() < todayMs) return false
-    const ch = extractTriggerField(r.trigger_metadata, 'channel')
+    const ch = extractChannelId(r.trigger_metadata)
     const channelInfo = ch ? channelMap.get(ch) : undefined
     const flags = computeAnomalyFlags({
       run: r,
@@ -565,7 +705,7 @@ export async function listChannelsWithEllaRuns(): Promise<Array<{ slack_channel_
     .eq('agent_name', 'ella')
   const channelIds = new Set<string>()
   for (const r of runs ?? []) {
-    const ch = extractTriggerField(r.trigger_metadata as Record<string, unknown> | null, 'channel')
+    const ch = extractChannelId(r.trigger_metadata as Record<string, unknown> | null)
     if (ch) channelIds.add(ch)
   }
   if (channelIds.size === 0) return []
