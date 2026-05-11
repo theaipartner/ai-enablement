@@ -30,6 +30,12 @@ export function TopNav({ userEmail }: { userEmail: string }) {
         >
           Calls
         </Link>
+        <Link
+          href="/ella/runs"
+          className="text-sm font-medium hover:underline underline-offset-4"
+        >
+          Ella
+        </Link>
       </div>
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">{userEmail}</span>
