@@ -4,7 +4,7 @@ Slack channel metadata, mapped to clients where applicable.
 
 ## Purpose
 
-Mirror every Slack channel we care about so agents can reason about scope (client vs. internal), privacy, and beta gating without calling Slack's API. `ella_enabled` is the pilot gate for Ella's answering behavior.
+Mirror every Slack channel we care about so agents can reason about scope (client vs. internal), privacy, and Ella's behavior without calling Slack's API. `passive_monitoring_enabled` is the per-channel kill switch for Ella's V2 passive-monitoring behavior.
 
 ## Columns
 
@@ -16,7 +16,7 @@ Mirror every Slack channel we care about so agents can reason about scope (clien
 | `client_id` | `uuid` | FK → `clients.id`. Null for internal channels |
 | `is_private` | `boolean` | Not null |
 | `is_archived` | `boolean` | Default `false` |
-| `ella_enabled` | `boolean` | Default `false`. Beta gate — Ella only responds when true |
+| `passive_monitoring_enabled` | `boolean` | Default `false`. Per-channel kill switch for Ella's V2 passive-monitoring behavior. Renamed from `ella_enabled` in migration 0029 (Batch 2.3). |
 | `metadata` | `jsonb` | Extensible |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
@@ -29,21 +29,24 @@ Mirror every Slack channel we care about so agents can reason about scope (clien
 ## Populated By
 
 - Slack ingestion: bulk load on bot install, plus periodic refresh and `channel_created` / `channel_rename` / `channel_archive` event handlers
+- `scripts/seed_clients.py` and the onboarding RPC `create_or_update_client_from_onboarding` populate fresh rows with `passive_monitoring_enabled=false`
 
 ## Read By
 
-- Ella (gates on `ella_enabled`; resolves `client_id` for scoping retrieval)
+- Ella (reactive path resolves `client_id` for scoping retrieval; passive path gates on `passive_monitoring_enabled` AND the global `ELLA_PASSIVE_MONITORING_ENABLED` env var)
+- `ingestion/slack/realtime_ingest.py` (passive-monitor fork dispatches when `passive_monitoring_enabled=true` AND `author_type='client'`)
+- `api/passive_ella_cron.py` (re-checks the per-channel toggle before draining each pending row — Drake may flip it off during the 4-min queue wait)
 - Dashboards (channel → client views)
 
 ## Example Queries
 
-Channels where Ella is enabled and a client is attached:
+Channels where Ella's passive monitoring is enabled and a client is attached:
 
 ```sql
 select sc.*, c.full_name
 from slack_channels sc
 join clients c on c.id = sc.client_id
-where sc.ella_enabled = true
+where sc.passive_monitoring_enabled = true
   and sc.is_archived = false
   and c.archived_at is null;
 ```
@@ -54,4 +57,12 @@ Resolve a Slack channel id to its client:
 select client_id
 from slack_channels
 where slack_channel_id = $1;
+```
+
+Enable passive monitoring for a specific channel (Drake's gate (d)):
+
+```sql
+update slack_channels
+   set passive_monitoring_enabled = true
+ where slack_channel_id = '<channel_id>';
 ```

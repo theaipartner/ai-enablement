@@ -132,6 +132,22 @@ Resolved architecturally, not by ceiling bump. The V2 brain shipped with a weekl
 - **Revisit trigger:** `SELECT count(*) FROM agent_runs WHERE agent_name='ai_call_signal'` exceeds 5000, OR sweep duration trends upward in a way that correlates with table growth.
 - **Logged:** 2026-05-07.
 
+## Index on agent_runs trigger_metadata.triggering_slack_channel_id when passive volume grows
+
+- **What:** the firm-after-first gate in `agents/ella/passive_monitor.py:_firm_after_first_match` reads "recent passive runs in channel X that escalated" via `SELECT ... FROM agent_runs WHERE agent_name='ella' AND trigger_type='passive_monitor' AND started_at >= cutoff` then filters on `trigger_metadata->>'triggering_slack_channel_id'` in Python after a date-range filter. Today's scale (zero passive runs at ship) makes this trivial.
+- **Why it matters:** at 100+ passive runs/day per channel × 8 active channels, daily growth is ~800 passive_monitor rows. At 6 months the per-channel filter scans ~150k rows. Mirrors the `ai_call_signal` index entry above; same pattern.
+- **Next action:** add a partial index `CREATE INDEX agent_runs_passive_monitor_channel_idx ON agent_runs (started_at, (trigger_metadata->>'triggering_slack_channel_id')) WHERE agent_name='ella' AND trigger_type='passive_monitor'` when the row count for that filter crosses ~5000. Migration straightforward.
+- **Revisit trigger:** `SELECT count(*) FROM agent_runs WHERE agent_name='ella' AND trigger_type='passive_monitor'` exceeds 5000, OR firm-after-first gate latency surfaces in cron run-times.
+- **Logged:** 2026-05-11.
+
+## Passive Haiku prompt — thresholds + categories will need iteration
+
+- **What:** Batch 2.3 ships with Builder-chosen defaults: KB-relevance threshold 0.3, firm-after-first keyword overlap >= 3 content words, Haiku auto-escalate fence covering billing / complaints / advice / emotional / prompt-injection / CSM-directed. Real misses + misfires only surface against production traffic.
+- **Why it matters:** wrong thresholds = either too much skip (Ella missing helpable moments) or too much misfire (Ella interjecting where she shouldn't). The audit dashboard at `/ella/runs` surfaces every decision with reasoning; Drake reviews post-launch.
+- **Next action:** after the first ~50-100 production passive decisions, review the `/ella/runs` flagged-anomaly view, identify miss / misfire patterns, iterate (`_HAIKU_SYSTEM_PROMPT` and / or `_DEFAULT_KB_RELEVANCE_THRESHOLD` constants in `agents/ella/passive_monitor.py`). Document the iteration history in `docs/agents/ella/ella.md` § Eval Criteria once the eval set bootstraps.
+- **Revisit trigger:** post-rollout to `#ella-test-drakeonly`, after 1-2 weeks of decisions accumulated.
+- **Logged:** 2026-05-11.
+
 ## Call Review V1 has no eval coverage
 
 - **What:** `agents/call_reviewer/` has unit tests covering JSON parse + persistence shapes, but no eval coverage of output quality (does the model surface real pain_points / wins / dodged_questions, or hallucinate / pad / miss obvious signals?). May 2026 backfill produced 31 reviews (smoke + apply); spot-checking is the only quality gate today.

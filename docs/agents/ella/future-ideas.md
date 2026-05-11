@@ -157,12 +157,13 @@ Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker
 - **Revisit trigger:** first non-trivial Ella iteration after V1 (prompt changes, retrieval changes, chunking changes), OR first client correction that suggests regression risk from a future change.
 - **Logged:** 2026-04-22.
 
-## Per-channel ella_enabled beta gating
+## ~~Per-channel ella_enabled beta gating~~ — SUPERSEDED 2026-05-11
 
 - **What:** use the existing `slack_channels.ella_enabled` boolean as the live gate — Ella responds in channels where it's `true`, skips everything else. Controlled per channel via a manual UPDATE or a small admin CLI, no code deploy needed to add or remove a channel.
 - **Why deferred:** V1 hardcodes the pilot channel set (7 clients + `#ella-test`) directly in the agent config for speed. `ella_enabled` is already in the schema but the agent doesn't read it yet.
 - **Revisit trigger:** first time we need to add or remove a channel without a code deploy — e.g., expanding to a second client cohort, or pulling a specific pilot channel during an incident.
 - **Logged:** 2026-04-22.
+- **Superseded by Ella V2 Batch 2.3 (2026-05-11):** the column was renamed `passive_monitoring_enabled` and is now actively read by `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor` (gate for the passive-monitor fork) and `api/passive_ella_cron.py:_lookup_channel` (gate re-check during queue drain). Per-channel toggle is the operational mechanism for the passive-monitoring rollout per `docs/runbooks/ella_passive_monitoring.md`. The reactive @-mention path still doesn't gate on this column — it runs in every client-mapped channel — so the "beta gate for Ella's responses" framing of the original entry is partially superseded: passive responses gate per-channel; reactive responses don't.
 
 ## Team-test mode flag
 
