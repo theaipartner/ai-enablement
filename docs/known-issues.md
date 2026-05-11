@@ -76,6 +76,25 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 - **Next action:** Drake ships the file MCP when ready. No Director-side action needed — Director starts using `str_replace`-style operations once the new MCP is available. Until then, Director continues writing specs for Builder to execute when surgical edits would be too painful via full-file rewrite.
 - **Logged:** 2026-05-11.
 
+## Repo-root pip-install leak — disk-only, never tracked in git (re-confirmed 2026-05-11)
+
+- **What:** Working-tree at `/home/drake/projects/ai-enablement` currently carries ~75 pip-installed Python package directories (`anthropic/`, `pydantic/`, `openai/`, `supabase/`, `httpx/`, etc.), ~55 `.dist-info` directories, 4 loose `.so` files (`mmh3.*.so`, `_cffi_backend.*.so`, `pyroaring.*.so`, `81d243bd2c585b0f4821__mypyc.*.so`), 3 vendored single-file Python modules (`deprecation.py`, `six.py`, `typing_extensions.py`), and a root `__pycache__/`. All visible in `git status` as `??` (untracked).
+- **Diagnostic signature (run the queries; expected output is empty):**
+  ```
+  git ls-files . | grep -E "\.dist-info/"                       # empty
+  git ls-files . | grep -E "\.so$"                              # empty
+  git ls-files . | grep -E "^(deprecation|six|typing_extensions)\.py$"  # empty
+  git ls-files . | grep __pycache__                             # empty
+  git ls-files . | grep -E "^[a-z_]+/" | awk -F/ '{print $1}' | sort -u
+  # ↑ should return only legitimate tracked top-level dirs:
+  # agents api app components docs ingestion lib scripts shared supabase tests
+  ```
+- **Why this matters (or doesn't):** the pollution is harmless to git history, deploys, and test runs. `.gitignore` (`__pycache__/`, `*.py[cod]`, `.venv/`, etc.) plus the absence of any `git add .` discipline incidents kept these files out of git entirely. `.vercelignore` + `excludeFiles: "{.next,node_modules}/**"` in `vercel.json` keep them out of Python function bundles too. The disk pollution is purely visual noise in WSL file-tree views and local `ls` output. Drake can `rm -rf` it any time without consequence.
+- **Why it keeps re-appearing:** an earlier local invocation of `pip install --target .` (or wheel extraction without `--target .venv`) writes packages to the working directory by default. The 2026-05-08 Phase 3b session deleted 55 such untracked skeletons; by 2026-05-11 a fresh ~75-dir set was back, indicating another local pip operation between those dates. Prevention is "always run pip from the activated `.venv`" — but the recurrence is low-cost since none of it ever reaches git, deploys, or tests.
+- **What was cleaned 2026-05-11:** under the `director-docs-topology-and-root-cleanup` spec, only the `hi` file (6 bytes, "hi bot\n") was deleted from git tracking. The spec was written assuming the pip-leak was tracked in git; the discovery queries confirmed it was not, so the bulk-deletion plan collapsed to a single-file `git rm`. The on-disk pollution itself was left alone — out of scope per the spec's "anything on disk but not tracked is out of scope" rule.
+- **Detection if it ever does land in git:** run the diagnostic queries above. Any non-empty output means a `git add .` slipped past discipline and tracked something pip-shaped. Recovery: `git rm -r <offending paths>` + commit.
+- **Logged:** 2026-04-29 (M3.3 era — original surface); previous sweep 2026-05-08 (Phase 3b — disk cleanup of 55 untracked pkg dirs); re-confirmed disk-only 2026-05-11 (this spec, only `hi` deleted from git).
+
 ---
 
 Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
