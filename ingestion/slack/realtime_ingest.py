@@ -59,6 +59,12 @@ _CONTENT_SOURCE_INGESTED = "ingested"
 _SKIP_NON_CLIENT_CHANNEL = "non_client_channel"
 _SKIP_IGNORABLE_SUBTYPE = "ignorable_subtype"
 
+# Audit-row source label for the passive-monitor fork's exception path.
+# Distinct from `_DELIVERY_SOURCE` so a failing passive branch doesn't
+# muddy the ingest's own audit ledger — analytics can query the two
+# sources separately.
+_PASSIVE_MONITOR_ERROR_SOURCE = "ella_passive_monitor_error"
+
 
 def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
     """Process one Slack `message` event. Returns a structured result
@@ -233,6 +239,20 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
             record.author_type,
         )
         result["ingested"] = True
+
+        # Passive-monitor fork. Fail-soft — exception path writes an
+        # error audit row under a distinct source label and never
+        # propagates, so the ingest itself always succeeds. Behavior
+        # only activates when the channel has `passive_monitoring_enabled`
+        # set AND the message is client-authored AND the global env-var
+        # kill switch is on; the helper short-circuits all other cases.
+        _maybe_dispatch_passive_monitor(
+            db,
+            channel_row=channel_row,
+            record=record,
+            delivery_id=delivery_id,
+        )
+
         return result
 
     except Exception as exc:
@@ -284,7 +304,10 @@ def _lookup_channel(db, slack_channel_id: str | None) -> dict[str, Any] | None:
         return None
     resp = (
         db.table("slack_channels")
-        .select("id,slack_channel_id,client_id,is_archived")
+        .select(
+            "id,slack_channel_id,client_id,is_archived,"
+            "passive_monitoring_enabled"
+        )
         .eq("slack_channel_id", slack_channel_id)
         .limit(1)
         .execute()
@@ -373,3 +396,86 @@ def _insert_audit(
             delivery_id,
             exc,
         )
+
+
+# ---------------------------------------------------------------------------
+# Passive-monitor dispatch
+# ---------------------------------------------------------------------------
+
+
+def _maybe_dispatch_passive_monitor(
+    db,
+    *,
+    channel_row: dict[str, Any],
+    record: SlackMessageRecord,
+    delivery_id: str,
+) -> None:
+    """Fork into Ella's passive-monitor pipeline after a successful
+    ingest. Wrapped in a single try/except — any exception is logged
+    and audited under `_PASSIVE_MONITOR_ERROR_SOURCE`; never raised.
+
+    Channel-level gate: `slack_channels.passive_monitoring_enabled`
+    must be True. (The global env-var kill switch and the author-type
+    gate are checked inside `evaluate_passive_trigger` so the gate
+    logic stays in one place.)
+    """
+    try:
+        if not channel_row.get("passive_monitoring_enabled"):
+            return
+        channel_client_id = channel_row.get("client_id")
+        if not channel_client_id:
+            # Belt-and-suspenders: a channel marked passive but missing
+            # a client mapping shouldn't exist (the earlier allowlist
+            # gate rejects unmapped channels), but skip rather than
+            # crash if we somehow get one.
+            return
+
+        from agents.ella.passive_monitor import (
+            PassiveTriggerPayload,
+            evaluate_passive_trigger,
+        )
+        from agents.ella.passive_dispatch import persist_passive_evaluation
+
+        payload = PassiveTriggerPayload(
+            slack_channel_id=record.slack_channel_id,
+            triggering_message_ts=record.slack_ts,
+            triggering_message_slack_user_id=record.slack_user_id,
+            triggering_message_text=record.text or "",
+            author_type=record.author_type,
+            channel_client_id=channel_client_id,
+        )
+        evaluation = evaluate_passive_trigger(payload)
+        persist_passive_evaluation(evaluation)
+    except Exception as exc:
+        logger.exception(
+            "slack_message_ingest: passive-monitor fork failed "
+            "delivery_id=%s channel=%s ts=%s: %s",
+            delivery_id,
+            record.slack_channel_id,
+            record.slack_ts,
+            exc,
+        )
+        try:
+            error_audit_row: dict[str, Any] = {
+                "webhook_id": f"passive_monitor_{delivery_id}",
+                "source": _PASSIVE_MONITOR_ERROR_SOURCE,
+                "processing_status": "failed",
+                "processing_error": str(exc)[:2000],
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "slack_channel_id": record.slack_channel_id,
+                    "slack_ts": record.slack_ts,
+                    "slack_user_id": record.slack_user_id,
+                    "author_type": record.author_type,
+                    "ingest_delivery_id": delivery_id,
+                },
+                "headers": {},
+            }
+            db.table("webhook_deliveries").insert(error_audit_row).execute()
+        except Exception as audit_exc:
+            logger.warning(
+                "slack_message_ingest: passive-monitor error-audit insert "
+                "also failed delivery_id=%s: %s",
+                delivery_id,
+                audit_exc,
+            )
