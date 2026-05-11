@@ -208,6 +208,14 @@ On save, an entry is written to `call_classification_history` (migration 0013) c
 
 **Section 6 — Transcript (collapsed by default):** Toggle to expand, read-only scrollable.
 
+### Ella runs page — audit dashboard (Batch 2.2, 2026-05-10)
+
+Read-only audit surface at `/ella/runs` (list) and `/ella/runs/[id]` (per-run detail). Scoped narrowly to Ella runs only (`agent_runs WHERE agent_name='ella'`) — multi-agent surface is deferred. Reuses the existing `(authenticated)` layout, the `MultiSelectDropdown` filter primitive, and the same pill aesthetic as the Clients / Calls pages.
+
+List view: a summary band (today / week / month run counts, status mix over 30 days, cost, anomaly count) above a filter bar (date range, channel, speaker role, status, anomaly flag, anomalies-only toggle — all URL-state-serialized) above a table (timestamp / channel + mapped client / real author + role / status / anomaly flags / input preview / tokens · cost / click-through). Five anomaly checks mirror `scripts/audit_ella_interactions.py`: A (ESCALATE leak), B' (real-author mismatch), C (error), D (length outlier — top/bottom 5%), E (bare mention). Source: `app/(authenticated)/ella/runs/`. Query layer: `lib/db/ella-runs.ts`.
+
+Detail view: run header (id, channel, real author + role, status, anomaly flags, cost · tokens · duration), input, surrounding thread context (last messages with resolved display names, triggering message highlighted), Ella's response (split into client-facing vs captured handoff_reasoning when ESCALATE was detected; falls back to output_summary when no slack_messages match), escalation row when present, full trigger_metadata JSON for debugging.
+
 ## Schema changes
 
 Two new migrations. Both lightweight, neither destructive.
