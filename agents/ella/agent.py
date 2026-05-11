@@ -68,6 +68,23 @@ _BARE_OPENERS_NO_NAME = (
     "Fire away.",
 )
 
+# Passive general-inquiry openers (Batch 2.3). Used when the Haiku
+# decision is `respond_general_inquiry` — the client looks like
+# they're asking for help in a general way but no KB chunks address
+# their specific question. Warm + short, no answer attempt.
+_PASSIVE_GENERAL_OPENERS_WITH_NAME = (
+    "Hey {name} — I'm around. What's going on?",
+    "Hi {name}, here if you need me. What do you need?",
+    "Hey {name} — what can I help with?",
+    "Hi {name}, fire away when you're ready.",
+)
+_PASSIVE_GENERAL_OPENERS_NO_NAME = (
+    "Hey — I'm around. What's going on?",
+    "Here if you need me — what do you need?",
+    "What can I help with?",
+    "Fire away when you're ready.",
+)
+
 
 @dataclass(frozen=True)
 class EllaResponse:
@@ -362,6 +379,240 @@ def _speaker_to_dict(speaker: SpeakerIdentity) -> dict[str, Any]:
         "client_id": speaker.client_id,
         "team_member_id": speaker.team_member_id,
     }
+
+
+@dataclass(frozen=True)
+class PassiveResponseResult:
+    """What `respond_to_passive_trigger` / `_handle_passive_general_inquiry`
+    return for the cron to log and write back to pending_ella_responses."""
+
+    response_text: str
+    agent_run_id: str
+    posted: bool
+    slack_error: str | None = None
+
+
+def respond_to_passive_trigger(
+    pending_row: dict[str, Any],
+) -> PassiveResponseResult:
+    """Substantive passive response. Reuses speaker resolution + KB
+    retrieval + Sonnet generation from the reactive path so behavior
+    stays consistent across @-mention and passive-trigger paths.
+
+    `pending_row` is the row from `pending_ella_responses` (from the
+    cron). We reconstruct the synthetic event the reactive path
+    expects: channel + ts + user.
+
+    Posts via `shared.slack_post.post_message` (main-channel-only,
+    no thread). Returns a result dataclass for the cron to write back.
+    """
+    from shared.slack_post import post_message  # local import to keep top tight
+
+    synthetic_event = {
+        "channel": pending_row["slack_channel_id"],
+        "ts": pending_row["triggering_message_ts"],
+        "user": pending_row["triggering_message_slack_user_id"],
+        "text": "",  # not used by the prompt path; KB retrieval reads
+                    # context instead. See note below.
+    }
+    speaker = resolve_speaker_identity(synthetic_event["user"])
+    channel_client = _resolve_channel_client(synthetic_event["channel"])
+    if channel_client is None:
+        run_id = start_agent_run(
+            agent_name="ella",
+            trigger_type="passive_substantive",
+            trigger_metadata={
+                "pending_id": pending_row.get("id"),
+                "slack_channel_id": synthetic_event["channel"],
+                "skip_reason": "no_client_for_channel",
+            },
+        )
+        end_agent_run(run_id, status="skipped", output_summary="no_client_for_channel")
+        return PassiveResponseResult(
+            response_text="",
+            agent_run_id=run_id,
+            posted=False,
+            slack_error="no_client_for_channel",
+        )
+
+    # The triggering message itself is what we want Ella to respond to.
+    # Pull the text from slack_messages (the ingest layer wrote it
+    # there before the queue insert).
+    triggering_text = _fetch_message_text(
+        synthetic_event["channel"], synthetic_event["ts"]
+    )
+    query_text = triggering_text or ""
+
+    run_id = start_agent_run(
+        agent_name="ella",
+        trigger_type="passive_substantive",
+        trigger_metadata={
+            "pending_id": pending_row.get("id"),
+            "slack_channel_id": synthetic_event["channel"],
+            "triggering_message_ts": synthetic_event["ts"],
+            "triggering_message_slack_user_id": synthetic_event["user"],
+            "real_author_role": speaker.role,
+            "real_author_name": speaker.display_name,
+            "real_author_id": speaker.client_id or speaker.team_member_id,
+        },
+        input_summary=query_text[:200],
+    )
+
+    try:
+        context = _retrieve_context(channel_client["id"], query_text)
+        client_for_prompt = dict(channel_client)
+        client_for_prompt["primary_csm"] = context.primary_csm
+        recent_channel_context = fetch_recent_channel_context(
+            synthetic_event["channel"],
+            before_ts=synthetic_event["ts"],
+        )
+        system_prompt = build_system_prompt(
+            client_for_prompt,
+            context.chunks,
+            speaker=speaker,
+            recent_channel_context=recent_channel_context,
+        )
+        response_text, confidence = _call_claude(
+            system_prompt, query_text, context, run_id=run_id
+        )
+        client_text, handoff_context = _detect_and_strip_escalation(response_text)
+        if handoff_context is not None:
+            # Sonnet decided to escalate inside its generation even
+            # though the Haiku gate already routed substantive. Honor
+            # the escalation: write the escalations row, do NOT post
+            # client-facing on the passive path (the spec is explicit
+            # — passive escalations are backend-only).
+            escalation_id = escalate(
+                reason="ella_escalated_from_passive_substantive",
+                context={
+                    "query_text": query_text,
+                    "ella_response": client_text,
+                    "handoff_reasoning": handoff_context,
+                    "client_id": channel_client["id"],
+                    "speaker": _speaker_to_dict(speaker),
+                    "pending_id": pending_row.get("id"),
+                },
+                client_id=channel_client["id"],
+                agent_run_id=run_id,
+            )
+            end_agent_run(
+                run_id,
+                status="escalated",
+                output_summary=(
+                    f"sonnet-side escalation from passive substantive "
+                    f"(escalation_id={escalation_id})"
+                ),
+                confidence_score=confidence,
+            )
+            return PassiveResponseResult(
+                response_text="",
+                agent_run_id=run_id,
+                posted=False,
+                slack_error="sonnet_side_escalation",
+            )
+
+        post_result = post_message(synthetic_event["channel"], response_text)
+        end_agent_run(
+            run_id,
+            status="success",
+            output_summary=response_text[:200],
+            confidence_score=confidence,
+        )
+        return PassiveResponseResult(
+            response_text=response_text,
+            agent_run_id=run_id,
+            posted=bool(post_result["ok"]),
+            slack_error=post_result.get("slack_error"),
+        )
+    except Exception as exc:
+        logger.exception(
+            "respond_to_passive_trigger failed: %s", exc
+        )
+        end_agent_run(run_id, status="error", error_message=str(exc))
+        raise
+
+
+def handle_passive_general_inquiry(
+    pending_row: dict[str, Any],
+) -> PassiveResponseResult:
+    """Canned warm response for the `respond_general_inquiry` decision.
+    Zero LLM cost. Posts a randomized opener to the channel and writes
+    an agent_runs row with trigger_type='passive_general_inquiry'.
+    """
+    from shared.slack_post import post_message  # local import
+
+    channel_id = pending_row["slack_channel_id"]
+    user_id = pending_row["triggering_message_slack_user_id"]
+    speaker = resolve_speaker_identity(user_id)
+
+    run_id = start_agent_run(
+        agent_name="ella",
+        trigger_type="passive_general_inquiry",
+        trigger_metadata={
+            "pending_id": pending_row.get("id"),
+            "slack_channel_id": channel_id,
+            "triggering_message_ts": pending_row["triggering_message_ts"],
+            "triggering_message_slack_user_id": user_id,
+            "real_author_role": speaker.role,
+            "real_author_name": speaker.display_name,
+            "real_author_id": speaker.client_id or speaker.team_member_id,
+        },
+        input_summary="(passive general inquiry — no input text)",
+    )
+    response = _pick_passive_general_opener(speaker)
+    post_result = post_message(channel_id, response)
+    end_agent_run(
+        run_id,
+        status="success",
+        output_summary=response[:200],
+        confidence_score=1.0,
+    )
+    return PassiveResponseResult(
+        response_text=response,
+        agent_run_id=run_id,
+        posted=bool(post_result["ok"]),
+        slack_error=post_result.get("slack_error"),
+    )
+
+
+def _pick_passive_general_opener(speaker: SpeakerIdentity) -> str:
+    """First-name'd warm opener for resolved speakers, generic fallback
+    for unresolvable / placeholder display names. Mirrors the
+    `_pick_bare_response` decision shape from the @-mention path."""
+    if (
+        speaker.role in ("client", "advisor")
+        and speaker.display_name
+        and not speaker.display_name.startswith("(")
+    ):
+        first_name = speaker.display_name.split()[0]
+        return random.choice(_PASSIVE_GENERAL_OPENERS_WITH_NAME).format(
+            name=first_name
+        )
+    return random.choice(_PASSIVE_GENERAL_OPENERS_NO_NAME)
+
+
+def _fetch_message_text(slack_channel_id: str, slack_ts: str) -> str:
+    """Resolve the triggering message's text from `slack_messages`.
+
+    The cron is the only caller. The realtime ingest layer wrote the
+    row before the queue insert, so the row exists by the time the
+    cron drains. Returns empty string on miss (network blip, ingest
+    failure, etc.) — the substantive path tolerates empty queries
+    via KB retrieval over an empty embedding.
+    """
+    db = get_client()
+    resp = (
+        db.table("slack_messages")
+        .select("text")
+        .eq("slack_channel_id", slack_channel_id)
+        .eq("slack_ts", slack_ts)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        return ""
+    return rows[0].get("text") or ""
 
 
 def _redact_event(
