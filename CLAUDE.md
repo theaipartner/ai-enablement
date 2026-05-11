@@ -448,11 +448,14 @@ Ella V2 is the active multi-batch focus alongside Gregory. **Full surface area �
 
 ## Update Policy for This File
 
-Update CLAUDE.md whenever:
+CLAUDE.md auto-loads into every Claude Code / Director session, so it stays lean. Kind B (state snapshots, shipped-batch detail) lives in `docs/state.md`; agent-specific surface area lives in `docs/agents/<agent>.md`. Both are read-on-demand, not auto-loaded.
+
+Update CLAUDE.md (the always-loaded surface) only when:
 - A core principle is clarified or extended
 - A stack choice changes
 - A new major convention is adopted
-- The current focus shifts to a new phase / batch
-- The "Live System State" snapshot drifts from reality
+- § Current Focus or § Next Session Priorities shifts (these are the only state-y sections that stay in CLAUDE.md, because every session needs the "what's in flight" pointer)
 
-Treat it as living documentation. A stale CLAUDE.md is worse than no CLAUDE.md.
+Update `docs/state.md` whenever a batch ships — in the same Builder commit-sequence as the code. Update `docs/agents/<agent>.md` whenever the agent's surface area changes (behavior, retrieval, schema dependencies, build phases).
+
+Treat all three files as living documentation. A stale CLAUDE.md is worse than no CLAUDE.md; the same is true of stale `state.md` and stale agent docs.
