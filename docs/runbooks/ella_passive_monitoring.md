@@ -4,14 +4,16 @@ Operational guide for Ella V2 Batch 2.3 passive monitoring. Covers what it is, h
 
 ## What it is
 
-Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) to "passively observing every client message in passive-monitoring-enabled channels, deciding whether to respond, and acting on a 3-5 minute delay so CSMs can interject first."
+Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) to "passively observing every client message in passive-monitoring-enabled channels, deciding whether to respond, and acting on a 1-minute delay." (Original spec wrote this as a 3-5 min CSM-interjection window; Drake's 2026-05-11 call dropped the delay to 1 min because CSMs are structurally in meetings and don't respond inside any realistic window. The queue + cron + intervention-check machinery stays in place pending production data; if `cancelled_csm_intervened` stays at ~0 after meaningful traffic, Batch 2.4 will rip the queue and move to synchronous response from the ingest fork.)
 
 Pipeline (one entry per client-authored message):
 
 1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py:ingest_message_event`) — every Slack `message` event lands here; passive fork attaches after the existing client-channel + subtype gates and the message upsert.
 2. **Passive decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — runs six gates in order: global kill switch → author-type gate → CSM-directed auto-skip → KB-relevance gate → firm-after-first gate → Haiku decision call. Returns one of four outcomes.
-3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — writes the `agent_runs` row (always), and: for `respond_*` outcomes inserts a `pending_ella_responses` row with `respond_after_ts = now() + 4 minutes`; for `escalate` fires a backend DM to the primary CSM; for `skip` does nothing further.
+3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — writes the `agent_runs` row (always), and: for `respond_*` outcomes inserts a `pending_ella_responses` row with `respond_after_ts = now() + 1 minute`; for `escalate` fires a backend DM to the primary CSM; for `skip` does nothing further.
 4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute, picks due rows, re-checks the kill switches + per-channel toggle + CSM-intervention, dispatches the response or cancels the row.
+
+Real-world perceived latency is **1-2 minutes** end-to-end: the 1-minute insert-time delay plus up to 60 seconds of cron-tick lag. Per-minute is the floor on Vercel Cron (Pro plan); going lower would require a different scheduling primitive.
 
 Default-stance is **stay out**: every uncertain case skips silently. Misfiring is more costly than missing.
 
@@ -55,7 +57,7 @@ update slack_channels
  where slack_channel_id = 'C09JYRAENPJ';
 ```
 
-The cron re-checks this on every drain; flipping it off during a 4-minute queue wait marks the in-flight row `cancelled_channel_disabled`.
+The cron re-checks this on every drain; flipping it off during the 1-minute queue wait marks the in-flight row `cancelled_channel_disabled`.
 
 ## How to verify the path is flowing
 
@@ -108,6 +110,18 @@ select id, processed_at, processing_status, processing_error,
  limit 20;
 ```
 
+### CSM intervention counter (the key Batch 2.4 prerequisite metric)
+
+```sql
+select date_trunc('day', created_at) as day, count(*)
+  from pending_ella_responses
+ where status = 'cancelled_csm_intervened'
+ group by 1
+ order by 1 desc;
+```
+
+If this stays at zero across a week of meaningful traffic, the queue+cron infrastructure is dead weight and Batch 2.4 should rip it.
+
 ## Failure modes
 
 ### Cron not firing
@@ -127,7 +141,7 @@ Symptom: `agent_runs.trigger_metadata->>'haiku_decision' = 'skip'` with `haiku_r
 
 Iteration: cheap LLMs go off-format occasionally. Per spec, unparseable defaults to skip. Don't retry — adds cost, doesn't fix structural prompt issues. Iterate the Haiku system prompt in `agents/ella/passive_monitor.py:_HAIKU_SYSTEM_PROMPT` if the pattern persists.
 
-### Kill switch flipped during the 4-min queue wait
+### Kill switch flipped during the 1-min queue wait
 
 Behavior: the next cron drain marks the row `cancelled_kill_switch` (global) or `cancelled_channel_disabled` (per-channel). No client-facing posts fire. Drake sees the cancellation in `/ella/runs`.
 
@@ -153,15 +167,15 @@ After Drake flips `ELLA_PASSIVE_MONITORING_ENABLED=true` in Vercel and redeploys
     where slack_channel_id = 'C<DRAKE_TEST_CHANNEL>';
    ```
 
-2. Drake posts a client-shaped message in `#ella-test-drakeonly`. Expected: `/ella/runs` shows a new `trigger_type='passive_monitor'` row within seconds. If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~4 minutes later, the cron drains it and posts to the channel.
+2. Drake posts a client-shaped message in `#ella-test-drakeonly`. Expected: `/ella/runs` shows a new `trigger_type='passive_monitor'` row within seconds. If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~1-2 minutes later, the cron drains it and posts to the channel.
 
 3. Iterate until comfortable. Production rollout to other channels is post-validation work — not in the Batch 2.3 spec.
 
 ## Why per-minute cron (vs longer cadence)
 
-Per the spec § Goal: "CSMs have a 3-5 min window to interject before Ella responds." The cron picks up rows at most ~60s after they become due (`respond_after_ts <= now()`). With a 4-minute insert-time delay, that lands the post 4-5 minutes after the triggering message — the spec's window.
+Per the spec § Goal originally targeted a 3-5 min CSM-interjection window; Drake's 2026-05-11 call collapsed that to 1 min. The cron picks up rows at most ~60s after they become due (`respond_after_ts <= now()`). With a 1-minute insert-time delay, that lands the post 1-2 minutes after the triggering message.
 
-Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the project plan ever loses Pro, fallback is 5-minute cadence with the delay window shifting to 8-10 minutes — document and surface to Drake before that change ships.
+Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the project plan ever loses Pro, fallback is 5-minute cadence with the delay window shifting to 5-6 minutes — document and surface to Drake before that change ships.
 
 ## Env vars (Vercel project)
 
