@@ -21,9 +21,11 @@ Import-time-binding gotcha (load-bearing — do NOT simplify away):
   name binding inside the importing module still points at the original function.
   We must patch each live local re-export too.
 
-  Today the live re-export with current pytest exposure is
-  `agents.gregory.cs_call_summary_post.post_message` (hit via the Fathom pipeline
-  test's `_record_with_summary` helper).
+  Today the live re-exports with current pytest exposure are:
+    - `agents.gregory.cs_call_summary_post.post_message` (hit via the Fathom
+      pipeline test's `_record_with_summary` helper).
+    - `agents.ella.passive_dispatch.post_message` (hit by Batch 2.3 passive
+      monitor tests that flow through `persist_passive_evaluation`).
 
   Other re-exports exist but no pytest test imports them today:
     - `api.accountability_notification_cron.post_message` — cron handler is a
@@ -61,4 +63,10 @@ def _block_real_slack_posts(monkeypatch):
     # See the module docstring above for the import-time-binding rationale.
     monkeypatch.setattr(
         "agents.gregory.cs_call_summary_post.post_message", _noop
+    )
+    # Live local re-export bound at import time inside passive_dispatch
+    # (Batch 2.3). The cron + ingest fork that exercise this module
+    # in tests must not hit Slack.
+    monkeypatch.setattr(
+        "agents.ella.passive_dispatch.post_message", _noop
     )
