@@ -8,26 +8,28 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
+import { NpsStandingPill } from './pills'
 import {
-  JourneyStagePill,
-  NpsStandingPill,
-  StatusPill,
-  TrustpilotPill,
-} from './pills'
+  EditableCsmStandingCell,
+  EditableJourneyStageCell,
+  EditableStatusCell,
+  EditableTrustpilotCell,
+} from './editable-cell'
 import type { ClientsListRow } from '@/lib/db/clients'
 
-// V2 column layout (2026-05-08): NPS standing + Trustpilot + Meetings
-// this month replaced Tags + Last call + Open action items. All eight
-// columns sortable now (was seven sortable + one Tags column outside
-// the sort map).
+// Column layout per Scott's 2026-05-11 ask: Name / Status / Journey
+// stage / Primary CSM / CSM Standing / NPS standing / Trustpilot /
+// Health score / Meetings this mo. Adds the CSM Standing column (was
+// not in the V2 layout) and reorders Trustpilot before Health score.
 type SortKey =
   | 'full_name'
   | 'status'
   | 'journey_stage'
   | 'primary_csm_name'
+  | 'csm_standing'
   | 'nps_standing'
-  | 'latest_health_score'
   | 'trustpilot_status'
+  | 'latest_health_score'
   | 'meetings_this_month'
 
 const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
@@ -35,9 +37,10 @@ const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
   { key: 'status', label: 'Status' },
   { key: 'journey_stage', label: 'Journey stage' },
   { key: 'primary_csm_name', label: 'Primary CSM' },
+  { key: 'csm_standing', label: 'CSM Standing' },
   { key: 'nps_standing', label: 'NPS standing' },
-  { key: 'latest_health_score', label: 'Health score' },
   { key: 'trustpilot_status', label: 'Trustpilot' },
+  { key: 'latest_health_score', label: 'Health score' },
   { key: 'meetings_this_month', label: 'Meetings this mo' },
 ]
 
@@ -148,7 +151,7 @@ export function ClientsTable({
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={row.id} className="cursor-pointer hover:bg-muted/50">
+            <TableRow key={row.id} className="hover:bg-muted/50">
               <TableCell>
                 <Link
                   href={`/clients/${row.id}`}
@@ -158,14 +161,13 @@ export function ClientsTable({
                 </Link>
               </TableCell>
               <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <StatusPill status={row.status} />
-                </Link>
+                <EditableStatusCell clientId={row.id} value={row.status} />
               </TableCell>
               <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <JourneyStagePill stage={row.journey_stage} />
-                </Link>
+                <EditableJourneyStageCell
+                  clientId={row.id}
+                  value={row.journey_stage}
+                />
               </TableCell>
               <TableCell>
                 <Link href={`/clients/${row.id}`} className="block">
@@ -175,9 +177,21 @@ export function ClientsTable({
                 </Link>
               </TableCell>
               <TableCell>
+                <EditableCsmStandingCell
+                  clientId={row.id}
+                  value={row.csm_standing}
+                />
+              </TableCell>
+              <TableCell>
                 <Link href={`/clients/${row.id}`} className="block">
                   <NpsStandingPill standing={row.nps_standing} />
                 </Link>
+              </TableCell>
+              <TableCell>
+                <EditableTrustpilotCell
+                  clientId={row.id}
+                  value={row.trustpilot_status}
+                />
               </TableCell>
               <TableCell>
                 <Link href={`/clients/${row.id}`} className="block">
@@ -185,11 +199,6 @@ export function ClientsTable({
                     score={row.latest_health_score}
                     tier={row.latest_health_tier}
                   />
-                </Link>
-              </TableCell>
-              <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <TrustpilotPill status={row.trustpilot_status} />
                 </Link>
               </TableCell>
               <TableCell>

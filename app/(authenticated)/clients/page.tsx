@@ -3,7 +3,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { FilterBar } from './filter-bar'
 import { ClientsTable } from './clients-table'
 
-// V2 column layout (2026-05-08). Mirror of clients-table.tsx
+// Inline-edit cells on this list call revalidatePath('/clients') after
+// every save, but the route's static-render cache otherwise serves stale
+// data on a return navigation from a detail page (until the cache TTL
+// expires). force-dynamic disables the static optimization so every
+// navigation re-runs against fresh DB data. Cost: ~200ms per visit;
+// acceptable at 197 clients.
+export const dynamic = 'force-dynamic'
+
+// Column layout per Scott's 2026-05-11 ask. Mirror of clients-table.tsx
 // SORTABLE_COLUMNS — kept duplicated rather than imported because the
 // table is a client-tree component and we don't want to drag its imports
 // into the server bundle. Drift risk is low; both sets validated at
@@ -13,9 +21,10 @@ type SortKey =
   | 'status'
   | 'journey_stage'
   | 'primary_csm_name'
+  | 'csm_standing'
   | 'nps_standing'
-  | 'latest_health_score'
   | 'trustpilot_status'
+  | 'latest_health_score'
   | 'meetings_this_month'
 
 const VALID_SORT_KEYS: SortKey[] = [
@@ -23,9 +32,10 @@ const VALID_SORT_KEYS: SortKey[] = [
   'status',
   'journey_stage',
   'primary_csm_name',
+  'csm_standing',
   'nps_standing',
-  'latest_health_score',
   'trustpilot_status',
+  'latest_health_score',
   'meetings_this_month',
 ]
 
