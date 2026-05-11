@@ -206,12 +206,14 @@ Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker
 - **Revisit trigger:** Ella V2 cycles begin (after Gregory V2 batches A–C stabilize per the canonical batch ordering in `docs/future-ideas.md`), OR the Javi-Pena-as-test-fixture confusion causes a real misclassification or wrong-fact incident.
 - **Logged:** 2026-04-23.
 
-## Slack real-time ingestion via Events API
+## ~~Slack real-time ingestion via Events API~~ — SUPERSEDED 2026-05-09
+
+Superseded by V2 Batch 1 cloud Slack ingestion shipping 2026-05-09 (`ingestion/slack/realtime_ingest.py` + `api/slack_events.py`'s `message` branch). Realtime path is live + verified operational 2026-05-10 (the `message.groups` event subscription fix unblocked private channels). Original entry preserved below for the design rationale.
 
 - **What:** Vercel serverless function receiving Slack Events API `message` subscriptions. Parses via `ingestion/slack/parser.py`, upserts to `slack_messages`. Reuses the parser verbatim; adds signing-secret verification and `event_id` deduplication. Complements the REST-based backfill, which stays the right tool for historical imports.
 - **Why deferred:** the 90-day backfill covers tonight's team testing and the early pilot. Real-time ingestion only moves the needle once Slack history is embedded into retrieval (see "Slack messages as a retrieval surface" below) — stale-but-embedded Slack history is less useful than live-but-embedded, so the two entries are best revisited together.
 - **Revisit trigger:** the retrieval-surface entry ships, OR Ella starts getting asked about same-day Slack conversations she can't see, OR a second manual backfill run becomes necessary inside a week.
-- **Logged:** 2026-04-23.
+- **Logged:** 2026-04-23; superseded 2026-05-09 (V2 Batch 1 ship).
 
 ## Backfill team_members.slack_user_id from ingested messages
 
@@ -220,12 +222,12 @@ Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker
 - **Revisit trigger:** query #11 in `docs/runbooks/inspect_ingestion.md` shows more than ~20 distinct unresolved authors OR the first time a team @mention in a Slack channel needs to resolve to a `team_members.id`.
 - **Logged:** 2026-04-22.
 
-## Slack messages as a retrieval surface (V1.1)
+## Slack messages as a retrieval surface (Batch 2.1)
 
-- **What:** chunk + embed `slack_messages` text into `document_chunks` under a new `document_type = 'slack_message_chunk'`, metadata-gated per client the same way transcript chunks are. Maximally useful alongside real-time ingestion (see "Slack real-time ingestion via Events API" above), but the backfilled 90-day window alone would already let Ella reference prior in-channel conversations.
-- **Why deferred:** V1 ships with course content plus Fathom call summaries as Ella's retrieval surface. Slack history embedding is additive — more ingest tokens, more noise in the retrieval pool — worth doing once live testing shows a concrete gap Ella can't cover from the two existing surfaces.
-- **Revisit trigger:** a team-test or client question surfaces that Slack history would have answered AND course content + Fathom calls didn't, OR strong signal on that immediately after Monday's launch.
-- **Logged:** 2026-04-23.
+- **What:** chunk + embed `slack_messages` text into `document_chunks` under a new `document_type = 'slack_message_chunk'`, metadata-gated per client the same way transcript chunks are. Maximally useful alongside real-time ingestion (shipped V2 Batch 1, 2026-05-09), and now that `slack_messages` is populated (3,641 messages across 8 channels as of 2026-05-10) the data is ready.
+- **Why originally deferred:** V1 shipped with course content plus Fathom call summaries as Ella's retrieval surface. Slack history embedding is additive — more ingest tokens, more noise in the retrieval pool — worth doing once live testing shows a concrete gap Ella can't cover from the two existing surfaces.
+- **Revisit trigger:** **ACTIVE** — scheduled for Batch 2.1 after Batch 2.3 (passive monitoring) ships. See `CLAUDE.md` § Next Session Priorities #2. The 2.1 spec will need its own scoping pass: chunking strategy for short Slack messages, anonymization / cross-client retrieval-scope gating to prevent client A's channel content leaking into client B's prompt context, and the metadata schema (`document_type='slack_message_chunk'` + per-message `client_id` filter).
+- **Logged:** 2026-04-23; re-promoted to active roadmap 2026-05-11 as Batch 2.1.
 
 ## LLM post-processing for Fathom speaker misattribution
 
