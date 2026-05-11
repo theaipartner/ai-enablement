@@ -185,3 +185,58 @@ Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the pr
 | `ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD` | Pre-Haiku KB-relevance cutoff (cosine similarity). | `0.3` |
 | `CRON_SECRET` | Bearer-token auth for the per-minute cron. Shared across all cron endpoints (single-var pattern per M6.2). | (set in Vercel) |
 | `SLACK_WORKSPACE` | Optional. Subdomain used in escalation-DM permalinks. | (omitted = clean fallback) |
+
+## Smoke testing in #ella-test-drakeonly
+
+Per-channel `slack_channels.test_mode=true` allows team_member messages (e.g. Drake) to trigger passive monitor in that one channel. The bypass is conditional on the channel-level flag — no other channel is affected. Used for validating the four Haiku decision outcomes before expanding passive monitoring to production client channels.
+
+Production-only behavior is preserved everywhere: the bypass accepts `client` AND `team_member` under test_mode. `ella`, `bot`, `workflow`, `unknown` continue to skip regardless of mode (Ella responding to her own posts or to system messages is undesirable in every mode).
+
+### To validate
+
+1. Confirm test_mode is on for the test channel:
+   ```sql
+   SELECT slack_channel_id, name, passive_monitoring_enabled, test_mode
+     FROM slack_channels
+    WHERE slack_channel_id = 'C0AUWL20U8J';
+   ```
+   Both `passive_monitoring_enabled` and `test_mode` should be `true`.
+
+2. Post test messages designed to exercise each Haiku outcome:
+   - **`respond_substantive` test:** a question the channel-mapped client's KB clearly answers (e.g., "what's the best opener for cold calls" if the client has cold-call training content).
+   - **`respond_general_inquiry` test:** a vague "anyone there?" or "hey, can someone help me with something" — general availability ping with no KB hook.
+   - **`skip` test:** off-topic chatter ("lol that meeting was wild") — nothing for Ella to do.
+   - **`escalate` test:** sensitive content phrasing — "I've been thinking about cancelling" or similar billing/cancellation language.
+
+3. Watch the `/ella/runs` dashboard after each post. Within 1-2 minutes the decision row appears with `trigger_type='passive_monitor'` and the matching `haiku_decision` value in `trigger_metadata`. For `respond_*` decisions, a second row appears (the cron-drain row) with `trigger_type='passive_substantive'` or `'passive_general_inquiry'` when Ella actually posts.
+
+### Filtering test traffic out of production metrics
+
+Test-mode runs are tagged in `agent_runs.trigger_metadata.test_mode_run=true` so audit queries can split test from production:
+
+```sql
+-- Real production passive decisions only:
+SELECT count(*) FROM agent_runs
+ WHERE agent_name='ella' AND trigger_type='passive_monitor'
+   AND (trigger_metadata->>'test_mode_run' IS NULL
+     OR trigger_metadata->>'test_mode_run' != 'true');
+
+-- Test-mode passive decisions only:
+SELECT id, started_at, trigger_metadata->>'haiku_decision' AS decision,
+       trigger_metadata->>'haiku_reasoning' AS reasoning
+  FROM agent_runs
+ WHERE agent_name='ella' AND trigger_type='passive_monitor'
+   AND trigger_metadata->>'test_mode_run' = 'true'
+ ORDER BY started_at DESC;
+```
+
+### Disabling test_mode
+
+Leave on indefinitely for ongoing smoke testing, OR flip off when production rollout begins to keep the test channel clean for ad-hoc future testing. Drake's call. Either way, the `test_mode_run` flag on historic test runs means past test traffic stays cleanly filterable from production queries.
+
+```sql
+-- Disable test_mode (run when ready):
+UPDATE slack_channels
+   SET test_mode = false
+ WHERE slack_channel_id = 'C0AUWL20U8J';
+```

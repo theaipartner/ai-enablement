@@ -17,6 +17,7 @@ Mirror every Slack channel we care about so agents can reason about scope (clien
 | `is_private` | `boolean` | Not null |
 | `is_archived` | `boolean` | Default `false` |
 | `passive_monitoring_enabled` | `boolean` | Default `false`. Per-channel kill switch for Ella's V2 passive-monitoring behavior. Renamed from `ella_enabled` in migration 0029 (Batch 2.3). |
+| `test_mode` | `boolean` | Default `false`. Per-channel test mode for passive monitoring. When `true`, the passive monitor's author-type gate accepts `team_member` messages in addition to `client` messages so Drake can smoke-test Ella as himself. NEVER enable on a production client channel — test_mode runs are tagged in `agent_runs.trigger_metadata.test_mode_run=true` for audit-filter purposes. Added in migration 0031. |
 | `metadata` | `jsonb` | Extensible |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
@@ -33,9 +34,9 @@ Mirror every Slack channel we care about so agents can reason about scope (clien
 
 ## Read By
 
-- Ella (reactive path resolves `client_id` for scoping retrieval; passive path gates on `passive_monitoring_enabled` AND the global `ELLA_PASSIVE_MONITORING_ENABLED` env var)
-- `ingestion/slack/realtime_ingest.py` (passive-monitor fork dispatches when `passive_monitoring_enabled=true` AND `author_type='client'`)
-- `api/passive_ella_cron.py` (re-checks the per-channel toggle before draining each pending row — Drake may flip it off during the 4-min queue wait)
+- Ella (reactive path resolves `client_id` for scoping retrieval; passive path gates on `passive_monitoring_enabled` AND the global `ELLA_PASSIVE_MONITORING_ENABLED` env var; `test_mode` widens the author-type gate from `client`-only to `client`+`team_member` for the smoke-test channel)
+- `ingestion/slack/realtime_ingest.py` (passive-monitor fork dispatches when `passive_monitoring_enabled=true`; threads `test_mode` into the payload so `agents/ella/passive_monitor.py:_evaluate` can apply the Gate 2 bypass)
+- `api/passive_ella_cron.py` (re-checks the per-channel toggle before draining each pending row — Drake may flip it off during the 1-minute queue wait)
 - Dashboards (channel → client views)
 
 ## Example Queries
@@ -65,4 +66,21 @@ Enable passive monitoring for a specific channel (Drake's gate (d)):
 update slack_channels
    set passive_monitoring_enabled = true
  where slack_channel_id = '<channel_id>';
+```
+
+Enable test_mode for smoke testing (intended for `#ella-test-drakeonly` only):
+
+```sql
+update slack_channels
+   set test_mode = true
+ where slack_channel_id = 'C0AUWL20U8J';
+```
+
+Filter test_mode passive runs out of production audit metrics:
+
+```sql
+select count(*) from agent_runs
+ where agent_name='ella' and trigger_type='passive_monitor'
+   and (trigger_metadata->>'test_mode_run' is null
+     or trigger_metadata->>'test_mode_run' != 'true');
 ```
