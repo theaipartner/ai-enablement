@@ -3,39 +3,48 @@
   "functions": {
     "api/slack_events.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/fathom_events.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/fathom_backfill.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 300
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/gregory_brain_cron.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 300
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/airtable_nps_webhook.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/accountability_roster.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/airtable_onboarding_webhook.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/accountability_notification_cron.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     },
     "api/passive_ella_cron.py": {
       "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
