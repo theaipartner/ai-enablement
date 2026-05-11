@@ -1,9 +1,9 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getClientById } from '@/lib/db/clients'
 import { listMergeCandidates } from '@/lib/db/merge'
 import { Separator } from '@/components/ui/separator'
 import { StatusPill, JourneyStagePill, NeedsReviewPill } from '../pills'
+import { BackToClientsButton } from './back-to-clients-button'
 import { MergeClientButton } from './merge-client-button'
 
 import { IdentitySection } from '@/components/client-detail/identity-section'
@@ -42,9 +42,7 @@ export default async function ClientDetailPage({
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <Link href="/clients" className="text-sm text-muted-foreground hover:underline">
-          ← Back to Clients
-        </Link>
+        <BackToClientsButton />
       </div>
 
       <div className="space-y-1.5">
