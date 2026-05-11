@@ -69,12 +69,13 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 - **Next action:** add a paragraph to CLAUDE.md § Director / Builder System § Builder behavior. Suggested wording: "When Builder encounters a hard stop and cannot proceed without Drake or Director input, Builder writes a partial report at `docs/reports/<slug>.md` describing what was completed (with commit hashes), what was attempted and blocked, the specific block (error message, missing schema, unresolvable ambiguity), and what input would unblock it. Then Builder exits cleanly. The partial report uses the same six-section structure as a normal report — the empty sections still get filled with explicit 'none' or 'blocked by X.'" This Builder-norm change is the integration item; the spec itself is the placeholder.
 - **Logged:** 2026-05-11.
 
-## File MCP for chat (Director side) — Drake has fix queued
+## File MCP for chat (Director side) — attempted and reverted 2026-05-11
 
-- **What:** Today's GitHub MCP requires Director (chat-Claude) to rewrite full files on every edit. This is slow and high-token-cost on a 70KB CLAUDE.md — every small surgical change becomes a full file rewrite. Drake has a fix queued (a file MCP that supports `str_replace`-style targeted edits in chat, mirroring Builder's `str_replace` tool). Not urgent today but worth tracking.
-- **Why it matters:** Director's effective rate-limit on doc edits is much lower than Builder's because of the full-file-rewrite pattern. Once the file MCP lands, Director can do surgical doc edits as fast as Builder can, which speeds up the "in-chat doc hygiene" loop materially.
-- **Next action:** Drake ships the file MCP when ready. No Director-side action needed — Director starts using `str_replace`-style operations once the new MCP is available. Until then, Director continues writing specs for Builder to execute when surgical edits would be too painful via full-file rewrite.
-- **Logged:** 2026-05-11.
+- **What:** GitHub MCP requires Director (chat-Claude) to rewrite full files on every edit. Slow and high-token-cost on a 70KB CLAUDE.md — every small surgical change becomes a full file rewrite. Drake tried wiring a filesystem MCP (live disk access at `/home/drake/projects/ai-enablement` via Claude Desktop with a `wsl.exe -- bash -ic` wrapper) to give Director surgical-edit capability.
+- **What broke:** filesystem-MCP writes land on Drake's local disk, GitHub-MCP commits land on `origin`. When Director used both in parallel (write via filesystem MCP, push via GitHub MCP), Drake's later `git pull` aborted with "local changes would be overwritten by merge" — git doesn't recognize the byte-identical match between working-tree and remote. Resolution at the time: `git checkout -- <file>` to discard the local copy, then pull. Painful, repeated multiple times in the same session.
+- **Resolution:** revert. Director uses GitHub MCP only (back to the pre-filesystem-MCP state). The full-file-rewrite token cost stays, but it's mitigated structurally — the Director-writes-specs-only rule (also landed 2026-05-11) means Director never edits existing files anyway. New specs are tiny by design. Surgical editing of CLAUDE.md / runbooks / known-issues happens in Builder via the spec, where `str_replace` is cheap.
+- **Revisit trigger:** if and when a file MCP for chat lands that handles the local-vs-remote race cleanly (e.g., writes directly to a non-working-tree location, or coordinates with git state) Drake can re-evaluate. No active queue.
+- **Logged:** 2026-05-11 (filesystem MCP attempted and reverted same day).
 
 ## Repo-root pip-install leak — disk-only, never tracked in git (re-confirmed 2026-05-11)
 
