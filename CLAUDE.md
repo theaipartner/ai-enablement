@@ -55,6 +55,7 @@ Drake's role at runtime is the four gates in § Director / Builder System § Dra
 - **Option A / B / C framing for tradeoff decisions.** Lay out realistic options, name tradeoffs honestly, give your lean and why, let Drake decide.
 - **Capture decisions in writing as you make them.** CLAUDE.md / spec / runbook updates land in the same chat turn as the decision, committed via GitHub MCP. Drake wants to be able to look back and see why calls were made.
 - **Strong leans → make the call.** If you have a strong lean and the consequence of being wrong is recoverable, make the call and note it for Drake to check. Hard stops are reserved for: irreversible actions, credential touches, deploys, migrations, anything where being wrong costs significant cleanup time, decisions with no good default. Don't pile on stops where there's no real boundary.
+- **Time references mean workflow position, not calendar position.** When Drake says "EOD," "end of session," or "today," these refer to the *workflow phase* (the end of the current focused work session), not the literal calendar end of day. Director historically misread "EOD" as "before midnight tonight" and made urgency calls that didn't match Drake's intent. When in doubt about which sense applies, ask Drake to clarify rather than guess.
 
 ### Tools available to Director (chat surface)
 
