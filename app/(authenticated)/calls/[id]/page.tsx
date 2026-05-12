@@ -275,27 +275,35 @@ export default async function CallDetailPage({
   )
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <Link
-          href="/calls"
-          className="text-sm text-muted-foreground hover:underline"
-        >
-          ← Back to Calls
-        </Link>
-      </div>
+    <div className="px-8 py-8 max-w-4xl mx-auto space-y-6">
+      <Link
+        href="/calls"
+        className="geg-eyebrow hover:underline"
+        style={{ color: 'var(--color-geg-text-3)' }}
+      >
+        ← BACK TO CALLS
+      </Link>
 
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold">
+      <header
+        className="space-y-2"
+        style={{
+          paddingBottom: 24,
+          borderBottom: '1px solid var(--color-geg-border-strong)',
+        }}
+      >
+        <div className="geg-eyebrow">CALL · DETAIL</div>
+        <h1
+          className="geg-display"
+          style={{ fontSize: 40, lineHeight: '44px' }}
+        >
           {call.title ?? 'Untitled call'}
         </h1>
-        <p className="text-sm text-muted-foreground">
+        <div className="geg-eyebrow geg-numeric pt-1">
           {new Date(call.started_at).toLocaleString()} ·{' '}
           {formatDuration(call.duration_seconds)}
-        </p>
-      </div>
+        </div>
+      </header>
 
-      <Separator />
 
       {/* Section 1 — Metadata */}
       <section className="space-y-3">

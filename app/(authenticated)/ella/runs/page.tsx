@@ -69,13 +69,30 @@ export default async function EllaRunsPage({
     .map((c) => ({ value: c.slack_channel_id, label: c.name }))
 
   return (
-    <div className="space-y-4 p-6">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">Ella runs</h1>
-        <span className="text-sm text-muted-foreground">
-          {total} {total === 1 ? 'run' : 'runs'}
-        </span>
-      </div>
+    <div className="px-8 py-8 space-y-6">
+      <header
+        className="flex items-end justify-between gap-6"
+        style={{
+          paddingBottom: 24,
+          borderBottom: '1px solid var(--color-geg-border-strong)',
+        }}
+      >
+        <div>
+          <div className="geg-eyebrow">ELLA · AUDIT</div>
+          <h1
+            className="geg-display"
+            style={{ fontSize: 52, lineHeight: '54px', marginTop: 8 }}
+          >
+            Run history.
+          </h1>
+        </div>
+        <div
+          className="geg-eyebrow geg-numeric"
+          style={{ paddingBottom: 6 }}
+        >
+          {total} {total === 1 ? 'RUN' : 'RUNS'}
+        </div>
+      </header>
 
       <EllaRunsSummaryBand stats={stats} />
       <EllaRunsFilterBar channelOptions={channelDropdownOptions} />

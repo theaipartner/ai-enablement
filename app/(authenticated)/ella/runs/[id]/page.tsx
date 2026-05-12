@@ -66,14 +66,34 @@ export default async function EllaRunDetailPage({
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-6">
+    <div className="mx-auto max-w-4xl space-y-5 px-8 py-8">
       <Link
         href="/ella/runs"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-1 geg-eyebrow hover:underline"
+        style={{ color: 'var(--color-geg-text-3)' }}
       >
-        <ChevronLeftIcon className="h-4 w-4" />
-        Back to Ella runs
+        <ChevronLeftIcon className="h-3 w-3" />
+        BACK TO ELLA RUNS
       </Link>
+
+      <header
+        className="space-y-2"
+        style={{
+          paddingBottom: 24,
+          borderBottom: '1px solid var(--color-geg-border-strong)',
+        }}
+      >
+        <div className="geg-eyebrow">ELLA · RUN</div>
+        <h1
+          className="geg-display"
+          style={{ fontSize: 40, lineHeight: '44px' }}
+        >
+          Run detail.
+        </h1>
+        <div className="geg-eyebrow geg-numeric pt-1" style={{ color: 'var(--color-geg-text-3)' }}>
+          <code>{run.id}</code>
+        </div>
+      </header>
 
       <Section title="Run header">
         <KeyValue label="Run ID" value={<code className="text-xs">{run.id}</code>} />
