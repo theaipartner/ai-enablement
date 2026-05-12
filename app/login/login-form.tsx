@@ -35,49 +35,120 @@ export function LoginForm() {
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-4 rounded border p-6"
-      >
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold">Sign in</h1>
-          <p className="text-sm text-muted-foreground">Gregory dashboard.</p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
+      <div className="w-full max-w-[420px]">
+        {/* Wordmark + LIVE pulse */}
+        <div className="flex items-center gap-2.5 mb-10">
+          <span
+            className="inline-block rounded-full geg-pulse"
+            style={{
+              width: 7,
+              height: 7,
+              background: 'var(--color-geg-accent)',
+              boxShadow: '0 0 8px var(--color-geg-accent-dim)',
+            }}
           />
+          <span
+            className="geg-eyebrow"
+            style={{ color: 'var(--color-geg-text-2)' }}
+          >
+            GREGORY · LIVE
+          </span>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
+        <h1
+          className="geg-display"
+          style={{ fontSize: 64, lineHeight: '64px', marginBottom: 12 }}
+        >
+          Sign in.
+        </h1>
+        <p
+          className="geg-deck"
+          style={{ fontSize: 17, marginBottom: 36 }}
+        >
+          The CSM brain for The AI Partner.
+        </p>
 
-        {error ? (
-          <p className="text-sm text-red-600" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <form
+          onSubmit={onSubmit}
+          className="space-y-5"
+          style={{
+            background: 'var(--color-geg-bg-elev)',
+            border: '1px solid var(--color-geg-border-strong)',
+            borderRadius: 8,
+            padding: '28px 28px 24px',
+          }}
+        >
+          <div className="space-y-2">
+            <Label
+              htmlFor="email"
+              className="geg-eyebrow"
+              style={{ color: 'var(--color-geg-text-3)' }}
+            >
+              EMAIL
+            </Label>
+            <Input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              style={{
+                background: 'var(--color-geg-bg)',
+                color: 'var(--color-geg-text)',
+                borderColor: 'var(--color-geg-border-strong)',
+              }}
+            />
+          </div>
 
-        <Button type="submit" className="w-full" disabled={submitting}>
-          {submitting ? 'Signing in…' : 'Sign in'}
-        </Button>
-      </form>
+          <div className="space-y-2">
+            <Label
+              htmlFor="password"
+              className="geg-eyebrow"
+              style={{ color: 'var(--color-geg-text-3)' }}
+            >
+              PASSWORD
+            </Label>
+            <Input
+              id="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              style={{
+                background: 'var(--color-geg-bg)',
+                color: 'var(--color-geg-text)',
+                borderColor: 'var(--color-geg-border-strong)',
+              }}
+            />
+          </div>
+
+          {error ? (
+            <p
+              className="text-sm"
+              role="alert"
+              style={{ color: 'var(--color-geg-neg)' }}
+            >
+              {error}
+            </p>
+          ) : null}
+
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={submitting}
+            style={{
+              background: 'var(--color-geg-accent)',
+              color: '#ffffff',
+              borderColor: 'transparent',
+              fontWeight: 500,
+            }}
+          >
+            {submitting ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }
