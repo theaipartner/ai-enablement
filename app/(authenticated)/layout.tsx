@@ -20,7 +20,14 @@ export default async function AuthenticatedLayout({
   }
 
   return (
-    <div className="min-h-screen">
+    <div
+      className="min-h-screen"
+      data-theme="gregory-editorial"
+      style={{
+        background: 'var(--color-geg-bg)',
+        color: 'var(--color-geg-text)',
+      }}
+    >
       <TopNav userEmail={user.email ?? ''} />
       <main>{children}</main>
     </div>

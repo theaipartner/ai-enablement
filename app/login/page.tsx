@@ -14,5 +14,16 @@ export default async function LoginPage() {
     redirect('/clients')
   }
 
-  return <LoginForm />
+  return (
+    <div
+      data-theme="gregory-editorial"
+      className="min-h-screen"
+      style={{
+        background: 'var(--color-geg-bg)',
+        color: 'var(--color-geg-text)',
+      }}
+    >
+      <LoginForm />
+    </div>
+  )
 }
