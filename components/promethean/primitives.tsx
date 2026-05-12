@@ -11,30 +11,51 @@ export function PromPage({ children, className = '' }: { children: React.ReactNo
   return <div className={`px-10 py-8 max-w-[1280px] ${className}`}>{children}</div>
 }
 
+// Two-column section header: small-caps slug + 2px rule on the left, big
+// serif title + optional italic deck on the right. Children render below
+// with 36px gap. Sections sit 88px apart for the broadsheet rhythm.
 export function PromSection({
   eyebrow,
   headline,
+  deck,
+  index,
   trailing,
   children,
 }: {
   eyebrow?: string
   headline?: string
+  deck?: React.ReactNode
+  index?: string
   trailing?: React.ReactNode
   children: React.ReactNode
 }) {
+  const hasHeader = eyebrow || headline || index || deck || trailing
   return (
-    <section className="mt-10">
-      {(eyebrow || headline) && (
-        <div className="flex items-end justify-between mb-5">
+    <section style={{ marginTop: 88 }}>
+      {hasHeader && (
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: '180px 1fr', gap: 24, marginBottom: 36 }}
+        >
           <div>
-            {eyebrow ? <div className="prom-eyebrow">{eyebrow}</div> : null}
-            {headline ? (
-              <h2 className="prom-serif mt-1" style={{ fontSize: 34, lineHeight: '38px' }}>
-                {headline}
-              </h2>
-            ) : null}
+            {eyebrow ? <SectionSlug index={index} label={eyebrow} /> : null}
           </div>
-          {trailing ? <div>{trailing}</div> : null}
+          <div className="flex items-start justify-between gap-6">
+            <div style={{ maxWidth: 880 }}>
+              {headline ? (
+                <h2 className="prom-section-title">{headline}</h2>
+              ) : null}
+              {deck ? (
+                <div
+                  className="prom-deck"
+                  style={{ fontSize: 15.5, marginTop: 12, maxWidth: 620 }}
+                >
+                  {deck}
+                </div>
+              ) : null}
+            </div>
+            {trailing ? <div className="shrink-0">{trailing}</div> : null}
+          </div>
         </div>
       )}
       {children}
@@ -42,38 +63,132 @@ export function PromSection({
   )
 }
 
+// Tiny slug helper — small-caps left-margin label sitting above a 2px rule.
+export function SectionSlug({ index, label }: { index?: string; label: string }) {
+  return (
+    <div className="prom-section-slug">
+      {index ? `${index} · ` : ''}
+      {label}
+    </div>
+  )
+}
+
+// Bordered hairline strip with internal column dividers — replaces stacked
+// PromCards in the Money / Acquisition / "Where we stand" sections.
+export function StripPanel({
+  children,
+  cols,
+  className = '',
+}: {
+  children: React.ReactNode
+  cols: string
+  className?: string
+}) {
+  return (
+    <div
+      className={`prom-strip grid ${className}`}
+      style={{ gridTemplateColumns: cols }}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function StripCol({
+  children,
+  className = '',
+  padding = '32px',
+}: {
+  children: React.ReactNode
+  className?: string
+  padding?: string
+}) {
+  return (
+    <div className={`prom-strip-col ${className}`} style={{ padding }}>
+      {children}
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Page header — eyebrow + serif name + meta strip
 // ---------------------------------------------------------------------------
+// Refined: 86px display H1 via .prom-display, optional italic editorial
+// "deck" to the right of the title, and a byline strip below the H1 with
+// hairline rules above + below. The top-row (eyebrow + meta + trailing)
+// sits above its own divider so the masthead reads like print.
 export function PromPageHeader({
   eyebrow,
   title,
+  deck,
   meta,
   trailing,
 }: {
   eyebrow?: string
-  title: string
+  title: React.ReactNode
+  deck?: React.ReactNode
   meta?: React.ReactNode
   trailing?: React.ReactNode
 }) {
   return (
-    <header className="flex items-start justify-between gap-6">
-      <div>
-        {eyebrow ? <div className="prom-eyebrow">{eyebrow}</div> : null}
-        <h1
-          className="prom-serif mt-2"
-          style={{ fontSize: 54, lineHeight: '58px', maxWidth: '14ch' }}
+    <header>
+      {/* Top row — eyebrow + meta on the left, trailing controls on the right.
+          Sits above a hairline rule with editorial breathing room below. */}
+      {(eyebrow || meta || trailing) && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-y-2"
+          style={{
+            paddingBottom: 18,
+            marginBottom: 56,
+            borderBottom: '1px solid var(--color-prom-border-strong)',
+          }}
         >
+          <div className="prom-eyebrow flex flex-wrap items-center gap-x-3 gap-y-1">
+            {eyebrow ? <span>{eyebrow}</span> : null}
+            {eyebrow && meta ? (
+              <span style={{ color: 'var(--color-prom-border-strong)' }}>|</span>
+            ) : null}
+            {meta}
+          </div>
+          {trailing ? <div className="shrink-0">{trailing}</div> : null}
+        </div>
+      )}
+
+      {/* Title row — 86px display + optional italic deck on the right. */}
+      <div className="flex items-start justify-between gap-10">
+        <h1 className="prom-display" style={{ fontSize: 86, maxWidth: 920 }}>
           {title}
         </h1>
-        {meta ? (
-          <div className="prom-eyebrow mt-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-            {meta}
+        {deck ? (
+          <div
+            className="prom-deck shrink-0"
+            style={{ fontSize: 18, lineHeight: 1.45, maxWidth: 460, paddingTop: 8 }}
+          >
+            {deck}
           </div>
         ) : null}
       </div>
-      {trailing ? <div className="shrink-0">{trailing}</div> : null}
     </header>
+  )
+}
+
+// Optional byline strip — used directly after PromPageHeader for the
+// "● THIS MONTH · LIVE | period | SYNCED 9:36 AM" row with rules above
+// and below. Keeps the masthead composable; pages opt in.
+export function PromBylineStrip({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="flex items-center gap-4 prom-eyebrow"
+      style={{
+        marginTop: 36,
+        paddingTop: 20,
+        paddingBottom: 36,
+        borderTop: '1px solid var(--color-prom-border-strong)',
+        borderBottom: '1px solid var(--color-prom-border-strong)',
+      }}
+    >
+      {children}
+    </div>
   )
 }
 
@@ -238,84 +353,134 @@ export function PreviewBadge() {
 // ---------------------------------------------------------------------------
 // Leverage card — Promethean's flagship "if you fixed one thing" surface
 // ---------------------------------------------------------------------------
+// Refined: 54px serif accent number, no progress bar, italic curly-quoted
+// coaching pullquote. `current`/`target` kept optional for back-compat
+// but unused — the comparison sentence alone carries the meaning.
 export function LeverageCard({
   rank,
   metricLabel,
   cashDelta,
   cashSub,
-  current,
-  target,
+  current: _current,
+  target: _target,
   comparison,
   coachingQuestion,
   lift,
+  fromValue,
+  toValue,
 }: {
   rank: number
   metricLabel: string
   cashDelta: string
   cashSub: string
-  current: number // 0..1
-  target: number // 0..1
+  current?: number
+  target?: number
   comparison: string
   coachingQuestion: string
   lift: string
+  fromValue?: string
+  toValue?: string
 }) {
-  const pct = Math.min(100, Math.max(0, (current / target) * 100))
+  void _current
+  void _target
   return (
-    <PromCard className="p-6 flex flex-col h-full">
-      <div className="flex items-center justify-between">
-        <div className="prom-eyebrow">{metricLabel}</div>
-        <div className="prom-eyebrow">#{rank} LEVER</div>
-      </div>
+    <div
+      className="flex flex-col h-full rounded-xl"
+      style={{
+        background: 'var(--color-prom-bg-elev)',
+        border: '1px solid var(--color-prom-border-strong)',
+        padding: '30px 28px 28px',
+      }}
+    >
+      {/* Eyebrow row with hairline divider below */}
       <div
-        className="prom-numeric mt-4 font-semibold"
-        style={{ fontSize: 44, lineHeight: '46px', color: 'var(--color-prom-accent)' }}
+        className="flex items-center justify-between"
+        style={{
+          paddingBottom: 18,
+          borderBottom: '1px solid var(--color-prom-border-strong)',
+        }}
+      >
+        <div className="prom-eyebrow">{metricLabel}</div>
+        <div
+          className="prom-eyebrow"
+          style={{
+            color: rank === 1 ? 'var(--color-prom-accent)' : 'var(--color-prom-text-3)',
+          }}
+        >
+          #{rank} LEVER
+        </div>
+      </div>
+
+      {/* 54px serif cash delta */}
+      <div
+        className="prom-numeric-serif prom-display"
+        style={{
+          fontSize: 54,
+          lineHeight: 1,
+          color: 'var(--color-prom-accent)',
+          marginTop: 22,
+        }}
       >
         {cashDelta}
       </div>
-      <div className="mt-1 text-xs" style={{ color: 'var(--color-prom-text-2)' }}>
+      <div
+        className="prom-deck"
+        style={{ fontSize: 13.5, marginTop: 8, marginBottom: 24 }}
+      >
         {cashSub}
       </div>
 
-      {/* progress bar */}
-      <div className="mt-5">
+      {/* current → target line in tabular Inter */}
+      {fromValue && toValue ? (
         <div
-          className="h-[3px] w-full rounded-full overflow-hidden"
-          style={{ background: 'rgba(255,255,255,0.06)' }}
+          className="prom-numeric"
+          style={{ fontSize: 18, marginBottom: 6 }}
         >
-          <div
-            className="h-full"
-            style={{
-              width: `${pct}%`,
-              background: 'var(--color-prom-accent)',
-            }}
-          />
+          <span style={{ color: 'var(--color-prom-text)' }}>{fromValue}</span>
+          <span style={{ color: 'var(--color-prom-text-3)', margin: '0 8px' }}>→</span>
+          <span style={{ color: 'var(--color-prom-accent)' }}>{toValue}</span>
         </div>
-        <div className="mt-2 text-xs" style={{ color: 'var(--color-prom-text-2)' }}>
-          {comparison}
-        </div>
-      </div>
+      ) : null}
 
-      {/* coaching */}
+      {/* comparison sentence */}
       <div
-        className="mt-5 pt-5 text-sm"
         style={{
-          borderTop: '1px solid var(--color-prom-border)',
-          color: 'var(--color-prom-text)',
-          lineHeight: '1.5',
+          fontSize: 12.5,
+          color: 'var(--color-prom-text-3)',
+          lineHeight: 1.5,
         }}
       >
-        {coachingQuestion}
+        {comparison}
       </div>
 
-      <div className="mt-auto pt-4 flex justify-end">
+      {/* Coaching pullquote, italic, dotted top border */}
+      <div
+        className="prom-deck"
+        style={{
+          fontSize: 14.5,
+          color: 'var(--color-prom-text-2)',
+          lineHeight: 1.5,
+          marginTop: 20,
+          paddingTop: 20,
+          borderTop: '1px dotted var(--color-prom-border-strong)',
+        }}
+      >
+        &ldquo;{coachingQuestion}&rdquo;
+      </div>
+
+      {/* Lift footer */}
+      <div className="mt-auto" style={{ paddingTop: 18 }}>
         <div
           className="prom-eyebrow"
-          style={{ color: 'var(--color-prom-accent)' }}
+          style={{
+            color: 'var(--color-prom-pos)',
+            letterSpacing: '0.16em',
+          }}
         >
           {lift}
         </div>
       </div>
-    </PromCard>
+    </div>
   )
 }
 

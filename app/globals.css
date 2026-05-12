@@ -105,6 +105,66 @@
   font-feature-settings: "tnum";
 }
 
+/* Display serif — for the H1 and section headings. */
+[data-theme="promethean"] .prom-display {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+}
+
+/* Section-title scale — slightly tighter tracking than .prom-serif. */
+[data-theme="promethean"] .prom-section-title {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-weight: 400;
+  font-size: 38px;
+  line-height: 42px;
+  letter-spacing: -0.022em;
+  color: var(--color-prom-text);
+}
+
+/* Editorial "deck" italic — sub-copy under section titles + supporting
+   paragraphs in masthead/cards. */
+[data-theme="promethean"] .prom-deck {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-prom-text-2);
+  line-height: 1.5;
+}
+
+/* Serif numerics — Instrument Serif with tabular figures. Replaces sans
+   tabular for big display numbers; KEEP .prom-numeric for inline mono-feel
+   (delta pills, mini stats). */
+[data-theme="promethean"] .prom-numeric-serif {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-feature-settings: "tnum", "lnum";
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Section slug — the small-caps left-margin "I · MONTHLY PACE" label.
+   Sits above a 2px top border. */
+[data-theme="promethean"] .prom-section-slug {
+  font-family: var(--font-prom-sans, Inter, system-ui, sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-prom-text);
+  font-weight: 600;
+  padding-top: 8px;
+  border-top: 2px solid var(--color-prom-text);
+}
+
+/* Hairline strip — bordered-row container that replaces some cards. */
+[data-theme="promethean"] .prom-strip {
+  border-top: 1px solid var(--color-prom-border-strong);
+  border-bottom: 1px solid var(--color-prom-border-strong);
+}
+[data-theme="promethean"] .prom-strip-col + .prom-strip-col {
+  border-left: 1px solid var(--color-prom-border-strong);
+}
+
 @keyframes prom-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.55; transform: scale(0.85); }
