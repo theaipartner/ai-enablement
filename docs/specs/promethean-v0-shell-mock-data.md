@@ -17,7 +17,7 @@ The hypothesis matters because Promethean's previous estimate was 3 weeks (with 
 
 - **All 11 surfaces in scope.** No trimming.
 - **Realistic mock data**, generated in code, lives in a single `lib/mock-data.ts` file. Names match the transcript's style (Sebastian, James, Aubrey, Aiden, Jordan as closers; ~5-8 setters; 30-50 leads; believable dial gaps, sentiment distributions, ROAS numbers, country distributions).
-- **Polish target: demo-able, looks professional.** Builder picks a coherent visual direction. Default to light mode unless conditional cues suggest otherwise. Use Tailwind defaults + shadcn/ui primitives consistent with the existing Gregory codebase. Don't chase pixel-perfection.
+- **Polish target: demo-able, looks like the Promethean reference screenshots.** Builder matches the visual aesthetic specified in the Design section below. This is NOT a generic dark theme — it's a specific editorial dark aesthetic with serif headlines, warm-dark backgrounds, and yellow-green accent.
 - **Target branch: `promethean-shell`.** This work does NOT land on main. Builder creates the branch from main's current HEAD, builds on the branch, commits to the branch. Vercel auto-deploys preview URLs from feature branches; Drake reviews at the preview URL.
 - **No backend, no Supabase queries, no API calls, no integration logic.** Every data fetch in the new code returns from `lib/mock-data.ts`. The boundary is clear: when integrations land later, the only thing that changes is the import path.
 - **Auth gate stays.** Promethean is behind the same Supabase Auth gate as Gregory. Drake logs in with the same credentials. No new auth surface.
@@ -26,8 +26,8 @@ The hypothesis matters because Promethean's previous estimate was 3 weeks (with 
 ## Acclimatization checklist — confirm in 4-5 bullets before starting
 
 1. Confirm you're on a fresh branch `promethean-shell` cut from `origin/main`. `git checkout -b promethean-shell origin/main`. Push the branch immediately so Vercel sees it and starts auto-deploys.
-2. Read `app/(authenticated)/layout.tsx` to understand the auth-gate pattern Gregory uses. Promethean reuses it — same layout file applies to `/promethean/*` routes.
-3. Read `components/ui/` (shadcn primitives) and the table/pill/dropdown patterns in `app/(authenticated)/clients/clients-table.tsx`. Reuse these primitives. Do NOT create new alternatives.
+2. Read `app/(authenticated)/layout.tsx` to understand the auth-gate pattern Gregory uses. Promethean reuses it for auth but otherwise renders its own dark-themed shell — Gregory's light shell does NOT apply to /promethean routes.
+3. Read `components/ui/` (shadcn primitives) and the table/pill/dropdown patterns in `app/(authenticated)/clients/clients-table.tsx`. Reuse the structural patterns (sortable table, pill component shape) but restyle for the dark editorial aesthetic. Do NOT just drop Gregory's components in with a dark-mode prop — the typography, weight, and density are different.
 4. Read `lib/client-vocab.ts` to see the vocab pattern. Promethean has its own vocabs (setter names, closer names, sentiment tiers, lead quality buckets, outcome states, country list). Create `lib/promethean-vocab.ts` with the same shape.
 5. Confirm `vercel.json`'s preview-branch behavior — pushing to a non-main branch should produce a preview URL. If not, surface to Drake before pushing the first commit.
 
@@ -102,159 +102,238 @@ export function getCloserStats(period?: DateRange) { ... }
 
 Data volume targets: 5-8 setters, 4-6 closers, 40-60 leads spread across the last 60 days, ~300-500 dials, 60 days of ad spend across 3 campaigns × 4 countries, 15-25 payments. Enough volume that charts have real shape; not so much that the page lags.
 
+**The mock tenant.** Drake's mock tenant is named **Helios** (matches the reference screenshots, where the demo tenant was "Helios · SCALE-2"). Sidebar shows: "Promethean · LIVE" at top, then "Helios" with subtitle "HELIOS · SCALE-2" below.
+
 ## The 11 surfaces
 
 Each surface is its own route. All under `/app/(authenticated)/promethean/`. The naming is suggestion — Builder can adapt for sensible URL slugs.
 
 ### 1. Overview — `/promethean`
 
-Top-level dashboard. The Promethean landing page. Components:
+Top-level dashboard. The Promethean landing page. The reference screenshot shows what this should feel like.
 
-- **Period selector** (top right, applies globally; controls every metric on the page). Options: Today, Yesterday, This Week, Last Week, This Month, Last Month, Custom Range.
-- **Top KPI strip** (4-6 cards): Revenue, Cash Collected, Profit, Pipeline Value, Total Calls, Close Rate.
-- **Leverage simulator widget**: form with 3 input sliders (Close Rate %, AOV $, Booked Calls #) and a live-computed delta panel showing "If your close rate went from X% to Y%, you'd earn +$Z this month." Pure math, no AI. Defaults pre-populated from the mock data's actuals.
-- **Daily ROAS chart**: line chart, the period's days on x-axis, ROAS variant on y-axis. Dropdown to toggle Revenue ROAS / Cash ROAS / True ROAS.
-- **Pipeline summary**: small card list — "12 active deals / 3 overdue / $X total pipeline value."
-- **Recent activity feed** (optional, time-permitting): last 10 lead-status changes.
+Components:
+
+- **Page header**: Tenant name + "CEO VIEW" small-caps eyebrow label above. Serif headline below ("Every dollar, tracked." in the reference). Date range underneath: "Apr 12 → May 11" + "SYNCED 9:36 AM" timestamp small-caps.
+- **Period selector** (top right): "All countries" dropdown + "Last 30 days" dropdown. Both pill-shaped, dark, subtle.
+- **Eyebrow + headline sections** throughout the page: small-caps eyebrow label ("THIS MONTH · LIVE", "LEVERAGE") above a serif sub-headline ("Where we stand, where we're headed.", "If you fixed one thing.").
+- **Top section cards**:
+  - **Monthly Pace card**: Small-caps "MONTHLY PACE" label. If no target set: "Set a target to unlock pace tracking." with subtle config hint below ("Add a `Settings` tab to this client's sheet with a row: `monthly_cash_target` · `150000`"). If target set: progress bar + numbers.
+  - **Live Pipeline card** (right column): Small-caps "LIVE PIPELINE" label. Big yellow-green number ($9.5K). Explainer below ("Expected cash from 107 active follow-ups, based on a historical 0.8% recovery rate."). Bottom strip with 3 sub-stats: ACTIVE / OVERDUE / AVG WHEN WON.
+- **Leverage section**: 3 cards in a row.
+  - Each card has small-caps top-left label (CLOSE RATE, BOOKED CALLS, CASH AOV), small-caps top-right label (#1 lever, #2 lever, #3 lever).
+  - Big yellow-green delta value (+$40.2K, +$27K, +$18.1K).
+  - Sub-line: "projected cash · +7 wins" / similar.
+  - Progress bar showing current vs target.
+  - Comparison framing: "22.3% → 25.6% halfway to Sebastian Brown's 29.0%".
+  - Coaching question/insight: "Have Sebastian Brown run a tactic clinic — what objections do they handle that the rest don't?"
+  - Bottom-right small lift label: "+14.9% lift on this lever".
+- **Money KPI strip** (4 cards below leverage): REVENUE (CONTRACT VALUE) / CASH COLLECTED / CASH RECEIVED / PROFIT. Each shows a big number with a small delta pill top-right (▼ 43% in red-orange for negative, ▲ in yellow-green for positive).
+
+The Overview is the most important surface for Nabeel's demo. Spend extra polish budget here.
 
 ### 2. Pipeline — `/promethean/pipeline`
 
-Active leads view. Components:
-
-- Filterable table of leads with status filter chips at the top.
-- Columns: Name / Country / Status / Setter / Closer / Days in Stage / Cash potential / Last Activity.
-- Click a row → opens a slide-over panel with lead detail (skip drilling into a new page — keeps the surface contained).
-- "Overdue" filter chip that highlights leads stuck in a stage past a threshold (>14 days in qualified, >7 days in booked-not-showed, etc.).
+[Same as before — filterable lead table with status chips, slide-over detail panel, overdue filter chip.]
 
 ### 3. Financials — `/promethean/financials`
 
-Money-focused surface. Components:
+[Same as before — but rendered in the dark editorial aesthetic.]
 
-- KPI cards: Revenue / Cash Collected / Profit / Refunds / Outstanding payment plans.
-- Multiple ROAS variants displayed side-by-side: Revenue ROAS, Cash ROAS, True ROAS, with a small explainer tooltip for what each means.
-- True CAC, Cost per call, Cost per showed call, Cost per qualified call.
-- Stripe-style payments table (mock): Date / Lead / Amount / Status / Payment plan position.
-- Country breakdown: same metrics segmented by USA / CAN / AUS / UK.
+### 4. End-of-day lead entry form — `/promethean/setter-eod`
 
-### 4. End-of-day lead entry form — `/promethean/entry` or accessible as a modal from anywhere
+Note: in the reference sidebar this is called "Setter EOD". Use that naming. Otherwise as before.
 
-A form the sales rep fills out at end of day to log call outcomes. Components:
+### 5. Triages — `/promethean/triage-inbox`
 
-- Lead picker (search / autocomplete from `LEADS`).
-- Country selector.
-- Setter selector (pre-fills based on lead if known).
-- Closer selector (if pitched).
-- Call outcome radio: Won / Lost / No-show / DQ.
-- "Pitched?" toggle.
-- "Won cash?" amount input (only if Won).
-- Lead quality radio: Ready to buy / Good / Average / Poor.
-- Payment plan toggle.
-- Free-text notes field.
-- Submit button → mock writes to localStorage so the entry persists in the demo session (or just shows a "saved" toast and dismisses; either is fine).
+Note: reference sidebar calls this "Triage Inbox". Use that naming.
 
-### 5. Triages — `/promethean/triages`
-
-Direct-booking workflow surface. Components:
-
-- Table of recently-booked leads needing setter triage.
-- Columns: Lead / Setter / Booked at / Triage status (confirmed / untriaged / DQ'd).
-- Triage status pill is inline-editable (use the existing `EditableField` pattern from Gregory).
-- "Add notes" affordance per row.
-- "AI Mode" panel on the right side: a chat-shaped Q&A interface. **For V0, this is a static UI shell** — input box + a few pre-canned example questions + a placeholder response area. Mark with a "Preview" badge so Nabeel knows it's not live.
+[Otherwise as before — table + inline-edit triage status + AI Mode panel shell.]
 
 ### 6. Contacts — `/promethean/contacts`
 
-All contacts in the system. Components:
-
-- Filterable, sortable table of all leads (regardless of status).
-- Click a contact → detail page at `/promethean/contacts/[id]` showing:
-  - Contact info (name, email, country, source).
-  - Activity timeline: dials, appointments, status changes.
-  - "View recording" links (mock — go to # or a dummy recording page).
-  - Notes field.
+[Same as before.]
 
 ### 7. Closers — `/promethean/closers`
 
-Per-closer performance. Components:
+The reference's second screenshot shows the per-closer detail page (Sebastian Brown). Key elements:
 
-- Top-level closer leaderboard: card grid (one per closer) with their key metrics — Cash collected / Pitches / Close rate / AOV / Average call length.
-- Click a closer → detail page at `/promethean/closers/[id]`:
-  - All their metrics blown out.
-  - Recent calls table.
-  - **AI coaching card**: "How do we help [Name]?" — mock LLM-generated suggestions (2-3 bullet points). For V0, hardcoded suggestions per closer. Mark with "Preview" badge.
-  - Biggest deals list.
+- **Page header**: Small-caps "CLOSER BREAKDOWN" eyebrow. Serif name headline ("Sebastian Brown"). Date range + sync timestamp.
+- **KPI strip** (4 cards): SHOW RATE / PITCH RATE / CLOSE RATE / APPT → SALE. Big numbers, small delta pills top-right (red-orange ▼ for negative, yellow-green ▲ for positive).
+- **Leverage section** (closer-scoped): Same pattern as Overview but with the headline "If [Name] fixed one thing." 2-3 lever cards showing what this closer specifically should improve, with peer comparison framing.
+- **Outcomes section**: 4-card strip showing WON / LOST / FOLLOW UP / NO SHOWS counts.
+- **Consistency section**: "Steady, or spiky." headline with metrics ACTIVE DAYS / AVG CALLS / DAY / STD DEV / CV.
+- **"How do we help [Name]?"** AI coaching card with mock content. Preview badge.
+
+The list view (`/promethean/closers`) is the leaderboard — card grid with each closer's key metrics, click to drill.
 
 ### 8. Setters — `/promethean/setters`
 
-Per-setter performance. Components:
+Top-level setter leaderboard: same card-grid pattern as closers. Per-setter detail at `/promethean/setters/[id]`:
 
-- Top-level setter leaderboard: card grid with — Dials made / Speed to lead / Conversations / Bookings / Show rate.
-- "Speed to lead" detail filter: All leads / Not yet contacted / Contacted <5min / Contacted 5-30min / Contacted >30min.
-- Click a setter → detail page at `/promethean/setters/[id]`:
-  - Their metrics.
-  - **Dial log timeline**: vertical timeline of dials with gaps highlighted (e.g., "14 min gap" labels between dials). This is the "visible gap" feature from the transcript.
-  - Talk time totals per day.
-  - **Setter QC panel**: list of recent calls with an AI grade (mock — Green/Yellow/Red pill + 1-line summary). "Grade conversation" button on each row is a no-op for V0. Mark with "Preview" badge.
+- Same page-header pattern (eyebrow + serif name).
+- KPI strip with setter-specific metrics: Dials / Speed to lead / Conversations / Bookings / Show rate.
+- Dial log timeline (per-day) with visible gaps as labeled segments.
+- Talk time per day chart.
+- Recent calls table.
+
+### 8b. Setter QC — `/promethean/setter-qc`
+
+In the reference sidebar this is its own nav item ("Setter QC"). Promote to a standalone surface, not just a panel inside Setters detail.
+
+- List view of all recent setter calls with AI grades (Green/Yellow/Red pill + 1-line summary).
+- "Grade conversation" button on each row (no-op for V0).
+- Filter by setter, by grade, by date.
+- Click a row → detail view with the AI grading writeup (mock content). Preview badge.
 
 ### 9. Number Health — `/promethean/number-health`
 
-Dial-quality metrics. Components:
-
-- Aggregate stats: Total dials today / this week / this month.
-- Connect rate (live calls / total dials).
-- Average talk time.
-- Distribution chart: dial outcomes (no-answer / voicemail / live / booked) as a stacked bar.
-- Time-of-day heatmap: when dials happen most, when they connect best.
+[Same as before.]
 
 ### 10. Marketing — `/promethean/marketing`
 
-Ad spend + lead source. Components:
-
-- Spend by campaign chart.
-- Country segmentation: same metrics by country.
-- Cost-per-acquisition variants per campaign per country.
-- Lead source funnel: how many leads each campaign generates, conversion rates per stage.
-- Mock-Meta-style breakdowns (creative-level NOT required for V0; campaign-level is enough).
+[Same as before — in the dark editorial aesthetic.]
 
 ### 11. Deep Dive — `/promethean/deep-dive`
 
-Cross-cutting analytics. Components:
+[Same as before — pairing matrix gets full polish since it's a flagship feature.]
 
-- **No-show rate analysis**: when in the day/week do bookings most likely ghost? Chart it.
-- **Pairing matrix**: setter × closer cross-tab with configurable metric (Cash / AOV / No-shows / Close rate). Minimum sample size threshold (default 3). Heat-mapped cells. **This is a feature flag** — make sure the matrix component is clean and reusable; it's one of Promethean's flagship features.
-- **Lead quality booking analysis**: who books high-quality vs flake-prone leads.
-- **"Does the score predict the sale?"**: scatter plot of lead_quality bucket vs actual outcome.
-- **Money on the table**: deals stuck in intermediate states, with their potential cash value totaled.
-- **Cohort retention** (basic for V0): payment-plan retention by signup month.
+### Additional surfaces from the reference sidebar
+
+The screenshots show three additional surfaces beyond the original 11. Include these in V0:
+
+- **Inbox** — `/promethean/inbox`. General inbox for notifications, alerts, action items. For V0: a list of mock notifications (deal stuck, target missed, payment failed, etc.).
+- **Money on Table** — `/promethean/money-on-table` (also listed under Deep Dive as a section). Reference promotes it to a standalone surface. Same content as the Deep Dive subsection but with its own page.
+- **Payment Plans** — `/promethean/payment-plans`. Table of active payment plans with progress tracking (lead, plan total, paid, remaining, next charge date, status).
+- **Cohort Retention** — `/promethean/cohort-retention`. Same content as the Deep Dive subsection, promoted to its own page.
+- **P&L** — `/promethean/pnl`. Profit/loss summary. KPI cards + simple breakdown table. Lives under the SALES section in the sidebar.
+
+The expanded count is 15 surfaces, but several share components heavily. Builder may consolidate routes if natural (e.g., Cohort Retention could be a tab inside Financials).
+
+## Sidebar navigation structure
+
+From the reference, the sidebar is organized into labeled sections:
+
+```
+● Promethean · LIVE          [tenant pill top]
+Helios
+HELIOS · SCALE-2
+
+📈 Overview
+📥 Inbox
+▼ Triage Inbox
+✨ AI Mode
+
+— SALES —
+👤 Contacts
+○ Closers
+📞 Setters
+🎙 Setter QC
+🔢 Number Health
+📋 Setter EOD
+
+— ACQUISITION —
+📊 Marketing
+🔍 Deep Dive
+💰 Money on Table
+💳 Payment Plans
+🔄 Cohort Retention
+💲 P&L
+
+— CONFIGURATION —
+👤 OWNER
+   thomas@heliosscale.com
+   APP ADMIN
+```
+
+Sections labels are tiny small-caps. Active nav item has a left-edge yellow-green accent bar + slightly brighter text.
 
 ## Design + UX guidance
 
-- **Visual direction:** clean, professional, modern. Think Stripe Dashboard / Linear / Vercel / Notion — not flashy, not cluttered. Generous whitespace. Strong typography hierarchy.
-- **Color usage:** primary brand color for actions only. Status pills use red/yellow/green sparingly and only for tiered statuses (sentiment, outcome, urgency). Otherwise neutral palette.
-- **Tables:** reuse Gregory's `clients-table.tsx` pattern. Same `SortableHeader`, same hover treatment, same row spacing. Tables should feel familiar across both products.
-- **Navigation:** add a top-level nav switcher between Gregory and Promethean in the existing layout. Two products, same shell.
-- **Loading states:** skeleton loaders, NOT spinners.
-- **Empty states:** every list/table has a real empty state with a one-line message and (where appropriate) a CTA. Don't render blank tables.
-- **AI feature affordances:** anywhere there's a mock LLM feature (AI Mode, coaching suggestions, QC grading), render a small "Preview" badge in the corner so Drake and Nabeel know it's not live. Tooltip on the badge: "Demo-only. Live AI features land in V1."
-- **Responsive:** desktop-first. Mobile is not a target for V0.
-- **Dark mode:** not required.
+This section is detailed because matching the reference aesthetic matters more than for Gregory. Read carefully.
+
+### Visual aesthetic — "editorial dark"
+
+The Promethean reference is a specific aesthetic, not generic dark mode:
+
+- **Background**: warm-dark, not pure black. Around `#0a0a0a` to `#101010` for page background. Cards slightly lighter (`#16161a` or similar). Subtle warmth — slight olive/charcoal undertone, not blue-tinted.
+- **Borders**: barely visible. Either no border on cards (rely on lighter card background to separate) or very subtle 1px border at ~10% opacity.
+- **Generous whitespace**. Editorial breathing room. This is the opposite of dense; let things have space.
+
+### Typography
+
+- **Serif headlines** for page titles and section headlines. Use a free serif via Google Fonts: **Instrument Serif**, **Fraunces**, or **GT Sectra**'s closest free analog **Lora** at heavy weights. Headlines are LARGE — 48-60px for page titles like "Every dollar, tracked.", 32-40px for section sub-headlines like "Where we stand, where we're headed."
+- **Sans-serif body / labels / numerics.** Use **Inter** or system stack. Body 14-16px, labels 11-13px with `text-transform: uppercase` and `letter-spacing: 0.08em` for small-caps treatment.
+- **Numeric KPIs** are LARGE and sans (Inter at 600-700 weight, 40-72px depending on importance).
+- **Small-caps labels** are ubiquitous: section eyebrows ("THIS MONTH · LIVE"), card labels ("MONTHLY PACE"), sub-labels ("ACTIVE", "OVERDUE", "AVG WHEN WON"). Render as uppercase + tracked-out + slightly muted color.
+
+### Color palette
+
+- **Background**: `#0a0a0a` page, `#16161a` cards (suggestions; refine as needed).
+- **Text primary**: near-white, slightly warm. `#f5f4ef` or similar (not pure white).
+- **Text secondary**: ~60% opacity of primary. For body copy.
+- **Text muted**: ~40% opacity. For small-caps labels.
+- **Accent (positive)**: yellow-green. Around `#c9d92b` or `#d4e157`. Use for: positive numbers, "wins" deltas, active nav indicator, leverage card metric values.
+- **Accent (negative)**: red-orange. Around `#e74c3c` or `#ff6b47`. Use for: negative deltas (▼ percentages), overdue counts, alerts.
+- **Pills**: use opacity-based color tints rather than solid backgrounds. E.g., red-orange pill is `rgba(231, 76, 60, 0.15)` background + red-orange text.
+
+### Component shapes
+
+- **Cards**: rounded corners (8px), card background subtly lighter than page bg, padding generous (24-32px).
+- **KPI cards**: large numeric, small-caps label above, optional delta pill in top-right corner.
+- **Tables**: zebra-striping NO. Row separators yes, very subtle (1px at low opacity). Hover state slight background lift.
+- **Pills**: rounded-full, padding `px-2 py-0.5`, small text. Color via opacity-tinted bg + matching text color.
+- **Buttons**: primary uses yellow-green bg with dark text. Secondary is bordered, transparent bg. Tertiary is text-only.
+- **Active nav item**: left-edge accent bar (3px yellow-green) + slightly brighter text + subtle bg tint.
+
+### Copy voice
+
+The reference's coaching copy is doing real work for the brand feel. For V0 mock content, write in the same voice:
+
+- **Direct, declarative.** "Where we stand, where we're headed." Not "Dashboard Overview".
+- **Question-as-coaching.** "Why does Aiden Rodriguez collect more per deal — payment plans, qualifying for full-pay, or pricing tier presented?" Not "Suggested action: review pricing strategy."
+- **Specific peer comparisons.** "halfway to Sebastian Brown's 29.0%" rather than "below average."
+- **Confidence + framing.** "If you fixed one thing." "Each card halves the gap to the team-best on that lever and projects the cash impact."
+
+### Loading + empty states
+
+- Skeleton loaders, not spinners.
+- Empty states have a serif-headline one-liner ("No leads in this view.") and optional small-caps CTA below.
+
+### Live status indicator
+
+The top-left sidebar has a "● LIVE" pill next to the Promethean wordmark. Use a small yellow-green dot animation (subtle pulse) + LIVE small-caps text. Communicates real-time-data.
+
+### AI feature affordances
+
+Anywhere there's a mock LLM feature (AI Mode, coaching cards, QC grading), render a small "Preview" badge in the corner: small-caps text, yellow-green border, transparent bg. Tooltip on hover: "Demo-only. Live AI features land in V1."
+
+### Responsive
+
+Desktop-first. Mobile not a target for V0.
+
+### Dark mode
+
+Required. Light mode NOT needed.
 
 ## Hard stops
 
 - **Do NOT push to `main`.** All work lives on `promethean-shell` branch. If something forces a main push, stop and surface.
 - **Do NOT call Supabase / Anthropic API / any external service.** All data comes from `lib/mock-data.ts`. If a surface needs data that doesn't have a mock shape yet, extend the mock data file.
-- **Do NOT modify existing Gregory code in ways that affect Gregory's behavior.** Touching the shared layout to add the nav switcher is allowed; modifying clients-table.tsx, calls list, or anything else under `app/(authenticated)/clients/` or `app/(authenticated)/calls/` is not.
-- **Do NOT add new dependencies without surfacing first.** If a chart library or component lib feels necessary beyond what shadcn/ui + recharts provide, stop and ask.
-- **Do NOT spend time on perfect pixel polish.** "Looks nice and consistent" is the target. Mismatched font sizes within a single surface or jagged spacing is worth fixing; sub-pixel kerning is not.
+- **Do NOT modify existing Gregory code in ways that affect Gregory's behavior.** Touching the shared layout to add the nav switcher between Gregory and Promethean is allowed; modifying clients-table.tsx, calls list, or anything else under `app/(authenticated)/clients/` or `app/(authenticated)/calls/` is not.
+- **Do NOT skip the serif headlines.** Without them the aesthetic falls apart. If a font load fails, surface — don't fall back to sans.
+- **Do NOT use Tailwind's default colors literally** (zinc-900, gray-800, etc.). Build a color token palette in `tailwind.config.ts` (or use CSS variables) matching the Promethean palette specified above.
+- **Do NOT add new dependencies without surfacing first.** If a chart library or component lib feels necessary beyond what shadcn/ui + recharts + a Google Fonts serif provide, stop and ask.
 - **Stop and surface if a single surface exceeds ~1 hour of work.** That's the signal that surface needs scoping or simplification. Don't grind for 3 hours on Pipeline because the slide-over is hard.
 
 ## What could go wrong
 
-- **The 11 surfaces have inconsistent visual treatment by the end.** Likely if Builder builds them sequentially over many hours — the later surfaces drift from the earlier ones. Mitigation: build the design primitives (cards, KPI strip, tables, charts) first as a shared library inside `components/promethean/`, then compose every surface from those primitives. The primitives lock the visual direction.
+- **The aesthetic doesn't quite match the reference.** Likely on first pass. The fix is iteration after Drake sees it — don't grind for 4 hours trying to nail the serif weight. Get it 80% there in V0; Claude Design or a polish pass closes the gap.
+- **The 11+ surfaces have inconsistent visual treatment by the end.** Mitigation: build the design primitives (cards, KPI strip, tables, page header pattern with eyebrow+serif, leverage card, KPI delta pill) FIRST as a shared library inside `components/promethean/`. Every surface composes from these primitives. The primitives lock the visual direction.
 - **Mock data shape doesn't match what real queries will return.** Mitigation: name the types in `mock-data.ts` to match what the eventual Supabase schema would produce. E.g., a `Lead` type whose fields map 1:1 to columns in a future `promethean.leads` table. The swap is then literally `import { LEADS } from '@/lib/mock-data'` → `import { fetchLeads } from '@/lib/db/promethean'` with the same return shape.
 - **AI feature shells are confusing without "Preview" badges.** Mitigation already specified — every mock LLM surface gets the badge + tooltip.
 - **Drake wants more / different / fewer features after seeing V0.** Expected. This whole exercise is to surface that feedback fast. V0 is a learning vehicle, not a final deliverable.
-- **Build time runs long.** Real possibility — 11 surfaces at any quality is real work. If Builder hits ~4 hours and is at 7-8 surfaces complete, that's a great result. If at ~6 hours and stuck on surface 3, stop and surface.
+- **Build time runs long.** Real possibility — 15 surfaces at any quality is real work. If Builder hits ~4 hours and is at 10-12 surfaces complete, that's a great result. If at ~6 hours and stuck on surface 3, stop and surface.
 - **Vercel preview deploy fails because of a build error.** Build clean before pushing. `npm run build` locally before every commit on this branch.
 
 ## Mandatory doc updates
@@ -268,20 +347,23 @@ Cross-cutting analytics. Components:
 
 Per CLAUDE.md § Commits, one logical change per commit. Suggested batched commits:
 
-- `promethean: scaffold route group, layout, navigation switcher`
-- `promethean: add mock-data.ts with realistic seeded data`
-- `promethean: build shared design primitives (cards, KPI strip, charts wrapper)`
+- `promethean: scaffold route group, dark layout, nav switcher`
+- `promethean: add tailwind tokens + Google Fonts serif for editorial aesthetic`
+- `promethean: add mock-data.ts with realistic seeded Helios data`
+- `promethean: build shared design primitives (page header, KPI card, leverage card, delta pill, sidebar nav)`
 - `promethean: implement Overview surface`
 - `promethean: implement Pipeline surface`
 - `promethean: implement Financials surface`
-- `promethean: implement end-of-day lead entry form`
-- `promethean: implement Triages surface with AI Mode shell`
-- `promethean: implement Contacts surface + detail page`
-- `promethean: implement Closers surface + detail page with coaching shell`
-- `promethean: implement Setters surface + detail page with QC shell`
+- `promethean: implement Setter EOD form`
+- `promethean: implement Triage Inbox surface with AI Mode shell`
+- `promethean: implement Contacts + detail surfaces`
+- `promethean: implement Closers + per-closer detail surfaces`
+- `promethean: implement Setters + per-setter detail surfaces`
+- `promethean: implement Setter QC surface`
 - `promethean: implement Number Health surface`
 - `promethean: implement Marketing surface`
 - `promethean: implement Deep Dive surface with pairing matrix`
+- `promethean: implement Inbox + Money on Table + Payment Plans + Cohort Retention + P&L surfaces`
 - `docs: note Promethean V0 shell exploration in state.md`
 - `docs: add report for promethean-v0-shell-mock-data`
 
@@ -291,11 +373,12 @@ Report at `docs/reports/promethean-v0-shell-mock-data.md`. Include:
 
 - The Vercel preview URL for the `promethean-shell` branch.
 - Total session time (approximate).
-- Which surfaces shipped at "looks polished" quality vs which felt rougher.
+- Which surfaces shipped at "matches the reference aesthetic" quality vs which felt rougher.
 - Any surfaces that surfaced unexpected complexity worth flagging.
 - The exact list of mock data shapes generated.
 - Recommendations for which integrations to tackle first when Drake green-lights the next phase (e.g., "Close is the unlock; Stripe is independent; Meta is the easiest to fake longer with manual entry").
 - Anything Builder learned about Gregory's existing primitives that might be worth promoting / sharing.
+- Screenshots or descriptions of how closely the Overview surface matches the reference.
 
 ---
 
