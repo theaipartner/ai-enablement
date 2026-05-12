@@ -1,17 +1,16 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { TopNav } from '@/components/top-nav'
+import { AuthenticatedShell } from '@/components/authenticated-shell'
 
 export default async function AuthenticatedLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  // Auth gate: this resolves BEFORE any child Server Component starts
+  // Auth gate resolves BEFORE any child Server Component starts
   // rendering, so unauthenticated requests never trigger downstream
-  // data fetches. Replaces the middleware-based gate dropped in M2.3a
-  // because Vercel's Edge runtime can't bundle @supabase/ssr's
-  // transitive deps (`__dirname` Node-only reference).
+  // data fetches. Shell picks Gregory's TopNav or Promethean's dark
+  // sidebar based on the active route — see AuthenticatedShell.
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -21,8 +20,9 @@ export default async function AuthenticatedLayout({
 
   return (
     <div className="min-h-screen">
-      <TopNav userEmail={user.email ?? ''} />
-      <main>{children}</main>
+      <AuthenticatedShell userEmail={user.email ?? ''}>
+        {children}
+      </AuthenticatedShell>
     </div>
   )
 }
