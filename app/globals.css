@@ -245,12 +245,14 @@
 
 [data-theme="gregory-editorial"] .bg-zinc-100,
 [data-theme="gregory-editorial"] .bg-zinc-50,
+[data-theme="gregory-editorial"] .bg-zinc-200,
 [data-theme="gregory-editorial"] .bg-slate-100,
 [data-theme="gregory-editorial"] .bg-slate-200,
 [data-theme="gregory-editorial"] .bg-gray-100,
 [data-theme="gregory-editorial"] .bg-gray-50 {
   background-color: rgba(245, 244, 239, 0.06) !important;
 }
+[data-theme="gregory-editorial"] .text-zinc-500,
 [data-theme="gregory-editorial"] .text-zinc-700,
 [data-theme="gregory-editorial"] .text-zinc-800,
 [data-theme="gregory-editorial"] .text-slate-700,
@@ -266,6 +268,14 @@
 [data-theme="gregory-editorial"] .border-gray-200,
 [data-theme="gregory-editorial"] .border-gray-100 {
   border-color: var(--color-geg-border-strong) !important;
+}
+
+/* Amber border-300 + orange-900 — extras Gregory uses for warn states. */
+[data-theme="gregory-editorial"] .border-amber-300 {
+  border-color: rgba(244, 183, 64, 0.32) !important;
+}
+[data-theme="gregory-editorial"] .text-orange-900 {
+  color: var(--color-geg-warn) !important;
 }
 
 [data-theme="gregory-editorial"] .bg-white {
