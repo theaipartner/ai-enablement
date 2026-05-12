@@ -11,6 +11,17 @@ Real bugs and ops gaps for Gregory, with concrete next actions. Distinct from `d
 
 ---
 
+## Temporary work in progress
+
+### Promethean preview — auth bypass on `promethean-shell` (REMOVE when V0 visual iteration completes)
+
+- **What:** `app/(authenticated)/layout.tsx` short-circuits the Supabase auth gate when `process.env.PROMETHEAN_PUBLIC_PREVIEW === 'true'`. The env var is set in Vercel scoped to Preview environment + the `promethean-shell` branch only — production and main-branch previews keep the auth gate.
+- **Why it matters:** lets Claude Design ingest the live Promethean preview URL for higher-fidelity visual iteration than working from screenshots. Drake accepted the residual risk (real-data exposure on Gregory routes is low and the preview URL is not widely known). The bypass is double-locked: an env-var gate in code AND per-branch scoping in Vercel.
+- **Next action:** when the Promethean V0 visual iteration wraps OR `promethean-shell` is ready to merge to main (whichever comes first) — revert the conditional in `app/(authenticated)/layout.tsx` AND delete the `PROMETHEAN_PUBLIC_PREVIEW` env var from Vercel. Both steps must happen; either alone is insufficient.
+- **Logged:** 2026-05-12.
+
+---
+
 ## NEXT SESSION FIRST ACTION — verify daily cron fired (one-time gate, REMOVE after running)
 
 **This is a one-time verification gate, not a recurring routine.** First action of the next session, before any planned work. Remove this entry from `docs/known-issues.md` AND the matching pointer from `CLAUDE.md § Next Session Priorities` once the verification has run, regardless of outcome.
