@@ -316,6 +316,70 @@
   background-color: rgba(245, 244, 239, 0.025) !important;
 }
 
+/* Native <select> dropdown polish (gregory-native-select-polish).
+   The native select element in `components/client-detail/editable-field.tsx`
+   (used by inline-edit cells on /clients + Lifecycle + Adoption sections
+   on /clients/[id]) renders with the user-agent-default light theme by
+   default. Strip the native chrome, paint the editorial-dark surface, and
+   inject a custom chevron via a URL-encoded SVG so the closed state reads
+   as a dark form input. Height locked to 36px (Tailwind h-9) so the cell
+   row height doesn't shift when the menu opens. :focus-visible only —
+   mouse clicks get no lingering outline; keyboard tab still shows focus. */
+[data-theme="gregory-editorial"] .geg-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-color: var(--color-geg-bg-elev);
+  color: var(--color-geg-text);
+  border: 1px solid var(--color-geg-border-strong);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 L6 7.5 L9 4.5' stroke='%23f5f4ef' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  height: 36px;
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+}
+[data-theme="gregory-editorial"] .geg-select:hover {
+  border-color: var(--color-geg-text-3);
+}
+[data-theme="gregory-editorial"] .geg-select:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+[data-theme="gregory-editorial"] .geg-select:focus-visible {
+  outline: 2px solid var(--color-geg-accent);
+  outline-offset: 1px;
+  border-color: var(--color-geg-accent);
+}
+[data-theme="gregory-editorial"] .geg-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* <option> styling — limited cross-browser support. Chrome and Firefox
+   respect background-color + color; Safari mostly ignores. Best-effort
+   on the open menu; the closed state (which is visible 99% of the time)
+   is fully covered above. */
+[data-theme="gregory-editorial"] .geg-select option {
+  background-color: var(--color-geg-bg-elev);
+  color: var(--color-geg-text);
+}
+
+/* Display-mode editable cell wrapper — :focus-visible only so a mouse
+   click into a cell (which enters edit mode → renders a <select> →
+   commits → returns to display mode) doesn't leave the browser's default
+   focus ring on the cell wrapper. Keyboard tab still surfaces a visible
+   accent-colored ring. */
+[data-theme="gregory-editorial"] .geg-editable-display:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+[data-theme="gregory-editorial"] .geg-editable-display:focus-visible {
+  outline: 2px solid var(--color-geg-accent);
+  outline-offset: 1px;
+}
+
 /* Scrollbar styling, parallel to Promethean. */
 [data-theme="gregory-editorial"] *::-webkit-scrollbar {
   width: 10px;

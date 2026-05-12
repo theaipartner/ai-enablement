@@ -206,7 +206,13 @@ export function EditableField({
             }
           }}
           className={cn(
-            'min-h-9 rounded-md px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/50 border border-transparent hover:border-input transition-colors',
+            // The .geg-editable-display class hooks into the theme-scoped
+            // focus-visible-only outline rules in app/globals.css so a
+            // mouse-click into a cell doesn't leave a persistent browser
+            // focus ring on the display-mode div after the select unmounts.
+            // Keyboard navigation (Tab) still gets a visible focus ring
+            // via :focus-visible.
+            'geg-editable-display min-h-9 rounded-md px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/50 border border-transparent hover:border-input transition-colors',
             mono && 'font-mono',
             isEmpty && 'text-muted-foreground',
             variant === 'textarea' && 'whitespace-pre-wrap',
@@ -326,7 +332,13 @@ function renderEditor({
           }
         }}
         disabled={disabled}
-        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+        // The .geg-select class hooks into the theme-scoped CSS in
+        // app/globals.css that disables the native user-agent appearance,
+        // paints the editorial-dark surface, injects a custom chevron via
+        // a background-image SVG, locks the height to prevent the
+        // open-state cell-expansion bug, and uses focus-visible-only for
+        // the focus ring so click-to-blur leaves a clean cell.
+        className="geg-select h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
       >
         {opts.map((o) => (
           <option key={o.value} value={o.value}>
