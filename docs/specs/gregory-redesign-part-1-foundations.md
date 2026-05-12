@@ -8,17 +8,17 @@ Gregory is mid-redesign. The compiled per-page proposal lives at `docs/working/g
 
 Today, every detail page (`/clients/[id]`, `/calls/[id]`, `/ella/runs/[id]`) and list page (`/clients`, `/calls`, `/ella/runs`) reinvents its own chrome: each page hand-rolls the eyebrow + serif title pattern, decides where state pills go, decides whether/how to collapse diagnostic JSON dumps, decides how empty sections render. The design tokens (`geg-eyebrow`, `geg-display`, `geg-numeric`, `--color-geg-border-strong`, etc.) already exist in `app/globals.css` — what's missing is a shared set of layout primitives that uses them consistently.
 
-This spec builds those primitives, documents the conventions that pages must follow when composing them, and lands one schema migration (`call_review_sentiment_tier`) that unblocks downstream sentiment-pill work in Part 2. **It does not touch any existing per-page layouts.** Per-page application happens in Part 2 specs.
+This spec builds those primitives and documents the conventions that pages must follow when composing them. **It does not touch any existing per-page layouts and lands no schema migration.** Per-page application happens in Part 2 specs.
 
 Reference reads (do them in this order before writing any code):
 
-1. `docs/working/gregory-redesign-compiled.md` — full context for what's being built and why. Part 1 (sections 1.1–1.10) is the scope of this spec.
-2. `app/(authenticated)/clients/page.tsx` — canonical example of the current "page rolls its own header" pattern. New primitives must produce header markup that is visually identical to what this page currently renders so that adopting them in Part 2 is a pure refactor, not a redesign.
+1. `docs/working/gregory-redesign-compiled.md` — full context. Part 1 (sections 1.1–1.10) is the scope of this spec.
+2. `app/(authenticated)/clients/page.tsx` — canonical example of the current "page rolls its own header" pattern. New primitives must produce header markup visually identical to what this page currently renders so adopting them in Part 2 is a pure refactor.
 3. `app/globals.css` — design tokens (search for `geg-` prefix). New primitives consume these; do not invent new tokens.
 4. `components/ui/` — existing shadcn/ui primitives. Reuse `Button`, `Badge`, `Separator`, etc. where applicable. Do not duplicate.
-5. `docs/schema/calls.md` and `docs/schema/schema-v1.md` (search for `call_review`) — context for the sentiment-tier migration. **No `call_review` table or column exists today.** The compiled doc was written speculatively against future schema. This spec lands the column needed for sentiment-tier surfacing; Haiku-side population happens in a Part 2 spec.
+5. `app/(authenticated)/clients/editable-cell.tsx` — existing inline-edit pattern. The new generic primitive should pattern-match this (reuse the hook if one exists; factor a shared helper into `lib/inline-edit/` if not). Drake will accept either; flag your choice in Surprises.
 
-**Acclimatization checkpoint:** before writing any code, confirm in 4–5 bullets in your first commit message or report draft: (a) which `geg-*` design tokens you'll consume, (b) which existing shadcn/ui primitives you'll reuse vs. wrap, (c) the current header pattern at `app/(authenticated)/clients/page.tsx` and your plan to match it byte-for-byte visually, (d) the chosen home for the sentiment-tier column (see § Migration below), (e) any unexpected drift between the compiled doc's Part 1 assumptions and what you find in the codebase. If (e) is non-trivial, surface to Drake before continuing.
+**Acclimatization checkpoint:** before writing any code, confirm in 4–5 bullets in your first commit message: (a) which `geg-*` design tokens you'll consume, (b) which existing shadcn/ui primitives you'll reuse vs. wrap, (c) your plan to match `app/(authenticated)/clients/page.tsx`'s header markup byte-for-byte visually, (d) whether you're reusing the existing inline-edit hook from `editable-cell.tsx` or factoring a shared helper, (e) any unexpected drift between the compiled doc's Part 1 assumptions and what you find in the codebase. If (e) is non-trivial, surface to Drake before continuing.
 
 ## Decisions locked in by Director
 
@@ -28,9 +28,9 @@ These came out of Drake/Director conversation on 2026-05-12. They are not up for
 2. **Documented convention, not enforced slotted component.** No `<GregoryDetail>` shell with named slots. Pages compose primitives in the documented order. Drift is policed by the conventions doc and code review, not by the type system.
 3. **Empty-state tiers as drafted** in §1.3: Hide entirely / Stub / Show full structure. Section headers never appear without content underneath unless the empty state itself is actionable.
 4. **Collapsed-by-default with per-section expand.** Every collapsed section (Configuration/Details slot, Diagnostics slot, anything else marked collapsible) is user-expandable on demand via a chevron affordance. State is per-section, not page-wide.
-5. **Diagnostics collapsed by default for everyone**, including Drake. No role-based default. (Future iteration may add per-user preference; not in scope here.)
+5. **Diagnostics collapsed by default for everyone**, including Drake. No role-based default.
 6. **Inline-editable contract as drafted** in §1.5: optimistic update with on-blur persistence, inline error tooltip on failure (not toast), no row-level Save button, computed fields don't get the affordance.
-7. **Sentiment-tier field on `call_review` data.** Haiku generates it at call-review generation time, dashboard reads from it, `<SentimentPill>` renders from it. **Migration lands in this spec; Haiku population is a Part 2 concern.** See § Migration below for the column home.
+7. **Sentiment-tier lives in `documents.metadata.sentiment_tier`** for `call_summary` rows. No new table, no new column, no migration. The field is for visual rendering only — never filtered or queried at scale. Haiku populates it at call-summary generation time (Part 2 work). The dashboard reads it and `<SentimentPill>` renders from it.
 8. **No anomaly-code dictionary** — `/ella/runs` is being reworked entirely in Part 2; the speculative A/A'/B/B'/C/D/E dictionary from §1.7 is abandoned.
 9. **Header pattern as drafted** in §1.8: eyebrow taxonomy + serif title + state pills + right-aligned actions.
 10. **Baseline NFRs as drafted** in §1.9: desktop-first but doesn't fall apart below 1024px, skeleton over spinner, per-section error handling, real `<h1>` semantics, keyboard nav on inline edits, ARIA on pills, redundant-encoding for color signaling, header backlinks, permalink-able sections.
@@ -42,30 +42,23 @@ Concrete acceptance criteria. All must be satisfied before flipping status to sh
 
 ### A. Primitives shipped
 
-1. **`HeaderBand`** at `components/gregory/header-band.tsx` (create the `components/gregory/` folder if it doesn't exist). Props: `eyebrow` (string, e.g. `"CSM · CLIENTS"`), `title` (string or ReactNode for serif title content), `pills` (optional ReactNode for state pills slot), `actions` (optional ReactNode for right-aligned slot), `backlink` (optional `{ href: string; label: string }` for detail-page upward navigation). Renders an `<h1>` for the title (a11y requirement from §1.9). Uses existing `geg-eyebrow` and `geg-display` tokens. Border-bottom matches the existing pattern at `app/(authenticated)/clients/page.tsx`. Responsive baseline: doesn't fall apart below 1024px; single-column reflow below ~900px is acceptable.
+Create new folder `components/gregory/` for these primitives.
 
-2. **`EmptyStateAwareSection`** at `components/gregory/empty-state-aware-section.tsx`. Props: `title` (string, the section header), `mode` (`'hide' | 'stub' | 'show'`), `stubContent` (ReactNode, required when `mode='stub'`), `children` (ReactNode, rendered when `mode='show'`), optional `collapsible` (boolean, default false) and `defaultCollapsed` (boolean, default false). Behavior: `'hide'` returns null entirely (no section header, no content); `'stub'` renders the title plus `stubContent` only; `'show'` renders title + children. When `collapsible`, a chevron toggles the body open/closed; state is local. Per Decision 4, the chevron affordance is present on every collapsible section, page-wide.
+1. **`HeaderBand`** at `components/gregory/header-band.tsx`. Props: `eyebrow` (string, e.g. `"CSM · CLIENTS"`), `title` (string or ReactNode for serif title content), `pills` (optional ReactNode for state pills slot), `actions` (optional ReactNode for right-aligned slot), `backlink` (optional `{ href: string; label: string }` for detail-page upward navigation). Renders an `<h1>` for the title (a11y requirement from §1.9). Uses existing `geg-eyebrow` and `geg-display` tokens. Border-bottom matches the existing pattern at `app/(authenticated)/clients/page.tsx`. Responsive baseline: doesn't fall apart below 1024px; single-column reflow below ~900px is acceptable.
 
-3. **`DiagnosticsCollapse`** at `components/gregory/diagnostics-collapse.tsx`. Props: `children` (ReactNode, the diagnostic content). Renders a section with title "Diagnostics" that is collapsed by default for everyone (Decision 5), with a chevron to expand. When expanded, children render below. Intended placement: bottom of detail pages, never above the fold. The component itself doesn't enforce placement — that's a conventions-doc rule — but it should be visually distinct enough (muted border, smaller header, "diagnostics" eyebrow-style label) that misplacement is obvious in code review.
+   **Visual parity requirement.** `app/(authenticated)/clients/page.tsx` currently renders its header with hardcoded `style={{ fontSize: 52, lineHeight: '54px', marginTop: 8 }}` on the `geg-display` element, a 24px bottom padding, and `border-bottom: 1px solid var(--color-geg-border-strong)`. `HeaderBand` must reproduce this exactly so the Part 2 migration of that page is a pure refactor with zero visible diff. If the inline style captures something the token system doesn't, capture it in `HeaderBand`'s default rendering — don't expose it as a prop the page has to remember to set.
 
-4. **`InlineEditableActionItemRow`** at `components/gregory/inline-editable-action-item-row.tsx`. Props: `actionItem` ({ id, description, status, owner }), `owners` (array of selectable owners), `onSave` (async callback receiving the changed fields), optional `onDelete`. Renders one row with: status toggle (open/done/cancelled), owner dropdown, description text (editable in place — click to edit, blur to save, Escape to cancel, Enter to save). Follows the inline-editable contract from Decision 6: optimistic update, on-blur persist, inline error tooltip with retry on failure (not toast), no row-level Save button, status field's "done" computed-completion timestamp is not editable (computed). Pattern-match the existing optimistic-save plumbing in `app/(authenticated)/clients/editable-cell.tsx` — reuse the hook/utility there if one exists; if not, factor a shared helper into `lib/inline-edit/` (Drake will accept either; flag in Surprises which you chose and why).
+2. **`EmptyStateAwareSection`** at `components/gregory/empty-state-aware-section.tsx`. Props: `title` (string, the section header), `mode` (`'hide' | 'stub' | 'show'`), `stubContent` (ReactNode, required when `mode='stub'`), `children` (ReactNode, rendered when `mode='show'`), optional `collapsible` (boolean, default false) and `defaultCollapsed` (boolean, default false). Behavior: `'hide'` returns null entirely (no section header, no content); `'stub'` renders the title plus `stubContent` only; `'show'` renders title + children. When `collapsible`, a chevron toggles the body open/closed; state is local to the section.
 
-5. **`InlineEditableField`** at `components/gregory/inline-editable-field.tsx` — the generic primitive that the action-item row composes for its individual editable cells. Props: `value` (string or null), `onSave` (async callback), optional `type` (`'text' | 'select' | 'pill'`), optional `options` (for `'select'` / `'pill'`), optional `placeholder`, optional `disabled`. Same contract as the action-item row. Surfaces inline error tooltip on failure.
+3. **`DiagnosticsCollapse`** at `components/gregory/diagnostics-collapse.tsx`. Props: `children` (ReactNode, the diagnostic content). Renders a section titled "Diagnostics," collapsed by default for everyone (Decision 5), with a chevron to expand. When expanded, children render below. Intended placement: bottom of detail pages, never above the fold. The component itself doesn't enforce placement — that's a conventions-doc rule — but it should be visually distinct enough (muted border, smaller header, "diagnostics" eyebrow-style label) that misplacement is obvious in code review.
 
-### B. Migration shipped
+4. **`InlineEditableField`** at `components/gregory/inline-editable-field.tsx` — generic primitive for editable cells. Props: `value` (string or null), `onSave` (async callback returning success/failure), optional `type` (`'text' | 'select' | 'pill'`, default `'text'`), optional `options` (for `'select'` / `'pill'`), optional `placeholder`, optional `disabled`. Contract per Decision 6: optimistic update on edit, persist on blur, inline error tooltip on save failure (not toast), revert to last-known-good value on failure, no Save button, Escape cancels, Enter commits. Keyboard nav per §1.9: tab moves between editable fields, Enter commits + advances, Escape reverts.
 
-Land a Supabase migration that adds the field needed for Part 2 sentiment work. **Drake's SQL review is a hard stop before apply** (gate (a) — see § Hard stops below).
+5. **`InlineEditableActionItemRow`** at `components/gregory/inline-editable-action-item-row.tsx`. Props: `actionItem` ({ id, description, status, owner }), `owners` (array of selectable owners), `onSave` (async callback receiving the changed fields), optional `onDelete`. Composes `InlineEditableField` for the description (text), owner (select), and status (pill: `open` / `done` / `cancelled`). Same inline-edit contract. Computed-completion timestamp is not editable (computed field).
 
-**Column home decision:** the compiled doc says "sentiment field on `call_review`," but no `call_review` table or column exists in production today. Two real options:
+6. **`SentimentPill`** at `components/gregory/sentiment-pill.tsx`. Props: `tier` (`'green' | 'yellow' | 'red'` or null/undefined). Renders a small colored pill with the tier name. When `tier` is null/undefined, renders nothing (no placeholder). Used by Part 2 work on `/calls`, `/calls/[id]`, `/clients/[id]` recent-calls list to surface sentiment derived from `documents.metadata.sentiment_tier` on the call's `call_summary` document. Per §1.9, color must be redundantly encoded — the pill carries a text label, not just a color. Built in this spec because it's a tiny primitive and Part 2 specs will need it ready.
 
-- **(i)** Add `sentiment_tier text` directly to `calls` with a CHECK constraint on `('green', 'yellow', 'red')` or null. Pro: simple, matches where the `summary` and `transcript` columns already live, no new table. Con: couples sentiment to the `calls` row rather than to the (future) call-review pipeline output, which may be regenerated independently of the call.
-- **(ii)** Add `sentiment_tier text` to a new `call_reviews` table (FK to `calls`, one row per review pass) with the same CHECK. Pro: clean separation between raw call + review output; allows re-running reviews without touching `calls`. Con: introduces a table with one column for now, on the bet that more review fields will join it later.
-
-**Director's lean: (i).** Until there's actually a multi-column review pipeline, a single column on `calls` is the lowest-overhead path. If/when the review pipeline grows to need its own table, that's a clean migration later. **Builder confirms (i) is fine in the first commit message OR raises (ii) with concrete reasoning. Don't silently pick (ii).**
-
-Migration filename follows the existing convention: next sequential number, descriptive snake_case. Drake reviews the generated SQL before apply. Post-apply, dual-verify per § Operational patterns in CLAUDE.md.
-
-### C. Conventions doc shipped
+### B. Conventions doc shipped
 
 Write `docs/gregory-conventions.md`. Contents:
 
@@ -74,30 +67,72 @@ Write `docs/gregory-conventions.md`. Contents:
 - **Empty-state rules** (§1.3): the three tiers, when each applies.
 - **Diagnostics-collapse rule** (§1.4): always at the bottom of detail pages, collapsed-by-default for everyone, never interleaved.
 - **Inline-editable contract** (§1.5): the full Decision 6 contract.
-- **Header pattern** (§1.8): eyebrow taxonomy (table of `SURFACE · CONTEXT` for each surface — fill in `CSM · CLIENTS`, `CLIENT · DETAIL`, `CSM · CALLS`, `CALL · DETAIL`, `ELLA · AUDIT`, `ELLA · RUN`), serif-title treatment, pill placement.
-- **Primitive index**: short table mapping each primitive's name to its file path and the slot it lives in.
+- **Header pattern** (§1.8): eyebrow taxonomy table — fill in `CSM · CLIENTS`, `CLIENT · DETAIL`, `CSM · CALLS`, `CALL · DETAIL`, `ELLA · AUDIT`, `ELLA · RUN`. Serif-title treatment, pill placement.
+- **Sentiment data flow:** one short paragraph noting that sentiment lives in `documents.metadata.sentiment_tier` for `call_summary` rows, is populated by Haiku at review-generation time (Part 2 work), and is consumed by `<SentimentPill>`. For visuals only — not filtered/queried.
+- **Primitive index:** short table mapping each primitive's name to its file path, the slot it lives in, and which `geg-*` design tokens it consumes (so future token renames have visible impact).
 - **Baseline NFRs** (§1.9): the six items, one short paragraph each.
 
-This doc is what every Part 2 spec will reference. Keep it terse — Builder is reading it blind in a fresh session weeks from now. Prose, not philosophy.
+This doc is what every Part 2 spec will reference. Keep it terse — Builder reads it blind in a fresh session weeks from now. Prose, not philosophy.
 
-### D. No per-page layout changes
+### C. No per-page layout changes
 
 This is foundation only. **Do not edit `app/(authenticated)/clients/page.tsx`, `app/(authenticated)/calls/page.tsx`, or any existing page layout to consume the new primitives.** Part 2 specs do that, one page at a time. If you find yourself wanting to migrate a page "while you're in there," stop — that's a Part 2 spec, not this one.
 
-### E. Tests
+### D. Tests
 
-- Unit tests for each primitive covering: render correctness, empty/stub/show modes for `EmptyStateAwareSection`, expand/collapse behavior for `DiagnosticsCollapse` and collapsible `EmptyStateAwareSection`, the optimistic-save + revert-on-failure path for `InlineEditableField` and `InlineEditableActionItemRow`.
-- Use the existing test infrastructure (search `package.json` and any existing component test for the conventions — Jest + React Testing Library is the likely stack; match what's already there).
+- Unit tests for each primitive covering: render correctness, empty/stub/show modes for `EmptyStateAwareSection`, expand/collapse behavior for `DiagnosticsCollapse` and collapsible `EmptyStateAwareSection`, the optimistic-save + revert-on-failure path for `InlineEditableField` and `InlineEditableActionItemRow`, the null-tier render-nothing behavior for `SentimentPill`.
+- Use the existing test infrastructure (check `package.json` and any existing component test for conventions — match what's already there).
 - Don't ship if tests fail.
+
+### E. Branch + PR workflow
+
+This spec is foundation work touching live surfaces, so it does **not** push to `main` directly per CLAUDE.md's normal Builder push policy. Instead:
+
+1. Create branch `gregory-redesign-part-1-foundations` from latest `origin/main`.
+2. All commits land on that branch (primitives, tests, conventions doc, report).
+3. Push the branch to `origin`.
+4. Open a PR against `main` titled `Gregory redesign Part 1 — foundations`. Body should be the report's "What I did, in plain English" section, plus a link to this spec and to `docs/reports/gregory-redesign-part-1-foundations.md`. List the files touched grouped by category (primitives / conventions doc / tests).
+5. Do NOT merge. Drake reviews the deploy preview and merges manually.
+
+The report (`docs/reports/gregory-redesign-part-1-foundations.md`) lands on the same branch as the rest of the work; it'll merge to main as part of the PR.
 
 ## Hard stops
 
-1. **Before applying the migration.** Generate the SQL file, surface it to Drake for review, wait for explicit approval, then apply via `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes` per the operational pattern in CLAUDE.md. Dual-verify post-apply (schema reality + ledger registration).
-2. **If the (i) vs (ii) migration decision changes from Director's lean** — i.e. if Builder concludes (ii) is the right call for reasons that show up in the codebase — stop and surface before writing the migration SQL. Don't silently switch.
-3. **If acclimatization point (e) surfaces non-trivial drift** between the compiled doc and the codebase — e.g. design tokens have been renamed, the shadcn primitives don't match what the doc assumes, the existing inline-edit pattern at `editable-cell.tsx` is fundamentally different from what the compiled doc imagines — stop and surface before continuing past the primitives' first commit.
+1. **If acclimatization point (e) surfaces non-trivial drift** between the compiled doc and the codebase — e.g. design tokens have been renamed, the shadcn primitives don't match what the doc assumes, the existing inline-edit pattern at `editable-cell.tsx` is fundamentally different from what Decision 6 describes — stop and surface before continuing past the primitives' first commit.
+
+2. **If a primitive's visual rendering doesn't match `app/(authenticated)/clients/page.tsx`'s current header byte-for-byte** and the gap requires a design call (not just a CSS tweak), stop and surface. Part 2's migration is a refactor; a visual-regression diff is a sign Part 1 isn't done yet.
+
+That's the full hard-stop list. No migrations in this spec means no SQL-review gate. Routine commits, primitive design choices within the contract, test scaffolding choices, and the inline-edit-helper question (reuse vs. factor) are all Builder's call — note them in Surprises if non-obvious.
 
 ## Think this through yourself — what could go wrong
 
-- The `geg-*` design tokens in `globals.css` are extensive but undocumented in any conventions doc. If the new primitives consume a token that gets renamed in a future redesign pass, every primitive breaks. **Mitigation:** in the conventions doc's Primitive Index, list which tokens each primitive consumes so the rename impact is visible upfront.
-- The existing `app/(authenticated)/clients/page.tsx` renders its header inline with hardcoded `style={{ fontSize: 52, lineHeight: '54px' }}` on the `geg-display` element. If `HeaderBand` doesn't reproduce this exactly, Part 2's "migrate clients page to HeaderBand" diff will be a visual regression rather than a pure refactor. **Mitigation:** match byte-for-byte. If the inline style is doing something the token doesn't capture, capture it in the primitive's CSS or a prop with a sensible default.
-- `EmptyStateAwareSection` with `mode='hide'` returning null means a misconfigured page can silently drop sections. **Mitigation:** the conventions doc should be explicit that `mode` is chosen at composition time based on the data present, not toggled defensively. A page that renders `<EmptyStateAwareSection mode={data.length > 0 ? 'show' : 'hide'} ...>` is correct; a page that renders `
+- The `geg-*` design tokens in `globals.css` are extensive but undocumented elsewhere. If a primitive consumes a token that gets renamed later, every primitive breaks silently until the page renders. **Mitigation:** the conventions doc's Primitive Index lists which tokens each primitive consumes, so rename impact is visible upfront. Builder maintains this list as it builds.
+
+- `EmptyStateAwareSection` with `mode='hide'` returning null means a misconfigured page can silently drop sections. **Mitigation:** the conventions doc must be explicit that `mode` is chosen at composition time based on data presence, not toggled defensively. A page that renders `<EmptyStateAwareSection mode={data.length > 0 ? 'show' : 'hide'} ...>` is correct; a page that passes `mode='hide'` with non-empty children is a bug — flag it in code review.
+
+- The existing inline-edit pattern at `app/(authenticated)/clients/editable-cell.tsx` may not exactly match Decision 6's contract (e.g. it might toast on error rather than inline-tooltip). If it doesn't match, the new `InlineEditableField` has to diverge from the existing pattern, which means two patterns coexist in the codebase until Part 2 migrates the clients list. **Mitigation:** flag the divergence in Surprises and update the conventions doc to say which pattern is canonical going forward (the new one). Don't refactor `editable-cell.tsx` in this spec — that's Part 2 territory.
+
+- `DiagnosticsCollapse` being collapsed-by-default for everyone (Decision 5) means Drake's own debugging workflow gets one extra click per detail-page visit. **Mitigation:** none — Drake explicitly accepted this in the decision. Don't preemptively add a role check or feature flag. Future per-user preference work would be a separate spec.
+
+- `SentimentPill` rendering nothing on null is the right behavior, but a page that forgets to handle the loading state can render the pill slot as a layout gap that pops in when data arrives. **Mitigation:** none at the primitive level — handle in Part 2 pages with skeleton states per §1.9 baseline NFRs.
+
+- Branch-and-PR instead of push-to-main is a one-off override of CLAUDE.md's normal push policy. **Mitigation:** the override is explicit in § E above. Don't generalize it to other specs without an explicit Drake/Director conversation — `main` push remains the default for everything else.
+
+## Mandatory doc-update list
+
+End-of-work, update these docs explicitly. For each, either commit the change or state in the report that the doc didn't need updating and why.
+
+- `docs/gregory-conventions.md` — NEW, created by this spec (§ B).
+- `CLAUDE.md` — does not need updating. Working norms didn't change. The branch-and-PR override for this spec is a one-off captured in this spec's § E, not a permanent norm.
+- `docs/state.md` — does not need updating. No batch shipped; foundation work that unblocks Part 2 is in-flight context, not a state snapshot.
+- `docs/agents/gregory.md` — does not need updating in this spec. The primitives are surface-area for the dashboard, not for Gregory-the-agent's brain. Part 2 specs may update this when per-page changes land.
+- `docs/known-issues.md` — only if something surfaces during build. State explicitly in the report whether anything was added.
+- `docs/working/gregory-redesign-compiled.md` — does not need updating. It's the source-of-truth input to Part 1 + Part 2 specs; preserved as-is.
+
+## Out of scope for this spec (explicit)
+
+- Any edits to existing per-page layouts (`/clients`, `/clients/[id]`, `/calls`, `/calls/[id]`, `/ella/runs`, `/ella/runs/[id]`). Part 2 specs.
+- Haiku-side population of `documents.metadata.sentiment_tier`. Part 2 spec, gated on the call-summary generation pipeline.
+- The `/ella` Nabeel-facing dashboard (§2.6 of compiled doc). Deferred entirely; revisit in Part 2 scoping.
+- `SavedViews`, `TodayDigest`, `RowHoverPreview`, `VirtualizedTable`, `DateRangePicker`, `SortableColumnHeader`, `FilterChipRow`, `CSMAvatarOrLabel`, `SeverityNarrativeCard`, `SentimentArc`, `ChatBubble`, `DecisionPill`, `AnomalyCodeLabel`, `HealthScoreBreakdown`, `NeedsReviewIndicator`, `QuoteToTimestampLink` — all listed in §1.10 of the compiled doc as either decoupled work or page-specific primitives. They land in Part 2 specs as the pages that need them get specced.
+- Any schema migration. Decision 7's sentiment field lives in existing `documents.metadata`, no new column.
