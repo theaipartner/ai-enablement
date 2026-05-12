@@ -40,14 +40,26 @@ export default async function ClientDetailPage({
     : []
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="px-8 py-8 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <BackToClientsButton />
       </div>
 
-      <div className="space-y-1.5">
-        <h1 className="text-3xl font-semibold">{client.full_name}</h1>
-        <div className="flex flex-wrap gap-2 items-center">
+      <header
+        className="space-y-3"
+        style={{
+          paddingBottom: 24,
+          borderBottom: '1px solid var(--color-geg-border-strong)',
+        }}
+      >
+        <div className="geg-eyebrow">CLIENT · DETAIL</div>
+        <h1
+          className="geg-display"
+          style={{ fontSize: 48, lineHeight: '50px' }}
+        >
+          {client.full_name}
+        </h1>
+        <div className="flex flex-wrap gap-2 items-center pt-1">
           <StatusPill status={client.status} />
           <JourneyStagePill stage={client.journey_stage} />
           {hasNeedsReview ? (
@@ -61,9 +73,8 @@ export default async function ClientDetailPage({
             </>
           ) : null}
         </div>
-      </div>
+      </header>
 
-      <Separator />
 
       <IdentitySection client={client} />
       <Separator />

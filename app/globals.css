@@ -50,6 +50,288 @@
   }
 }
 
+/* ===========================================================================
+   Gregory editorial-dark theme. Scoped to [data-theme="gregory-editorial"]
+   so Promethean (when its branch lands) coexists side-by-side via its own
+   [data-theme="promethean"] scope. Accent is electric blue (#0066FF) —
+   the meaningful color difference vs Promethean's yellow-green.
+
+   Strategy: override the shadcn tokens (--background, --card, --primary, etc.)
+   inside the scope so every shadcn-based component (Card, Button, Input,
+   Table, Badge) auto-flips to editorial-dark without touching component
+   files. Additional --color-geg-* tokens cover patterns shadcn doesn't
+   express directly (deck text, numeric serif color, etc.).
+   ========================================================================= */
+@theme inline {
+  --color-geg-bg: #0a0a0a;
+  --color-geg-bg-elev: #16161a;
+  --color-geg-bg-elev-2: #1c1c20;
+  --color-geg-border: rgba(245, 244, 239, 0.08);
+  --color-geg-border-strong: rgba(245, 244, 239, 0.14);
+  --color-geg-text: #f5f4ef;
+  --color-geg-text-2: rgba(245, 244, 239, 0.60);
+  --color-geg-text-3: rgba(245, 244, 239, 0.40);
+  --color-geg-accent: #0066ff;
+  --color-geg-accent-dim: rgba(0, 102, 255, 0.16);
+  --color-geg-accent-strong: #1f7dff;
+  --color-geg-pos: #0066ff;
+  --color-geg-neg: #ff6b47;
+  --color-geg-neg-dim: rgba(255, 107, 71, 0.16);
+  --color-geg-warn: #f4b740;
+  --color-geg-warn-dim: rgba(244, 183, 64, 0.16);
+}
+
+[data-theme="gregory-editorial"] {
+  /* Shadcn token overrides — every Card / Button / Input / Table / Badge
+     auto-restyles under this scope. */
+  --background: var(--color-geg-bg);
+  --foreground: var(--color-geg-text);
+  --card: var(--color-geg-bg-elev);
+  --card-foreground: var(--color-geg-text);
+  --popover: var(--color-geg-bg-elev-2);
+  --popover-foreground: var(--color-geg-text);
+  --primary: var(--color-geg-accent);
+  --primary-foreground: var(--color-geg-text);
+  --secondary: var(--color-geg-bg-elev-2);
+  --secondary-foreground: var(--color-geg-text);
+  --muted: var(--color-geg-bg-elev-2);
+  --muted-foreground: var(--color-geg-text-2);
+  --accent: var(--color-geg-accent-dim);
+  --accent-foreground: var(--color-geg-text);
+  --destructive: var(--color-geg-neg);
+  --border: var(--color-geg-border);
+  --input: var(--color-geg-border-strong);
+  --ring: var(--color-geg-accent);
+  --sidebar: var(--color-geg-bg);
+  --sidebar-foreground: var(--color-geg-text);
+  --sidebar-primary: var(--color-geg-accent);
+  --sidebar-primary-foreground: var(--color-geg-text);
+  --sidebar-accent: var(--color-geg-accent-dim);
+  --sidebar-accent-foreground: var(--color-geg-text);
+  --sidebar-border: var(--color-geg-border);
+  --sidebar-ring: var(--color-geg-accent);
+  --radius: 0.5rem;
+
+  background: var(--color-geg-bg);
+  color: var(--color-geg-text);
+  font-family: var(--font-prom-sans, ui-sans-serif, system-ui, sans-serif);
+}
+
+/* Utility classes — parallel structure to Promethean's .prom-* family.
+   Prefix .geg- ("gregory editorial") so future Promethean coexistence
+   doesn't collide. */
+[data-theme="gregory-editorial"] .geg-serif {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+[data-theme="gregory-editorial"] .geg-display {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+}
+
+[data-theme="gregory-editorial"] .geg-section-title {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-weight: 400;
+  font-size: 28px;
+  line-height: 32px;
+  letter-spacing: -0.018em;
+  color: var(--color-geg-text);
+}
+
+[data-theme="gregory-editorial"] .geg-deck {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-geg-text-2);
+  line-height: 1.5;
+}
+
+[data-theme="gregory-editorial"] .geg-numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+[data-theme="gregory-editorial"] .geg-numeric-serif {
+  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-feature-settings: "tnum", "lnum";
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+[data-theme="gregory-editorial"] .geg-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-geg-text-3);
+  font-weight: 500;
+}
+
+[data-theme="gregory-editorial"] .geg-section-slug {
+  font-family: var(--font-prom-sans, Inter, system-ui, sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-geg-text);
+  font-weight: 600;
+  padding-top: 8px;
+  border-top: 2px solid var(--color-geg-text);
+}
+
+/* LIVE pulse, parallel to Promethean's .prom-pulse. */
+@keyframes geg-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.85); }
+}
+[data-theme="gregory-editorial"] .geg-pulse {
+  animation: geg-pulse 2s ease-in-out infinite;
+}
+
+/* Pill recolor — Gregory's existing pills hardcode Tailwind's emerald/
+   amber/rose/sky/zinc palette via class lists. Theme-scoped overrides
+   flip them to opacity-tinted dark editorial palette without modifying
+   any pill component files.
+
+   Pattern: each Tailwind palette family (bg-emerald-100 + text-emerald-900
+   + border-emerald-200) is mapped to (tinted-bg + matching-text + transparent-border).
+   Same logic in the dark `.dark` shadcn variants (bg-emerald-900/30 etc.) — those
+   don't fire under this scope so the light-mode classes are the only path. */
+[data-theme="gregory-editorial"] .bg-emerald-100,
+[data-theme="gregory-editorial"] .bg-emerald-50 {
+  background-color: rgba(0, 102, 255, 0.14) !important;
+}
+[data-theme="gregory-editorial"] .text-emerald-900,
+[data-theme="gregory-editorial"] .text-emerald-700,
+[data-theme="gregory-editorial"] .text-emerald-800 {
+  color: #5ea4ff !important;
+}
+[data-theme="gregory-editorial"] .border-emerald-200,
+[data-theme="gregory-editorial"] .border-emerald-100 {
+  border-color: rgba(0, 102, 255, 0.22) !important;
+}
+
+[data-theme="gregory-editorial"] .bg-amber-100,
+[data-theme="gregory-editorial"] .bg-amber-50 {
+  background-color: rgba(244, 183, 64, 0.16) !important;
+}
+[data-theme="gregory-editorial"] .text-amber-900,
+[data-theme="gregory-editorial"] .text-amber-700,
+[data-theme="gregory-editorial"] .text-amber-800 {
+  color: #f4b740 !important;
+}
+[data-theme="gregory-editorial"] .border-amber-200,
+[data-theme="gregory-editorial"] .border-amber-100 {
+  border-color: rgba(244, 183, 64, 0.24) !important;
+}
+
+[data-theme="gregory-editorial"] .bg-rose-100,
+[data-theme="gregory-editorial"] .bg-rose-50 {
+  background-color: rgba(255, 107, 71, 0.18) !important;
+}
+[data-theme="gregory-editorial"] .text-rose-900,
+[data-theme="gregory-editorial"] .text-rose-700,
+[data-theme="gregory-editorial"] .text-rose-800,
+[data-theme="gregory-editorial"] .text-red-600,
+[data-theme="gregory-editorial"] .text-red-500 {
+  color: var(--color-geg-neg) !important;
+}
+[data-theme="gregory-editorial"] .border-rose-200,
+[data-theme="gregory-editorial"] .border-rose-100 {
+  border-color: rgba(255, 107, 71, 0.28) !important;
+}
+
+[data-theme="gregory-editorial"] .bg-zinc-100,
+[data-theme="gregory-editorial"] .bg-zinc-50,
+[data-theme="gregory-editorial"] .bg-zinc-200,
+[data-theme="gregory-editorial"] .bg-slate-100,
+[data-theme="gregory-editorial"] .bg-slate-200,
+[data-theme="gregory-editorial"] .bg-gray-100,
+[data-theme="gregory-editorial"] .bg-gray-50 {
+  background-color: rgba(245, 244, 239, 0.06) !important;
+}
+[data-theme="gregory-editorial"] .text-zinc-500,
+[data-theme="gregory-editorial"] .text-zinc-700,
+[data-theme="gregory-editorial"] .text-zinc-800,
+[data-theme="gregory-editorial"] .text-slate-700,
+[data-theme="gregory-editorial"] .text-slate-800,
+[data-theme="gregory-editorial"] .text-gray-700,
+[data-theme="gregory-editorial"] .text-gray-800 {
+  color: var(--color-geg-text-2) !important;
+}
+[data-theme="gregory-editorial"] .border-zinc-200,
+[data-theme="gregory-editorial"] .border-zinc-100,
+[data-theme="gregory-editorial"] .border-slate-200,
+[data-theme="gregory-editorial"] .border-slate-300,
+[data-theme="gregory-editorial"] .border-gray-200,
+[data-theme="gregory-editorial"] .border-gray-100 {
+  border-color: var(--color-geg-border-strong) !important;
+}
+
+/* Amber border-300 + orange-900 — extras Gregory uses for warn states. */
+[data-theme="gregory-editorial"] .border-amber-300 {
+  border-color: rgba(244, 183, 64, 0.32) !important;
+}
+[data-theme="gregory-editorial"] .text-orange-900 {
+  color: var(--color-geg-warn) !important;
+}
+
+[data-theme="gregory-editorial"] .bg-white {
+  background-color: var(--color-geg-bg-elev) !important;
+}
+
+[data-theme="gregory-editorial"] .bg-sky-100,
+[data-theme="gregory-editorial"] .bg-blue-100,
+[data-theme="gregory-editorial"] .bg-blue-50 {
+  background-color: var(--color-geg-accent-dim) !important;
+}
+[data-theme="gregory-editorial"] .text-sky-900,
+[data-theme="gregory-editorial"] .text-sky-700,
+[data-theme="gregory-editorial"] .text-blue-900,
+[data-theme="gregory-editorial"] .text-blue-700 {
+  color: var(--color-geg-accent-strong) !important;
+}
+[data-theme="gregory-editorial"] .border-sky-200,
+[data-theme="gregory-editorial"] .border-blue-200,
+[data-theme="gregory-editorial"] .border-blue-100 {
+  border-color: rgba(0, 102, 255, 0.24) !important;
+}
+
+/* Editorial Table chrome — shadcn's Table primitive already picks up the
+   dark background via --card/--background; this tightens the row rules
+   and removes the borderless feel that makes the table look unfinished. */
+[data-theme="gregory-editorial"] table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+[data-theme="gregory-editorial"] thead tr {
+  border-bottom: 1px solid var(--color-geg-border-strong) !important;
+}
+[data-theme="gregory-editorial"] tbody tr {
+  border-top: 1px solid var(--color-geg-border) !important;
+}
+[data-theme="gregory-editorial"] tbody tr:hover {
+  background-color: rgba(245, 244, 239, 0.025) !important;
+}
+
+/* Scrollbar styling, parallel to Promethean. */
+[data-theme="gregory-editorial"] *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+[data-theme="gregory-editorial"] *::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-theme="gregory-editorial"] *::-webkit-scrollbar-thumb {
+  background: rgba(245, 244, 239, 0.08);
+  border-radius: 8px;
+}
+[data-theme="gregory-editorial"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 244, 239, 0.14);
+}
+
 @layer base {
   .theme {
     --font-heading: var(--font-sans);

@@ -196,13 +196,30 @@ export default async function ClientsPage({
   const baseSearchParams = new URLSearchParams(baseSearchParamsObj)
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">Clients</h1>
-        <span className="text-sm text-muted-foreground">
-          {sorted.length} {sorted.length === 1 ? 'client' : 'clients'}
-        </span>
-      </div>
+    <div className="px-8 py-8 space-y-6">
+      <header
+        className="flex items-end justify-between gap-6"
+        style={{
+          paddingBottom: 24,
+          borderBottom: '1px solid var(--color-geg-border-strong)',
+        }}
+      >
+        <div>
+          <div className="geg-eyebrow">CSM · CLIENTS</div>
+          <h1
+            className="geg-display"
+            style={{ fontSize: 52, lineHeight: '54px', marginTop: 8 }}
+          >
+            All clients.
+          </h1>
+        </div>
+        <div
+          className="geg-eyebrow geg-numeric"
+          style={{ paddingBottom: 6 }}
+        >
+          {sorted.length} {sorted.length === 1 ? 'CLIENT' : 'CLIENTS'}
+        </div>
+      </header>
 
       <FilterBar
         primaryCsmOptions={primaryCsmOptions}

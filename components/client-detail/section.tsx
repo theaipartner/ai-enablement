@@ -18,14 +18,27 @@ export function Section({
   defaultOpen?: boolean
 }) {
   return (
-    <details open={defaultOpen} className="group space-y-3">
-      <summary className="cursor-pointer text-lg font-semibold list-none flex items-center gap-2 select-none">
-        <span className="inline-block w-3 text-muted-foreground transition-transform group-open:rotate-90">
+    <details
+      open={defaultOpen}
+      className="group space-y-3"
+      style={{
+        paddingTop: 4,
+        paddingBottom: 4,
+      }}
+    >
+      <summary
+        className="cursor-pointer list-none flex items-center gap-3 select-none geg-section-title"
+        style={{ fontSize: 22, lineHeight: '26px' }}
+      >
+        <span
+          className="inline-block w-3 transition-transform group-open:rotate-90"
+          style={{ color: 'var(--color-geg-text-3)', fontSize: 10 }}
+        >
           ▶
         </span>
         {title}
       </summary>
-      <div className="space-y-3 pt-2 pl-5">{children}</div>
+      <div className="space-y-3 pt-3 pl-6">{children}</div>
     </details>
   )
 }
