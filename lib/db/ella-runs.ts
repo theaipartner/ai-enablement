@@ -51,6 +51,9 @@ export type EllaRunDetail = EllaRunsListRow & {
   thread_ts: string | null
   trigger_metadata: Record<string, unknown>
   llm_model: string | null
+  // Single "surrounding messages" slot covering both reactive (in-thread)
+  // and passive (last-N-in-channel) runs — Part 2 collapses the two
+  // formerly-distinct rendering paths into one shape.
   thread_messages: Array<{
     slack_ts: string
     slack_user_id: string
@@ -60,6 +63,12 @@ export type EllaRunDetail = EllaRunsListRow & {
     sent_at: string
     is_trigger: boolean
   }>
+  // Haiku decision metadata for passive_monitor runs. Read from
+  // pending_ella_responses; falls back to trigger_metadata copies when
+  // no row exists in the queue (skip decisions never land in the table).
+  // Both null for reactive runs.
+  haiku_decision: string | null
+  haiku_reasoning: string | null
   escalation: {
     id: string
     reason: string
@@ -79,6 +88,13 @@ export type EllaSummaryStats = {
   status_counts: Record<string, number>
   cost_today: number
   cost_week: number
+  cost_month: number
+  errors_today: number
+  errors_week: number
+  errors_month: number
+  // Still computed by the data layer; the redesigned summary band
+  // doesn't surface it but future alert-source work may consume it
+  // (intentional retention per Part 2 spec § Anomaly removal scope).
   anomaly_count_today: number
 }
 
@@ -489,6 +505,67 @@ export async function getEllaRunsList(
   return { rows: paged, total }
 }
 
+// Fetch the last N slack_messages in a channel up to and including a
+// given timestamp. Used by getEllaRunDetail's passive-run surrounding-
+// messages path. Returns oldest-first (ascending) so render order
+// matches the thread-message path.
+//
+// Lookup order:
+//   1. If beforeTs (a slack_ts) is present, find the matching row's
+//      sent_at in slack_messages — this anchors the query window
+//      precisely on the trigger message's wall-clock time.
+//   2. If no match (the trigger predates the slack_messages backfill
+//      or is a synthetic test ts), fall back to the run's started_at
+//      as the anchor.
+//
+// Empty result is a valid signal: render an empty-state stub upstream
+// rather than the dev-facing "synthetic test ts predating the backfill"
+// placeholder that the V1 path showed.
+async function fetchLastNChannelMessages(
+  supabase: ReturnType<typeof createAdminClient>,
+  channelId: string,
+  beforeTs: string | null,
+  fallbackTs: string,
+  n: number,
+): Promise<
+  Array<{
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }>
+> {
+  let anchor: string | null = null
+  if (beforeTs) {
+    const { data: triggerRow } = await supabase
+      .from('slack_messages')
+      .select('sent_at')
+      .eq('slack_channel_id', channelId)
+      .eq('slack_ts', beforeTs)
+      .maybeSingle()
+    anchor = (triggerRow as { sent_at?: string } | null)?.sent_at ?? null
+  }
+  if (!anchor) anchor = fallbackTs
+
+  const { data: msgs } = await supabase
+    .from('slack_messages')
+    .select('slack_ts, slack_user_id, author_type, text, sent_at')
+    .eq('slack_channel_id', channelId)
+    .lte('sent_at', anchor)
+    .order('sent_at', { ascending: false })
+    .limit(n)
+
+  // Re-sort ascending to match the thread-message render order.
+  return [...(msgs ?? [])].reverse() as Array<{
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }>
+}
+
 export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null> {
   const supabase = createAdminClient()
   const { data: row } = await supabase
@@ -516,9 +593,26 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     extractTriggerField(r.trigger_metadata, 'triggering_message_ts')
   const thread_ts = extractTriggerField(r.trigger_metadata, 'thread_ts')
 
-  // Surrounding thread context — last 15 messages in same channel/thread
-  // up to and including the trigger.
-  let threadMessages: EllaRunDetail['thread_messages'] = []
+  // Surrounding messages — dual-mode per Part 2 spec § Decision 10.
+  //
+  //   Reactive runs (thread_ts present) → existing thread query, last
+  //     ~20 messages in the thread. Identical to V1 behavior.
+  //
+  //   Passive runs (thread_ts null) → fetchLastNChannelMessages, last 5
+  //     in the channel up to and including the trigger ts. Replaces the
+  //     V1 placeholder copy ("Likely a synthetic test ts predating the
+  //     backfill...") which was wrong for passive runs.
+  //
+  // Both paths converge on the same shape so the detail page renders
+  // them through one component.
+  type RawMsg = {
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }
+  let rawMsgs: RawMsg[] = []
   if (ch && thread_ts) {
     const { data: msgs } = await supabase
       .from('slack_messages')
@@ -527,9 +621,21 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       .or(`slack_thread_ts.eq.${thread_ts},slack_ts.eq.${thread_ts}`)
       .order('sent_at', { ascending: true })
       .limit(20)
+    rawMsgs = (msgs ?? []) as RawMsg[]
+  } else if (ch) {
+    rawMsgs = await fetchLastNChannelMessages(
+      supabase,
+      ch,
+      trigger_ts,
+      r.started_at,
+      5,
+    )
+  }
 
+  let threadMessages: EllaRunDetail['thread_messages'] = []
+  if (rawMsgs.length > 0) {
     const userIds = Array.from(
-      new Set((msgs ?? []).map((m) => m.slack_user_id).filter((x): x is string => !!x)),
+      new Set(rawMsgs.map((m) => m.slack_user_id).filter((x): x is string => !!x)),
     )
     const nameMap = new Map<string, string>()
     if (userIds.length) {
@@ -553,7 +659,7 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       }
     }
 
-    threadMessages = (msgs ?? []).map((m) => ({
+    threadMessages = rawMsgs.map((m) => ({
       slack_ts: m.slack_ts,
       slack_user_id: m.slack_user_id,
       author_type: m.author_type,
@@ -562,6 +668,32 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       sent_at: m.sent_at,
       is_trigger: m.slack_ts === trigger_ts,
     }))
+  }
+
+  // Haiku decision lookup for passive_monitor runs. Read pending_ella_responses
+  // by agent_run_id; fall back to trigger_metadata copies when no row
+  // exists (skip decisions never land in the queue per the schema doc).
+  let haiku_decision: string | null = null
+  let haiku_reasoning: string | null = null
+  if (r.trigger_type === 'passive_monitor') {
+    const { data: pendingRow } = await supabase
+      .from('pending_ella_responses')
+      .select('haiku_decision, haiku_reasoning')
+      .eq('agent_run_id', r.id)
+      .maybeSingle()
+    const typed = pendingRow as
+      | { haiku_decision?: string | null; haiku_reasoning?: string | null }
+      | null
+    if (typed && (typed.haiku_decision || typed.haiku_reasoning)) {
+      haiku_decision = typed.haiku_decision ?? null
+      haiku_reasoning = typed.haiku_reasoning ?? null
+    } else {
+      // Fallback path: passive_dispatch writes the decision into
+      // trigger_metadata at decision time; for skip decisions (which
+      // never land in pending_ella_responses) this is the only record.
+      haiku_decision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      haiku_reasoning = extractTriggerField(r.trigger_metadata, 'haiku_reasoning')
+    }
   }
 
   // Escalation row.
@@ -622,6 +754,8 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     slack_response_text: slackText,
     has_escalation: escalationIds.has(r.id),
     thread_messages: threadMessages,
+    haiku_decision,
+    haiku_reasoning,
     escalation,
   }
 }
@@ -667,6 +801,18 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
   const cost_week = runs
     .filter((r) => new Date(r.started_at).getTime() >= weekMs)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+  const cost_month = runs.reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+
+  // status='error' counts per window. Pure projection over the existing
+  // monthRuns query — no extra DB roundtrip.
+  const errorsRuns = runs.filter((r) => r.status === 'error')
+  const errors_today = errorsRuns.filter(
+    (r) => new Date(r.started_at).getTime() >= todayMs,
+  ).length
+  const errors_week = errorsRuns.filter(
+    (r) => new Date(r.started_at).getTime() >= weekMs,
+  ).length
+  const errors_month = errorsRuns.length
 
   const anomaly_count_today = runs.filter((r) => {
     if (new Date(r.started_at).getTime() < todayMs) return false
@@ -689,6 +835,10 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
     status_counts,
     cost_today,
     cost_week,
+    cost_month,
+    errors_today,
+    errors_week,
+    errors_month,
     anomaly_count_today,
   }
 }
