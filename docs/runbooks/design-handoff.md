@@ -19,10 +19,10 @@ If the work has both visual + data-layer components (the typical redesign — ne
    - The data fields the design can assume (read `lib/db/<surface>.ts` and enumerate the row / detail shape — names, types, nullability).
    - The primitives that already exist (`components/gregory/header-band.tsx`, `sentiment-pill.tsx`, `geg-pill.tsx`, `inline-editable-field.tsx`, etc.) and what each is for.
    - The tokens (`app/globals.css` `--color-geg-*` variables) and the typography pairing (Newsreader serif + JetBrains Mono).
-   - Any precedent designs Design should reference for continuity (`docs/working/Gregory Calls Redesign.html`, `docs/working/Gregory Clients Redesign.html`).
+   - Any precedent designs Design should reference for continuity. The Gregory Calls + Clients + Ella redesign mocks were the original references during the May 2026 redesign; they've since been archived to git history (search the log for `Gregory <Surface> Redesign.html` to find them). For new work, point Design at the live shipped surfaces (e.g. "match the chrome of `/clients/[id]`") rather than dead-path HTML files.
    - What is **not** in scope (column changes, data shape changes, etc. — anything that needs a separate spec).
 
-3. **Drake hands the prompt to Claude Design.** Design is a separate claude.ai session (no relation to Director's session) with the GitHub MCP connector authorized for this repo. Design produces an annotated single-file HTML mock and commits it to the repo at `docs/working/<Surface> Redesign.html`. The mock is self-contained — fonts via Google Fonts, all styles inline, annotated with overlay labels that explain each surface. Design's commit lands directly on `main` via the MCP `create_or_update_file` call.
+3. **Drake hands the prompt to Claude Design.** Design is a separate claude.ai session (no relation to Director's session) with the GitHub MCP connector authorized for this repo. Design produces an annotated single-file HTML mock and commits it to the repo (recent precedent placed the mocks at the repo root as `Gregory <Surface> Redesign.html`; future Design sessions are free to use any path Drake confirms). The mock is self-contained — fonts via Google Fonts, all styles inline, annotated with overlay labels that explain each surface. Design's commit lands directly on `main` via the MCP `create_or_update_file` call.
 
 4. **Director reads the mock and writes a UI spec for Builder.** The UI spec at `docs/specs/<slug>.md` references the mock by path, the primitives by name, and the data fields available. Builder reads the spec + the mock + the primitives + the data layer, then implements. Drake hands the spec to Builder via the `/run` cue (or types `/run` himself in a Code session pointed at the spec).
 
@@ -48,7 +48,7 @@ Builder injects no cookie; the preview URL (`https://ai-enablement-git-<branch>-
 
 ## Spec / report cleanup
 
-- The Design hand-off HTML mocks at `docs/working/<Surface> Redesign.html` **stay in place after the work ships** — they're the durable visual reference for the established design language. Future Design sessions reference them.
+- Design hand-off HTML mocks were initially intended to stay as the durable visual reference. The 2026-05-14 wrap retired that pattern: once the redesign ships and the live preview is the source of truth, the HTML mock becomes redundant artifact. Past mocks are archived to git history. New Design sessions can leave their mock in place during the spec → build → ship cycle; cleanup happens in the next EOD wrap.
 - The redesign spec + Builder's report follow the standard EOD cleanup cadence (CLAUDE.md § Spec and report convention § Cleanup cadence) — Drake batches deletions when the work ships.
 
 ## What can go wrong + mitigations
