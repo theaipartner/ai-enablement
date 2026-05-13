@@ -68,7 +68,7 @@ export function EllaRunsFilterBar({
   const statuses = parseList('status')
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border bg-zinc-50/50 p-3">
+    <div className="flex flex-wrap items-center gap-2 rounded-md border bg-white p-3">
       <label className="flex items-center gap-1 text-sm">
         <span className="text-muted-foreground">From</span>
         <input
