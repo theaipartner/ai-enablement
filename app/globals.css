@@ -777,6 +777,51 @@
   border-radius: 999px;
 }
 
+/* Slack-styled message block — used on /ella/runs/[id] for the
+   Triggering message + Ella's response. Wraps Mrkdwn-rendered output.
+   Paragraph + list + inline-mark formatting align with the design
+   handoff (Gregory Ella Redesign.html § slack-msg). */
+[data-theme="gregory-editorial"] .geg-slack-msg p {
+  margin: 0 0 10px;
+}
+[data-theme="gregory-editorial"] .geg-slack-msg p:last-child {
+  margin-bottom: 0;
+}
+[data-theme="gregory-editorial"] .geg-slack-msg ul,
+[data-theme="gregory-editorial"] .geg-slack-msg ol {
+  margin: 4px 0 10px;
+  padding-left: 22px;
+}
+[data-theme="gregory-editorial"] .geg-slack-msg li {
+  margin-bottom: 4px;
+}
+[data-theme="gregory-editorial"] .geg-slack-msg li::marker {
+  color: var(--color-geg-accent);
+}
+[data-theme="gregory-editorial"] .geg-slack-msg strong {
+  color: var(--color-geg-text);
+  font-weight: 600;
+}
+[data-theme="gregory-editorial"] .geg-slack-msg em {
+  color: var(--color-geg-text-2);
+}
+[data-theme="gregory-editorial"] .geg-slack-msg a {
+  color: var(--color-geg-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--color-geg-accent-border);
+}
+[data-theme="gregory-editorial"] .geg-slack-msg a:hover {
+  border-bottom-color: var(--color-geg-accent);
+}
+[data-theme="gregory-editorial"] .geg-slack-msg code {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--color-geg-pos);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
 /* Scrollbar styling, parallel to Promethean. */
 [data-theme="gregory-editorial"] *::-webkit-scrollbar {
   width: 10px;
