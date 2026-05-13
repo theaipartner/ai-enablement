@@ -1,70 +1,73 @@
-# Report (PARTIAL): Gregory Redesign Part 2 — Calls data layer (pre-design)
+# Report: Gregory Redesign Part 2 — Calls data layer (pre-design)
 **Slug:** gregory-redesign-part-2-calls-data-layer
 **Spec:** docs/specs/gregory-redesign-part-2-calls-data-layer.md
-**Status:** halted — spec § Hard stops point 2 fired: no CSM column on `clients`; CSM is a join-table relationship via `client_team_assignments`.
 
 ## Files touched
 
-None. Halted at acclimatization before any code change.
+**Created**
+- `agents/call_reviewer/sentiment_classifier.py` — Haiku-backed `classify_sentiment_tier`; max_tokens=10; yellow-fallback on unexpected output.
+- `scripts/backfill_sentiment_tiers.py` — idempotent one-shot backfill; dry-run / --smoke / --apply / --limit; Drake runs this.
+- `app/(authenticated)/calls/[id]/action-item-actions.ts` — three server actions for the Confirm-flow data layer.
+- `docs/agents/call_reviewer.md` — new top-level agent doc (not a subdir; promote later if the agent grows).
+
+**Modified**
+- `agents/call_reviewer/persistence.py` — hooked `classify_sentiment_tier` into `upsert_call_review` before `validate_document_metadata`; classifier failures log and proceed without the field.
+- `shared/ingestion/validate.py` — `('fathom', 'call_review')` now accepts `sentiment_tier` in the optional set.
+- `lib/db/calls.ts` — nested `client_team_assignments` join under `primary_client`; derived `csm_team_member_id` / `csm_team_member_name` on `CallsListRow`; `csm_team_member` object on `CallDetail`; `csm_id?: string` filter (in-JS post-fetch); `category='client'` default when no category filter is set.
+- `docs/schema/documents.md` — `call_review` added to `document_type` enum; `metadata.sentiment_tier` documented inline on the metadata row.
+- `tests/agents/call_reviewer/test_persistence.py` — autouse fixture mocks the classifier; two metadata-match fixtures include `sentiment_tier`.
 
 ## What I did, in plain English
 
-Walked the spec's acclimatization checklist against the live codebase. Read `lib/db/calls.ts` (the data layer this spec extends), `lib/db/clients.ts` (the parallel CSM-bearing data layer), `docs/schema/clients.md` (column-level schema), `agents/call_reviewer/persistence.py` + `reviewer.py` (the call-review write path), and `shared/claude_client.py` (the Haiku client signature). Confirmed four of the five acclimatization bullets cleanly. The fifth — drift between spec and codebase — surfaced a non-trivial mismatch on the CSM data model that fires spec § Hard stops point 2, so I'm stopping per the protocol.
+Shipped the non-visual half of the Calls redesign. The work splits cleanly into three pieces:
+
+1. **Sentiment classifier** — a small Haiku-backed function that buckets a `sentiment_arc` string into green/yellow/red. It runs once when a call review is generated (hooked inside `upsert_call_review` so both production callers — the Fathom pipeline and the one-shot backfill — pick it up without their own changes), and a paired backfill script lets Drake classify the ~hundreds of existing reviews in one pass.
+
+2. **CSM extensions to the calls data layer** — adds the active primary_csm on both list and detail, and a `csm_id` filter on the list. Implemented per Drake's Option A unblock: mirrors the `client_team_assignments` join-table pattern from `lib/db/clients.ts`. Same pass also lands the client-only category default Drake requested separately.
+
+3. **Action-item server actions** — three functions (`updateActionItemDescription`, `deleteActionItem`, `commitPendingActionItemChanges`) the eventual Confirm-button UI will call. Hard delete per Decision 6, no transaction wrapper per Decision 7, redirect target returned as a string per Decision 7.
+
+Doc updates and the sample-5 classifier sanity check round out the work. Nothing visual touched.
 
 ## Verification
 
-None. No code changed.
+- **pytest tests/** — 512 passed (full suite). Includes the modified `test_persistence.py` with its new autouse classifier mock + two updated metadata-match fixtures.
+- **npx tsc --noEmit** — clean. Two iterations: once after the calls data-layer changes, once after the server actions landed.
+- **Sample-5 classifier sanity check (spec § Hard stops point 3)** — ran `classify_sentiment_tier` against 5 real `call_review.sentiment_arc` values fetched directly from production. 5/5 returned valid green/yellow/red outputs; no refusals, no empty strings, no multi-word responses. Distribution: 1 green + 4 yellow, which read plausibly against the arc text. Classifier ships.
+- **Backfill script** — syntax-checked via `ast.parse`; not executed. Drake runs `--apply` himself per spec § Hard stops point 1.
 
 ## Surprises and judgment calls
 
-### Major drift — CSM data model
+- **CSM data model drift** — the spec assumed `clients.csm_team_member_id` (a direct FK); the actual model is a join through `client_team_assignments` with `role='primary_csm' AND unassigned_at IS NULL`. Surfaced as a hard stop in the partial report; Drake cleared via Option A. Implementation mirrors `lib/db/clients.ts:240-302` — the nested `client_team_assignments` select hangs under the `primary_client` join, and the active CSM is derived in JS via the same `find(a => a.role === 'primary_csm' && a.unassigned_at === null)` predicate. Both list and detail paths use the same predicate so future "primary_csm" semantics changes land in one place.
 
-The spec assumes `clients.csm_team_member_id` (or similar FK column) holds the CSM-on-a-client relationship. **That column does not exist.** `docs/schema/clients.md` lines 11–30 enumerate every column on `clients`; there is no CSM FK. The CSM relationship lives in the **`client_team_assignments` join table** with `role='primary_csm'` and `unassigned_at IS NULL`.
+- **`call_reviewer` doc location** — spec § G referenced `docs/agents/call_reviewer/` (subdir), but `docs/agents/` only contained `ella/` and `gregory.md`. Drake's call: a single top-level file. Created `docs/agents/call_reviewer.md`. If the agent grows (multiple build phases, runbooks, retrieval-rules subdocs), promote to a directory.
 
-The existing precedent for resolving this is in `lib/db/clients.ts:240-302`. `getClientsList`'s nested select pulls `client_team_assignments` alongside the client row, then derives `primary_csm_id` / `primary_csm_name` in JS by finding `assignments.find(a => a.role === 'primary_csm' && a.unassigned_at === null)`.
+- **Classifier-failure handling on the hook** — the spec specified "if the classifier call fails (network error, Haiku timeout, malformed response), log a warning and proceed without the field." Implemented as a try/except around `classify_sentiment_tier` inside `upsert_call_review`. The catch is narrow on purpose — `classify_sentiment_tier` itself already handles malformed-response with the yellow fallback, so the only path that reaches the outer try is a real exception (network, auth). The `_logger.warning` carries the `call_id` so a pattern of failures is greppable.
 
-The spec's three CSM-related success criteria (§ D CSM data layer extensions, § E CSM filter) all assume the FK-column model. Specifically:
+- **Pipeline test mocking** — `test_persistence.py` previously had no `complete()` mock because the hook didn't exist. Adding the autouse fixture lets the existing tests keep their fake-DB scaffolding without each one knowing about the classifier. The two metadata-match fixtures (`test_..._no_op_when_existing_matches`, `test_..._flips_is_active_back_to_false`) needed `sentiment_tier: _MOCK_TIER` added to stay no-op-equal to what the hook now writes. Test-impact analysis was the surprise — three tests in the file, two needed updates; the others were tolerant.
 
-- § D option (i)'s nested select `csm:team_members!clients_csm_team_member_id_fkey(full_name)` won't work — the FK constraint name doesn't exist.
-- § E's "filter the result rows to those whose `primary_client.csm_team_member_id` equals the filter" needs to be reworded around `client_team_assignments`.
+- **`category` filter shape on `getCallsList`** — landed the client-only default by collapsing the old `if (filters.category)` branch into an `effectiveCategory = filters.category ?? 'client'` line that always applies. There is no "show all categories" escape hatch in this commit. If the UI eventually needs one, the cleanest path is a sentinel (e.g. `category === '__all__'` → skip filter); flagged in case the follow-up UI spec wants it.
 
-Per spec § Hard stops point 2 ("If there's no CSM column at all on `clients`, **stop and surface** — the entire CSM column + filter premise of this spec depends on it"), this is the explicit halt trigger.
+- **csm_id filter location (in-JS)** — spec § E sanctioned in-JS at 560-call volume. Implemented alongside the existing `search` filter (also in-JS) and added the same scale-revisit note in code (`~5000`). The team_members(id, full_name) shape comes back nested under each assignment row, so the filter just compares `row.csm_team_member_id === filters.csm_id`.
 
-### Minor drift — call_reviewer doc location
+- **Backfill script reuses `backfill_call_reviews.py`'s CLI shape** — flags (`--smoke`, `--apply`, `--limit`), summary block, even the dry-run-as-default behavior. The classifier path is utility-scoped per spec § A so there's no `agent_runs` telemetry to roll up; the summary tracks tier-count distribution + failure count instead of cost.
 
-Spec § G says "update `docs/agents/call_reviewer/` (whatever the agent doc is named)." That directory doesn't exist. `docs/agents/` contains `ella/` and `gregory.md` — call_reviewer has no dedicated doc surface today. Resolution needs Drake's call: extend `gregory.md`, create a new `docs/agents/call_reviewer.md`, or skip the doc update on the basis that there's nowhere natural to put it.
-
-### Confirmed cleanly (acclimatization (a)–(d), modulo (a))
-
-- **(b) Call-review generation chokepoint:** `agents/call_reviewer/persistence.py:upsert_call_review` is the single place the `documents.metadata` dict is constructed (lines 74–81). Two production callers — `scripts/backfill_call_reviews.py:174` and `ingestion/fathom/pipeline.py:1062` — both route through it. Hooking the sentiment classifier inside `upsert_call_review` before `validate_document_metadata` is the clean single-chokepoint injection the spec asks for; satisfies spec § C and dodges § Hard stops point 4.
-- **(c) Classifier plan:** use the spec's prompt verbatim. Call via `shared.claude_client.complete(system="", messages=[{"role":"user","content":prompt}], model="claude-haiku-4-5-20251001", max_tokens=10)`, parse `.text`, lowercase + strip, match against `{green, yellow, red}`, fall back to `yellow` on miss. No `run_id` (utility scope per spec § A). The 5-sample sanity check from § Hard stops point 3 runs before declaring the work done.
-- **(d) File map (pending CSM resolution):**
-  - `agents/call_reviewer/sentiment_classifier.py` — new
-  - `agents/call_reviewer/persistence.py` — modified (hook + metadata injection)
-  - `scripts/backfill_sentiment_tiers.py` — new
-  - `lib/db/calls.ts` — modified (CSM fields + filter, action items not here — see § F path)
-  - `app/(authenticated)/calls/[id]/action-item-actions.ts` — new (three server actions per § F)
-  - `docs/schema/documents.md` — modified (sentiment_tier note)
-  - `docs/agents/...` — pending Drake's call per the minor drift above
+- **Sample-5 distribution skew** — the 5 sampled arcs leaned yellow (4/5). Not a classifier defect — re-reading the arcs, only one read as a clear "green relationship momentum"; the other four were genuinely mixed-signal. Worth keeping an eye on the production distribution after Drake's `--apply` run; if 95%+ land yellow across hundreds of reviews, that's a prompt-tightening signal. Logging the prompt verbatim in the file's module docstring makes future iteration cheap.
 
 ## Out of scope / deferred
 
-The entire spec body remains untouched. On unblock, work proceeds top-to-bottom: classifier → backfill script → pipeline hook → CSM data layer + filter (using whichever model Drake picks) → action-item server actions → doc updates.
+- **All visual surface changes** — `/calls`, `/calls/[id]`, no JSX touched. Reserved for the follow-up UI spec.
+- **Filter-by-CSM UI control** — data layer ships here; the dropdown ships in the follow-up.
+- **Confirm-button UI** — server actions ship here; the UI invokes them later.
+- **Inline-editable action-item rendering** — same split.
+- **Migration of calls list/detail to Part 1 primitives** — out of scope.
+- **TS tests** — deferred to `gregory-ts-test-infra` per spec § Out of scope.
+- **Show-all-categories escape hatch** — not required by the spec; future-spec material if the UI needs it.
+- **Removing auth bypass** — Drake-side env-var toggle, not a code change.
 
 ## Side effects
 
-None. No commits, no DB writes, no API calls, no shared-system touches. Read-only acclimatization.
-
-## What's needed to unblock
-
-Drake's call on the CSM data model. Three reasonable paths:
-
-- **Option A — Mirror `getClientsList`'s join-table pattern (recommended).** Extend the `getCallsList` nested select to also fetch the primary client's `client_team_assignments(role, unassigned_at, team_members(id, full_name))`, derive `csm_team_member_name` in JS the same way `lib/db/clients.ts:240-302` does. `getCallById` gets a parallel fetch under the existing `Promise.all`. `csm_id` filter runs in-JS post-fetch (matches the existing search filter pattern). Pros: zero schema change, mirrors a battle-tested pattern, doesn't gum up future CSM-history work. Cons: spec § D option (i)'s nested-FK syntax doesn't apply; effectively D option (ii)-shaped via a different join.
-
-- **Option B — Add a denormalized `clients.primary_csm_team_member_id` column (migration).** Updated by the same RPCs that mutate `client_team_assignments` (`change_primary_csm`, per `lib/db/clients.ts:646`). The spec's nested-FK syntax then works as written. Pros: matches the spec literally. Cons: introduces a denormalization that has to stay in sync with the assignments table forever; requires a migration in this spec which the spec doesn't currently scope; SQL-review gate (Drake) fires on the migration.
-
-- **Option C — Defer CSM bits, ship sentiment + action-item-actions only.** Drop § D, § E from this spec; sentiment classifier + backfill + pipeline hook + the three action-item server actions still ship. CSM lands in a follow-up spec once the data model is settled. Pros: ships the uncontroversial half today. Cons: the follow-up UI spec (after Design returns mocks) likely wants both CSM-on-list and CSM-filter; deferring forces a second round trip.
-
-My lean: **Option A.** The join-table model is the right long-term shape (matches the historical-CSM-assignments use case that motivated `client_team_assignments` originally), `lib/db/clients.ts` already proves the pattern works at the current volume, and the in-JS `csm_id` filter aligns with the spec's stated tolerance for in-JS filtering at 560 calls. No schema change, no migration, no SQL-review gate hit, no follow-up spec needed.
-
-Secondary unblock: pick a target doc for the call_reviewer addition per § G — extend `gregory.md`, create `docs/agents/call_reviewer.md`, or skip. (Low stakes; can be answered in the same message as the CSM call.)
+- **5 Anthropic API calls** during the sample-5 sanity check against `claude-haiku-4-5-20251001`. Cost trivially small (~$0.005 total). No DB writes — the sanity check used a read-only Python REPL that called `classify_sentiment_tier` directly without going through the backfill's persist path.
+- **No production DB writes.** No new rows in any table. No metadata mutations. The hook is plumbed but only fires when `upsert_call_review` is called, which doesn't happen during this spec's execution.
+- **No Slack posts, no emails, no shared-system touches** beyond the 5 Anthropic calls.
+- **No CI runs touched** — backfill script is committed but not invoked.
