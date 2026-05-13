@@ -136,14 +136,18 @@ async function main(): Promise<void> {
     await responseSection.screenshot({ path: responseCollapsedPath })
     console.log(`[verify] wrote ${responseCollapsedPath}`)
 
-    // Expand both, capture expanded state.
-    const showMoreButtons = page.locator('button', { hasText: 'Show more' })
-    const count = await showMoreButtons.count()
-    console.log(`[verify] ${count} Show more buttons found`)
-    for (let i = 0; i < count; i++) {
-      await showMoreButtons.nth(i).click()
-      await page.waitForTimeout(80)
+    // Expand both, capture expanded state. After each click the
+    // button's text flips to "Show less", so a fresh first() locator
+    // always points at the next un-clicked one.
+    let safety = 0
+    while (safety < 10) {
+      const next = page.locator('button', { hasText: 'Show more' }).first()
+      if ((await next.count()) === 0) break
+      await next.click()
+      await page.waitForTimeout(120)
+      safety++
     }
+    console.log(`[verify] clicked ${safety} Show more buttons`)
 
     const triggeringExpandedPath = path.join(
       OUT_DIR,
