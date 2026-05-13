@@ -3,6 +3,7 @@ import { NpsStandingPill } from './pills'
 import {
   EditableCsmStandingCell,
   EditableJourneyStageCell,
+  EditablePrimaryCsmCell,
   EditableStatusCell,
   EditableTrustpilotCell,
 } from './editable-cell'
@@ -110,11 +111,13 @@ export function ClientsTable({
   sort,
   dir,
   baseSearchParams,
+  csmOptions,
 }: {
   rows: ClientsListRow[]
   sort: SortKey
   dir: 'asc' | 'desc'
   baseSearchParams: URLSearchParams
+  csmOptions: ReadonlyArray<{ id: string; full_name: string }>
 }) {
   if (rows.length === 0) {
     return (
@@ -200,19 +203,12 @@ export function ClientsTable({
                 value={row.journey_stage}
               />
             </td>
-            <td
-              style={{
-                padding: '14px 14px',
-                fontSize: 13,
-                color: 'var(--color-geg-text-2)',
-                verticalAlign: 'middle',
-              }}
-            >
-              {row.primary_csm_name ?? (
-                <span style={{ color: 'var(--color-geg-text-3)' }}>
-                  Unassigned
-                </span>
-              )}
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditablePrimaryCsmCell
+                clientId={row.id}
+                value={row.primary_csm_id}
+                options={csmOptions}
+              />
             </td>
             <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
               <EditableCsmStandingCell
