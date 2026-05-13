@@ -1,24 +1,20 @@
 'use client'
 
-// Ella runs filter bar — Part 2 redesign.
+// Ella runs filter bar — editorial dark redesign.
 //
-// Removed from V1: Speaker-role multi-select, Anomaly-flag multi-select,
-// "Show anomalies only" toggle. Their server-side filter inputs are
-// retained in `lib/db/ella-runs.ts` (intentional; future alert work may
-// consume them) but the UI no longer exposes them.
+// Two filters today: Channel (searchable multi-select) + Status
+// (multi-select). The Triggers filter from the mock is intentionally
+// excluded per Drake's direction; the data layer still accepts a
+// `triggers` input but the UI doesn't surface it. Speaker-role +
+// Anomaly-flag filters from V1 also stay data-layer-only; no UI for
+// either today.
 //
-// Channel filter swapped from MultiSelectDropdown to an inline
-// hand-rolled searchable combobox — needed for the post-2.3 channel
-// fleet (100+ channels make a non-searchable dropdown unworkable).
-// Path B per spec § Channel filter: a hand-rolled wrapper rather than
-// shadcn's Command primitive, because adding `cmdk` would cross the
-// "never install major dep without asking" working norm. The visual is
-// less polished than Command but the UX (type to filter, click to
-// toggle) is the same.
+// Visual: matches the editorial dark treatment of the Calls + Clients
+// filter bars — date range as two inline mono inputs separated by an
+// arrow, then the two dropdown triggers in matching chrome.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronDownIcon } from 'lucide-react'
 import { MultiSelectDropdown } from '@/app/(authenticated)/clients/multi-select-dropdown'
 
 const STATUS_OPTIONS = [
@@ -68,25 +64,67 @@ export function EllaRunsFilterBar({
   const statuses = parseList('status')
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border bg-white p-3">
-      <label className="flex items-center gap-1 text-sm">
-        <span className="text-muted-foreground">From</span>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '14px 0 16px',
+        borderTop: '1px solid var(--color-geg-border)',
+        flexWrap: 'wrap',
+      }}
+    >
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          border: '1px solid var(--color-geg-border-strong)',
+          borderRadius: 6,
+          padding: '4px 8px 4px 12px',
+          fontFamily:
+            'var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace)',
+          fontSize: 12,
+          color: 'var(--color-geg-text-2)',
+          letterSpacing: '0.02em',
+        }}
+      >
         <input
           type="date"
           value={from}
           onChange={(e) => setSingle('from', e.target.value || null)}
-          className="h-8 rounded-md border bg-white px-2 text-sm"
+          aria-label="From date"
+          style={{
+            background: 'transparent',
+            border: 0,
+            outline: 0,
+            color: 'var(--color-geg-text)',
+            fontFamily: 'inherit',
+            fontSize: 12,
+            letterSpacing: '0.02em',
+            padding: '4px 0',
+            width: 110,
+          }}
         />
-      </label>
-      <label className="flex items-center gap-1 text-sm">
-        <span className="text-muted-foreground">To</span>
+        <span style={{ color: 'var(--color-geg-text-faint)' }}>→</span>
         <input
           type="date"
           value={to}
           onChange={(e) => setSingle('to', e.target.value || null)}
-          className="h-8 rounded-md border bg-white px-2 text-sm"
+          aria-label="To date"
+          style={{
+            background: 'transparent',
+            border: 0,
+            outline: 0,
+            color: 'var(--color-geg-text)',
+            fontFamily: 'inherit',
+            fontSize: 12,
+            letterSpacing: '0.02em',
+            padding: '4px 0',
+            width: 110,
+          }}
         />
-      </label>
+      </div>
 
       <SearchableMultiSelect
         label="Channel"
@@ -105,10 +143,8 @@ export function EllaRunsFilterBar({
   )
 }
 
-// Hand-rolled searchable multi-select. Click trigger → opens a panel
-// with a search input at top + a filtered checkbox list below.
-// Click-outside dismisses; Escape closes. Toggling checkboxes keeps the
-// panel open so users can select multiple channels without re-opening.
+// Hand-rolled searchable multi-select — same shape as before, just
+// styled to match the editorial filter chrome.
 function SearchableMultiSelect({
   label,
   options,
@@ -128,7 +164,6 @@ function SearchableMultiSelect({
   const panelRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  // Click-outside dismiss + Escape close.
   useEffect(() => {
     if (!open) return
     function onMouseDown(e: MouseEvent) {
@@ -148,7 +183,6 @@ function SearchableMultiSelect({
     }
   }, [open])
 
-  // Auto-focus the search input on open.
   useEffect(() => {
     if (open) inputRef.current?.focus()
   }, [open])
@@ -169,7 +203,7 @@ function SearchableMultiSelect({
 
   let triggerText: string
   if (selected.length === 0) {
-    triggerText = label
+    triggerText = `${label} · any`
   } else if (selected.length === 1) {
     const o = options.find((opt) => opt.value === selected[0])
     triggerText = `${label}: ${o?.label ?? selected[0]}`
@@ -183,12 +217,27 @@ function SearchableMultiSelect({
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border bg-transparent px-2 text-sm transition-colors hover:bg-muted/50"
         aria-haspopup="listbox"
         aria-expanded={open}
+        style={{
+          background: 'transparent',
+          border: '1px solid var(--color-geg-border-strong)',
+          color: 'var(--color-geg-text-2)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: 13,
+          padding: '8px 30px 8px 12px',
+          borderRadius: 6,
+          cursor: 'pointer',
+          backgroundImage:
+            "linear-gradient(45deg, transparent 50%, var(--color-geg-text-faint) 50%), linear-gradient(135deg, var(--color-geg-text-faint) 50%, transparent 50%)",
+          backgroundPosition:
+            'calc(100% - 14px) 50%, calc(100% - 9px) 50%',
+          backgroundSize: '5px 5px, 5px 5px',
+          backgroundRepeat: 'no-repeat',
+          outline: 'none',
+        }}
       >
         <span>{triggerText}</span>
-        <ChevronDownIcon className="h-3.5 w-3.5 opacity-60" />
       </button>
       {open ? (
         <div
