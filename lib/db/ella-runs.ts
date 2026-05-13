@@ -725,7 +725,19 @@ export async function getEllaRunsList(
     // the rows whose output_summary carried that placeholder don't
     // surface here at all. The Ella-spoke event is the linked
     // passive_substantive row with the real response text.
-    const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
+    // Suppress the `escalated via DM` status-string placeholder from
+    // output_text — when an escalation row has no body in
+    // webhook_deliveries (historical), the cell should render `—`
+    // muted (per spec). When it DOES have a body, escalation_body
+    // wins. Either way, the raw placeholder string never reaches the
+    // table.
+    const summaryTrimmed = r.output_summary?.trim() ?? ''
+    const isEscalationPlaceholder = ESCALATION_PLACEHOLDER_PATTERN.test(
+      summaryTrimmed,
+    )
+    const rawOutput = isEscalationPlaceholder
+      ? slackText?.trim() || null
+      : r.output_summary?.trim() || slackText?.trim() || null
     const output_text = rawOutput ? renderSlackText(rawOutput, mentionNameMap) : null
     const rawEscalationBody = escalationBodies.get(r.id) ?? null
     const escalation_body = rawEscalationBody

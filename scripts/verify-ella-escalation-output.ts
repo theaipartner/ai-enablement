@@ -77,22 +77,14 @@ async function main(): Promise<void> {
       return
     }
 
-    // Screenshot just the row.
+    // Screenshot just the row. Scroll into view first so the clip
+    // box lands inside the viewport.
     const targetRow = page.locator('table tbody tr').nth(targetIdx)
-    const rowBox = await targetRow.boundingBox()
-    if (rowBox) {
-      const rowPath = path.join(OUT_DIR, 'ella-escalation-output-row.png')
-      await page.screenshot({
-        path: rowPath,
-        clip: {
-          x: 0,
-          y: Math.max(0, rowBox.y - 4),
-          width: 1440,
-          height: rowBox.height + 8,
-        },
-      })
-      console.log(`[verify] wrote ${rowPath}`)
-    }
+    await targetRow.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(150)
+    const rowPath = path.join(OUT_DIR, 'ella-escalation-output-row.png')
+    await targetRow.screenshot({ path: rowPath })
+    console.log(`[verify] wrote ${rowPath}`)
 
     // Probe the row's Output text — distinguish fallback ("—") vs body.
     const outputText = await targetRow.evaluate((el) => {
