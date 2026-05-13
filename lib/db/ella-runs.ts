@@ -1,6 +1,10 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import {
+  collectMentionedUserIds,
+  renderMentions,
+} from '@/lib/slack/render-mentions'
 
 // Anomaly flag identifiers shared by the list filter + summary band + detail view.
 // Match the audit script's check IDs from scripts/audit_ella_interactions.py
@@ -69,12 +73,25 @@ export type EllaRunDetail = EllaRunsListRow & {
     sent_at: string
     is_trigger: boolean
   }>
-  // Haiku decision metadata for passive_monitor runs. Read from
-  // pending_ella_responses; falls back to trigger_metadata copies when
-  // no row exists in the queue (skip decisions never land in the table).
-  // Both null for reactive runs.
+  // Haiku decision metadata. Surfaced on every passive run shape:
+  //   - passive_monitor: forward lookup from pending_ella_responses by
+  //     agent_run_id, or trigger_metadata fallback for skip decisions.
+  //   - passive_substantive / passive_general_inquiry: REVERSE lookup
+  //     via trigger_metadata.pending_id → pending_ella_responses row.
+  // Reactive runs (slack_mention / bare_mention) get null here and the
+  // detail page renders synthetic content.
   haiku_decision: string | null
   haiku_reasoning: string | null
+  // For passive_substantive / passive_general_inquiry: the linked
+  // passive_monitor (Haiku decision) row's id + its cost / tokens.
+  // Lets the detail page sum Sonnet response cost with Haiku decision
+  // cost to show the "true total" for the user-visible event. Null
+  // for passive_monitor / reactive runs (which carry their own cost
+  // directly on the row).
+  haiku_agent_run_id: string | null
+  haiku_cost_usd: number | null
+  haiku_input_tokens: number | null
+  haiku_output_tokens: number | null
   escalation: {
     id: string
     reason: string
@@ -243,6 +260,38 @@ function extractAuthorName(
   const userId = extractAuthorSlackUserId(trigger_metadata)
   if (!userId) return null
   return userNameMap.get(userId) ?? null
+}
+
+// Generic Slack user ID → display name resolver. One batched lookup
+// against clients + team_members for a known set of IDs. Used by the
+// mention-rendering pipeline and the thread/surrounding-message
+// author-name resolution.
+async function buildUserNameMap(
+  supabase: ReturnType<typeof createAdminClient>,
+  userIds: Set<string>,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  if (userIds.size === 0) return map
+  const ids = Array.from(userIds)
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', ids)
+    .is('archived_at', null)
+  for (const c of clients ?? []) {
+    if (c.slack_user_id && c.full_name) map.set(c.slack_user_id, c.full_name)
+  }
+  const { data: tms } = await supabase
+    .from('team_members')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', ids)
+    .is('archived_at', null)
+  for (const t of tms ?? []) {
+    if (t.slack_user_id && t.full_name && !map.has(t.slack_user_id)) {
+      map.set(t.slack_user_id, t.full_name)
+    }
+  }
+  return map
 }
 
 async function fetchUserNameMap(
@@ -454,20 +503,38 @@ export async function getEllaRunsList(
   const { data: rawRuns } = await query.range(0, 1000)
   const allRuns = (rawRuns ?? []) as RawRunRow[]
 
-  // Response-scope filter: only runs where Ella actually attempted to
-  // speak. Excludes passive_monitor evaluations where Haiku decided to
-  // skip (Ella observed the message and chose silence — that's an
-  // observation, not a response). Applied unconditionally per Decision
-  // 1 of the list-polish spec: the page exists to show responses, not
-  // every observation.
+  // Response-scope filter: only runs where Ella actually spoke
+  // (or tried to). The Ella codebase writes TWO agent_runs per logical
+  // passive response — `passive_monitor` for the Haiku decision and
+  // `passive_substantive` (or `passive_general_inquiry`) for the
+  // Sonnet response. We want one row per user-visible event:
   //
-  // Reactive @-mention runs have no `haiku_decision` field in
-  // trigger_metadata (the IS NULL branch keeps them).
+  //   - Reactive @-mention runs (slack_mention / bare_mention).
+  //   - Passive Sonnet responses (passive_substantive).
+  //   - Passive canned-opener responses (passive_general_inquiry).
+  //   - Escalate-only passive runs (passive_monitor where Haiku decided
+  //     to fire a DM rather than respond) — they have no substantive
+  //     row to take their place, so the passive_monitor row is the
+  //     user-visible event.
+  //
+  // Everything else — skip-decision passive_monitor rows, the Haiku
+  // decision row for runs that produced a substantive response (whose
+  // user-visible event is the substantive row), etc. — is hidden.
+  const RESPONSE_TRIGGER_TYPES = new Set([
+    'slack_mention',
+    'bare_mention',
+    'app_mention', // legacy alias (some older rows used this)
+    'passive_substantive',
+    'passive_general_inquiry',
+  ])
   const runs = allRuns.filter((r) => {
     if (!['success', 'escalated', 'error'].includes(r.status)) return false
-    const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
-    if (haikuDecision === 'skip') return false
-    return true
+    if (RESPONSE_TRIGGER_TYPES.has(r.trigger_type)) return true
+    if (r.trigger_type === 'passive_monitor') {
+      const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      return haikuDecision === 'escalate'
+    }
+    return false
   })
 
   const channelMap = await fetchChannelMap(supabase)
@@ -480,42 +547,15 @@ export async function getEllaRunsList(
   const lengthOutliers = computeLengthOutliers(runs, responseTexts)
 
   // Build a Slack-mention name map across every row's output text so
-  // the "@U0XXXX" syntax in the Output column resolves to readable
-  // "@First Last" form. One batched lookup against clients +
+  // the <@U...> syntax in the Output column resolves to readable
+  // @First Last form. One batched lookup against clients +
   // team_members; resolved at the data layer so the table component
-  // stays dumb.
-  const mentionedUserIds = new Set<string>()
-  const mentionRegex = /<@(U[A-Z0-9]+)>/g
-  for (const r of runs) {
-    const text = (r.output_summary?.trim() || responseTexts.get(r.id) || '').toString()
-    if (!text) continue
-    let m: RegExpExecArray | null
-    while ((m = mentionRegex.exec(text)) !== null) {
-      mentionedUserIds.add(m[1])
-    }
-  }
-  const mentionNameMap = new Map<string, string>()
-  if (mentionedUserIds.size > 0) {
-    const ids = Array.from(mentionedUserIds)
-    const { data: mClients } = await supabase
-      .from('clients')
-      .select('slack_user_id, full_name')
-      .in('slack_user_id', ids)
-      .is('archived_at', null)
-    for (const c of mClients ?? []) {
-      if (c.slack_user_id && c.full_name) mentionNameMap.set(c.slack_user_id, c.full_name)
-    }
-    const { data: mTms } = await supabase
-      .from('team_members')
-      .select('slack_user_id, full_name')
-      .in('slack_user_id', ids)
-      .is('archived_at', null)
-    for (const t of mTms ?? []) {
-      if (t.slack_user_id && t.full_name && !mentionNameMap.has(t.slack_user_id)) {
-        mentionNameMap.set(t.slack_user_id, t.full_name)
-      }
-    }
-  }
+  // stays dumb. Helpers live in lib/slack/render-mentions.ts so the
+  // detail page can call the same transforms.
+  const mentionedUserIds = collectMentionedUserIds(
+    runs.map((r) => r.output_summary?.trim() || responseTexts.get(r.id) || ''),
+  )
+  const mentionNameMap = await buildUserNameMap(supabase, mentionedUserIds)
 
   // Project + filter (channel / role / anomaly filters happen in JS
   // since they touch joined data).
@@ -532,16 +572,16 @@ export async function getEllaRunsList(
     })
     // Output column source: prefer non-empty output_summary, fall back
     // to fetched slack_messages text, else null. Slack mentions
-    // (<@U...>) resolved to readable @First Last via the prebuilt name
-    // map; unresolvable IDs stay in raw <@U...> form (don't strip on
-    // miss — better to show the syntax than silently lose the mention).
+    // (<@U...>) resolved via the shared renderMentions helper.
+    //
+    // No special-case skip for `queued (...)` placeholder output_summary
+    // anymore — the trigger_type-based response-scope filter above
+    // hides every passive_monitor non-escalate row from the list, so
+    // the rows whose output_summary carried that placeholder don't
+    // surface here at all. The Ella-spoke event is the linked
+    // passive_substantive row with the real response text.
     const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
-    const output_text = rawOutput
-      ? rawOutput.replace(/<@(U[A-Z0-9]+)>/g, (full, uid) => {
-          const name = mentionNameMap.get(uid)
-          return name ? `@${name}` : full
-        })
-      : null
+    const output_text = rawOutput ? renderMentions(rawOutput, mentionNameMap) : null
 
     return {
       id: r.id,
@@ -606,6 +646,39 @@ export async function getEllaRunsList(
 // Empty result is a valid signal: render an empty-state stub upstream
 // rather than the dev-facing "synthetic test ts predating the backfill"
 // placeholder that the V1 path showed.
+// Slice an N-sized window centered on the trigger message inside an
+// ascending-by-sent_at array. Algorithm: find the trigger's index;
+// take ⌊(n-1)/2⌋ messages before + trigger + ⌈(n-1)/2⌉ messages after.
+// If the trigger is near the start or end of the array, the window
+// slides asymmetrically to fill — e.g. trigger at index 0 with n=5
+// becomes [trigger, +1, +2, +3, +4]. If the trigger isn't in the
+// array (defensive), returns the first n messages so something
+// reasonable renders (the trigger-inclusion guarantee elsewhere then
+// appends the trigger).
+function centerWindowAroundTrigger<T extends { slack_ts: string }>(
+  ordered: T[],
+  triggerTs: string | null,
+  n: number,
+): T[] {
+  if (ordered.length <= n) return ordered
+  if (!triggerTs) return ordered.slice(0, n)
+  const idx = ordered.findIndex((m) => m.slack_ts === triggerTs)
+  if (idx < 0) return ordered.slice(0, n)
+  const before = Math.floor((n - 1) / 2)
+  const after = n - 1 - before
+  let start = idx - before
+  let end = idx + after + 1
+  if (start < 0) {
+    end += -start
+    start = 0
+  }
+  if (end > ordered.length) {
+    start = Math.max(0, start - (end - ordered.length))
+    end = ordered.length
+  }
+  return ordered.slice(start, end)
+}
+
 async function fetchLastNChannelMessages(
   supabase: ReturnType<typeof createAdminClient>,
   channelId: string,
@@ -697,8 +770,17 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     text: string
     sent_at: string
   }
+  // Surrounding-messages slot always renders 5 messages (or fewer if
+  // the channel/thread has less) centered on the trigger. The trigger
+  // itself must always appear in the array; if it's not in
+  // slack_messages (edge case: synthetic test ts or pre-backfill data),
+  // we synthesize a row from the run's own metadata so the section
+  // doesn't render a confusingly-unanchored window.
   let rawMsgs: RawMsg[] = []
   if (ch && thread_ts) {
+    // Reactive path: pull the thread, then center the 5-window on the
+    // trigger. Fetch limit(20) so we have enough headroom to slice
+    // even for long threads; the visible 5 are picked in-JS.
     const { data: msgs } = await supabase
       .from('slack_messages')
       .select('slack_ts, slack_thread_ts, slack_user_id, author_type, text, sent_at')
@@ -706,8 +788,12 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       .or(`slack_thread_ts.eq.${thread_ts},slack_ts.eq.${thread_ts}`)
       .order('sent_at', { ascending: true })
       .limit(20)
-    rawMsgs = (msgs ?? []) as RawMsg[]
+    const all = (msgs ?? []) as RawMsg[]
+    rawMsgs = centerWindowAroundTrigger(all, trigger_ts, 5)
   } else if (ch) {
+    // Passive path: 4 preceding + the trigger itself, ordered ascending.
+    // fetchLastNChannelMessages anchors on the trigger's sent_at; the
+    // trigger row falls in if it exists in slack_messages.
     rawMsgs = await fetchLastNChannelMessages(
       supabase,
       ch,
@@ -715,6 +801,29 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       r.started_at,
       5,
     )
+  }
+
+  // Trigger-inclusion guarantee: if the fetched array doesn't contain
+  // the trigger (slack_messages didn't have it because realtime ingest
+  // hadn't landed yet, or the ts is synthetic), synthesize a row from
+  // the run's own data and append. The section's contract is "at least
+  // the trigger appears."
+  if (
+    ch &&
+    trigger_ts &&
+    !rawMsgs.some((m) => m.slack_ts === trigger_ts)
+  ) {
+    rawMsgs = [
+      ...rawMsgs,
+      {
+        slack_ts: trigger_ts,
+        slack_user_id: extractAuthorSlackUserId(r.trigger_metadata) ?? '',
+        author_type: extractTriggerField(r.trigger_metadata, 'author_type') ?? 'unknown',
+        text:
+          r.input_summary ?? '(triggering message not in slack_messages)',
+        sent_at: r.started_at,
+      },
+    ]
   }
 
   let threadMessages: EllaRunDetail['thread_messages'] = []
@@ -755,11 +864,32 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     }))
   }
 
-  // Haiku decision lookup for passive_monitor runs. Read pending_ella_responses
-  // by agent_run_id; fall back to trigger_metadata copies when no row
-  // exists (skip decisions never land in the queue per the schema doc).
+  // Haiku decision lookup. Three sources depending on trigger_type:
+  //
+  //   - passive_monitor: forward lookup — the passive_monitor run IS
+  //     the Haiku decision run. pending_ella_responses keyed on its id.
+  //     Trigger-metadata fallback covers skip decisions (which never
+  //     land in pending_ella_responses).
+  //
+  //   - passive_substantive / passive_general_inquiry: REVERSE lookup —
+  //     the Haiku decision lives on a SEPARATE passive_monitor run.
+  //     Path: trigger_metadata.pending_id → pending_ella_responses row
+  //     → that row's haiku_decision + haiku_reasoning. If pending_id is
+  //     null (legacy data), we just don't surface a decision.
+  //
+  //   - Reactive runs (slack_mention / bare_mention): no Haiku step
+  //     happened. Detail page renders synthetic content.
+  //
+  // We also forward the linked passive_monitor run's cost + tokens so
+  // the detail page can display "true total cost" for substantive runs
+  // (Sonnet response + Haiku decision summed).
   let haiku_decision: string | null = null
   let haiku_reasoning: string | null = null
+  let haiku_cost_usd: number | null = null
+  let haiku_input_tokens: number | null = null
+  let haiku_output_tokens: number | null = null
+  let haiku_agent_run_id: string | null = null
+
   if (r.trigger_type === 'passive_monitor') {
     const { data: pendingRow } = await supabase
       .from('pending_ella_responses')
@@ -773,11 +903,62 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       haiku_decision = typed.haiku_decision ?? null
       haiku_reasoning = typed.haiku_reasoning ?? null
     } else {
-      // Fallback path: passive_dispatch writes the decision into
-      // trigger_metadata at decision time; for skip decisions (which
-      // never land in pending_ella_responses) this is the only record.
       haiku_decision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
       haiku_reasoning = extractTriggerField(r.trigger_metadata, 'haiku_reasoning')
+    }
+  } else if (
+    r.trigger_type === 'passive_substantive' ||
+    r.trigger_type === 'passive_general_inquiry'
+  ) {
+    const pending_id = extractTriggerField(r.trigger_metadata, 'pending_id')
+    if (pending_id) {
+      const { data: pendingRow } = await supabase
+        .from('pending_ella_responses')
+        .select('haiku_decision, haiku_reasoning, agent_run_id')
+        .eq('id', pending_id)
+        .maybeSingle()
+      const typed = pendingRow as
+        | {
+            haiku_decision?: string | null
+            haiku_reasoning?: string | null
+            agent_run_id?: string | null
+          }
+        | null
+      if (typed) {
+        haiku_decision = typed.haiku_decision ?? null
+        haiku_reasoning = typed.haiku_reasoning ?? null
+        haiku_agent_run_id = typed.agent_run_id ?? null
+      }
+      // Forward the linked passive_monitor row's cost + tokens so the
+      // detail page can sum the Sonnet response cost with the Haiku
+      // decision cost for the "true total" display.
+      if (haiku_agent_run_id) {
+        const { data: haikuRow } = await supabase
+          .from('agent_runs')
+          .select('llm_cost_usd, llm_input_tokens, llm_output_tokens')
+          .eq('id', haiku_agent_run_id)
+          .maybeSingle()
+        const typedHaiku = haikuRow as
+          | {
+              llm_cost_usd?: number | string | null
+              llm_input_tokens?: number | null
+              llm_output_tokens?: number | null
+            }
+          | null
+        if (typedHaiku) {
+          // llm_cost_usd is a numeric column; Supabase may return it as
+          // string. Coerce defensively.
+          const rawCost = typedHaiku.llm_cost_usd
+          haiku_cost_usd =
+            rawCost == null
+              ? null
+              : typeof rawCost === 'string'
+              ? Number(rawCost)
+              : rawCost
+          haiku_input_tokens = typedHaiku.llm_input_tokens ?? null
+          haiku_output_tokens = typedHaiku.llm_output_tokens ?? null
+        }
+      }
     }
   }
 
@@ -814,6 +995,37 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     lengthOutlierIds: lengthOutliers,
   })
 
+  // Build a Slack-mention name map across every text field that will be
+  // surfaced on the detail page (triggering message, Ella's response,
+  // surrounding messages). One batched lookup against clients +
+  // team_members so the page receives mention-resolved text and stays
+  // dumb.
+  const detailMentionedIds = collectMentionedUserIds([
+    r.input_summary,
+    r.output_summary,
+    slackText,
+    ...threadMessages.map((m) => m.text),
+    haiku_reasoning,
+  ])
+  const detailMentionMap = await buildUserNameMap(supabase, detailMentionedIds)
+
+  const inputSummaryRendered = r.input_summary
+    ? renderMentions(r.input_summary, detailMentionMap)
+    : null
+  const outputSummaryRendered = r.output_summary
+    ? renderMentions(r.output_summary, detailMentionMap)
+    : null
+  const slackTextRendered = slackText
+    ? renderMentions(slackText, detailMentionMap)
+    : null
+  const haikuReasoningRendered = haiku_reasoning
+    ? renderMentions(haiku_reasoning, detailMentionMap)
+    : null
+  threadMessages = threadMessages.map((m) => ({
+    ...m,
+    text: renderMentions(m.text, detailMentionMap),
+  }))
+
   return {
     id: r.id,
     started_at: r.started_at,
@@ -824,16 +1036,14 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     channel_client_name: channelInfo?.client_name ?? null,
     real_author_role: extractAuthorRole(r.trigger_metadata),
     real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
-    input_summary: r.input_summary,
-    // The list-page output_text field is mention-resolved + falls back
-    // to slack_response_text. Detail page doesn't render it directly
-    // (it has its own "Ella's response" section that splits client-
-    // facing from handoff), but EllaRunDetail extends EllaRunsListRow
-    // so this field must be populated. Apply the same precedence + the
-    // detail-page mention-name map would be a nice-to-have but isn't
-    // needed today — the detail page reads slack_response_text raw.
-    output_text: r.output_summary?.trim() || slackText?.trim() || null,
-    output_summary: r.output_summary,
+    // input_summary + output_summary + output_text + slack_response_text
+    // surface mention-rendered text. Detail page receives readable
+    // <@First Last> in place of <@U...> for every field that ends up
+    // on screen.
+    input_summary: inputSummaryRendered,
+    output_text:
+      outputSummaryRendered?.trim() || slackTextRendered?.trim() || null,
+    output_summary: outputSummaryRendered,
     error_message: r.error_message,
     trigger_ts,
     thread_ts,
@@ -844,11 +1054,15 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     llm_cost_usd: r.llm_cost_usd,
     duration_ms: r.duration_ms,
     anomaly_flags: flags,
-    slack_response_text: slackText,
+    slack_response_text: slackTextRendered,
     has_escalation: escalationIds.has(r.id),
     thread_messages: threadMessages,
     haiku_decision,
-    haiku_reasoning,
+    haiku_reasoning: haikuReasoningRendered,
+    haiku_agent_run_id,
+    haiku_cost_usd,
+    haiku_input_tokens,
+    haiku_output_tokens,
     escalation,
   }
 }
@@ -882,18 +1096,37 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
   const todayMs = todayStart.getTime()
   const weekMs = weekStart.getTime()
 
-  // Response-scope predicate (matches getEllaRunsList's filter):
-  // status IN (success/escalated/error) AND haiku_decision != 'skip'.
-  // Skip-scope is the inverse — passive_monitor runs where Haiku
-  // decided to stay silent.
+  // Response-scope predicate (mirrors getEllaRunsList's filter): one
+  // row per user-visible "Ella spoke" event. Includes reactive
+  // @-mention paths, passive Sonnet responses, passive canned
+  // openers, and escalate-only passive_monitor rows (which have no
+  // substantive row to take their place). Excludes every other
+  // passive_monitor row (skip decisions and substantive-decision rows
+  // whose linked substantive row IS in scope).
+  const RESPONSE_TRIGGER_TYPES = new Set([
+    'slack_mention',
+    'bare_mention',
+    'app_mention',
+    'passive_substantive',
+    'passive_general_inquiry',
+  ])
   const isResponseScope = (r: RawRunRow): boolean => {
     if (!['success', 'escalated', 'error'].includes(r.status)) return false
-    const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
-    if (haikuDecision === 'skip') return false
-    return true
+    if (RESPONSE_TRIGGER_TYPES.has(r.trigger_type)) return true
+    if (r.trigger_type === 'passive_monitor') {
+      const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      return haikuDecision === 'escalate'
+    }
+    return false
   }
+  // Skip-scope retained for telemetry parity even though the Cost-card
+  // hint that surfaced it is reverted per Decision 2. Field stays on
+  // EllaSummaryStats; downstream callers can render it if needed.
   const isSkipScope = (r: RawRunRow): boolean => {
-    return extractTriggerField(r.trigger_metadata, 'haiku_decision') === 'skip'
+    return (
+      r.trigger_type === 'passive_monitor' &&
+      extractTriggerField(r.trigger_metadata, 'haiku_decision') === 'skip'
+    )
   }
 
   const responseRuns = runs.filter(isResponseScope)
