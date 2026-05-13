@@ -310,13 +310,17 @@
   border-bottom: 1px solid var(--color-geg-border-strong) !important;
 }
 [data-theme="gregory-editorial"] tbody tr {
-  /* Row divider contrast. 0.14 (--color-geg-border-strong) reads too
-     subtle on the warm-dark theme; bumped to ~0.28 via a direct rgba
-     so the table reads as a table at a glance. Doesn't touch
-     --color-geg-border-strong because that token is consumed by
-     non-table chrome (HeaderBand hairline, MetaRowSection borders)
-     where 0.14 is the correct contrast. */
-  border-top: 1px solid rgba(245, 244, 239, 0.28) !important;
+  /* Row divider contrast. Iterated:
+       0.08 (--color-geg-border) → invisible on warm-dark
+       0.14 (--color-geg-border-strong) → still too subtle
+       0.28 → visible to Builder via screenshot but Drake still
+              reports "no lines"
+       0.45 → current. A noticeable line at standard viewing
+              distance without becoming a heavy ruling.
+     Token --color-geg-border-strong stays at 0.14 for non-table
+     chrome (HeaderBand hairlines, MetaRowSection borders) where
+     0.14 is the correct contrast. */
+  border-top: 1px solid rgba(245, 244, 239, 0.45) !important;
 }
 [data-theme="gregory-editorial"] tbody tr:hover {
   background-color: rgba(245, 244, 239, 0.025) !important;

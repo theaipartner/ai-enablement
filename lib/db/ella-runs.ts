@@ -288,6 +288,15 @@ function extractAuthorName(
 // against clients + team_members for a known set of IDs. Used by the
 // mention-rendering pipeline and the thread/surrounding-message
 // author-name resolution.
+//
+// Also resolves Ella's own slack_user_id to the literal name "Ella".
+// Ella lives outside clients + team_members (her identity comes from
+// SLACK_USER_TOKEN at the Python side via shared.slack_identity), so
+// without this branch every mention TO Ella and every message FROM
+// Ella renders her bare user_id. Source of truth: any slack_messages
+// row with author_type='ella' carries her slack_user_id. We query for
+// the first such row and stamp 'Ella' for that ID in the map. One
+// extra DB call per request; cheap.
 async function buildUserNameMap(
   supabase: ReturnType<typeof createAdminClient>,
   userIds: Set<string>,
@@ -311,6 +320,20 @@ async function buildUserNameMap(
   for (const t of tms ?? []) {
     if (t.slack_user_id && t.full_name && !map.has(t.slack_user_id)) {
       map.set(t.slack_user_id, t.full_name)
+    }
+  }
+  // Ella backfill — only worth doing if her ID is in the request's
+  // user-id set AND nothing else resolved her already.
+  const unresolvedIds = ids.filter((id) => !map.has(id))
+  if (unresolvedIds.length > 0) {
+    const { data: ellaRows } = await supabase
+      .from('slack_messages')
+      .select('slack_user_id')
+      .eq('author_type', 'ella')
+      .in('slack_user_id', unresolvedIds)
+      .limit(1)
+    for (const row of ellaRows ?? []) {
+      if (row.slack_user_id) map.set(row.slack_user_id, 'Ella')
     }
   }
   return map
@@ -850,30 +873,12 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
 
   let threadMessages: EllaRunDetail['thread_messages'] = []
   if (rawMsgs.length > 0) {
-    const userIds = Array.from(
-      new Set(rawMsgs.map((m) => m.slack_user_id).filter((x): x is string => !!x)),
+    const userIds = new Set(
+      rawMsgs.map((m) => m.slack_user_id).filter((x): x is string => !!x),
     )
-    const nameMap = new Map<string, string>()
-    if (userIds.length) {
-      const { data: clients } = await supabase
-        .from('clients')
-        .select('slack_user_id, full_name')
-        .in('slack_user_id', userIds)
-        .is('archived_at', null)
-      for (const c of clients ?? []) {
-        if (c.slack_user_id) nameMap.set(c.slack_user_id, c.full_name)
-      }
-      const { data: tms } = await supabase
-        .from('team_members')
-        .select('slack_user_id, full_name')
-        .in('slack_user_id', userIds)
-        .is('archived_at', null)
-      for (const t of tms ?? []) {
-        if (t.slack_user_id && !nameMap.has(t.slack_user_id)) {
-          nameMap.set(t.slack_user_id, t.full_name)
-        }
-      }
-    }
+    // Route through buildUserNameMap so Ella's slack_user_id resolves
+    // to "Ella" (her identity lives outside clients + team_members).
+    const nameMap = await buildUserNameMap(supabase, userIds)
 
     threadMessages = rawMsgs.map((m) => ({
       slack_ts: m.slack_ts,
