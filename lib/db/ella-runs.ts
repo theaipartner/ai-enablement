@@ -71,9 +71,9 @@ export type EllaRunDetail = EllaRunsListRow & {
   thread_ts: string | null
   trigger_metadata: Record<string, unknown>
   llm_model: string | null
-  // Single "surrounding messages" slot covering both reactive (in-thread)
-  // and passive (last-N-in-channel) runs — Part 2 collapses the two
-  // formerly-distinct rendering paths into one shape.
+  // Single "surrounding messages" slot — last 5 channel messages
+  // anchored on the trigger ts, used uniformly across reactive and
+  // passive trigger types.
   thread_messages: Array<{
     slack_ts: string
     slack_user_id: string
@@ -691,39 +691,6 @@ export async function getEllaRunsList(
 // Empty result is a valid signal: render an empty-state stub upstream
 // rather than the dev-facing "synthetic test ts predating the backfill"
 // placeholder that the V1 path showed.
-// Slice an N-sized window centered on the trigger message inside an
-// ascending-by-sent_at array. Algorithm: find the trigger's index;
-// take ⌊(n-1)/2⌋ messages before + trigger + ⌈(n-1)/2⌉ messages after.
-// If the trigger is near the start or end of the array, the window
-// slides asymmetrically to fill — e.g. trigger at index 0 with n=5
-// becomes [trigger, +1, +2, +3, +4]. If the trigger isn't in the
-// array (defensive), returns the first n messages so something
-// reasonable renders (the trigger-inclusion guarantee elsewhere then
-// appends the trigger).
-function centerWindowAroundTrigger<T extends { slack_ts: string }>(
-  ordered: T[],
-  triggerTs: string | null,
-  n: number,
-): T[] {
-  if (ordered.length <= n) return ordered
-  if (!triggerTs) return ordered.slice(0, n)
-  const idx = ordered.findIndex((m) => m.slack_ts === triggerTs)
-  if (idx < 0) return ordered.slice(0, n)
-  const before = Math.floor((n - 1) / 2)
-  const after = n - 1 - before
-  let start = idx - before
-  let end = idx + after + 1
-  if (start < 0) {
-    end += -start
-    start = 0
-  }
-  if (end > ordered.length) {
-    start = Math.max(0, start - (end - ordered.length))
-    end = ordered.length
-  }
-  return ordered.slice(start, end)
-}
-
 async function fetchLastNChannelMessages(
   supabase: ReturnType<typeof createAdminClient>,
   channelId: string,
@@ -796,18 +763,13 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     extractTriggerField(r.trigger_metadata, 'triggering_message_ts')
   const thread_ts = extractTriggerField(r.trigger_metadata, 'thread_ts')
 
-  // Surrounding messages — dual-mode per Part 2 spec § Decision 10.
-  //
-  //   Reactive runs (thread_ts present) → existing thread query, last
-  //     ~20 messages in the thread. Identical to V1 behavior.
-  //
-  //   Passive runs (thread_ts null) → fetchLastNChannelMessages, last 5
-  //     in the channel up to and including the trigger ts. Replaces the
-  //     V1 placeholder copy ("Likely a synthetic test ts predating the
-  //     backfill...") which was wrong for passive runs.
-  //
-  // Both paths converge on the same shape so the detail page renders
-  // them through one component.
+  // Surrounding messages — unified to last 5 channel messages anchored
+  // on the trigger ts (or the run's started_at when the trigger isn't
+  // in slack_messages). Replaces the prior reactive/passive split: the
+  // reactive thread-window query reliably returned only the trigger for
+  // thin or race-conditioned threads, leaving the section feeling empty.
+  // Last-5-channel always fills the slot and matches the user-facing
+  // semantics of "surrounding messages."
   type RawMsg = {
     slack_ts: string
     slack_user_id: string
@@ -815,30 +777,8 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     text: string
     sent_at: string
   }
-  // Surrounding-messages slot always renders 5 messages (or fewer if
-  // the channel/thread has less) centered on the trigger. The trigger
-  // itself must always appear in the array; if it's not in
-  // slack_messages (edge case: synthetic test ts or pre-backfill data),
-  // we synthesize a row from the run's own metadata so the section
-  // doesn't render a confusingly-unanchored window.
   let rawMsgs: RawMsg[] = []
-  if (ch && thread_ts) {
-    // Reactive path: pull the thread, then center the 5-window on the
-    // trigger. Fetch limit(20) so we have enough headroom to slice
-    // even for long threads; the visible 5 are picked in-JS.
-    const { data: msgs } = await supabase
-      .from('slack_messages')
-      .select('slack_ts, slack_thread_ts, slack_user_id, author_type, text, sent_at')
-      .eq('slack_channel_id', ch)
-      .or(`slack_thread_ts.eq.${thread_ts},slack_ts.eq.${thread_ts}`)
-      .order('sent_at', { ascending: true })
-      .limit(20)
-    const all = (msgs ?? []) as RawMsg[]
-    rawMsgs = centerWindowAroundTrigger(all, trigger_ts, 5)
-  } else if (ch) {
-    // Passive path: 4 preceding + the trigger itself, ordered ascending.
-    // fetchLastNChannelMessages anchors on the trigger's sent_at; the
-    // trigger row falls in if it exists in slack_messages.
+  if (ch) {
     rawMsgs = await fetchLastNChannelMessages(
       supabase,
       ch,
