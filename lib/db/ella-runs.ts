@@ -35,6 +35,12 @@ export type EllaRunsListRow = {
   real_author_role: string | null
   real_author_name: string | null
   input_summary: string | null
+  // List-page "Output" column source. Prefer non-empty output_summary
+  // from agent_runs; fall back to the matching slack_messages text via
+  // fetchSlackResponseTexts; null if neither available. Slack <@U...>
+  // mentions resolved to readable @First Last form before this lands
+  // here — table renders dumb.
+  output_text: string | null
   llm_input_tokens: number | null
   llm_output_tokens: number | null
   llm_cost_usd: number | null
@@ -82,13 +88,24 @@ export type EllaRunDetail = EllaRunsListRow & {
 }
 
 export type EllaSummaryStats = {
+  // Response-scope counts: runs where Ella attempted to send a message
+  // (status IN success/escalated/error AND haiku_decision != 'skip').
+  // Passive-monitor skip-decision rows count as observations, not
+  // responses — they're excluded here.
   total_today: number
   total_week: number
   total_month: number
   status_counts: Record<string, number>
+  // Response-scope cost totals.
   cost_today: number
   cost_week: number
   cost_month: number
+  // Out-of-scope cost: today's spend on Haiku-decided skip evaluations.
+  // Surfaced separately on the Cost card so the response-scope total
+  // stays the headline figure.
+  skip_cost_today: number
+  // status='error' counts within the response-scope window. error is
+  // always in-scope; this is shorthand for "Ella tried and failed."
   errors_today: number
   errors_week: number
   errors_month: number
@@ -435,7 +452,23 @@ export async function getEllaRunsList(
   // Pull enough rows for outlier computation across the window even
   // though we paginate at the end.
   const { data: rawRuns } = await query.range(0, 1000)
-  const runs = (rawRuns ?? []) as RawRunRow[]
+  const allRuns = (rawRuns ?? []) as RawRunRow[]
+
+  // Response-scope filter: only runs where Ella actually attempted to
+  // speak. Excludes passive_monitor evaluations where Haiku decided to
+  // skip (Ella observed the message and chose silence — that's an
+  // observation, not a response). Applied unconditionally per Decision
+  // 1 of the list-polish spec: the page exists to show responses, not
+  // every observation.
+  //
+  // Reactive @-mention runs have no `haiku_decision` field in
+  // trigger_metadata (the IS NULL branch keeps them).
+  const runs = allRuns.filter((r) => {
+    if (!['success', 'escalated', 'error'].includes(r.status)) return false
+    const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+    if (haikuDecision === 'skip') return false
+    return true
+  })
 
   const channelMap = await fetchChannelMap(supabase)
   const userNameMap = await fetchUserNameMap(supabase, runs)
@@ -445,6 +478,44 @@ export async function getEllaRunsList(
     runs.map((r) => r.id),
   )
   const lengthOutliers = computeLengthOutliers(runs, responseTexts)
+
+  // Build a Slack-mention name map across every row's output text so
+  // the "@U0XXXX" syntax in the Output column resolves to readable
+  // "@First Last" form. One batched lookup against clients +
+  // team_members; resolved at the data layer so the table component
+  // stays dumb.
+  const mentionedUserIds = new Set<string>()
+  const mentionRegex = /<@(U[A-Z0-9]+)>/g
+  for (const r of runs) {
+    const text = (r.output_summary?.trim() || responseTexts.get(r.id) || '').toString()
+    if (!text) continue
+    let m: RegExpExecArray | null
+    while ((m = mentionRegex.exec(text)) !== null) {
+      mentionedUserIds.add(m[1])
+    }
+  }
+  const mentionNameMap = new Map<string, string>()
+  if (mentionedUserIds.size > 0) {
+    const ids = Array.from(mentionedUserIds)
+    const { data: mClients } = await supabase
+      .from('clients')
+      .select('slack_user_id, full_name')
+      .in('slack_user_id', ids)
+      .is('archived_at', null)
+    for (const c of mClients ?? []) {
+      if (c.slack_user_id && c.full_name) mentionNameMap.set(c.slack_user_id, c.full_name)
+    }
+    const { data: mTms } = await supabase
+      .from('team_members')
+      .select('slack_user_id, full_name')
+      .in('slack_user_id', ids)
+      .is('archived_at', null)
+    for (const t of mTms ?? []) {
+      if (t.slack_user_id && t.full_name && !mentionNameMap.has(t.slack_user_id)) {
+        mentionNameMap.set(t.slack_user_id, t.full_name)
+      }
+    }
+  }
 
   // Project + filter (channel / role / anomaly filters happen in JS
   // since they touch joined data).
@@ -459,6 +530,19 @@ export async function getEllaRunsList(
       hasEscalation: escalationIds.has(r.id),
       lengthOutlierIds: lengthOutliers,
     })
+    // Output column source: prefer non-empty output_summary, fall back
+    // to fetched slack_messages text, else null. Slack mentions
+    // (<@U...>) resolved to readable @First Last via the prebuilt name
+    // map; unresolvable IDs stay in raw <@U...> form (don't strip on
+    // miss — better to show the syntax than silently lose the mention).
+    const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
+    const output_text = rawOutput
+      ? rawOutput.replace(/<@(U[A-Z0-9]+)>/g, (full, uid) => {
+          const name = mentionNameMap.get(uid)
+          return name ? `@${name}` : full
+        })
+      : null
+
     return {
       id: r.id,
       started_at: r.started_at,
@@ -470,6 +554,7 @@ export async function getEllaRunsList(
       real_author_role: extractAuthorRole(r.trigger_metadata),
       real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
       input_summary: r.input_summary,
+      output_text,
       llm_input_tokens: r.llm_input_tokens,
       llm_output_tokens: r.llm_output_tokens,
       llm_cost_usd: r.llm_cost_usd,
@@ -740,6 +825,14 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     real_author_role: extractAuthorRole(r.trigger_metadata),
     real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
     input_summary: r.input_summary,
+    // The list-page output_text field is mention-resolved + falls back
+    // to slack_response_text. Detail page doesn't render it directly
+    // (it has its own "Ella's response" section that splits client-
+    // facing from handoff), but EllaRunDetail extends EllaRunsListRow
+    // so this field must be populated. Apply the same precedence + the
+    // detail-page mention-name map would be a nice-to-have but isn't
+    // needed today — the detail page reads slack_response_text raw.
+    output_text: r.output_summary?.trim() || slackText?.trim() || null,
     output_summary: r.output_summary,
     error_message: r.error_message,
     trigger_ts,
@@ -788,24 +881,54 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
 
   const todayMs = todayStart.getTime()
   const weekMs = weekStart.getTime()
-  const total_today = runs.filter((r) => new Date(r.started_at).getTime() >= todayMs).length
-  const total_week = runs.filter((r) => new Date(r.started_at).getTime() >= weekMs).length
-  const total_month = runs.length
+
+  // Response-scope predicate (matches getEllaRunsList's filter):
+  // status IN (success/escalated/error) AND haiku_decision != 'skip'.
+  // Skip-scope is the inverse — passive_monitor runs where Haiku
+  // decided to stay silent.
+  const isResponseScope = (r: RawRunRow): boolean => {
+    if (!['success', 'escalated', 'error'].includes(r.status)) return false
+    const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+    if (haikuDecision === 'skip') return false
+    return true
+  }
+  const isSkipScope = (r: RawRunRow): boolean => {
+    return extractTriggerField(r.trigger_metadata, 'haiku_decision') === 'skip'
+  }
+
+  const responseRuns = runs.filter(isResponseScope)
+  const skipRuns = runs.filter(isSkipScope)
+
+  // total_* + cost_* + errors_* all reflect response scope. The Surface
+  // band's headline is "what did Ella actually do" — observation noise
+  // doesn't belong in the count or the cost figure.
+  const total_today = responseRuns.filter((r) => new Date(r.started_at).getTime() >= todayMs).length
+  const total_week = responseRuns.filter((r) => new Date(r.started_at).getTime() >= weekMs).length
+  const total_month = responseRuns.length
 
   const status_counts: Record<string, number> = {}
-  for (const r of runs) status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
+  for (const r of responseRuns) status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
 
-  const cost_today = runs
+  const cost_today = responseRuns
     .filter((r) => new Date(r.started_at).getTime() >= todayMs)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-  const cost_week = runs
+  const cost_week = responseRuns
     .filter((r) => new Date(r.started_at).getTime() >= weekMs)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-  const cost_month = runs.reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+  const cost_month = responseRuns.reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
 
-  // status='error' counts per window. Pure projection over the existing
-  // monthRuns query — no extra DB roundtrip.
-  const errorsRuns = runs.filter((r) => r.status === 'error')
+  // Skip-cost broken out separately on the Cost card hint line so the
+  // headline figure stays response-scope while the observation-cost is
+  // still visible. Only the today figure is broken out.
+  const skip_cost_today = skipRuns
+    .filter((r) => new Date(r.started_at).getTime() >= todayMs)
+    .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+
+  // status='error' counts per window. status='error' is in response
+  // scope by definition (Ella tried and failed); skip rows have
+  // status='success' not 'error', so a plain filter against responseRuns
+  // is correct.
+  const errorsRuns = responseRuns.filter((r) => r.status === 'error')
   const errors_today = errorsRuns.filter(
     (r) => new Date(r.started_at).getTime() >= todayMs,
   ).length
@@ -836,6 +959,7 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
     cost_today,
     cost_week,
     cost_month,
+    skip_cost_today,
     errors_today,
     errors_week,
     errors_month,
