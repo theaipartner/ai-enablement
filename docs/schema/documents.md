@@ -15,9 +15,9 @@ The retrieval-friendly layer of the knowledge base. Raw sources (Drive files, ca
 | `external_id` | `text` | Source-system id for re-sync. Null for manually authored |
 | `title` | `text` | Not null |
 | `content` | `text` | Not null. Full text |
-| `document_type` | `text` | Not null. `course_lesson`, `faq`, `sop`, `methodology`, `onboarding`, `call_summary` |
+| `document_type` | `text` | Not null. `course_lesson`, `faq`, `sop`, `methodology`, `onboarding`, `call_summary`, `call_review` |
 | `tags` | `text[]` | Ad-hoc labels (`module_1`, `sales`, `onboarding`, ...). GIN-indexed |
-| `metadata` | `jsonb` | Source-specific. For `call_summary` rows: `metadata.client_id` identifies the client |
+| `metadata` | `jsonb` | Source-specific. For `call_summary` rows: `metadata.client_id` identifies the client. For `call_review` rows: also carries `sentiment_tier` (`green` \| `yellow` \| `red`, optional — written by the Haiku-backed classifier in `agents/call_reviewer/sentiment_classifier.py`; display-only, never load-bearing). |
 | `is_active` | `boolean` | Default `true`. Soft archive for retrieval |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
