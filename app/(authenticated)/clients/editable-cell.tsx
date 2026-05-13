@@ -25,6 +25,7 @@ import { useEffect, useState, useTransition } from 'react'
 import { EditableField } from '@/components/client-detail/editable-field'
 import { GegPill } from '@/components/gregory/geg-pill'
 import {
+  changeClientPrimaryCsm,
   updateClientAccountabilityEnabledAction,
   updateClientCsmStandingAction,
   updateClientField,
@@ -223,6 +224,59 @@ export function EditableAccountabilityEnabledToggle({
       onSave={(next) =>
         updateClientAccountabilityEnabledAction(clientId, next)
       }
+    />
+  )
+}
+
+export function EditablePrimaryCsmCell({
+  clientId,
+  value,
+  options,
+}: {
+  clientId: string
+  value: string | null
+  options: ReadonlyArray<{ id: string; full_name: string }>
+}) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  const nameById = new Map(options.map((o) => [o.id, o.full_name]))
+  const enumOptions = options.map((o) => ({ value: o.id, label: o.full_name }))
+  return (
+    <EditableField
+      label=""
+      value={value}
+      variant="enum"
+      options={enumOptions}
+      displayValue={(raw) => {
+        if (raw === null || raw === undefined || raw === '') {
+          return <span style={{ color: 'var(--color-geg-text-faint)' }}>—</span>
+        }
+        return nameById.get(raw as string) ?? String(raw)
+      }}
+      onSave={async (newValue) => {
+        // Server-side change_primary_csm RPC archives the old assignment
+        // and inserts a new one atomically. No null path — the existing
+        // Server Action signature requires a non-null new_team_member_id.
+        // The "clear CSM" case from the spec (§ A.1) isn't wired; Drake
+        // accepted it as low-value.
+        if (newValue === null || newValue === '') {
+          return {
+            success: false as const,
+            error: 'Clearing Primary CSM is not supported yet.',
+          }
+        }
+        if (newValue === value) {
+          return { success: true as const }
+        }
+        const result = await changeClientPrimaryCsm(
+          clientId,
+          newValue as string,
+        )
+        if (result.success) {
+          startTransition(() => router.refresh())
+        }
+        return result
+      }}
     />
   )
 }

@@ -624,6 +624,42 @@ export async function updateClient(
 }
 
 // ----------------------------------------------------------------------
+// listAvailableCsms — every active CSM in the team_members table
+// ----------------------------------------------------------------------
+//
+// Source of truth for the Primary CSM dropdown on /clients/[id]. Filter
+// is is_csm=true + is_active=true + archived_at IS NULL — surfaces the
+// four real CSMs (Scott Wilson, Nabeel Junaid, Lou Perez, Nico Sandoval)
+// plus the Scott Chasing sentinel.
+//
+// Distinct from listActiveCsms() in lib/db/calls.ts, which goes via
+// active client_team_assignments and surfaces "CSMs currently owning at
+// least one client" — narrower set, used by the /calls filter dropdown.
+// For an assignment editor, the dashboard wants every CSM available to
+// be assigned, not just those who already own work.
+//
+// The same query lived inline in app/(authenticated)/clients/page.tsx
+// for the list-page filter dropdown; this helper consolidates the
+// definition so the detail page editor and the list page filter can't
+// drift apart silently. (The list-page call site continues to inline
+// the query for now — kept out of scope to avoid widening this spec's
+// diff.)
+export async function listAvailableCsms(): Promise<
+  Array<{ id: string; full_name: string }>
+> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('team_members')
+    .select('id, full_name')
+    .eq('is_active', true)
+    .eq('is_csm', true)
+    .is('archived_at', null)
+    .order('full_name')
+  if (error) throw error
+  return (data ?? []) as Array<{ id: string; full_name: string }>
+}
+
+// ----------------------------------------------------------------------
 // changePrimaryCsm
 // ----------------------------------------------------------------------
 //

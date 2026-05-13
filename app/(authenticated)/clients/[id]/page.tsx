@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getClientById, type ClientDetail } from '@/lib/db/clients'
+import { getClientById, listAvailableCsms, type ClientDetail } from '@/lib/db/clients'
 import { GegPill } from '@/components/gregory/geg-pill'
 import {
   CsmStandingPill,
@@ -12,6 +12,7 @@ import {
   EditableCsmStandingCell,
   EditableJourneyStageCell,
   EditableNpsEnabledToggle,
+  EditablePrimaryCsmCell,
   EditableStatusCell,
   EditableTrustpilotCell,
 } from '../editable-cell'
@@ -134,7 +135,10 @@ export default async function ClientDetailPage({
 }: {
   params: { id: string }
 }) {
-  const client = await getClientById(params.id)
+  const [client, csmOptions] = await Promise.all([
+    getClientById(params.id),
+    listAvailableCsms(),
+  ])
   if (!client) notFound()
 
   const concerns = readConcerns(client)
@@ -259,12 +263,16 @@ export default async function ClientDetailPage({
                   mono
                 />
               ) : null}
-              {client.active_primary_csm ? (
-                <DataRow
-                  k="Primary CSM"
-                  v={client.active_primary_csm.team_member_name}
-                />
-              ) : null}
+              <DataRow
+                k="Primary CSM"
+                v={
+                  <EditablePrimaryCsmCell
+                    clientId={client.id}
+                    value={client.active_primary_csm?.team_member_id ?? null}
+                    options={csmOptions}
+                  />
+                }
+              />
             </div>
           </div>
 
