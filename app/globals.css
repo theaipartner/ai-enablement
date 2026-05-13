@@ -313,14 +313,13 @@
   /* Row divider contrast. Iterated:
        0.08 (--color-geg-border) → invisible on warm-dark
        0.14 (--color-geg-border-strong) → still too subtle
-       0.28 → visible to Builder via screenshot but Drake still
-              reports "no lines"
-       0.45 → current. A noticeable line at standard viewing
-              distance without becoming a heavy ruling.
+       0.28 → still subtle
+       0.45 → screenshot-visible but Drake reported "no lines"
+       1.0  → current. Solid cream-white per "white lines" ask.
      Token --color-geg-border-strong stays at 0.14 for non-table
      chrome (HeaderBand hairlines, MetaRowSection borders) where
      0.14 is the correct contrast. */
-  border-top: 1px solid rgba(245, 244, 239, 0.45) !important;
+  border-top: 1px solid var(--color-geg-text) !important;
 }
 [data-theme="gregory-editorial"] tbody tr:hover {
   background-color: rgba(245, 244, 239, 0.025) !important;
