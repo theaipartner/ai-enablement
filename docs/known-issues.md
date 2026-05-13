@@ -48,6 +48,13 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 
 ---
 
+## `getClientsList` open_action_items_count column has the same broken predicate
+
+- **What:** `lib/db/clients.ts:183` embeds `call_action_items!call_action_items_owner_client_id_fkey(...)` in the list-page select. That FK relation only matches action items where the *client* is the assigned doer (`owner_client_id = clients.id`). Items owned by CSMs (most action items extracted from coaching calls) get dropped — same logical bug the 2026-05-13 detail-page fix (`gregory-action-items-transfer-fix`) addressed via a `calls!inner(primary_client_id)` JOIN. As a result, the `OPEN AI` column in the Clients table consistently under-counts open items per client.
+- **Why it matters:** CSMs use the list count to triage. Under-counts mean clients with open work appear to have none, hiding urgency. The detail-page fix restored visibility there; the list-page count still lies until this is fixed.
+- **Next action:** rewrite the list query's action-items embed to use a `calls!inner(primary_client_id)`-style JOIN instead of the FK-on-owner_client_id relation, OR drop the embed and compute the count via a separate aggregated query keyed on the client's call IDs. Likely 5-10 line change in `getClientsList`. Spec-grade once Drake decides it's worth the cycle.
+- **Logged:** 2026-05-13.
+
 ## Ella audit dashboard (`/ella/runs`) — 5 follow-up fixes flagged during validation
 
 - **What:** Drake validated the Batch 2.2 audit dashboard in production on 2026-05-11 and flagged five distinct items requiring follow-up fixes. The specific items were not enumerated in the chat session; they'll be captured here when Drake re-engages with the dashboard and writes them up. Five issues total — each gets either its own followup line below this entry, or a single bundled spec, depending on whether they cluster.
