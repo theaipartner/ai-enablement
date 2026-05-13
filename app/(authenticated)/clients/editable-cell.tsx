@@ -14,14 +14,22 @@
 // are mutually exclusive on the same cell. The other five cells in the
 // row (full_name, primary_csm_name, nps_standing, latest_health_score,
 // meetings_this_month) handle navigation.
+//
+// Boolean toggles (nps_enabled / accountability_enabled) are NOT wrapped
+// in EditableField — click-to-flip doesn't fit EditableField's
+// click→enter-edit-mode→blur-to-save state machine. They use a small
+// dedicated <PillToggle> with optimistic state + revert-on-failure.
 
 import { useRouter } from 'next/navigation'
-import { useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { EditableField } from '@/components/client-detail/editable-field'
+import { GegPill } from '@/components/gregory/geg-pill'
 import {
+  updateClientAccountabilityEnabledAction,
   updateClientCsmStandingAction,
   updateClientField,
   updateClientJourneyStageAction,
+  updateClientNpsEnabledAction,
   updateClientStatusAction,
 } from './[id]/actions'
 import {
@@ -123,6 +131,98 @@ export function EditableCsmStandingCell({
         }
         return result
       }}
+    />
+  )
+}
+
+// Shared pill-toggle base. Optimistic flip on click, revert on failure.
+// Disabled while a save is in flight to swallow rapid double-clicks.
+function PillToggle({
+  value,
+  onSave,
+}: {
+  value: boolean
+  onSave: (
+    next: boolean,
+  ) => Promise<{ success: true } | { success: false; error: string }>
+}) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  const [optimistic, setOptimistic] = useState(value)
+  const [saving, setSaving] = useState(false)
+
+  // Resync to parent value after server-side revalidate completes.
+  useEffect(() => {
+    if (!saving) setOptimistic(value)
+  }, [value, saving])
+
+  async function handleClick() {
+    if (saving) return
+    const next = !optimistic
+    setOptimistic(next)
+    setSaving(true)
+    const result = await onSave(next)
+    if (result.success) {
+      startTransition(() => router.refresh())
+    } else {
+      setOptimistic(!next)
+    }
+    setSaving(false)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={saving}
+      title="Click to toggle"
+      className="geg-pill-toggle"
+      style={{
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        cursor: saving ? 'progress' : 'pointer',
+        opacity: saving ? 0.6 : 1,
+        font: 'inherit',
+        color: 'inherit',
+      }}
+    >
+      <GegPill
+        tier={optimistic ? 'pos' : 'muted'}
+        label={optimistic ? 'On' : 'Off'}
+      />
+    </button>
+  )
+}
+
+export function EditableNpsEnabledToggle({
+  clientId,
+  value,
+}: {
+  clientId: string
+  value: boolean
+}) {
+  return (
+    <PillToggle
+      value={value}
+      onSave={(next) => updateClientNpsEnabledAction(clientId, next)}
+    />
+  )
+}
+
+export function EditableAccountabilityEnabledToggle({
+  clientId,
+  value,
+}: {
+  clientId: string
+  value: boolean
+}) {
+  return (
+    <PillToggle
+      value={value}
+      onSave={(next) =>
+        updateClientAccountabilityEnabledAction(clientId, next)
+      }
     />
   )
 }

@@ -8,8 +8,10 @@ import {
   StatusPill,
 } from '../pills'
 import {
+  EditableAccountabilityEnabledToggle,
   EditableCsmStandingCell,
   EditableJourneyStageCell,
+  EditableNpsEnabledToggle,
   EditableStatusCell,
   EditableTrustpilotCell,
 } from '../editable-cell'
@@ -321,18 +323,18 @@ export default async function ClientDetailPage({
               <EditRow
                 k="NPS enabled"
                 v={
-                  <GegPill
-                    tier={client.nps_enabled ? 'pos' : 'muted'}
-                    label={client.nps_enabled ? 'On' : 'Off'}
+                  <EditableNpsEnabledToggle
+                    clientId={client.id}
+                    value={client.nps_enabled}
                   />
                 }
               />
               <EditRow
                 k="Accountability"
                 v={
-                  <GegPill
-                    tier={client.accountability_enabled ? 'pos' : 'muted'}
-                    label={client.accountability_enabled ? 'On' : 'Off'}
+                  <EditableAccountabilityEnabledToggle
+                    clientId={client.id}
+                    value={client.accountability_enabled}
                   />
                 }
               />

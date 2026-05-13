@@ -286,6 +286,42 @@ export async function updateClientCsmStandingAction(
 }
 
 // ----------------------------------------------------------------------
+// Operational toggles — nps_enabled / accountability_enabled
+// ----------------------------------------------------------------------
+//
+// Thin dedicated wrappers over updateClient for the two M5.6 boolean
+// columns surfaced as click-to-flip pills on /clients/[id]. No history
+// row needed (operational toggles, not customer data); cascade-owned
+// for negative-status transitions but freely flippable from the
+// dashboard.
+
+export async function updateClientNpsEnabledAction(
+  client_id: string,
+  enabled: boolean,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const result = await updateClient(client_id, { nps_enabled: enabled })
+  if (result.success) {
+    revalidatePath(`/clients/${client_id}`)
+    revalidatePath('/clients')
+  }
+  return result
+}
+
+export async function updateClientAccountabilityEnabledAction(
+  client_id: string,
+  enabled: boolean,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const result = await updateClient(client_id, {
+    accountability_enabled: enabled,
+  })
+  if (result.success) {
+    revalidatePath(`/clients/${client_id}`)
+    revalidatePath('/clients')
+  }
+  return result
+}
+
+// ----------------------------------------------------------------------
 // addNpsScoreAction — Section 2 "Add NPS score" inline form
 // ----------------------------------------------------------------------
 export async function addNpsScoreAction(
