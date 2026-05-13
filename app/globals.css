@@ -310,7 +310,13 @@
   border-bottom: 1px solid var(--color-geg-border-strong) !important;
 }
 [data-theme="gregory-editorial"] tbody tr {
-  border-top: 1px solid var(--color-geg-border-strong) !important;
+  /* Row divider contrast. 0.14 (--color-geg-border-strong) reads too
+     subtle on the warm-dark theme; bumped to ~0.28 via a direct rgba
+     so the table reads as a table at a glance. Doesn't touch
+     --color-geg-border-strong because that token is consumed by
+     non-table chrome (HeaderBand hairline, MetaRowSection borders)
+     where 0.14 is the correct contrast. */
+  border-top: 1px solid rgba(245, 244, 239, 0.28) !important;
 }
 [data-theme="gregory-editorial"] tbody tr:hover {
   background-color: rgba(245, 244, 239, 0.025) !important;

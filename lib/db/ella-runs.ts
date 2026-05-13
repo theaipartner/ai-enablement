@@ -5,6 +5,16 @@ import {
   collectMentionedUserIds,
   renderMentions,
 } from '@/lib/slack/render-mentions'
+import { renderEmojis } from '@/lib/slack/render-emojis'
+
+// Apply both transforms to a single text field. Mentions resolved
+// first (since the mention helper takes a name map), then emoji
+// shortcodes. Order doesn't matter for correctness — they target
+// disjoint syntax — but keeping it consistent across call sites makes
+// the rendering pipeline obvious.
+function renderSlackText(text: string, mentionMap: Map<string, string>): string {
+  return renderEmojis(renderMentions(text, mentionMap))
+}
 
 // Anomaly flag identifiers shared by the list filter + summary band + detail view.
 // Match the audit script's check IDs from scripts/audit_ella_interactions.py
@@ -197,9 +207,21 @@ function extractTriggerField(
 function extractChannelId(
   trigger_metadata: Record<string, unknown> | null,
 ): string | null {
+  // Three trigger_metadata shapes use three different keys:
+  //   - reactive (slack_mention / bare_mention)         → `channel`
+  //   - passive decision (passive_monitor)              → `triggering_slack_channel_id`
+  //   - passive response (passive_substantive /
+  //     passive_general_inquiry) — written by
+  //     respond_to_passive_trigger + handle_passive_general_inquiry → `slack_channel_id`
+  //
+  // The third key was the source of the "surrounding messages shows
+  // only the trigger" bug — extractChannelId returned null for
+  // substantive / general_inquiry rows, so the surrounding-messages
+  // query was short-circuited and thread_messages came back empty.
   return (
     extractTriggerField(trigger_metadata, 'channel') ??
-    extractTriggerField(trigger_metadata, 'triggering_slack_channel_id')
+    extractTriggerField(trigger_metadata, 'triggering_slack_channel_id') ??
+    extractTriggerField(trigger_metadata, 'slack_channel_id')
   )
 }
 
@@ -581,7 +603,7 @@ export async function getEllaRunsList(
     // surface here at all. The Ella-spoke event is the linked
     // passive_substantive row with the real response text.
     const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
-    const output_text = rawOutput ? renderMentions(rawOutput, mentionNameMap) : null
+    const output_text = rawOutput ? renderSlackText(rawOutput, mentionNameMap) : null
 
     return {
       id: r.id,
@@ -1010,20 +1032,20 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
   const detailMentionMap = await buildUserNameMap(supabase, detailMentionedIds)
 
   const inputSummaryRendered = r.input_summary
-    ? renderMentions(r.input_summary, detailMentionMap)
+    ? renderSlackText(r.input_summary, detailMentionMap)
     : null
   const outputSummaryRendered = r.output_summary
-    ? renderMentions(r.output_summary, detailMentionMap)
+    ? renderSlackText(r.output_summary, detailMentionMap)
     : null
   const slackTextRendered = slackText
-    ? renderMentions(slackText, detailMentionMap)
+    ? renderSlackText(slackText, detailMentionMap)
     : null
   const haikuReasoningRendered = haiku_reasoning
-    ? renderMentions(haiku_reasoning, detailMentionMap)
+    ? renderSlackText(haiku_reasoning, detailMentionMap)
     : null
   threadMessages = threadMessages.map((m) => ({
     ...m,
-    text: renderMentions(m.text, detailMentionMap),
+    text: renderSlackText(m.text, detailMentionMap),
   }))
 
   return {
