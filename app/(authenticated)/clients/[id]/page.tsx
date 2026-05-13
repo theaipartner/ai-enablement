@@ -270,6 +270,7 @@ export default async function ClientDetailPage({
                     clientId={client.id}
                     value={client.active_primary_csm?.team_member_id ?? null}
                     options={csmOptions}
+                    compact
                   />
                 }
               />
