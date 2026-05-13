@@ -180,6 +180,33 @@ Build a per-client context vault: credentials, brand assets, hosting info, domai
 
 ---
 
+## Newer ideas (post-redesign, Gregory side)
+
+Three ideas Drake surfaced during the day-end-wrap conversation 2026-05-14. Each is a Gregory-side feature, not part of the existing Batch A-E themes. Land as their own specs when Drake's perceived priority pulls them forward (current ordering in `CLAUDE.md § Next Session Priorities` items 2-4, after Send-to-Slack production cutover).
+
+### Gregory CSM utilization audit
+
+- **What:** a routine that audits whether CSMs are actually using Gregory — logging into the dashboard, editing action items, marking journey stages, sending Slack messages from the Action items box, completing items via the checkbox flow. Surface for Nabeel/Drake to see which CSMs lean on Gregory vs. ignore it. Could be a dashboard view, a weekly Slack digest, or both. Format and scope deferred.
+- **Why deferred:** post-2026-05-14 day-end-wrap idea. Needs a scoping conversation: which actions count as "using"? What's the comparison baseline (per-CSM, per-week, per-client load-adjusted)? Where does the audit live — a `/admin/utilization` page, a cron-scheduled Slack post, or both? Drake names the priority order before Builder drafts.
+- **Revisit trigger:** when Drake decides CSM-by-CSM adoption visibility is the next thing he wants — either because a specific CSM is suspected of under-using Gregory, or because a leadership conversation surfaces the question.
+- **Logged:** 2026-05-14.
+
+### Teams page (calendar-based meeting tracker)
+
+- **What:** a meeting-tracker view for CSMs backed by Google Calendar. V1 permission model: each CSM sees only their own meetings; Nabeel sees all team members'. Surfaces cadence (how often each CSM meets each client), late-flag candidates (clients with no recent meeting), and end-of-week aggregate views. Builds toward CSM cadence tracking + a late-flag workflow that bridges into the existing accountability surface.
+- **Why deferred:** depends on Google Calendar API auth setup per CSM (each CSM authorizes Gregory to read their calendar). Permission scoping is the load-bearing architectural piece — who can see what across the team boundary needs explicit design before any code. Overlaps with the existing carried "Meeting tracking" priority (`CLAUDE.md § Next Session Priorities` item 6); the two may fuse into one spec when scoping happens.
+- **Revisit trigger:** when Drake wants a dashboard-side view of CSM cadence rather than the current Slack-post-only surface (the daily 7am EST accountability cron + per-call CS Slack summary). Most likely pulled forward by a Nabeel ask for visibility into meeting frequency.
+- **Logged:** 2026-05-14.
+
+### Admin cost hub
+
+- **What:** admin-only dashboard view showing costs across the tools Gregory + the agency use — Anthropic API spend (already trackable via `agent_runs.llm_cost_usd`), Supabase database + storage, Vercel hosting + cron + function invocations, Slack (if usage-billed in our tier), maybe OpenAI embeddings, Fathom subscription, ElevenLabs voice if applicable. Surface for Nabeel to spot cost-reduction opportunities. Likely starts with Anthropic + Supabase (both have queryable APIs + we already store per-run cost) and grows tool-by-tool as integration cost is justified.
+- **Why deferred:** post-2026-05-14 day-end-wrap idea. Each external API integration has its own auth + rate-limit + data-shape work. Anthropic + Supabase are cheap firsts because we already have the data (Anthropic) or direct admin access (Supabase project settings). Vercel cost data lives in their billing dashboard — may or may not have an API. Scoping starts with "which providers are queryable" before the dashboard exists.
+- **Revisit trigger:** when Nabeel asks for total monthly cost or when a specific bill spike prompts a "where is this coming from?" question that needs a real surface, not a one-off SQL query.
+- **Logged:** 2026-05-14.
+
+---
+
 ## Tooling / Infrastructure (Director's working layer)
 
 Items here aren't Gregory features. They're improvements to the operational layer Director uses day-to-day. Distinct from the agency-product batches above.
