@@ -5,28 +5,26 @@ import { DiagnosticsCollapse } from '@/components/gregory/diagnostics-collapse'
 import { EmptyStateAwareSection } from '@/components/gregory/empty-state-aware-section'
 import { RolePill, RunStatusPill } from '../pills'
 
-// Part 2 redesign:
-// - HeaderBand replaces the hand-rolled header. backlink slot replaces
-//   the standalone "← BACK TO ELLA RUNS" link. Title is derived from
-//   run shape (verb + responder + #channel). Pills slot carries status
-//   + trigger-type. Actions slot carries cost · tokens · duration.
-// - Meta-row below the HeaderBand carries channel / responder / started /
-//   model — a single labeled row of contextual chrome, not a full Section.
-// - The V1 standalone "Run header" Section is gone; its content was
-//   either promoted into the HeaderBand or moved to the meta-row.
-// - "Surrounding thread context" Section renamed → "Surrounding messages"
-//   and rendered for BOTH reactive runs (thread query) and passive runs
-//   (last-5-in-channel query). The V1 dev-facing "synthetic test ts
-//   predating the backfill" placeholder is gone.
-// - "Triggering message" Section (formerly "Input") keeps its zinc-50
-//   box and footer; just renamed.
-// - New "What Haiku decided" Section, conditional on
-//   trigger_type='passive_monitor'. Reads haiku_decision + haiku_reasoning
-//   from getEllaRunDetail's new fields.
-// - "Trigger metadata" is now inside DiagnosticsCollapse (collapsed by
-//   default for everyone per Part 1 Decision 5).
+// Part 2 detail-and-cleanup redesign:
+// - Section order: Context → Triggering message → Ella's response →
+//   Surrounding messages → Haiku decision → Escalation → Diagnostics.
+//   Workflow order beats audit order; this matches the conventions doc.
+// - Haiku decision section ALWAYS renders. Reactive @-mentions get
+//   synthetic content ("Responded — direct mention" / "Direct @-mention
+//   from {name}") because the @-mention itself is the reason. Passive
+//   runs surface the real Haiku data (forward lookup on passive_monitor
+//   rows; reverse lookup via trigger_metadata.pending_id on
+//   passive_substantive / _general_inquiry rows — both handled in
+//   getEllaRunDetail).
+// - Surrounding messages ALWAYS includes the trigger (data layer
+//   guarantees this even when the trigger isn't in slack_messages).
+//   No empty-state.
+// - Cost display: for passive_substantive / _general_inquiry rows the
+//   user-visible cost is the SUM of the Sonnet response (the row
+//   itself) and the linked Haiku decision (forwarded from the data
+//   layer). Diagnostics shows the breakdown.
 
-function fmtCost(c: number | null): string {
+function fmtCost(c: number | null | undefined): string {
   if (c == null) return '—'
   return `$${c.toFixed(4)}`
 }
@@ -64,18 +62,16 @@ function KeyValue({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-// Trigger-type display label. Reactive @-mentions read as "@-mention";
-// passive_monitor reads as "passive monitor". Anything else (bare_mention,
-// legacy values) falls through unchanged.
+// Trigger-type display label.
 function triggerTypeDisplay(triggerType: string): string {
   if (triggerType === 'slack_mention' || triggerType === 'app_mention') return '@-mention'
   if (triggerType === 'bare_mention') return 'bare @-mention'
   if (triggerType === 'passive_monitor') return 'passive monitor'
+  if (triggerType === 'passive_substantive') return 'passive response'
+  if (triggerType === 'passive_general_inquiry') return 'passive opener'
   return triggerType.replace(/_/g, ' ')
 }
 
-// Decision label for the "What Haiku decided" section. Maps the raw
-// enum to the human-readable phrasing the spec specified.
 function haikuDecisionDisplay(decision: string | null): string {
   if (!decision) return '—'
   switch (decision) {
@@ -92,11 +88,31 @@ function haikuDecisionDisplay(decision: string | null): string {
   }
 }
 
-// Derive a human-readable detail-page title from run shape:
-//   Responded to {name} in #{channel}     (success, default)
-//   Skipped {name} in #{channel}          (status='skipped' or haiku skip)
-//   Escalated {name} in #{channel}        (status='escalated' or haiku escalate)
-//   Errored on {name} in #{channel}       (status='error')
+// Reactive @-mention shapes don't have a Haiku step — the user's
+// direct mention IS the reason Ella spoke. Synthesize a Decision +
+// Reasoning so the Haiku section can render consistently across both
+// trigger paths.
+function REACTIVE_TRIGGER_TYPES(): ReadonlySet<string> {
+  return new Set(['slack_mention', 'bare_mention', 'app_mention'])
+}
+
+function isReactiveTrigger(triggerType: string): boolean {
+  return REACTIVE_TRIGGER_TYPES().has(triggerType)
+}
+
+function syntheticReactiveHaiku(run: EllaRunDetail): {
+  decision: string
+  reasoning: string
+} {
+  const responder = run.real_author_name ?? run.real_author_role
+  return {
+    decision: 'Responded — direct mention',
+    reasoning: responder
+      ? `Direct @-mention from ${responder}`
+      : 'Direct @-mention',
+  }
+}
+
 function deriveTitle(run: EllaRunDetail): string {
   const channelLabel = run.channel_name ? `#${run.channel_name}` : '#unknown'
   const responder = run.real_author_name ?? run.real_author_role ?? 'unresolved'
@@ -107,10 +123,59 @@ function deriveTitle(run: EllaRunDetail): string {
   } else if (run.status === 'skipped' || run.haiku_decision === 'skip') {
     verb = 'Skipped'
   }
-  // Use the same preposition for "Errored on" vs "Responded to / Skipped /
-  // Escalated"; reads naturally across all four shapes.
-  if (verb === 'Errored on') return `${verb} ${responder} in ${channelLabel}`
   return `${verb} ${responder} in ${channelLabel}`
+}
+
+// User-visible cost / tokens / model for the run header. For passive
+// Sonnet response runs (passive_substantive) and passive general-
+// inquiry runs, we sum the row's own cost with the linked Haiku
+// decision row's cost so the headline figure reflects the "true total"
+// for the user-visible event. Reactive and passive_monitor rows fall
+// through with their own row data.
+function rollupCost(run: EllaRunDetail): {
+  total_cost: number | null
+  total_input_tokens: number | null
+  total_output_tokens: number | null
+  // Original row figures stay available for the Diagnostics breakdown.
+  response_cost: number | null
+  response_input_tokens: number | null
+  response_output_tokens: number | null
+  haiku_cost: number | null
+  haiku_input_tokens: number | null
+  haiku_output_tokens: number | null
+} {
+  const responseCost = run.llm_cost_usd ?? null
+  const responseIn = run.llm_input_tokens ?? null
+  const responseOut = run.llm_output_tokens ?? null
+  const haikuCost = run.haiku_cost_usd ?? null
+  const haikuIn = run.haiku_input_tokens ?? null
+  const haikuOut = run.haiku_output_tokens ?? null
+
+  // No linked Haiku row → totals match the response row.
+  if (haikuCost == null && haikuIn == null && haikuOut == null) {
+    return {
+      total_cost: responseCost,
+      total_input_tokens: responseIn,
+      total_output_tokens: responseOut,
+      response_cost: responseCost,
+      response_input_tokens: responseIn,
+      response_output_tokens: responseOut,
+      haiku_cost: null,
+      haiku_input_tokens: null,
+      haiku_output_tokens: null,
+    }
+  }
+  return {
+    total_cost: (responseCost ?? 0) + (haikuCost ?? 0),
+    total_input_tokens: (responseIn ?? 0) + (haikuIn ?? 0),
+    total_output_tokens: (responseOut ?? 0) + (haikuOut ?? 0),
+    response_cost: responseCost,
+    response_input_tokens: responseIn,
+    response_output_tokens: responseOut,
+    haiku_cost: haikuCost,
+    haiku_input_tokens: haikuIn,
+    haiku_output_tokens: haikuOut,
+  }
 }
 
 export default async function EllaRunDetailPage({
@@ -121,8 +186,8 @@ export default async function EllaRunDetailPage({
   const run = await getEllaRunDetail(params.id)
   if (!run) notFound()
 
-  // For Slack response detection: split into client-facing + handoff
-  // if the marker is present (mirroring the Batch 1.5 detector).
+  // Slack response detection: split client-facing + handoff if the
+  // marker is present (mirroring the Batch 1.5 detector).
   const fullResponse = run.slack_response_text
   let clientFacing: string | null = null
   let handoff: string | null = null
@@ -134,7 +199,8 @@ export default async function EllaRunDetailPage({
     clientFacing = fullResponse
   }
 
-  const isPassive = run.trigger_type === 'passive_monitor'
+  const reactive = isReactiveTrigger(run.trigger_type)
+  const cost = rollupCost(run)
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 px-8 py-8">
@@ -155,14 +221,12 @@ export default async function EllaRunDetailPage({
         }
         actions={
           <span className="font-mono text-xs text-muted-foreground">
-            {fmtCost(run.llm_cost_usd)} · {fmtTokens(run.llm_input_tokens, run.llm_output_tokens)} · {run.duration_ms ?? '—'} ms
+            {fmtCost(cost.total_cost)} · {fmtTokens(cost.total_input_tokens, cost.total_output_tokens)} · {run.duration_ms ?? '—'} ms
           </span>
         }
       />
 
-      {/* Meta-row: single Section with the run's context that isn't
-          identity (already in the HeaderBand) but reads as essential
-          chrome below the title. */}
+      {/* Context — a single labeled row of contextual chrome below the title. */}
       <MetaRowSection title="Context">
         <KeyValue
           label="Channel"
@@ -201,6 +265,8 @@ export default async function EllaRunDetailPage({
         <KeyValue label="Model" value={run.llm_model ?? '—'} />
       </MetaRowSection>
 
+      {/* Section order: Triggering message → Ella's response →
+          Surrounding messages → Haiku decision. Workflow order. */}
       <MetaRowSection title="Triggering message">
         <div className="space-y-2 text-sm">
           <div className="rounded bg-zinc-50 p-3">
@@ -215,8 +281,6 @@ export default async function EllaRunDetailPage({
           </div>
         </div>
       </MetaRowSection>
-
-      <SurroundingMessagesSection run={run} />
 
       <MetaRowSection title="Ella's response">
         {clientFacing == null && run.output_summary == null ? (
@@ -269,11 +333,9 @@ export default async function EllaRunDetailPage({
         ) : null}
       </MetaRowSection>
 
-      {/* Haiku-decision section — hidden entirely for reactive runs (no
-          Haiku step happened). For passive runs without recorded
-          decision data (skip decisions never land in pending_ella_responses,
-          and a corrupted run might lack metadata too), render a stub. */}
-      <HaikuDecisionSection run={run} isPassive={isPassive} />
+      <SurroundingMessagesSection run={run} />
+
+      <HaikuDecisionSection run={run} reactive={reactive} />
 
       {run.escalation ? (
         <MetaRowSection title="Escalation">
@@ -310,6 +372,43 @@ export default async function EllaRunDetailPage({
       ) : null}
 
       <DiagnosticsCollapse>
+        {cost.haiku_cost != null ||
+        cost.haiku_input_tokens != null ||
+        cost.haiku_output_tokens != null ? (
+          <div className="mb-4">
+            <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+              Cost breakdown (response = Sonnet · decision = Haiku)
+            </div>
+            <div className="grid grid-cols-[200px_1fr] gap-2 text-xs font-mono">
+              <div className="text-muted-foreground">Sonnet response</div>
+              <div>
+                {fmtCost(cost.response_cost)} ·{' '}
+                {fmtTokens(cost.response_input_tokens, cost.response_output_tokens)}
+              </div>
+              <div className="text-muted-foreground">Haiku decision</div>
+              <div>
+                {fmtCost(cost.haiku_cost)} ·{' '}
+                {fmtTokens(cost.haiku_input_tokens, cost.haiku_output_tokens)}
+                {run.haiku_agent_run_id ? (
+                  <>
+                    {' '}
+                    <span className="text-muted-foreground">
+                      (run {run.haiku_agent_run_id})
+                    </span>
+                  </>
+                ) : null}
+              </div>
+              <div className="text-muted-foreground">Total</div>
+              <div>
+                {fmtCost(cost.total_cost)} ·{' '}
+                {fmtTokens(cost.total_input_tokens, cost.total_output_tokens)}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+          Trigger metadata
+        </div>
         <pre className="overflow-x-auto rounded bg-zinc-50 p-3 font-mono text-xs">
           {JSON.stringify(run.trigger_metadata, null, 2)}
         </pre>
@@ -318,11 +417,10 @@ export default async function EllaRunDetailPage({
   )
 }
 
-// Renders the "Surrounding messages" section. Dual-mode: thread (for
-// reactive runs with thread_ts) or last-N-in-channel (for passive runs).
-// Both render through the same body code; only the data fetch differs
-// (handled upstream in getEllaRunDetail).
 function SurroundingMessagesSection({ run }: { run: EllaRunDetail }) {
+  // Data layer guarantees thread_messages has at least the trigger;
+  // no empty-state path. If the array is somehow empty (degenerate
+  // case — channel and trigger_ts both unresolvable), render a stub.
   if (run.thread_messages.length === 0) {
     return (
       <EmptyStateAwareSection
@@ -377,21 +475,34 @@ function SurroundingMessagesSection({ run }: { run: EllaRunDetail }) {
 
 function HaikuDecisionSection({
   run,
-  isPassive,
+  reactive,
 }: {
   run: EllaRunDetail
-  isPassive: boolean
+  reactive: boolean
 }) {
-  if (!isPassive) {
-    // Reactive runs never went through Haiku — hide the section entirely
-    // per Part 1 § Empty-state rules (mode='hide').
+  // Reactive @-mention shapes: render synthetic content so the section
+  // appears consistently across all runs. The mention itself is the
+  // reason Ella spoke; we say that explicitly.
+  if (reactive) {
+    const synthetic = syntheticReactiveHaiku(run)
     return (
-      <EmptyStateAwareSection
-        title="What Haiku decided"
-        mode="hide"
-      />
+      <MetaRowSection title="What Haiku decided">
+        <KeyValue
+          label="Decision"
+          value={<span className="font-medium">{synthetic.decision}</span>}
+        />
+        <KeyValue
+          label="Reasoning"
+          value={
+            <div className="whitespace-pre-wrap text-sm">{synthetic.reasoning}</div>
+          }
+        />
+      </MetaRowSection>
     )
   }
+  // Passive shapes — real data via forward lookup (passive_monitor) or
+  // reverse lookup (passive_substantive / passive_general_inquiry) in
+  // getEllaRunDetail. Empty = data-quality issue; render a stub.
   if (!run.haiku_decision && !run.haiku_reasoning) {
     return (
       <EmptyStateAwareSection

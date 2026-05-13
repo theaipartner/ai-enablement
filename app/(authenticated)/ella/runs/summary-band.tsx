@@ -30,7 +30,7 @@ export function EllaRunsSummaryBand({ stats }: { stats: EllaSummaryStats }) {
       <Stat
         label="Cost"
         value={fmtCost(stats.cost_today)}
-        hint={`${fmtCost(stats.cost_week)} this week · ${fmtCost(stats.cost_month)} this month · ${fmtCost(stats.skip_cost_today)} skip cost today`}
+        hint={`${fmtCost(stats.cost_week)} this week · ${fmtCost(stats.cost_month)} this month`}
       />
       <Stat
         label="Errors"
