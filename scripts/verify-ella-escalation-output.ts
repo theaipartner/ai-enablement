@@ -44,66 +44,42 @@ async function main(): Promise<void> {
     await page.waitForSelector('table tbody tr', { timeout: 30_000 })
 
     const fullPath = path.join(OUT_DIR, 'ella-escalation-output-full.png')
-    await page.screenshot({ path: fullPath, fullPage: false })
+    await page.screenshot({ path: fullPath, fullPage: true })
     console.log(`[verify] wrote ${fullPath}`)
 
-    // Walk rows; first whose Status pill contains "escalated" is the
-    // target. The Status column index in EllaRunsTable is the cell
-    // immediately before the Output cell.
     const rowsCount = await page.locator('table tbody tr').count()
     console.log(`[verify] /ella/runs: ${rowsCount} rows`)
 
-    let targetIdx = -1
-    for (let i = 0; i < Math.min(50, rowsCount); i++) {
-      const row = page.locator('table tbody tr').nth(i)
-      const statusText = await row.evaluate((el) => {
-        // Read each cell's text; find one with "escalated" (case-insensitive).
-        const cells = Array.from(el.querySelectorAll('td'))
-        return cells.map((c) => (c.textContent ?? '').trim()).join(' | ')
-      })
-      if (/escalated/i.test(statusText)) {
-        targetIdx = i
-        console.log(
-          `[verify] escalation row at index ${i}: ${statusText.slice(0, 200)}`,
-        )
-        break
-      }
-    }
-
-    if (targetIdx === -1) {
-      console.log(
-        '[verify] no escalation rows visible on /ella/runs — fallback / body cannot be demonstrated in this preview',
-      )
-      return
-    }
-
-    // Screenshot just the row. Scroll into view first so the clip
-    // box lands inside the viewport.
-    const targetRow = page.locator('table tbody tr').nth(targetIdx)
-    await targetRow.scrollIntoViewIfNeeded()
-    await page.waitForTimeout(150)
-    const rowPath = path.join(OUT_DIR, 'ella-escalation-output-row.png')
-    await targetRow.screenshot({ path: rowPath })
-    console.log(`[verify] wrote ${rowPath}`)
-
-    // Probe the row's Output text — distinguish fallback ("—") vs body.
-    const outputText = await targetRow.evaluate((el) => {
-      const cells = Array.from(el.querySelectorAll('td'))
-      // Output is one of the wider text cells; pick the longest one
-      // matching neither the status pill nor the numeric/timestamp cells.
-      return cells
-        .map((c) => (c.textContent ?? '').trim())
-        .reduce((a, b) => (a.length > b.length ? a : b), '')
-    })
-    console.log(
-      `[verify] target row's longest cell text (${outputText.length} chars): ${outputText.slice(0, 200)}`,
+    // Two visible-state checks:
+    //   1. The `escalated via DM` placeholder string should NOT appear
+    //      anywhere on the page — post-fix the projection suppresses
+    //      it from output_text when no body is available.
+    //   2. The "Worth a look" body marker indicates a row rendered the
+    //      real DM body — this requires a post-deploy escalation to
+    //      have fired (forward-only). May be absent if no new
+    //      escalation has happened yet; not a failure mode.
+    const placeholderPresent = await page.evaluate(
+      () => document.body.textContent?.includes('escalated via DM') ?? false,
     )
-    if (outputText.includes('Worth a look') || outputText.includes('Ella decided to escalate')) {
-      console.log('[verify] BODY rendered — new audit payload reached the row')
-    } else if (outputText === '—' || outputText.length < 3) {
-      console.log('[verify] FALLBACK rendered — no body in audit (likely a pre-deploy escalation)')
+    const bodyPresent = await page.evaluate(
+      () => document.body.textContent?.includes('Worth a look') ?? false,
+    )
+    console.log(
+      `[verify] placeholder string ('escalated via DM') present: ${placeholderPresent}`,
+    )
+    console.log(`[verify] body marker ('Worth a look') present: ${bodyPresent}`)
+
+    if (placeholderPresent) {
+      console.error(
+        '[verify] FAIL: placeholder still rendering — projection suppression did not take effect',
+      )
+      process.exitCode = 1
+    } else if (bodyPresent) {
+      console.log('[verify] PASS: body rendered for at least one escalation row')
     } else {
-      console.log('[verify] unexpected output content; check screenshot')
+      console.log(
+        '[verify] PASS: placeholder suppressed; no body present yet (forward-only — no post-deploy escalation has fired)',
+      )
     }
   } finally {
     await browser.close()
