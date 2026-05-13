@@ -480,12 +480,21 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
       })
       .eq('primary_client_id', id)
       .order('started_at', { ascending: false }),
+    // Fetch every action item extracted from any of the client's calls,
+    // not just items where the client itself is the assigned owner. The
+    // /clients/[id] Action items box surfaces items from the client's
+    // coaching calls regardless of whether the assigned doer is the
+    // client (owner_client_id), a CSM (owner_team_member_id), or unset.
+    // The prior `.eq('owner_client_id', id)` filter dropped every item
+    // assigned to a CSM, which is most of them — items extracted from
+    // /calls/[id] never appeared on /clients/[id]. Use an inner-join on
+    // calls + filter the joined call's primary_client_id to scope.
     supabase
       .from('call_action_items')
       .select(
-        'id, description, owner_type, owner_team_member_id, owner_client_id, due_date, call_id, status, completed_at, extracted_at',
+        'id, description, owner_type, owner_team_member_id, owner_client_id, due_date, call_id, status, completed_at, extracted_at, calls!inner(primary_client_id)',
       )
-      .eq('owner_client_id', id)
+      .eq('calls.primary_client_id', id)
       .order('extracted_at', { ascending: false }),
     supabase
       .from('client_health_scores')
@@ -544,7 +553,14 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
     detailLatestStartedAt === null ||
     new Date(detailLatestStartedAt) < detailThirtyDaysAgo
 
-  const allActionItems = (actionItemsRes.data ?? []) as ActionItem[]
+  // Strip the joined `calls` field used only as a JOIN predicate — the
+  // ActionItem type doesn't carry it, and downstream consumers don't
+  // need it.
+  const allActionItems = (actionItemsRes.data ?? []).map((row) => {
+    const rest = { ...(row as Record<string, unknown>) }
+    delete rest.calls
+    return rest as unknown as ActionItem
+  })
   const openActionItems = allActionItems.filter((item) => item.status === 'open')
 
   const npsRows = (npsRes.data ?? []) as Array<{
