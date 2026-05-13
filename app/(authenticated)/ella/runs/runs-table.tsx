@@ -91,11 +91,20 @@ export function EllaRunsTable({ rows }: { rows: EllaRunsListRow[] }) {
             </TableCell>
             <TableCell className={`${CELL_PADDING} max-w-[360px] text-sm`}>
               <Link href={`/ella/runs/${r.id}`} className="block">
-                {r.output_text ? (
-                  <span>{truncate(r.output_text, 80)}</span>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
+                {(() => {
+                  // escalation_body wins over output_text when present:
+                  // for escalation rows where the new audit-payload body
+                  // resolved, the Output column shows the actual DM Ella
+                  // sent rather than the status-string placeholder. Both
+                  // sources are already mention/emoji/link-syntax
+                  // rendered at the data layer.
+                  const text = r.escalation_body ?? r.output_text
+                  return text ? (
+                    <span>{truncate(text, 80)}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )
+                })()}
               </Link>
             </TableCell>
             <TableCell className={`${CELL_PADDING} whitespace-nowrap text-right text-xs`}>

@@ -233,13 +233,35 @@ def _fire_escalation_dm(
     delivery_id = f"passive_escalation_{uuid.uuid4()}"
     db = get_client()
 
+    # Construct the DM body up front so it can land in the audit row.
+    # The body doesn't depend on primary_csm — only on the triggering-
+    # message coordinates + the Haiku reasoning — so building it here
+    # works for both the no-primary-csm early-return path and the
+    # normal send path. The audit row's body always reflects what
+    # would have been (or was) sent.
+    link = _build_message_permalink(
+        payload.slack_channel_id, payload.triggering_message_ts
+    )
+    reasoning = (decision.reasoning or "")[:_DM_REASONING_TRUNC]
+    body = (
+        f":eyes: Worth a look — <{link}>\n"
+        f"_Ella decided to escalate rather than respond. "
+        f"Reasoning: {reasoning}_"
+    )
+
     # Insert the audit row up front; we'll update terminal status at
-    # exit so failure paths still leave a row.
+    # exit so failure paths still leave a row. `body` is persisted so
+    # the dashboard's /ella/runs list can surface Ella's actual
+    # escalation message in the Output column (see lib/db/ella-runs.ts
+    # getEllaRunsList, the escalation placeholder-skip fallback path).
+    # Forward-only — historical rows without this key continue to show
+    # the placeholder.
     audit_payload = {
         "slack_channel_id": payload.slack_channel_id,
         "triggering_message_ts": payload.triggering_message_ts,
         "channel_client_id": payload.channel_client_id,
         "haiku_reasoning": decision.reasoning,
+        "body": body,
     }
     _insert_dm_audit(db, delivery_id, audit_payload, status="received")
 
@@ -259,16 +281,6 @@ def _fire_escalation_dm(
 
     csm_slack_id = primary_csm["slack_user_id"]
     csm_name = primary_csm.get("full_name")
-
-    link = _build_message_permalink(
-        payload.slack_channel_id, payload.triggering_message_ts
-    )
-    reasoning = (decision.reasoning or "")[:_DM_REASONING_TRUNC]
-    body = (
-        f":eyes: Worth a look — <{link}>\n"
-        f"_Ella decided to escalate rather than respond. "
-        f"Reasoning: {reasoning}_"
-    )
 
     result = post_message(csm_slack_id, body)
 
