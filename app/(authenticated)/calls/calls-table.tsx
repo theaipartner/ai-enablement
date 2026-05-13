@@ -1,46 +1,61 @@
 import Link from 'next/link'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
+import { SentimentPill } from '@/components/gregory/sentiment-pill'
 import type { CallsListRow } from '@/lib/db/calls'
+
+// Calls redesign · § 1 — table per Design's call list mock.
+//
+//   - No outer box: the <table> sits flush on the page surface; row
+//     dividers (1px gold-border at 0.40 alpha) carry the visual rhythm.
+//   - Columns: Date · Title · Primary client · CSM · Sentiment · Duration
+//     (right-aligned). Category column removed — list is pre-filtered to
+//     category='client' at the data layer.
+//   - Sort header glyph: " ↓" or " ↑" in gold once a column is active.
 
 type SortKey =
   | 'started_at'
   | 'title'
-  | 'call_category'
   | 'primary_client_name'
+  | 'csm_team_member_name'
   | 'duration_seconds'
-  | 'classification_confidence'
 
-const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
-  { key: 'started_at', label: 'Date' },
-  { key: 'title', label: 'Title' },
-  { key: 'call_category', label: 'Category' },
-  { key: 'primary_client_name', label: 'Primary client' },
-  { key: 'duration_seconds', label: 'Duration' },
-  { key: 'classification_confidence', label: 'Confidence' },
+type ColumnDef =
+  | {
+      kind: 'sort'
+      key: SortKey
+      label: string
+      align?: 'right'
+      width?: string
+    }
+  | {
+      kind: 'static'
+      label: string
+      width?: string
+    }
+
+const COLUMNS: ColumnDef[] = [
+  { kind: 'sort', key: 'started_at', label: 'Date', width: '96px' },
+  { kind: 'sort', key: 'title', label: 'Title' },
+  {
+    kind: 'sort',
+    key: 'primary_client_name',
+    label: 'Primary client',
+    width: '180px',
+  },
+  {
+    kind: 'sort',
+    key: 'csm_team_member_name',
+    label: 'CSM',
+    width: '140px',
+  },
+  { kind: 'static', label: 'Sentiment', width: '130px' },
+  {
+    kind: 'sort',
+    key: 'duration_seconds',
+    label: 'Duration',
+    align: 'right',
+    width: '90px',
+  },
 ]
-
-const CATEGORY_CLASSES: Record<string, string> = {
-  client: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-  internal: 'bg-sky-100 text-sky-900 border-sky-200',
-  external: 'bg-zinc-100 text-zinc-700 border-zinc-200',
-  unclassified: 'bg-amber-100 text-amber-900 border-amber-200',
-  excluded: 'bg-rose-100 text-rose-900 border-rose-200',
-}
-
-function CategoryPill({ category }: { category: string }) {
-  const cls =
-    CATEGORY_CLASSES[category] ?? 'bg-zinc-100 text-zinc-700 border-zinc-200'
-  return <Badge className={cn('border font-normal', cls)}>{category}</Badge>
-}
 
 function SortableHeader({
   column,
@@ -48,7 +63,7 @@ function SortableHeader({
   currentDir,
   baseSearchParams,
 }: {
-  column: { key: SortKey; label: string }
+  column: Extract<ColumnDef, { kind: 'sort' }>
   currentSort: string
   currentDir: 'asc' | 'desc'
   baseSearchParams: URLSearchParams
@@ -59,17 +74,18 @@ function SortableHeader({
   params.set('sort', column.key)
   params.set('dir', nextDir)
   const href = `?${params.toString()}`
-  const indicator =
-    currentSort === column.key ? (currentDir === 'desc' ? '↓' : '↑') : ''
+  const active = currentSort === column.key
+  const glyph = active ? (currentDir === 'desc' ? ' ↓' : ' ↑') : ''
   return (
     <Link
       href={href}
-      className="hover:underline underline-offset-4 inline-flex items-center gap-1"
+      style={{
+        color: active ? 'var(--color-geg-accent)' : undefined,
+        textDecoration: 'none',
+      }}
     >
       {column.label}
-      {indicator ? (
-        <span className="text-muted-foreground">{indicator}</span>
-      ) : null}
+      {glyph}
     </Link>
   )
 }
@@ -81,43 +97,9 @@ function formatDuration(seconds: number | null): string {
   return `${mm}:${ss.toString().padStart(2, '0')}`
 }
 
-function ConfidenceCell({ value }: { value: number | null }) {
-  if (value === null) return <span className="text-muted-foreground">—</span>
-  const cls =
-    value < 0.5
-      ? 'text-rose-700'
-      : value < 0.7
-        ? 'text-amber-700'
-        : 'text-emerald-700'
-  return (
-    <span className={cn('tabular-nums font-medium', cls)}>
-      {value.toFixed(2)}
-    </span>
-  )
-}
-
-function ParticipantsCell({
-  participants,
-}: {
-  participants: CallsListRow['participants']
-}) {
-  if (participants.length === 0) {
-    return <span className="text-muted-foreground">—</span>
-  }
-  const first = participants[0]
-  const firstLabel = first.display_name ?? first.email
-  if (participants.length === 1) {
-    return <span className="text-sm">{firstLabel}</span>
-  }
-  return (
-    <span className="text-sm">
-      {firstLabel}{' '}
-      <span className="text-muted-foreground">
-        + {participants.length - 1} other
-        {participants.length - 1 === 1 ? '' : 's'}
-      </span>
-    </span>
-  )
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
 }
 
 export function CallsTable({
@@ -133,83 +115,157 @@ export function CallsTable({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="border rounded-md p-12 text-center text-muted-foreground text-sm">
+      <div
+        className="rounded-md p-12 text-center text-sm"
+        style={{
+          color: 'var(--color-geg-text-2)',
+          border: '1px solid var(--color-geg-border)',
+        }}
+      >
         No calls match the current filters.
       </div>
     )
   }
   return (
-    <div className="border rounded-md overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {SORTABLE_COLUMNS.map((column) => (
-              <TableHead key={column.key}>
+    <table
+      className="w-full"
+      style={{
+        borderCollapse: 'separate',
+        borderSpacing: 0,
+        marginTop: 4,
+      }}
+    >
+      <thead>
+        <tr>
+          {COLUMNS.map((column, idx) => (
+            <th
+              key={column.kind === 'sort' ? column.key : `static-${idx}`}
+              className="geg-mono"
+              style={{
+                textAlign:
+                  column.kind === 'sort' && column.align ? column.align : 'left',
+                width: column.width,
+                padding: '14px 16px',
+                fontSize: 10,
+                fontWeight: 500,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: 'var(--color-geg-text-faint)',
+                borderBottom: '1px solid var(--color-geg-accent-border)',
+                whiteSpace: 'nowrap',
+                cursor: column.kind === 'sort' ? 'pointer' : 'default',
+              }}
+            >
+              {column.kind === 'sort' ? (
                 <SortableHeader
                   column={column}
                   currentSort={sort}
                   currentDir={dir}
                   baseSearchParams={baseSearchParams}
                 />
-              </TableHead>
-            ))}
-            <TableHead>Participants</TableHead>
-            <TableHead>Retrievable</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.id}>
-              <TableCell className="text-sm tabular-nums whitespace-nowrap text-muted-foreground">
-                {new Date(row.started_at).toLocaleDateString()}
-              </TableCell>
-              <TableCell>
-                <Link
-                  href={`/calls/${row.id}`}
-                  className="text-sm hover:underline underline-offset-4 truncate inline-block max-w-md"
-                >
-                  {row.title ?? 'Untitled call'}
-                </Link>
-              </TableCell>
-              <TableCell>
-                <CategoryPill category={row.call_category} />
-              </TableCell>
-              <TableCell className="text-sm">
-                {row.primary_client_id && row.primary_client_name ? (
-                  <Link
-                    href={`/clients/${row.primary_client_id}`}
-                    className="hover:underline underline-offset-4"
-                  >
-                    {row.primary_client_name}
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </TableCell>
-              <TableCell className="text-sm tabular-nums">
-                {formatDuration(row.duration_seconds)}
-              </TableCell>
-              <TableCell>
-                <ConfidenceCell value={row.classification_confidence} />
-              </TableCell>
-              <TableCell>
-                <ParticipantsCell participants={row.participants} />
-              </TableCell>
-              <TableCell>
-                {row.is_retrievable_by_client_agents ? (
-                  <span title="Retrievable by client-facing agents" className="text-emerald-700">
-                    ✓
-                  </span>
-                ) : (
-                  <span title="Not retrievable" className="text-muted-foreground">
-                    —
-                  </span>
-                )}
-              </TableCell>
-            </TableRow>
+              ) : (
+                column.label
+              )}
+            </th>
           ))}
-        </TableBody>
-      </Table>
-    </div>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr
+            key={row.id}
+            style={{ transition: 'background 80ms ease' }}
+          >
+            <td
+              className="geg-mono"
+              style={{
+                padding: '14px 16px',
+                fontSize: 12,
+                color: 'var(--color-geg-text-2)',
+                whiteSpace: 'nowrap',
+                letterSpacing: '0.02em',
+                verticalAlign: 'middle',
+              }}
+            >
+              {formatDate(row.started_at)}
+            </td>
+            <td
+              style={{
+                padding: '14px 16px',
+                fontSize: 13,
+                color: 'var(--color-geg-text)',
+                verticalAlign: 'middle',
+              }}
+            >
+              <Link
+                href={`/calls/${row.id}`}
+                className="geg-link"
+                style={{
+                  color: 'var(--color-geg-text)',
+                  textDecoration: 'none',
+                  borderBottom: '1px solid transparent',
+                }}
+              >
+                {row.title ?? 'Untitled call'}
+              </Link>
+            </td>
+            <td
+              style={{
+                padding: '14px 16px',
+                fontSize: 13,
+                color: 'var(--color-geg-text-2)',
+                verticalAlign: 'middle',
+              }}
+            >
+              {row.primary_client_id && row.primary_client_name ? (
+                <Link
+                  href={`/clients/${row.primary_client_id}`}
+                  className="geg-link"
+                  style={{
+                    color: 'var(--color-geg-text-2)',
+                    textDecoration: 'none',
+                  }}
+                >
+                  {row.primary_client_name}
+                </Link>
+              ) : (
+                <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+              )}
+            </td>
+            <td
+              style={{
+                padding: '14px 16px',
+                fontSize: 13,
+                color: 'var(--color-geg-text-2)',
+                verticalAlign: 'middle',
+              }}
+            >
+              {row.csm_team_member_name ?? (
+                <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+              )}
+            </td>
+            <td
+              style={{ padding: '14px 16px', verticalAlign: 'middle' }}
+            >
+              <SentimentPill tier={row.sentiment_tier} />
+            </td>
+            <td
+              className="geg-mono"
+              style={{
+                padding: '14px 16px',
+                fontSize: 12,
+                color: 'var(--color-geg-text-2)',
+                letterSpacing: '0.02em',
+                textAlign: 'right',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle',
+              }}
+            >
+              {formatDuration(row.duration_seconds)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

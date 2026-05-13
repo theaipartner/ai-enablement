@@ -1,23 +1,15 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getCallById, type CallDetail } from '@/lib/db/calls'
-import { listMergeCandidates } from '@/lib/db/merge'
-import { Separator } from '@/components/ui/separator'
-import { Label } from '@/components/ui/label'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { ClassificationEdit } from './classification-edit'
-import { TranscriptSection } from './transcript-section'
+import { SentimentPill } from '@/components/gregory/sentiment-pill'
+import { ActionItemsBox } from './action-items-box'
 
-function SectionHeader({ title }: { title: string }) {
-  return <h2 className="text-lg font-semibold">{title}</h2>
-}
+// Calls redesign · § 2 — call detail page (/calls/[id]).
+//
+// Single-screen at 1440 × 900 baseline · two-column grid · three
+// translucent gold-bordered boxes. Transcript, classification, and
+// participants sections removed (out of scope for this surface — they
+// live in the audit-data layer if needed).
 
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return '—'
@@ -26,238 +18,59 @@ function formatDuration(seconds: number | null): string {
   return `${mm}:${ss.toString().padStart(2, '0')}`
 }
 
-function ParticipantsTable({
-  participants,
-}: {
-  participants: CallDetail['participants']
-}) {
-  if (participants.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">No participants recorded.</p>
-    )
-  }
-  return (
-    <div className="border rounded-md overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Email</TableHead>
-            <TableHead>Role</TableHead>
-            <TableHead>Matched</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {participants.map((p) => {
-            const matched = p.matched_client_name || p.matched_team_member_name
-            const matchedKind = p.client_id
-              ? 'client'
-              : p.team_member_id
-                ? 'team'
-                : null
-            return (
-              <TableRow key={p.id}>
-                <TableCell className="text-sm">
-                  {p.display_name ?? <span className="text-muted-foreground">—</span>}
-                </TableCell>
-                <TableCell className="text-sm font-mono">{p.email}</TableCell>
-                <TableCell className="text-sm text-muted-foreground capitalize">
-                  {p.participant_role ?? '—'}
-                </TableCell>
-                <TableCell className="text-sm">
-                  {matched ? (
-                    <span>
-                      <span className="text-xs text-muted-foreground mr-1">
-                        {matchedKind}:
-                      </span>
-                      {p.client_id ? (
-                        <Link
-                          href={`/clients/${p.client_id}`}
-                          className="hover:underline underline-offset-4"
-                        >
-                          {matched}
-                        </Link>
-                      ) : (
-                        <span>{matched}</span>
-                      )}
-                    </span>
-                  ) : (
-                    <span className="text-amber-700 text-xs">unmatched</span>
-                  )}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
-    </div>
-  )
+function formatStarted(iso: string): string {
+  // "5/12/2026, 11:48 PM" — matches the mock.
+  return new Date(iso).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
 }
 
-function CallReviewSection({
-  review,
-}: {
-  review: CallDetail['call_review']
-}) {
-  if (review === null) {
-    return (
-      <p className="text-sm text-muted-foreground">No review for this call yet.</p>
-    )
-  }
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h3 className="text-sm font-semibold mb-1">Sentiment arc</h3>
-        <p className="text-sm leading-relaxed">{review.sentiment_arc}</p>
-      </div>
-
-      <ReviewItemList
-        title="Pain points"
-        items={review.pain_points}
-        emptyText="No pain points surfaced."
-      />
-
-      <ReviewItemList
-        title="Wins"
-        items={review.wins}
-        emptyText="No wins surfaced."
-      />
-
-      <ReviewPivotsList items={review.dodged_questions} />
-    </div>
-  )
+function formatStartedDetailed(iso: string): string {
+  // "5/12/2026, 11:48:36 PM" — same shape with seconds for the Data box.
+  return new Date(iso).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  })
 }
 
-function ReviewItemList({
-  title,
-  items,
-  emptyText,
-}: {
-  title: string
-  items: Array<{ description: string; evidence: string }>
-  emptyText: string
-}) {
-  return (
-    <div>
-      <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2">
-        <span>{title}</span>
-        {items.length > 0 ? (
-          <span className="text-xs font-medium text-muted-foreground tabular-nums">
-            {items.length}
-          </span>
-        ) : null}
-      </h3>
-      {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{emptyText}</p>
-      ) : (
-        <ul className="space-y-2.5">
-          {items.map((item, idx) => (
-            <li key={idx} className="text-sm">
-              <p className="font-medium">{item.description}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {item.evidence}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function ReviewPivotsList({
-  items,
-}: {
-  items: Array<{ description: string; evidence: string; who: string }>
-}) {
-  return (
-    <div>
-      <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2">
-        <span>Conversation pivots</span>
-        {items.length > 0 ? (
-          <span className="text-xs font-medium text-muted-foreground tabular-nums">
-            {items.length}
-          </span>
-        ) : null}
-      </h3>
-      {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No notable pivots surfaced.</p>
-      ) : (
-        <ul className="space-y-2.5">
-          {items.map((item, idx) => (
-            <li key={idx} className="text-sm">
-              <div className="flex items-start gap-2">
-                <span
-                  className={
-                    'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide ' +
-                    (item.who === 'csm'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-slate-100 text-slate-700')
-                  }
-                >
-                  {item.who}
-                </span>
-                <p className="font-medium flex-1">{item.description}</p>
-              </div>
-              <p className="text-xs text-muted-foreground mt-0.5 ml-[3.25rem]">
-                {item.evidence}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function ActionItemsList({
-  items,
-}: {
-  items: CallDetail['action_items']
-}) {
-  if (items.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No action items extracted from this call.
-      </p>
-    )
-  }
-  return (
-    <ul className="space-y-2">
-      {items.map((item) => {
-        const ownerLabel = item.owner_client_name
-          ? `client: ${item.owner_client_name}`
-          : item.owner_team_member_name
-            ? `team: ${item.owner_team_member_name}`
-            : item.owner_type
-        return (
-          <li key={item.id} className="text-sm">
-            <div className="flex items-start gap-3">
-              <span className="flex-1">{item.description}</span>
-              {item.due_date ? (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {new Date(item.due_date).toLocaleDateString()}
-                </span>
-              ) : null}
-              <span
-                className={
-                  item.status === 'open'
-                    ? 'text-xs text-amber-700'
-                    : item.status === 'done'
-                      ? 'text-xs text-emerald-700'
-                      : 'text-xs text-muted-foreground'
-                }
-              >
-                {item.status}
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">Owner: {ownerLabel}</p>
-          </li>
-        )
-      })}
-    </ul>
-  )
+// Map a call's call_review sentiment_arc → the tier we'd display in
+// the review header. Same derivation as the list-page batch fetch, but
+// here we receive the call_review object directly from getCallById so
+// no extra round trip is needed.
+//
+// `documents.metadata.sentiment_tier` is the source of truth; the
+// detail-page review fetch returns the parsed content + generated_at,
+// but does NOT thread the metadata.sentiment_tier through. We fetch
+// the tier with a single tiny query co-located with this page.
+//
+// Returning null when no review exists keeps the SentimentPill
+// invisible in the review header until one lands.
+async function fetchSentimentTier(callId: string): Promise<
+  'green' | 'yellow' | 'red' | null
+> {
+  const { createAdminClient } = await import('@/lib/supabase/admin')
+  const supabase = createAdminClient()
+  const { data } = await supabase
+    .from('documents')
+    .select('metadata')
+    .eq('document_type', 'call_review')
+    .filter('metadata->>call_id', 'eq', callId)
+    .limit(1)
+    .maybeSingle()
+  const tier = (data as { metadata?: { sentiment_tier?: string } } | null)
+    ?.metadata?.sentiment_tier
+  if (tier === 'green' || tier === 'yellow' || tier === 'red') return tier
+  return null
 }
 
 export default async function CallDetailPage({
@@ -268,162 +81,498 @@ export default async function CallDetailPage({
   const call = await getCallById(params.id)
   if (!call) notFound()
 
-  // Reuse the merge-candidate fetch shape — exclude arg is a meaningless
-  // placeholder UUID so the function returns every active client.
-  const clientOptions = await listMergeCandidates(
-    '00000000-0000-0000-0000-000000000000',
-  )
+  const sentimentTier = await fetchSentimentTier(call.id)
 
   return (
-    <div className="px-8 py-8 max-w-4xl mx-auto space-y-6">
+    <div style={{ padding: '24px 48px 28px' }}>
       <Link
         href="/calls"
-        className="geg-eyebrow hover:underline"
-        style={{ color: 'var(--color-geg-text-3)' }}
+        className="geg-mono"
+        style={{
+          color: 'var(--color-geg-accent)',
+          textDecoration: 'none',
+          fontSize: 11,
+          fontWeight: 500,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+        }}
       >
         ← BACK TO CALLS
       </Link>
 
       <header
-        className="space-y-2"
         style={{
-          paddingBottom: 24,
-          borderBottom: '1px solid var(--color-geg-border-strong)',
+          padding: '28px 0 24px',
+          borderBottom: '1px solid var(--color-geg-border)',
         }}
       >
         <div className="geg-eyebrow">CALL · DETAIL</div>
         <h1
-          className="geg-display"
-          style={{ fontSize: 40, lineHeight: '44px' }}
+          className="geg-serif"
+          style={{
+            fontWeight: 500,
+            fontSize: 36,
+            lineHeight: 1.1,
+            letterSpacing: '-0.012em',
+            color: 'var(--color-geg-text)',
+            margin: '8px 0 0',
+          }}
         >
-          {call.title ?? 'Untitled call'}
+          {call.title ?? 'Untitled call'}.
         </h1>
-        <div className="geg-eyebrow geg-numeric pt-1">
-          {new Date(call.started_at).toLocaleString()} ·{' '}
+        <div
+          className="geg-mono"
+          style={{
+            marginTop: 10,
+            fontSize: 12,
+            color: 'var(--color-geg-text-2)',
+            letterSpacing: '0.02em',
+          }}
+        >
+          {formatStarted(call.started_at)}
+          <span style={{ color: 'var(--color-geg-text-dim)', margin: '0 10px' }}>
+            ·
+          </span>
           {formatDuration(call.duration_seconds)}
+          <span style={{ color: 'var(--color-geg-text-dim)', margin: '0 10px' }}>
+            ·
+          </span>
+          Fathom
         </div>
       </header>
 
-
-      {/* Section 1 — Metadata */}
-      <section className="space-y-3">
-        <SectionHeader title="Metadata" />
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Started at</Label>
-            <p>{new Date(call.started_at).toLocaleString()}</p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Duration</Label>
-            <p className="tabular-nums">{formatDuration(call.duration_seconds)}</p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Source</Label>
-            <p>{call.source}</p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">External id</Label>
-            <p className="font-mono text-xs break-all">{call.external_id}</p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Ingested at</Label>
-            <p>{new Date(call.ingested_at).toLocaleString()}</p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Recording</Label>
-            <p>
-              {call.recording_url ? (
-                <a
-                  href={call.recording_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sky-700 hover:underline underline-offset-4"
-                >
-                  Open in source
-                </a>
-              ) : (
-                <span className="text-muted-foreground">—</span>
-              )}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <Separator />
-
-      {/* Section 2 — Classification (editable) */}
-      <section className="space-y-3">
-        <SectionHeader title="Classification" />
-        <ClassificationEdit
-          call={{
-            id: call.id,
-            call_category: call.call_category,
-            call_type: call.call_type,
-            primary_client_id: call.primary_client_id,
-            primary_client: call.primary_client,
-            classification_confidence: call.classification_confidence,
-            classification_method: call.classification_method,
-            is_retrievable_by_client_agents: call.is_retrievable_by_client_agents,
+      <div
+        className="geg-detail-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '420px 1fr',
+          gap: 20,
+          paddingTop: 24,
+        }}
+      >
+        {/* LEFT COLUMN — Data + Action items */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 20,
+            minHeight: 0,
           }}
-          clientOptions={clientOptions}
+        >
+          <DataBox call={call} />
+          <ActionItemsContainer call={call} />
+        </div>
+
+        {/* RIGHT COLUMN — Call review */}
+        <ReviewBox review={call.call_review} sentimentTier={sentimentTier} />
+      </div>
+    </div>
+  )
+}
+
+function DataBox({ call }: { call: CallDetail }) {
+  const csmName = call.csm_team_member?.full_name
+  return (
+    <div className="geg-gold-box" style={{ flexShrink: 0 }}>
+      <div className="geg-gold-box-header">
+        <h3>Data</h3>
+      </div>
+      <div className="geg-gold-box-body">
+        <DataRow
+          k="Client"
+          v={
+            call.primary_client ? (
+              <Link
+                href={`/clients/${call.primary_client.id}`}
+                style={{
+                  color: 'var(--color-geg-accent)',
+                  textDecoration: 'none',
+                }}
+                className="geg-link"
+              >
+                {call.primary_client.full_name} →
+              </Link>
+            ) : (
+              <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+            )
+          }
         />
-      </section>
+        <DataRow
+          k="CSM"
+          v={
+            csmName ?? (
+              <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+            )
+          }
+        />
+        <DataRow
+          k="Started"
+          v={<span className="geg-mono">{formatStartedDetailed(call.started_at)}</span>}
+          mono
+        />
+        <DataRow
+          k="Duration"
+          v={<span className="geg-mono">{formatDuration(call.duration_seconds)}</span>}
+          mono
+        />
+        <DataRow
+          k="Recording"
+          v={
+            call.recording_url ? (
+              <a
+                href={call.recording_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: 'var(--color-geg-accent)',
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontWeight: 500,
+                }}
+                className="geg-link"
+              >
+                Open in Fathom <span className="geg-mono">→</span>
+              </a>
+            ) : (
+              <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+            )
+          }
+        />
+      </div>
+    </div>
+  )
+}
 
-      <Separator />
+function DataRow({
+  k,
+  v,
+  mono,
+}: {
+  k: string
+  v: React.ReactNode
+  mono?: boolean
+}) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '110px 1fr',
+        gap: 12,
+        padding: '8px 0',
+        fontSize: 13,
+        alignItems: 'baseline',
+        borderTop: '1px dashed rgba(160, 136, 80, 0.18)',
+      }}
+      className="geg-data-row"
+    >
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-faint)',
+        }}
+      >
+        {k}
+      </span>
+      <span
+        style={{
+          color: mono ? 'var(--color-geg-text-2)' : 'var(--color-geg-text)',
+          fontSize: mono ? 12 : 13,
+          letterSpacing: mono ? '0.02em' : undefined,
+        }}
+      >
+        {v}
+      </span>
+    </div>
+  )
+}
 
-      {/* Section 3 — Participants */}
-      <section className="space-y-3">
-        <SectionHeader title="Participants" />
-        <ParticipantsTable participants={call.participants} />
-      </section>
+function ActionItemsContainer({ call }: { call: CallDetail }) {
+  // Filter to OPEN action items for the redesigned UX. The X-delete is
+  // a hard delete (server action), so passing closed items here would
+  // let a CSM accidentally remove historical context.
+  const openItems = call.action_items.filter((it) => it.status === 'open')
+  return (
+    <div className="geg-gold-box" style={{ flex: 1, minHeight: 0 }}>
+      <div className="geg-gold-box-header">
+        <h3>
+          Action items{' '}
+          <span style={{ color: 'var(--color-geg-accent)', marginLeft: 6 }}>
+            {openItems.length}
+          </span>
+        </h3>
+        <span
+          className="geg-mono"
+          style={{
+            fontSize: 10,
+            color: 'var(--color-geg-text-faint)',
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+          }}
+        >
+          Click to edit
+        </span>
+      </div>
+      <div className="geg-gold-box-body">
+        <ActionItemsBox
+          callId={call.id}
+          items={openItems.map((it) => ({
+            id: it.id,
+            description: it.description,
+          }))}
+        />
+      </div>
+    </div>
+  )
+}
 
-      <Separator />
-
-      {/* Section 4 — Summary */}
-      <section className="space-y-3">
-        <SectionHeader title="Summary" />
-        {call.summary_text ? (
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm leading-relaxed font-sans">
-            {call.summary_text}
-          </pre>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No summary for this call. Cron-ingested calls have summaries; older
-            backlog imports (Fathom .txt exports) do not.
-          </p>
-        )}
-      </section>
-
-      <Separator />
-
-      {/* Section 4.5 — Call review */}
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <SectionHeader title="Call review" />
-          {call.call_review ? (
-            <span className="text-xs text-muted-foreground">
-              Generated {new Date(call.call_review.generated_at).toLocaleString()}
-            </span>
+function ReviewBox({
+  review,
+  sentimentTier,
+}: {
+  review: CallDetail['call_review']
+  sentimentTier: 'green' | 'yellow' | 'red' | null
+}) {
+  return (
+    <div className="geg-gold-box" style={{ height: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 16,
+          paddingBottom: 14,
+          marginBottom: 16,
+          borderBottom: '1px solid var(--color-geg-accent-border)',
+        }}
+      >
+        <div>
+          <h3
+            className="geg-serif"
+            style={{
+              fontWeight: 500,
+              fontSize: 22,
+              margin: 0,
+              letterSpacing: '-0.01em',
+              color: 'var(--color-geg-text)',
+            }}
+          >
+            Call review.
+          </h3>
+          {review ? (
+            <div
+              className="geg-mono"
+              style={{
+                marginTop: 6,
+                fontSize: 11,
+                color: 'var(--color-geg-text-faint)',
+                letterSpacing: '0.02em',
+              }}
+            >
+              Generated{' '}
+              <b style={{ color: 'var(--color-geg-text-2)', fontWeight: 400 }}>
+                {formatStarted(review.generated_at)}
+              </b>
+            </div>
           ) : null}
         </div>
-        <CallReviewSection review={call.call_review} />
-      </section>
+        <SentimentPill tier={sentimentTier} />
+      </div>
 
-      <Separator />
+      {review === null ? (
+        <p
+          style={{
+            color: 'var(--color-geg-text-2)',
+            fontSize: 13,
+            fontStyle: 'italic',
+            margin: 0,
+          }}
+        >
+          No review for this call yet.
+        </p>
+      ) : (
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            paddingRight: 8,
+            minHeight: 0,
+          }}
+        >
+          <ReviewSection title="Sentiment arc">
+            <p
+              className="geg-serif"
+              style={{
+                fontWeight: 400,
+                fontSize: 15,
+                lineHeight: 1.6,
+                color: 'var(--color-geg-text)',
+                margin: 0,
+              }}
+            >
+              {review.sentiment_arc}
+            </p>
+          </ReviewSection>
 
-      {/* Section 5 — Action items */}
-      <section className="space-y-3">
-        <SectionHeader title="Action items" />
-        <ActionItemsList items={call.action_items} />
-      </section>
+          <ReviewSection title="Pain points" count={review.pain_points.length}>
+            <ReviewList items={review.pain_points} />
+          </ReviewSection>
 
-      <Separator />
+          <ReviewSection title="Wins" count={review.wins.length}>
+            <ReviewList items={review.wins} />
+          </ReviewSection>
 
-      {/* Section 6 — Transcript */}
-      <section className="space-y-3">
-        <SectionHeader title="Transcript" />
-        <TranscriptSection transcript={call.transcript} />
-      </section>
+          <ReviewSection
+            title="Conversation pivots"
+            count={review.dodged_questions.length}
+          >
+            <ReviewList items={review.dodged_questions} withPivotTag />
+          </ReviewSection>
+        </div>
+      )}
     </div>
+  )
+}
+
+function ReviewSection({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count?: number
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <h4
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: '0.16em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-2)',
+          margin: '0 0 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        {title}
+        {count !== undefined ? (
+          <span style={{ color: 'var(--color-geg-accent)', fontWeight: 500 }}>
+            {count}
+          </span>
+        ) : null}
+      </h4>
+      {children}
+    </div>
+  )
+}
+
+function ReviewList({
+  items,
+  withPivotTag,
+}: {
+  items: Array<{ description: string; evidence: string; who?: string }>
+  withPivotTag?: boolean
+}) {
+  if (items.length === 0) {
+    return (
+      <p
+        style={{
+          fontSize: 12,
+          color: 'var(--color-geg-text-faint)',
+          fontStyle: 'italic',
+          margin: 0,
+        }}
+      >
+        None surfaced.
+      </p>
+    )
+  }
+  return (
+    <ul
+      style={{
+        listStyle: 'none',
+        margin: 0,
+        padding: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+      }}
+    >
+      {items.map((item, idx) => (
+        <li
+          key={idx}
+          style={{
+            paddingLeft: 12,
+            borderLeft: '1px solid var(--color-geg-accent-border)',
+          }}
+        >
+          <p
+            style={{
+              color: 'var(--color-geg-text)',
+              fontSize: 13.5,
+              lineHeight: 1.55,
+              margin: '0 0 6px',
+            }}
+          >
+            {withPivotTag && item.who ? (
+              <PivotTag who={item.who} />
+            ) : null}
+            {item.description}
+          </p>
+          <p
+            style={{
+              color: 'var(--color-geg-text-2)',
+              fontSize: 12,
+              lineHeight: 1.55,
+              fontStyle: 'italic',
+              margin: 0,
+            }}
+          >
+            {item.evidence}
+          </p>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function PivotTag({ who }: { who: string }) {
+  const isCsm = who.toLowerCase() === 'csm'
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        display: 'inline-block',
+        fontSize: 9,
+        fontWeight: 500,
+        letterSpacing: '0.16em',
+        textTransform: 'uppercase',
+        padding: '2px 7px',
+        borderRadius: 3,
+        marginRight: 8,
+        verticalAlign: 1,
+        color: isCsm
+          ? 'var(--color-geg-accent)'
+          : 'var(--color-geg-text-2)',
+        background: isCsm
+          ? 'var(--color-geg-accent-fill)'
+          : 'rgba(255, 255, 255, 0.03)',
+        border: isCsm
+          ? '1px solid var(--color-geg-accent-border)'
+          : '1px solid var(--color-geg-border-strong)',
+      }}
+    >
+      {who}
+    </span>
   )
 }

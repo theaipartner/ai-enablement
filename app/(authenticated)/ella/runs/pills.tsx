@@ -1,7 +1,12 @@
 // Pills + badges for the Ella runs audit dashboard.
+//
+// Part 2 cleanup: AnomalyFlagBadge / AnomalyFlagsRow / FLAG_CLASSES /
+// FLAG_SHORT removed — the redesign doesn't surface anomalies in the
+// UI (data layer still computes them for future alert-source work).
+// ANOMALY_FLAG_LABEL import dropped because nothing in this file uses
+// it anymore.
 
 import { Badge } from '@/components/ui/badge'
-import { ANOMALY_FLAG_LABEL, type AnomalyFlag } from '@/lib/db/ella-runs'
 import { cn } from '@/lib/utils'
 
 const ROLE_CLASSES: Record<string, string> = {
@@ -27,47 +32,6 @@ const STATUS_CLASSES: Record<string, string> = {
 export function RunStatusPill({ status }: { status: string }) {
   const cls = STATUS_CLASSES[status] ?? 'bg-zinc-100 text-zinc-700 border-zinc-200'
   return <Badge className={cn('border', cls)}>{status}</Badge>
-}
-
-// Anomaly flag colors:
-// - A (ESCALATE leak), C (error) → red, high-severity
-// - B_prime, D, E → amber, surface-only
-const FLAG_CLASSES: Record<AnomalyFlag, string> = {
-  A: 'bg-rose-100 text-rose-900 border-rose-200',
-  C: 'bg-rose-100 text-rose-900 border-rose-200',
-  B_prime: 'bg-amber-100 text-amber-900 border-amber-200',
-  D: 'bg-amber-100 text-amber-900 border-amber-200',
-  E: 'bg-amber-100 text-amber-900 border-amber-200',
-}
-
-const FLAG_SHORT: Record<AnomalyFlag, string> = {
-  A: 'A',
-  B_prime: "B'",
-  C: 'C',
-  D: 'D',
-  E: 'E',
-}
-
-export function AnomalyFlagBadge({ flag }: { flag: AnomalyFlag }) {
-  return (
-    <Badge
-      className={cn('border font-mono text-xs', FLAG_CLASSES[flag])}
-      title={ANOMALY_FLAG_LABEL[flag]}
-    >
-      {FLAG_SHORT[flag]}
-    </Badge>
-  )
-}
-
-export function AnomalyFlagsRow({ flags }: { flags: AnomalyFlag[] }) {
-  if (flags.length === 0) return <span className="text-muted-foreground">—</span>
-  return (
-    <div className="flex flex-wrap gap-1">
-      {flags.map((f) => (
-        <AnomalyFlagBadge key={f} flag={f} />
-      ))}
-    </div>
-  )
 }
 
 // Relative timestamp helper — short for recent, falls back to absolute date.

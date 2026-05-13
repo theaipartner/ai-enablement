@@ -27,6 +27,11 @@ export type CallsListFilters = {
   primary_client_id?: string
   needs_review?: boolean
   search?: string
+  // CSM filter — matched against the active primary_csm assignment of
+  // each call's primary_client. In-JS post-fetch (parallel to `search`)
+  // because the value lives in a nested join that PostgREST can't
+  // .in()-filter directly. Fine at the current call volume (~560).
+  csm_id?: string
 }
 
 export type CallsListRow = {
@@ -40,6 +45,18 @@ export type CallsListRow = {
   is_retrievable_by_client_agents: boolean
   primary_client_id: string | null
   primary_client_name: string | null
+  // CSM = active primary_csm of the call's primary_client. Derived in
+  // JS from the nested client_team_assignments select. Null when the
+  // call has no primary_client OR the client has no active CSM
+  // assignment. See § Surprises in the spec report for why this isn't
+  // a direct FK on clients.
+  csm_team_member_id: string | null
+  csm_team_member_name: string | null
+  // Sentiment tier surfaced from the latest call_review document for
+  // this call. 'green' | 'yellow' | 'red' | null (null when no review
+  // exists yet OR the review predates the sentiment_tier backfill).
+  // Display-only — see components/gregory/sentiment-pill.tsx.
+  sentiment_tier: 'green' | 'yellow' | 'red' | null
   participants: Array<{
     email: string
     display_name: string | null
@@ -72,14 +89,26 @@ export async function getCallsList(
       duration_seconds,
       is_retrievable_by_client_agents,
       primary_client_id,
-      primary_client:clients!calls_primary_client_id_fkey(id, full_name),
+      primary_client:clients!calls_primary_client_id_fkey(
+        id,
+        full_name,
+        client_team_assignments(
+          role,
+          unassigned_at,
+          team_members(id, full_name)
+        )
+      ),
       call_participants(email, display_name, participant_role)
     `,
   )
 
-  if (filters.category) {
-    query = query.eq('call_category', filters.category)
-  }
+  // Client-only default: when no category filter is set, scope to
+  // category='client'. Drake's redesigned list view treats the
+  // non-client buckets (internal, prospect, etc.) as out-of-scope for
+  // the primary surface. Callers that want broader scope pass an
+  // explicit category.
+  const effectiveCategory = filters.category ?? 'client'
+  query = query.eq('call_category', effectiveCategory)
   if (filters.primary_client_id) {
     query = query.eq('primary_client_id', filters.primary_client_id)
   }
@@ -110,25 +139,77 @@ export async function getCallsList(
     duration_seconds: number | null
     is_retrievable_by_client_agents: boolean
     primary_client_id: string | null
-    primary_client: { id: string; full_name: string } | null
+    primary_client: {
+      id: string
+      full_name: string
+      client_team_assignments: Array<{
+        role: string
+        unassigned_at: string | null
+        team_members: { id: string; full_name: string } | null
+      }> | null
+    } | null
     call_participants: Array<{
       email: string
       display_name: string | null
       participant_role: string | null
     }> | null
-  }>).map((row) => ({
-    id: row.id,
-    started_at: row.started_at,
-    title: row.title,
-    call_category: row.call_category,
-    call_type: row.call_type,
-    classification_confidence: row.classification_confidence,
-    duration_seconds: row.duration_seconds,
-    is_retrievable_by_client_agents: row.is_retrievable_by_client_agents,
-    primary_client_id: row.primary_client_id,
-    primary_client_name: row.primary_client?.full_name ?? null,
-    participants: row.call_participants ?? [],
-  }))
+  }>).map((row) => {
+    // Derive active primary_csm. Mirrors lib/db/clients.ts:246-248 —
+    // role='primary_csm' AND unassigned_at IS NULL is the active row.
+    // Multiple primary_csm rows can exist historically; the active one
+    // is unique.
+    const activeCsm = (row.primary_client?.client_team_assignments ?? []).find(
+      (a) => a.role === 'primary_csm' && a.unassigned_at === null,
+    )
+    return {
+      id: row.id,
+      started_at: row.started_at,
+      title: row.title,
+      call_category: row.call_category,
+      call_type: row.call_type,
+      classification_confidence: row.classification_confidence,
+      duration_seconds: row.duration_seconds,
+      is_retrievable_by_client_agents: row.is_retrievable_by_client_agents,
+      primary_client_id: row.primary_client_id,
+      primary_client_name: row.primary_client?.full_name ?? null,
+      csm_team_member_id: activeCsm?.team_members?.id ?? null,
+      csm_team_member_name: activeCsm?.team_members?.full_name ?? null,
+      sentiment_tier: null,
+      participants: row.call_participants ?? [],
+    }
+  })
+
+  // Batch-fetch sentiment_tier from the latest call_review doc per call
+  // (one round trip with .in on metadata->>'call_id'). The metadata
+  // jsonb path is indexed via the call_summary partial index so the
+  // filter is cheap. Multiple call_review rows per call would be a bug
+  // (the upsert key is (source, external_id, document_type)), so we
+  // pick the first match per call_id.
+  if (rows.length > 0) {
+    const callIds = rows.map((r) => r.id)
+    const { data: reviewRows } = await supabase
+      .from('documents')
+      .select('metadata')
+      .eq('document_type', 'call_review')
+      .in('metadata->>call_id', callIds)
+    const tierByCallId = new Map<string, 'green' | 'yellow' | 'red'>()
+    for (const r of (reviewRows ?? []) as Array<{
+      metadata: { call_id?: string; sentiment_tier?: string } | null
+    }>) {
+      const callId = r.metadata?.call_id
+      const tier = r.metadata?.sentiment_tier
+      if (
+        typeof callId === 'string' &&
+        (tier === 'green' || tier === 'yellow' || tier === 'red')
+      ) {
+        tierByCallId.set(callId, tier)
+      }
+    }
+    rows = rows.map((row) => ({
+      ...row,
+      sentiment_tier: tierByCallId.get(row.id) ?? null,
+    }))
+  }
 
   if (filters.search) {
     const q = filters.search.toLowerCase()
@@ -140,6 +221,13 @@ export async function getCallsList(
           (p.display_name ?? '').toLowerCase().includes(q),
       )
     })
+  }
+
+  // csm_id filter — in-JS post-fetch (parallel to search). Spec § E
+  // notes 560-call volume is fine in-JS; revisit server-side if call
+  // volume grows past ~5000.
+  if (filters.csm_id) {
+    rows = rows.filter((row) => row.csm_team_member_id === filters.csm_id)
   }
 
   return rows
@@ -201,6 +289,9 @@ export type CallReview = {
 
 export type CallDetail = CallRow & {
   primary_client: { id: string; full_name: string } | null
+  // Active primary_csm of the call's primary_client. Null when the
+  // call has no primary_client OR the client has no active assignment.
+  csm_team_member: { id: string; full_name: string } | null
   participants: CallParticipant[]
   action_items: CallActionItem[]
   summary_text: string | null
@@ -281,7 +372,17 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
       call.primary_client_id
         ? supabase
             .from('clients')
-            .select('id, full_name')
+            .select(
+              `
+              id,
+              full_name,
+              client_team_assignments(
+                role,
+                unassigned_at,
+                team_members(id, full_name)
+              )
+            `,
+            )
             .eq('id', call.primary_client_id)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
@@ -343,9 +444,34 @@ export async function getCallById(id: string): Promise<CallDetail | null> {
 
   const call_review = parseCallReview(reviewRes.data)
 
+  // Derive CSM from the primary_client's nested assignments. Same
+  // active-row predicate as the list path: role='primary_csm' AND
+  // unassigned_at IS NULL.
+  const primaryClientRaw = primaryClientRes.data as
+    | {
+        id: string
+        full_name: string
+        client_team_assignments: Array<{
+          role: string
+          unassigned_at: string | null
+          team_members: { id: string; full_name: string } | null
+        }> | null
+      }
+    | null
+  const activeCsm = (primaryClientRaw?.client_team_assignments ?? []).find(
+    (a) => a.role === 'primary_csm' && a.unassigned_at === null,
+  )
+  const csm_team_member = activeCsm?.team_members
+    ? { id: activeCsm.team_members.id, full_name: activeCsm.team_members.full_name }
+    : null
+  const primary_client = primaryClientRaw
+    ? { id: primaryClientRaw.id, full_name: primaryClientRaw.full_name }
+    : null
+
   return {
     ...call,
-    primary_client: primaryClientRes.data ?? null,
+    primary_client,
+    csm_team_member,
     participants,
     action_items,
     summary_text: summaryRes.data?.content ?? null,
@@ -467,4 +593,35 @@ export async function updateCallClassification(
     history_rows_written: result.history_rows_written,
     auto_cleared_primary_client_id: result.auto_cleared_primary_client_id,
   }
+}
+
+// ----------------------------------------------------------------------
+// listActiveCsms — populates the "Filter by CSM" select on /calls.
+//
+// Pulls distinct team_members who hold an active primary_csm assignment
+// on at least one non-archived client. Sorted alphabetically by full_name
+// so the dropdown order is stable.
+// ----------------------------------------------------------------------
+export async function listActiveCsms(): Promise<
+  Array<{ id: string; full_name: string }>
+> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from("client_team_assignments")
+    .select("team_members(id, full_name)")
+    .eq("role", "primary_csm")
+    .is("unassigned_at", null)
+  if (error) throw error
+  const seen = new Map<string, string>()
+  for (const row of (data ?? []) as Array<{
+    team_members: { id: string; full_name: string } | null
+  }>) {
+    const tm = row.team_members
+    if (tm && tm.id && tm.full_name && !seen.has(tm.id)) {
+      seen.set(tm.id, tm.full_name)
+    }
+  }
+  return Array.from(seen.entries())
+    .map(([id, full_name]) => ({ id, full_name }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name))
 }

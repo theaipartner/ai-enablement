@@ -2,20 +2,22 @@ import {
   getEllaRunsList,
   getEllaSummaryStats,
   listChannelsWithEllaRuns,
-  type AnomalyFlag,
   type EllaRunsListFilters,
 } from '@/lib/db/ella-runs'
+import { HeaderBand } from '@/components/gregory/header-band'
 import { EllaRunsFilterBar } from './filter-bar'
 import { EllaRunsSummaryBand } from './summary-band'
 import { EllaRunsTable } from './runs-table'
+import Link from 'next/link'
 
-const ANOMALY_VALUES: ReadonlySet<AnomalyFlag> = new Set<AnomalyFlag>([
-  'A',
-  'B_prime',
-  'C',
-  'D',
-  'E',
-])
+// Part 2 redesign — composes Part 1 primitives (HeaderBand).
+// Speaker-role and anomaly URL params are no longer parsed: the data
+// layer still accepts them on EllaRunsListFilters, but the UI doesn't
+// surface them, so bookmarked filtered URLs stop displaying their
+// active filter (acceptable per spec; bookmarked filters are rare for
+// an internal audit dashboard).
+
+const DEFAULT_PAGE_SIZE = 100
 
 function readFilters(
   searchParams: Record<string, string | string[] | undefined>,
@@ -29,27 +31,27 @@ function readFilters(
     return v ? v.split(',').filter(Boolean) : []
   }
 
-  const filters: EllaRunsListFilters = {
+  return {
     from: get('from'),
     to: get('to'),
     channels: list('channel'),
     statuses: list('status'),
   }
-  const roles = list('role') as Array<'client' | 'advisor' | 'unresolvable' | 'unknown'>
-  if (roles.length) filters.speaker_roles = roles
-  const anomalies = list('anomaly').filter((v): v is AnomalyFlag =>
-    ANOMALY_VALUES.has(v as AnomalyFlag),
-  )
-  // The "Show anomalies only" toggle is a superset filter — when on,
-  // ANY anomaly flag matches. We model that by adding every flag if
-  // no specific anomalies are selected; otherwise the explicit
-  // selection takes precedence.
-  if (get('anomalies_only') === '1' && anomalies.length === 0) {
-    filters.anomalies = ['A', 'B_prime', 'C', 'D', 'E']
-  } else if (anomalies.length) {
-    filters.anomalies = anomalies
-  }
-  return filters
+}
+
+function readLimit(
+  searchParams: Record<string, string | string[] | undefined>,
+): number {
+  const raw = Array.isArray(searchParams.limit)
+    ? searchParams.limit[0]
+    : searchParams.limit
+  if (!raw) return DEFAULT_PAGE_SIZE
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_PAGE_SIZE
+  // Cap at 10k just to prevent a runaway URL param. Realistically the
+  // largest reasonable value here is in the low thousands at current
+  // run volumes.
+  return Math.min(parsed, 10_000)
 }
 
 export default async function EllaRunsPage({
@@ -58,8 +60,9 @@ export default async function EllaRunsPage({
   searchParams: Record<string, string | string[] | undefined>
 }) {
   const filters = readFilters(searchParams)
+  const limit = readLimit(searchParams)
   const [{ rows, total }, stats, channelOptions] = await Promise.all([
-    getEllaRunsList(filters),
+    getEllaRunsList(filters, { limit }),
     getEllaSummaryStats(),
     listChannelsWithEllaRuns(),
   ])
@@ -68,35 +71,56 @@ export default async function EllaRunsPage({
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => ({ value: c.slack_channel_id, label: c.name }))
 
+  // Build the "Load 100 more" href: preserve all current URL params
+  // and increment ?limit by DEFAULT_PAGE_SIZE. URL-state preferred over
+  // local state so the deeper view is shareable.
+  const nextLimit = limit + DEFAULT_PAGE_SIZE
+  const loadMoreParams = new URLSearchParams()
+  for (const [k, v] of Object.entries(searchParams)) {
+    if (k === 'limit') continue
+    if (Array.isArray(v)) {
+      if (v[0] !== undefined) loadMoreParams.set(k, v[0])
+    } else if (v !== undefined) {
+      loadMoreParams.set(k, v)
+    }
+  }
+  loadMoreParams.set('limit', String(nextLimit))
+  const loadMoreHref = `/ella/runs?${loadMoreParams.toString()}`
+  const showLoadMore = rows.length >= limit && rows.length < total
+
   return (
     <div className="px-8 py-8 space-y-6">
-      <header
-        className="flex items-end justify-between gap-6"
-        style={{
-          paddingBottom: 24,
-          borderBottom: '1px solid var(--color-geg-border-strong)',
-        }}
-      >
-        <div>
-          <div className="geg-eyebrow">ELLA · AUDIT</div>
-          <h1
-            className="geg-display"
-            style={{ fontSize: 52, lineHeight: '54px', marginTop: 8 }}
-          >
-            Run history.
-          </h1>
-        </div>
-        <div
-          className="geg-eyebrow geg-numeric"
-          style={{ paddingBottom: 6 }}
-        >
-          {total} {total === 1 ? 'RUN' : 'RUNS'}
-        </div>
-      </header>
+      <HeaderBand
+        eyebrow="ELLA · AUDIT"
+        title="Run history."
+        actions={
+          <span className="geg-eyebrow geg-numeric">
+            {total} {total === 1 ? 'RUN' : 'RUNS'}
+          </span>
+        }
+      />
 
       <EllaRunsSummaryBand stats={stats} />
       <EllaRunsFilterBar channelOptions={channelDropdownOptions} />
       <EllaRunsTable rows={rows} />
+
+      {showLoadMore ? (
+        <div className="flex justify-center">
+          <Link
+            href={loadMoreHref}
+            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-4 py-2 text-sm transition-colors hover:bg-muted"
+          >
+            Load 100 more
+            <span className="text-xs text-muted-foreground">
+              ({rows.length} of {total})
+            </span>
+          </Link>
+        </div>
+      ) : rows.length > 0 && rows.length >= total ? (
+        <div className="text-center text-xs text-muted-foreground">
+          End of results — {total} runs.
+        </div>
+      ) : null}
     </div>
   )
 }

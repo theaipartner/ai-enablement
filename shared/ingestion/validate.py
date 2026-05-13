@@ -85,7 +85,7 @@ _DOCUMENT_SPECS: dict[tuple[str, str], _Spec] = {
     # exclusion into the SQL function when V2 generates these inline.
     ("fathom", "call_review"): _Spec(
         required=frozenset({"client_id", "call_id", "call_category", "started_at"}),
-        optional=frozenset({"prompt_version", "model"}),
+        optional=frozenset({"prompt_version", "model", "sentiment_tier"}),
     ),
 }
 

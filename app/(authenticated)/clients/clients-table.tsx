@@ -1,13 +1,4 @@
 import Link from 'next/link'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { cn } from '@/lib/utils'
 import { NpsStandingPill } from './pills'
 import {
   EditableCsmStandingCell,
@@ -17,10 +8,20 @@ import {
 } from './editable-cell'
 import type { ClientsListRow } from '@/lib/db/clients'
 
-// Column layout per Scott's 2026-05-11 ask: Name / Status / Journey
-// stage / Primary CSM / CSM Standing / NPS standing / Trustpilot /
-// Health score / Meetings this mo. Adds the CSM Standing column (was
-// not in the V2 layout) and reorders Trustpilot before Health score.
+// Clients redesign · § 1 — list table per the redesign mock.
+//
+// Visual rules:
+//   - No outer box; rows separated by gold-border hairlines (the
+//     globals.css `tbody td { border-bottom }` rule handles paint).
+//   - Header: mono caps, gold-border bottom, " ↓" / " ↑" glyph in gold
+//     on the active sort column.
+//   - Cells: pills via GegPill, mono dates / counts, gradient health bar.
+//
+// Per Drake's caveat, ALL nine existing columns are preserved (Full
+// name / Status / Journey stage / Primary CSM / CSM Standing / NPS
+// standing / Trustpilot / Health score / Meetings this mo). The mock's
+// 7-column reduction is not applied — only the visual language is.
+
 type SortKey =
   | 'full_name'
   | 'status'
@@ -32,16 +33,28 @@ type SortKey =
   | 'latest_health_score'
   | 'meetings_this_month'
 
-const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
+type ColumnDef = {
+  key: SortKey
+  label: string
+  align?: 'right'
+  width?: string
+}
+
+const COLUMNS: ColumnDef[] = [
   { key: 'full_name', label: 'Full name' },
-  { key: 'status', label: 'Status' },
-  { key: 'journey_stage', label: 'Journey stage' },
-  { key: 'primary_csm_name', label: 'Primary CSM' },
-  { key: 'csm_standing', label: 'CSM Standing' },
-  { key: 'nps_standing', label: 'NPS standing' },
-  { key: 'trustpilot_status', label: 'Trustpilot' },
-  { key: 'latest_health_score', label: 'Health score' },
-  { key: 'meetings_this_month', label: 'Meetings this mo' },
+  { key: 'status', label: 'Status', width: '120px' },
+  { key: 'journey_stage', label: 'Journey stage', width: '170px' },
+  { key: 'primary_csm_name', label: 'Primary CSM', width: '140px' },
+  { key: 'csm_standing', label: 'CSM standing', width: '120px' },
+  { key: 'nps_standing', label: 'NPS standing', width: '120px' },
+  { key: 'trustpilot_status', label: 'Trustpilot', width: '110px' },
+  { key: 'latest_health_score', label: 'Health', width: '120px' },
+  {
+    key: 'meetings_this_month',
+    label: 'Meetings · mo',
+    align: 'right',
+    width: '120px',
+  },
 ]
 
 function SortableHeader({
@@ -50,7 +63,7 @@ function SortableHeader({
   currentDir,
   baseSearchParams,
 }: {
-  column: { key: SortKey; label: string }
+  column: ColumnDef
   currentSort: string
   currentDir: 'asc' | 'desc'
   baseSearchParams: URLSearchParams
@@ -61,54 +74,33 @@ function SortableHeader({
   params.set('sort', column.key)
   params.set('dir', nextDir)
   const href = `?${params.toString()}`
-  const indicator =
-    currentSort === column.key ? (currentDir === 'desc' ? '↓' : '↑') : ''
+  const active = currentSort === column.key
+  const glyph = active ? (currentDir === 'desc' ? ' ↓' : ' ↑') : ''
   return (
     <Link
       href={href}
-      className="hover:underline underline-offset-4 inline-flex items-center gap-1"
+      style={{
+        color: active ? 'var(--color-geg-accent)' : undefined,
+        textDecoration: 'none',
+      }}
     >
       {column.label}
-      {indicator ? <span className="text-muted-foreground">{indicator}</span> : null}
+      {glyph}
     </Link>
   )
 }
 
-function MeetingsThisMonthCell({ count }: { count: number }) {
-  // Zero is meaningful (no meetings this calendar month), not missing
-  // data — render "0", not "—". Tabular-nums so the column reads as a
-  // tidy stack of right-aligned numerals.
-  return (
-    <span className="tabular-nums text-sm">{count}</span>
-  )
-}
-
-function HealthScoreCell({
-  score,
-  tier,
-}: {
-  score: number | null
-  tier: string | null
-}) {
+function HealthCell({ score }: { score: number | null }) {
   if (score === null) {
-    return (
-      <span className="text-muted-foreground text-sm">—</span>
-    )
+    return <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
   }
-  const tierCls =
-    tier === 'green'
-      ? 'bg-emerald-100 text-emerald-900 border-emerald-200'
-      : tier === 'yellow'
-        ? 'bg-amber-100 text-amber-900 border-amber-200'
-        : tier === 'red'
-          ? 'bg-rose-100 text-rose-900 border-rose-200'
-          : 'bg-zinc-100 text-zinc-700 border-zinc-200'
   return (
-    <span className="inline-flex items-center gap-2">
-      <span className="font-medium">{score}</span>
-      <span className={cn('rounded-full border px-2 py-0.5 text-xs', tierCls)}>
-        {tier ?? '—'}
-      </span>
+    <span className="geg-health-cell">
+      <span className="geg-health-cell-num">{score}</span>
+      <span
+        className="geg-health-cell-bar"
+        style={{ ['--p' as string]: `${score}%` }}
+      />
     </span>
   )
 }
@@ -126,90 +118,137 @@ export function ClientsTable({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="border rounded-md p-8 text-center text-muted-foreground">
-        No clients match your filters.
+      <div
+        className="rounded-md p-12 text-center text-sm"
+        style={{
+          color: 'var(--color-geg-text-2)',
+          border: '1px solid var(--color-geg-border)',
+        }}
+      >
+        No clients match the current filters.
       </div>
     )
   }
-
   return (
-    <div className="border rounded-md">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {SORTABLE_COLUMNS.map((col) => (
-              <TableHead key={col.key}>
-                <SortableHeader
-                  column={col}
-                  currentSort={sort}
-                  currentDir={dir}
-                  baseSearchParams={baseSearchParams}
-                />
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.id} className="hover:bg-muted/50">
-              <TableCell>
-                <Link
-                  href={`/clients/${row.id}`}
-                  className="font-medium hover:underline underline-offset-4 block"
-                >
-                  {row.full_name}
-                </Link>
-              </TableCell>
-              <TableCell>
-                <EditableStatusCell clientId={row.id} value={row.status} />
-              </TableCell>
-              <TableCell>
-                <EditableJourneyStageCell
-                  clientId={row.id}
-                  value={row.journey_stage}
-                />
-              </TableCell>
-              <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  {row.primary_csm_name ?? (
-                    <span className="text-muted-foreground">Unassigned</span>
-                  )}
-                </Link>
-              </TableCell>
-              <TableCell>
-                <EditableCsmStandingCell
-                  clientId={row.id}
-                  value={row.csm_standing}
-                />
-              </TableCell>
-              <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <NpsStandingPill standing={row.nps_standing} />
-                </Link>
-              </TableCell>
-              <TableCell>
-                <EditableTrustpilotCell
-                  clientId={row.id}
-                  value={row.trustpilot_status}
-                />
-              </TableCell>
-              <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <HealthScoreCell
-                    score={row.latest_health_score}
-                    tier={row.latest_health_tier}
-                  />
-                </Link>
-              </TableCell>
-              <TableCell>
-                <Link href={`/clients/${row.id}`} className="block">
-                  <MeetingsThisMonthCell count={row.meetings_this_month} />
-                </Link>
-              </TableCell>
-            </TableRow>
+    <table
+      className="w-full"
+      style={{
+        borderCollapse: 'separate',
+        borderSpacing: 0,
+        marginTop: 4,
+      }}
+    >
+      <thead>
+        <tr>
+          {COLUMNS.map((column) => (
+            <th
+              key={column.key}
+              className="geg-mono"
+              style={{
+                textAlign: column.align ?? 'left',
+                width: column.width,
+                padding: '14px 14px',
+                fontSize: 10,
+                fontWeight: 500,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: 'var(--color-geg-text-faint)',
+                borderBottom: '1px solid var(--color-geg-accent-border)',
+                whiteSpace: 'nowrap',
+                cursor: 'pointer',
+              }}
+            >
+              <SortableHeader
+                column={column}
+                currentSort={sort}
+                currentDir={dir}
+                baseSearchParams={baseSearchParams}
+              />
+            </th>
           ))}
-        </TableBody>
-      </Table>
-    </div>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.id}>
+            <td
+              style={{
+                padding: '14px 14px',
+                fontSize: 13,
+                verticalAlign: 'middle',
+              }}
+            >
+              <Link
+                href={`/clients/${row.id}`}
+                className="geg-link"
+                style={{
+                  color: 'var(--color-geg-text)',
+                  textDecoration: 'none',
+                  borderBottom: '1px solid transparent',
+                  fontWeight: 500,
+                }}
+              >
+                {row.full_name}
+              </Link>
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditableStatusCell clientId={row.id} value={row.status} />
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditableJourneyStageCell
+                clientId={row.id}
+                value={row.journey_stage}
+              />
+            </td>
+            <td
+              style={{
+                padding: '14px 14px',
+                fontSize: 13,
+                color: 'var(--color-geg-text-2)',
+                verticalAlign: 'middle',
+              }}
+            >
+              {row.primary_csm_name ?? (
+                <span style={{ color: 'var(--color-geg-text-3)' }}>
+                  Unassigned
+                </span>
+              )}
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditableCsmStandingCell
+                clientId={row.id}
+                value={row.csm_standing}
+              />
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <NpsStandingPill standing={row.nps_standing} />
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditableTrustpilotCell
+                clientId={row.id}
+                value={row.trustpilot_status}
+              />
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <HealthCell score={row.latest_health_score} />
+            </td>
+            <td
+              className="geg-mono"
+              style={{
+                padding: '14px 14px',
+                fontSize: 12,
+                color: 'var(--color-geg-text)',
+                letterSpacing: '0.02em',
+                textAlign: 'right',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle',
+              }}
+            >
+              {row.meetings_this_month}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

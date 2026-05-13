@@ -1,6 +1,20 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import {
+  collectMentionedUserIds,
+  renderMentions,
+} from '@/lib/slack/render-mentions'
+import { renderEmojis } from '@/lib/slack/render-emojis'
+
+// Apply both transforms to a single text field. Mentions resolved
+// first (since the mention helper takes a name map), then emoji
+// shortcodes. Order doesn't matter for correctness — they target
+// disjoint syntax — but keeping it consistent across call sites makes
+// the rendering pipeline obvious.
+function renderSlackText(text: string, mentionMap: Map<string, string>): string {
+  return renderEmojis(renderMentions(text, mentionMap))
+}
 
 // Anomaly flag identifiers shared by the list filter + summary band + detail view.
 // Match the audit script's check IDs from scripts/audit_ella_interactions.py
@@ -35,6 +49,12 @@ export type EllaRunsListRow = {
   real_author_role: string | null
   real_author_name: string | null
   input_summary: string | null
+  // List-page "Output" column source. Prefer non-empty output_summary
+  // from agent_runs; fall back to the matching slack_messages text via
+  // fetchSlackResponseTexts; null if neither available. Slack <@U...>
+  // mentions resolved to readable @First Last form before this lands
+  // here — table renders dumb.
+  output_text: string | null
   llm_input_tokens: number | null
   llm_output_tokens: number | null
   llm_cost_usd: number | null
@@ -51,6 +71,9 @@ export type EllaRunDetail = EllaRunsListRow & {
   thread_ts: string | null
   trigger_metadata: Record<string, unknown>
   llm_model: string | null
+  // Single "surrounding messages" slot — last 5 channel messages
+  // anchored on the trigger ts, used uniformly across reactive and
+  // passive trigger types.
   thread_messages: Array<{
     slack_ts: string
     slack_user_id: string
@@ -60,6 +83,25 @@ export type EllaRunDetail = EllaRunsListRow & {
     sent_at: string
     is_trigger: boolean
   }>
+  // Haiku decision metadata. Surfaced on every passive run shape:
+  //   - passive_monitor: forward lookup from pending_ella_responses by
+  //     agent_run_id, or trigger_metadata fallback for skip decisions.
+  //   - passive_substantive / passive_general_inquiry: REVERSE lookup
+  //     via trigger_metadata.pending_id → pending_ella_responses row.
+  // Reactive runs (slack_mention / bare_mention) get null here and the
+  // detail page renders synthetic content.
+  haiku_decision: string | null
+  haiku_reasoning: string | null
+  // For passive_substantive / passive_general_inquiry: the linked
+  // passive_monitor (Haiku decision) row's id + its cost / tokens.
+  // Lets the detail page sum Sonnet response cost with Haiku decision
+  // cost to show the "true total" for the user-visible event. Null
+  // for passive_monitor / reactive runs (which carry their own cost
+  // directly on the row).
+  haiku_agent_run_id: string | null
+  haiku_cost_usd: number | null
+  haiku_input_tokens: number | null
+  haiku_output_tokens: number | null
   escalation: {
     id: string
     reason: string
@@ -73,12 +115,30 @@ export type EllaRunDetail = EllaRunsListRow & {
 }
 
 export type EllaSummaryStats = {
+  // Response-scope counts: runs where Ella attempted to send a message
+  // (status IN success/escalated/error AND haiku_decision != 'skip').
+  // Passive-monitor skip-decision rows count as observations, not
+  // responses — they're excluded here.
   total_today: number
   total_week: number
   total_month: number
   status_counts: Record<string, number>
+  // Response-scope cost totals.
   cost_today: number
   cost_week: number
+  cost_month: number
+  // Out-of-scope cost: today's spend on Haiku-decided skip evaluations.
+  // Surfaced separately on the Cost card so the response-scope total
+  // stays the headline figure.
+  skip_cost_today: number
+  // status='error' counts within the response-scope window. error is
+  // always in-scope; this is shorthand for "Ella tried and failed."
+  errors_today: number
+  errors_week: number
+  errors_month: number
+  // Still computed by the data layer; the redesigned summary band
+  // doesn't surface it but future alert-source work may consume it
+  // (intentional retention per Part 2 spec § Anomaly removal scope).
   anomaly_count_today: number
 }
 
@@ -147,9 +207,21 @@ function extractTriggerField(
 function extractChannelId(
   trigger_metadata: Record<string, unknown> | null,
 ): string | null {
+  // Three trigger_metadata shapes use three different keys:
+  //   - reactive (slack_mention / bare_mention)         → `channel`
+  //   - passive decision (passive_monitor)              → `triggering_slack_channel_id`
+  //   - passive response (passive_substantive /
+  //     passive_general_inquiry) — written by
+  //     respond_to_passive_trigger + handle_passive_general_inquiry → `slack_channel_id`
+  //
+  // The third key was the source of the "surrounding messages shows
+  // only the trigger" bug — extractChannelId returned null for
+  // substantive / general_inquiry rows, so the surrounding-messages
+  // query was short-circuited and thread_messages came back empty.
   return (
     extractTriggerField(trigger_metadata, 'channel') ??
-    extractTriggerField(trigger_metadata, 'triggering_slack_channel_id')
+    extractTriggerField(trigger_metadata, 'triggering_slack_channel_id') ??
+    extractTriggerField(trigger_metadata, 'slack_channel_id')
   )
 }
 
@@ -210,6 +282,61 @@ function extractAuthorName(
   const userId = extractAuthorSlackUserId(trigger_metadata)
   if (!userId) return null
   return userNameMap.get(userId) ?? null
+}
+
+// Generic Slack user ID → display name resolver. One batched lookup
+// against clients + team_members for a known set of IDs. Used by the
+// mention-rendering pipeline and the thread/surrounding-message
+// author-name resolution.
+//
+// Also resolves Ella's own slack_user_id to the literal name "Ella".
+// Ella lives outside clients + team_members (her identity comes from
+// SLACK_USER_TOKEN at the Python side via shared.slack_identity), so
+// without this branch every mention TO Ella and every message FROM
+// Ella renders her bare user_id. Source of truth: any slack_messages
+// row with author_type='ella' carries her slack_user_id. We query for
+// the first such row and stamp 'Ella' for that ID in the map. One
+// extra DB call per request; cheap.
+async function buildUserNameMap(
+  supabase: ReturnType<typeof createAdminClient>,
+  userIds: Set<string>,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  if (userIds.size === 0) return map
+  const ids = Array.from(userIds)
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', ids)
+    .is('archived_at', null)
+  for (const c of clients ?? []) {
+    if (c.slack_user_id && c.full_name) map.set(c.slack_user_id, c.full_name)
+  }
+  const { data: tms } = await supabase
+    .from('team_members')
+    .select('slack_user_id, full_name')
+    .in('slack_user_id', ids)
+    .is('archived_at', null)
+  for (const t of tms ?? []) {
+    if (t.slack_user_id && t.full_name && !map.has(t.slack_user_id)) {
+      map.set(t.slack_user_id, t.full_name)
+    }
+  }
+  // Ella backfill — only worth doing if her ID is in the request's
+  // user-id set AND nothing else resolved her already.
+  const unresolvedIds = ids.filter((id) => !map.has(id))
+  if (unresolvedIds.length > 0) {
+    const { data: ellaRows } = await supabase
+      .from('slack_messages')
+      .select('slack_user_id')
+      .eq('author_type', 'ella')
+      .in('slack_user_id', unresolvedIds)
+      .limit(1)
+    for (const row of ellaRows ?? []) {
+      if (row.slack_user_id) map.set(row.slack_user_id, 'Ella')
+    }
+  }
+  return map
 }
 
 async function fetchUserNameMap(
@@ -419,7 +546,41 @@ export async function getEllaRunsList(
   // Pull enough rows for outlier computation across the window even
   // though we paginate at the end.
   const { data: rawRuns } = await query.range(0, 1000)
-  const runs = (rawRuns ?? []) as RawRunRow[]
+  const allRuns = (rawRuns ?? []) as RawRunRow[]
+
+  // Response-scope filter: only runs where Ella actually spoke
+  // (or tried to). The Ella codebase writes TWO agent_runs per logical
+  // passive response — `passive_monitor` for the Haiku decision and
+  // `passive_substantive` (or `passive_general_inquiry`) for the
+  // Sonnet response. We want one row per user-visible event:
+  //
+  //   - Reactive @-mention runs (slack_mention / bare_mention).
+  //   - Passive Sonnet responses (passive_substantive).
+  //   - Passive canned-opener responses (passive_general_inquiry).
+  //   - Escalate-only passive runs (passive_monitor where Haiku decided
+  //     to fire a DM rather than respond) — they have no substantive
+  //     row to take their place, so the passive_monitor row is the
+  //     user-visible event.
+  //
+  // Everything else — skip-decision passive_monitor rows, the Haiku
+  // decision row for runs that produced a substantive response (whose
+  // user-visible event is the substantive row), etc. — is hidden.
+  const RESPONSE_TRIGGER_TYPES = new Set([
+    'slack_mention',
+    'bare_mention',
+    'app_mention', // legacy alias (some older rows used this)
+    'passive_substantive',
+    'passive_general_inquiry',
+  ])
+  const runs = allRuns.filter((r) => {
+    if (!['success', 'escalated', 'error'].includes(r.status)) return false
+    if (RESPONSE_TRIGGER_TYPES.has(r.trigger_type)) return true
+    if (r.trigger_type === 'passive_monitor') {
+      const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      return haikuDecision === 'escalate'
+    }
+    return false
+  })
 
   const channelMap = await fetchChannelMap(supabase)
   const userNameMap = await fetchUserNameMap(supabase, runs)
@@ -429,6 +590,17 @@ export async function getEllaRunsList(
     runs.map((r) => r.id),
   )
   const lengthOutliers = computeLengthOutliers(runs, responseTexts)
+
+  // Build a Slack-mention name map across every row's output text so
+  // the <@U...> syntax in the Output column resolves to readable
+  // @First Last form. One batched lookup against clients +
+  // team_members; resolved at the data layer so the table component
+  // stays dumb. Helpers live in lib/slack/render-mentions.ts so the
+  // detail page can call the same transforms.
+  const mentionedUserIds = collectMentionedUserIds(
+    runs.map((r) => r.output_summary?.trim() || responseTexts.get(r.id) || ''),
+  )
+  const mentionNameMap = await buildUserNameMap(supabase, mentionedUserIds)
 
   // Project + filter (channel / role / anomaly filters happen in JS
   // since they touch joined data).
@@ -443,6 +615,19 @@ export async function getEllaRunsList(
       hasEscalation: escalationIds.has(r.id),
       lengthOutlierIds: lengthOutliers,
     })
+    // Output column source: prefer non-empty output_summary, fall back
+    // to fetched slack_messages text, else null. Slack mentions
+    // (<@U...>) resolved via the shared renderMentions helper.
+    //
+    // No special-case skip for `queued (...)` placeholder output_summary
+    // anymore — the trigger_type-based response-scope filter above
+    // hides every passive_monitor non-escalate row from the list, so
+    // the rows whose output_summary carried that placeholder don't
+    // surface here at all. The Ella-spoke event is the linked
+    // passive_substantive row with the real response text.
+    const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
+    const output_text = rawOutput ? renderSlackText(rawOutput, mentionNameMap) : null
+
     return {
       id: r.id,
       started_at: r.started_at,
@@ -454,6 +639,7 @@ export async function getEllaRunsList(
       real_author_role: extractAuthorRole(r.trigger_metadata),
       real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
       input_summary: r.input_summary,
+      output_text,
       llm_input_tokens: r.llm_input_tokens,
       llm_output_tokens: r.llm_output_tokens,
       llm_cost_usd: r.llm_cost_usd,
@@ -489,6 +675,67 @@ export async function getEllaRunsList(
   return { rows: paged, total }
 }
 
+// Fetch the last N slack_messages in a channel up to and including a
+// given timestamp. Used by getEllaRunDetail's passive-run surrounding-
+// messages path. Returns oldest-first (ascending) so render order
+// matches the thread-message path.
+//
+// Lookup order:
+//   1. If beforeTs (a slack_ts) is present, find the matching row's
+//      sent_at in slack_messages — this anchors the query window
+//      precisely on the trigger message's wall-clock time.
+//   2. If no match (the trigger predates the slack_messages backfill
+//      or is a synthetic test ts), fall back to the run's started_at
+//      as the anchor.
+//
+// Empty result is a valid signal: render an empty-state stub upstream
+// rather than the dev-facing "synthetic test ts predating the backfill"
+// placeholder that the V1 path showed.
+async function fetchLastNChannelMessages(
+  supabase: ReturnType<typeof createAdminClient>,
+  channelId: string,
+  beforeTs: string | null,
+  fallbackTs: string,
+  n: number,
+): Promise<
+  Array<{
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }>
+> {
+  let anchor: string | null = null
+  if (beforeTs) {
+    const { data: triggerRow } = await supabase
+      .from('slack_messages')
+      .select('sent_at')
+      .eq('slack_channel_id', channelId)
+      .eq('slack_ts', beforeTs)
+      .maybeSingle()
+    anchor = (triggerRow as { sent_at?: string } | null)?.sent_at ?? null
+  }
+  if (!anchor) anchor = fallbackTs
+
+  const { data: msgs } = await supabase
+    .from('slack_messages')
+    .select('slack_ts, slack_user_id, author_type, text, sent_at')
+    .eq('slack_channel_id', channelId)
+    .lte('sent_at', anchor)
+    .order('sent_at', { ascending: false })
+    .limit(n)
+
+  // Re-sort ascending to match the thread-message render order.
+  return [...(msgs ?? [])].reverse() as Array<{
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }>
+}
+
 export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null> {
   const supabase = createAdminClient()
   const { data: row } = await supabase
@@ -516,44 +763,64 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     extractTriggerField(r.trigger_metadata, 'triggering_message_ts')
   const thread_ts = extractTriggerField(r.trigger_metadata, 'thread_ts')
 
-  // Surrounding thread context — last 15 messages in same channel/thread
-  // up to and including the trigger.
-  let threadMessages: EllaRunDetail['thread_messages'] = []
-  if (ch && thread_ts) {
-    const { data: msgs } = await supabase
-      .from('slack_messages')
-      .select('slack_ts, slack_thread_ts, slack_user_id, author_type, text, sent_at')
-      .eq('slack_channel_id', ch)
-      .or(`slack_thread_ts.eq.${thread_ts},slack_ts.eq.${thread_ts}`)
-      .order('sent_at', { ascending: true })
-      .limit(20)
-
-    const userIds = Array.from(
-      new Set((msgs ?? []).map((m) => m.slack_user_id).filter((x): x is string => !!x)),
+  // Surrounding messages — unified to last 5 channel messages anchored
+  // on the trigger ts (or the run's started_at when the trigger isn't
+  // in slack_messages). Replaces the prior reactive/passive split: the
+  // reactive thread-window query reliably returned only the trigger for
+  // thin or race-conditioned threads, leaving the section feeling empty.
+  // Last-5-channel always fills the slot and matches the user-facing
+  // semantics of "surrounding messages."
+  type RawMsg = {
+    slack_ts: string
+    slack_user_id: string
+    author_type: string
+    text: string
+    sent_at: string
+  }
+  let rawMsgs: RawMsg[] = []
+  if (ch) {
+    rawMsgs = await fetchLastNChannelMessages(
+      supabase,
+      ch,
+      trigger_ts,
+      r.started_at,
+      5,
     )
-    const nameMap = new Map<string, string>()
-    if (userIds.length) {
-      const { data: clients } = await supabase
-        .from('clients')
-        .select('slack_user_id, full_name')
-        .in('slack_user_id', userIds)
-        .is('archived_at', null)
-      for (const c of clients ?? []) {
-        if (c.slack_user_id) nameMap.set(c.slack_user_id, c.full_name)
-      }
-      const { data: tms } = await supabase
-        .from('team_members')
-        .select('slack_user_id, full_name')
-        .in('slack_user_id', userIds)
-        .is('archived_at', null)
-      for (const t of tms ?? []) {
-        if (t.slack_user_id && !nameMap.has(t.slack_user_id)) {
-          nameMap.set(t.slack_user_id, t.full_name)
-        }
-      }
-    }
+  }
 
-    threadMessages = (msgs ?? []).map((m) => ({
+  // Trigger-inclusion guarantee: if the fetched array doesn't contain
+  // the trigger (slack_messages didn't have it because realtime ingest
+  // hadn't landed yet, or the ts is synthetic), synthesize a row from
+  // the run's own data and append. The section's contract is "at least
+  // the trigger appears."
+  if (
+    ch &&
+    trigger_ts &&
+    !rawMsgs.some((m) => m.slack_ts === trigger_ts)
+  ) {
+    rawMsgs = [
+      ...rawMsgs,
+      {
+        slack_ts: trigger_ts,
+        slack_user_id: extractAuthorSlackUserId(r.trigger_metadata) ?? '',
+        author_type: extractTriggerField(r.trigger_metadata, 'author_type') ?? 'unknown',
+        text:
+          r.input_summary ?? '(triggering message not in slack_messages)',
+        sent_at: r.started_at,
+      },
+    ]
+  }
+
+  let threadMessages: EllaRunDetail['thread_messages'] = []
+  if (rawMsgs.length > 0) {
+    const userIds = new Set(
+      rawMsgs.map((m) => m.slack_user_id).filter((x): x is string => !!x),
+    )
+    // Route through buildUserNameMap so Ella's slack_user_id resolves
+    // to "Ella" (her identity lives outside clients + team_members).
+    const nameMap = await buildUserNameMap(supabase, userIds)
+
+    threadMessages = rawMsgs.map((m) => ({
       slack_ts: m.slack_ts,
       slack_user_id: m.slack_user_id,
       author_type: m.author_type,
@@ -562,6 +829,104 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
       sent_at: m.sent_at,
       is_trigger: m.slack_ts === trigger_ts,
     }))
+  }
+
+  // Haiku decision lookup. Three sources depending on trigger_type:
+  //
+  //   - passive_monitor: forward lookup — the passive_monitor run IS
+  //     the Haiku decision run. pending_ella_responses keyed on its id.
+  //     Trigger-metadata fallback covers skip decisions (which never
+  //     land in pending_ella_responses).
+  //
+  //   - passive_substantive / passive_general_inquiry: REVERSE lookup —
+  //     the Haiku decision lives on a SEPARATE passive_monitor run.
+  //     Path: trigger_metadata.pending_id → pending_ella_responses row
+  //     → that row's haiku_decision + haiku_reasoning. If pending_id is
+  //     null (legacy data), we just don't surface a decision.
+  //
+  //   - Reactive runs (slack_mention / bare_mention): no Haiku step
+  //     happened. Detail page renders synthetic content.
+  //
+  // We also forward the linked passive_monitor run's cost + tokens so
+  // the detail page can display "true total cost" for substantive runs
+  // (Sonnet response + Haiku decision summed).
+  let haiku_decision: string | null = null
+  let haiku_reasoning: string | null = null
+  let haiku_cost_usd: number | null = null
+  let haiku_input_tokens: number | null = null
+  let haiku_output_tokens: number | null = null
+  let haiku_agent_run_id: string | null = null
+
+  if (r.trigger_type === 'passive_monitor') {
+    const { data: pendingRow } = await supabase
+      .from('pending_ella_responses')
+      .select('haiku_decision, haiku_reasoning')
+      .eq('agent_run_id', r.id)
+      .maybeSingle()
+    const typed = pendingRow as
+      | { haiku_decision?: string | null; haiku_reasoning?: string | null }
+      | null
+    if (typed && (typed.haiku_decision || typed.haiku_reasoning)) {
+      haiku_decision = typed.haiku_decision ?? null
+      haiku_reasoning = typed.haiku_reasoning ?? null
+    } else {
+      haiku_decision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      haiku_reasoning = extractTriggerField(r.trigger_metadata, 'haiku_reasoning')
+    }
+  } else if (
+    r.trigger_type === 'passive_substantive' ||
+    r.trigger_type === 'passive_general_inquiry'
+  ) {
+    const pending_id = extractTriggerField(r.trigger_metadata, 'pending_id')
+    if (pending_id) {
+      const { data: pendingRow } = await supabase
+        .from('pending_ella_responses')
+        .select('haiku_decision, haiku_reasoning, agent_run_id')
+        .eq('id', pending_id)
+        .maybeSingle()
+      const typed = pendingRow as
+        | {
+            haiku_decision?: string | null
+            haiku_reasoning?: string | null
+            agent_run_id?: string | null
+          }
+        | null
+      if (typed) {
+        haiku_decision = typed.haiku_decision ?? null
+        haiku_reasoning = typed.haiku_reasoning ?? null
+        haiku_agent_run_id = typed.agent_run_id ?? null
+      }
+      // Forward the linked passive_monitor row's cost + tokens so the
+      // detail page can sum the Sonnet response cost with the Haiku
+      // decision cost for the "true total" display.
+      if (haiku_agent_run_id) {
+        const { data: haikuRow } = await supabase
+          .from('agent_runs')
+          .select('llm_cost_usd, llm_input_tokens, llm_output_tokens')
+          .eq('id', haiku_agent_run_id)
+          .maybeSingle()
+        const typedHaiku = haikuRow as
+          | {
+              llm_cost_usd?: number | string | null
+              llm_input_tokens?: number | null
+              llm_output_tokens?: number | null
+            }
+          | null
+        if (typedHaiku) {
+          // llm_cost_usd is a numeric column; Supabase may return it as
+          // string. Coerce defensively.
+          const rawCost = typedHaiku.llm_cost_usd
+          haiku_cost_usd =
+            rawCost == null
+              ? null
+              : typeof rawCost === 'string'
+              ? Number(rawCost)
+              : rawCost
+          haiku_input_tokens = typedHaiku.llm_input_tokens ?? null
+          haiku_output_tokens = typedHaiku.llm_output_tokens ?? null
+        }
+      }
+    }
   }
 
   // Escalation row.
@@ -597,6 +962,37 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     lengthOutlierIds: lengthOutliers,
   })
 
+  // Build a Slack-mention name map across every text field that will be
+  // surfaced on the detail page (triggering message, Ella's response,
+  // surrounding messages). One batched lookup against clients +
+  // team_members so the page receives mention-resolved text and stays
+  // dumb.
+  const detailMentionedIds = collectMentionedUserIds([
+    r.input_summary,
+    r.output_summary,
+    slackText,
+    ...threadMessages.map((m) => m.text),
+    haiku_reasoning,
+  ])
+  const detailMentionMap = await buildUserNameMap(supabase, detailMentionedIds)
+
+  const inputSummaryRendered = r.input_summary
+    ? renderSlackText(r.input_summary, detailMentionMap)
+    : null
+  const outputSummaryRendered = r.output_summary
+    ? renderSlackText(r.output_summary, detailMentionMap)
+    : null
+  const slackTextRendered = slackText
+    ? renderSlackText(slackText, detailMentionMap)
+    : null
+  const haikuReasoningRendered = haiku_reasoning
+    ? renderSlackText(haiku_reasoning, detailMentionMap)
+    : null
+  threadMessages = threadMessages.map((m) => ({
+    ...m,
+    text: renderSlackText(m.text, detailMentionMap),
+  }))
+
   return {
     id: r.id,
     started_at: r.started_at,
@@ -607,8 +1003,14 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     channel_client_name: channelInfo?.client_name ?? null,
     real_author_role: extractAuthorRole(r.trigger_metadata),
     real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
-    input_summary: r.input_summary,
-    output_summary: r.output_summary,
+    // input_summary + output_summary + output_text + slack_response_text
+    // surface mention-rendered text. Detail page receives readable
+    // <@First Last> in place of <@U...> for every field that ends up
+    // on screen.
+    input_summary: inputSummaryRendered,
+    output_text:
+      outputSummaryRendered?.trim() || slackTextRendered?.trim() || null,
+    output_summary: outputSummaryRendered,
     error_message: r.error_message,
     trigger_ts,
     thread_ts,
@@ -619,9 +1021,15 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     llm_cost_usd: r.llm_cost_usd,
     duration_ms: r.duration_ms,
     anomaly_flags: flags,
-    slack_response_text: slackText,
+    slack_response_text: slackTextRendered,
     has_escalation: escalationIds.has(r.id),
     thread_messages: threadMessages,
+    haiku_decision,
+    haiku_reasoning: haikuReasoningRendered,
+    haiku_agent_run_id,
+    haiku_cost_usd,
+    haiku_input_tokens,
+    haiku_output_tokens,
     escalation,
   }
 }
@@ -654,19 +1062,80 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
 
   const todayMs = todayStart.getTime()
   const weekMs = weekStart.getTime()
-  const total_today = runs.filter((r) => new Date(r.started_at).getTime() >= todayMs).length
-  const total_week = runs.filter((r) => new Date(r.started_at).getTime() >= weekMs).length
-  const total_month = runs.length
+
+  // Response-scope predicate (mirrors getEllaRunsList's filter): one
+  // row per user-visible "Ella spoke" event. Includes reactive
+  // @-mention paths, passive Sonnet responses, passive canned
+  // openers, and escalate-only passive_monitor rows (which have no
+  // substantive row to take their place). Excludes every other
+  // passive_monitor row (skip decisions and substantive-decision rows
+  // whose linked substantive row IS in scope).
+  const RESPONSE_TRIGGER_TYPES = new Set([
+    'slack_mention',
+    'bare_mention',
+    'app_mention',
+    'passive_substantive',
+    'passive_general_inquiry',
+  ])
+  const isResponseScope = (r: RawRunRow): boolean => {
+    if (!['success', 'escalated', 'error'].includes(r.status)) return false
+    if (RESPONSE_TRIGGER_TYPES.has(r.trigger_type)) return true
+    if (r.trigger_type === 'passive_monitor') {
+      const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
+      return haikuDecision === 'escalate'
+    }
+    return false
+  }
+  // Skip-scope retained for telemetry parity even though the Cost-card
+  // hint that surfaced it is reverted per Decision 2. Field stays on
+  // EllaSummaryStats; downstream callers can render it if needed.
+  const isSkipScope = (r: RawRunRow): boolean => {
+    return (
+      r.trigger_type === 'passive_monitor' &&
+      extractTriggerField(r.trigger_metadata, 'haiku_decision') === 'skip'
+    )
+  }
+
+  const responseRuns = runs.filter(isResponseScope)
+  const skipRuns = runs.filter(isSkipScope)
+
+  // total_* + cost_* + errors_* all reflect response scope. The Surface
+  // band's headline is "what did Ella actually do" — observation noise
+  // doesn't belong in the count or the cost figure.
+  const total_today = responseRuns.filter((r) => new Date(r.started_at).getTime() >= todayMs).length
+  const total_week = responseRuns.filter((r) => new Date(r.started_at).getTime() >= weekMs).length
+  const total_month = responseRuns.length
 
   const status_counts: Record<string, number> = {}
-  for (const r of runs) status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
+  for (const r of responseRuns) status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
 
-  const cost_today = runs
+  const cost_today = responseRuns
     .filter((r) => new Date(r.started_at).getTime() >= todayMs)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-  const cost_week = runs
+  const cost_week = responseRuns
     .filter((r) => new Date(r.started_at).getTime() >= weekMs)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+  const cost_month = responseRuns.reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+
+  // Skip-cost broken out separately on the Cost card hint line so the
+  // headline figure stays response-scope while the observation-cost is
+  // still visible. Only the today figure is broken out.
+  const skip_cost_today = skipRuns
+    .filter((r) => new Date(r.started_at).getTime() >= todayMs)
+    .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+
+  // status='error' counts per window. status='error' is in response
+  // scope by definition (Ella tried and failed); skip rows have
+  // status='success' not 'error', so a plain filter against responseRuns
+  // is correct.
+  const errorsRuns = responseRuns.filter((r) => r.status === 'error')
+  const errors_today = errorsRuns.filter(
+    (r) => new Date(r.started_at).getTime() >= todayMs,
+  ).length
+  const errors_week = errorsRuns.filter(
+    (r) => new Date(r.started_at).getTime() >= weekMs,
+  ).length
+  const errors_month = errorsRuns.length
 
   const anomaly_count_today = runs.filter((r) => {
     if (new Date(r.started_at).getTime() < todayMs) return false
@@ -689,6 +1158,11 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
     status_counts,
     cost_today,
     cost_week,
+    cost_month,
+    skip_cost_today,
+    errors_today,
+    errors_week,
+    errors_month,
     anomaly_count_today,
   }
 }

@@ -32,7 +32,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import {
   CSM_STANDING_OPTIONS,
@@ -199,22 +198,39 @@ export function FilterBar({
     needsReviewSelected.length > 0
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Input
-          placeholder="Search by name or email…"
-          value={searchValue}
-          onChange={(event) => setSearchValue(event.target.value)}
-          className="max-w-sm"
-        />
-        {hasAnyFilter ? (
-          <Button variant="outline" size="sm" onClick={clearAll}>
-            Clear filters
-          </Button>
-        ) : null}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
+    <div
+      className="flex flex-wrap items-center gap-2.5"
+      style={{
+        padding: '14px 0 18px',
+        borderTop: '1px solid var(--color-geg-border)',
+      }}
+    >
+      <input
+        type="text"
+        placeholder="Search by name or email…"
+        value={searchValue}
+        onChange={(event) => setSearchValue(event.target.value)}
+        className="geg-filter-input"
+      />
+      {hasAnyFilter ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={clearAll}
+          className="geg-mono"
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            background: 'transparent',
+            color: 'var(--color-geg-text-2)',
+            borderColor: 'var(--color-geg-border-strong)',
+          }}
+        >
+          Clear
+        </Button>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2.5">
         <MultiSelectDropdown
           label="Status"
           options={STATUS_OPTIONS}

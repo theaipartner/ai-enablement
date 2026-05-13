@@ -22,9 +22,17 @@ export function BackToClientsButton() {
     <Link
       href="/clients"
       onClick={handleClick}
-      className="text-sm text-muted-foreground hover:underline"
+      className="geg-mono"
+      style={{
+        color: 'var(--color-geg-accent)',
+        textDecoration: 'none',
+        fontSize: 11,
+        fontWeight: 500,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+      }}
     >
-      ← Back to Clients
+      ← BACK TO CLIENTS
     </Link>
   )
 }

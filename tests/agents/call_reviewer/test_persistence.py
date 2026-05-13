@@ -27,6 +27,19 @@ _VALID_REVIEW = {
     "sentiment_arc": "Flat call.",
 }
 
+# The persistence hook calls classify_sentiment_tier (Haiku) before
+# writing. Mock it to a fixed tier so tests don't hit the real API and
+# can pin assertions on the resulting metadata shape.
+_MOCK_TIER = "green"
+
+
+@pytest.fixture(autouse=True)
+def _mock_sentiment_classifier(monkeypatch):
+    monkeypatch.setattr(
+        "agents.call_reviewer.persistence.classify_sentiment_tier",
+        lambda _arc: _MOCK_TIER,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Fake DB
@@ -188,6 +201,7 @@ def test_upsert_call_review_no_op_when_existing_matches():
         "started_at": "2026-05-01T12:00:00+00:00",
         "prompt_version": p.PROMPT_VERSION,
         "model": "claude-sonnet-4-6",
+        "sentiment_tier": _MOCK_TIER,
     }
     existing = {
         "id": "doc-existing",
@@ -214,6 +228,7 @@ def test_upsert_call_review_flips_is_active_back_to_false():
         "started_at": "2026-05-01T12:00:00+00:00",
         "prompt_version": p.PROMPT_VERSION,
         "model": "claude-sonnet-4-6",
+        "sentiment_tier": _MOCK_TIER,
     }
     existing = {
         "id": "doc-existing",

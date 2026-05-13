@@ -23,6 +23,11 @@ from typing import Any
 from shared.ingestion.validate import validate_document_metadata
 
 from agents.call_reviewer.prompt import PROMPT_VERSION
+from agents.call_reviewer.sentiment_classifier import classify_sentiment_tier
+
+import logging
+
+_logger = logging.getLogger("ai_enablement.call_reviewer.persistence")
 
 _SOURCE = "fathom"
 _REVIEW_DOC_TYPE = "call_review"
@@ -79,6 +84,21 @@ def upsert_call_review(
         "prompt_version": prompt_version,
         "model": model,
     }
+    # Sentiment-tier injection. Haiku-classified, display-only, never
+    # load-bearing — so a classifier failure must not block the write.
+    # On exception we log and proceed without the field; the doc still
+    # lands, the dashboard renders the call without a sentiment pill.
+    sentiment_arc = review.get("sentiment_arc")
+    if isinstance(sentiment_arc, str) and sentiment_arc:
+        try:
+            metadata["sentiment_tier"] = classify_sentiment_tier(sentiment_arc)
+        except Exception as exc:
+            _logger.warning(
+                "sentiment classifier failed for call %s — writing review "
+                "without sentiment_tier: %s",
+                call_id,
+                exc,
+            )
     validate_document_metadata(
         metadata, source=_SOURCE, document_type=_REVIEW_DOC_TYPE
     )

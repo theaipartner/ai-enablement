@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Instrument_Serif, Inter } from "next/font/google";
+import { Instrument_Serif, Inter, Newsreader, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -30,6 +30,24 @@ const prometheanSans = Inter({
   display: "swap",
 });
 
+// Calls-redesign editorial fonts — Newsreader for serif display +
+// JetBrains Mono for IDs/dates/eyebrows. Exposed as --font-geg-serif and
+// --font-geg-mono so the gregory-editorial theme references them
+// without colliding with the Promethean variables above.
+const gregoryEditorialSerif = Newsreader({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  style: ["normal", "italic"],
+  variable: "--font-geg-serif",
+  display: "swap",
+});
+const gregoryEditorialMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-geg-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "Gregory",
   description: "CSM dashboard for The AI Partner.",
@@ -43,7 +61,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${prometheanSerif.variable} ${prometheanSans.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${prometheanSerif.variable} ${prometheanSans.variable} ${gregoryEditorialSerif.variable} ${gregoryEditorialMono.variable} antialiased`}
       >
         {children}
       </body>

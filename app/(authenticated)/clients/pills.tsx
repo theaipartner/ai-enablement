@@ -1,91 +1,79 @@
-// Small server-renderable pill helpers for the Clients table.
-// Status / journey-stage / tags / needs-review treatments live here so
-// the table and detail page render them identically.
+// Vocab → editorial pill mappings for the Clients surfaces.
+//
+// All pills share the GegPill primitive; this file's job is the
+// (vocab string → tier + label) lookup. Centralized so the Clients
+// list table and detail page render identical pills for the same data.
+//
+// Tier mappings come from the Clients Redesign mock § 2 — see the
+// "Pill tier mappings" handoff table. Status:
+//   active=pos, paused/ghost=warn, leave=muted, churned=neg
+// CSM standing:
+//   happy/content=pos, at_risk=warn, problem=neg
+// NPS standing:
+//   promoter=pos, neutral=warn, at_risk=neg
+// Trustpilot:
+//   yes=pos, ask=warn, asked=gold, no=neg (no spec — kept readable)
+//
+// Journey stage stays as a muted pill — the labels are long and don't
+// carry a sentiment, so the muted treatment matches the mock's intent
+// (filter-only, neutral visual).
 
-import { Badge } from '@/components/ui/badge'
+import { GegPill, type GegPillTier } from '@/components/gregory/geg-pill'
 import { JOURNEY_STAGE_LABEL } from '@/lib/client-vocab'
-import { cn } from '@/lib/utils'
 
-const STATUS_CLASSES: Record<string, string> = {
-  active: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-  paused: 'bg-amber-100 text-amber-900 border-amber-200',
-  ghost: 'bg-zinc-100 text-zinc-700 border-zinc-200',
-  leave: 'bg-slate-200 text-slate-800 border-slate-300',
-  churned: 'bg-rose-100 text-rose-900 border-rose-200',
+// ----- Status -------------------------------------------------------------
+
+const STATUS_TIER: Record<string, GegPillTier> = {
+  active: 'pos',
+  paused: 'warn',
+  ghost: 'warn',
+  leave: 'muted',
+  churned: 'neg',
+}
+const STATUS_LABEL: Record<string, string> = {
+  active: 'Active',
+  paused: 'Paused',
+  ghost: 'Ghost',
+  leave: 'Leave',
+  churned: 'Churned',
 }
 
 export function StatusPill({ status }: { status: string }) {
-  const cls = STATUS_CLASSES[status] ?? 'bg-zinc-100 text-zinc-700 border-zinc-200'
-  return <Badge className={cn('border', cls)}>{status}</Badge>
+  const tier = STATUS_TIER[status] ?? 'muted'
+  const label = STATUS_LABEL[status] ?? status
+  return <GegPill tier={tier} label={label} />
 }
 
-export function JourneyStagePill({ stage }: { stage: string | null }) {
-  if (!stage) return <span className="text-muted-foreground">—</span>
-  // Label lookup via the migration-0028 vocab. Defensive: any value
-  // outside the CHECK-constrained vocab (shouldn't reach here
-  // post-0028, but a future widening might land before the vocab
-  // does) falls through to the raw string.
-  const label = JOURNEY_STAGE_LABEL[stage] ?? stage
-  return (
-    <Badge variant="outline" className="font-normal">
-      {label}
-    </Badge>
-  )
+// ----- CSM standing -------------------------------------------------------
+
+const CSM_STANDING_TIER: Record<string, GegPillTier> = {
+  happy: 'pos',
+  content: 'pos',
+  at_risk: 'warn',
+  problem: 'neg',
+}
+const CSM_STANDING_LABEL: Record<string, string> = {
+  happy: 'Happy',
+  content: 'Content',
+  at_risk: 'At risk',
+  problem: 'Problem',
 }
 
-const NEEDS_REVIEW_CLASSES =
-  'bg-amber-100 text-amber-900 border-amber-200 font-medium'
-
-export function TagsList({ tags }: { tags: string[] }) {
-  if (!tags.length) return <span className="text-muted-foreground">—</span>
-  return (
-    <div className="flex flex-wrap gap-1">
-      {tags.map((tag) => {
-        const isReview = tag === 'needs_review'
-        return (
-          <Badge
-            key={tag}
-            className={cn(
-              'border font-normal',
-              isReview
-                ? NEEDS_REVIEW_CLASSES
-                : 'bg-zinc-100 text-zinc-700 border-zinc-200',
-            )}
-          >
-            {tag}
-          </Badge>
-        )
-      })}
-    </div>
-  )
+export function CsmStandingPill({ standing }: { standing: string | null }) {
+  if (!standing) return <span className="text-muted-foreground">—</span>
+  const tier = CSM_STANDING_TIER[standing] ?? 'muted'
+  const label = CSM_STANDING_LABEL[standing] ?? standing
+  return <GegPill tier={tier} label={label} />
 }
 
-// Standalone pill rendered alongside Status / Journey on the detail
-// page header for clients carrying the needs_review tag. The list view
-// already surfaces this via TagsList; the detail header gives it a
-// second, more prominent rendering since reviewers will land here from
-// the "Auto-created (needs review)" filter chip.
-export function NeedsReviewPill() {
-  return (
-    <Badge className={cn('border', NEEDS_REVIEW_CLASSES)}>
-      needs review
-    </Badge>
-  )
+// ----- NPS standing -------------------------------------------------------
+
+const NPS_STANDING_TIER: Record<string, GegPillTier> = {
+  promoter: 'pos',
+  neutral: 'warn',
+  at_risk: 'neg',
 }
-
-// Clients list V2 column swap (2026-05-08). Shape + palette mirrors
-// StatusPill above so the row reads as a coherent strip of pills.
-// Labels MUST match lib/client-vocab.ts NPS_STANDING_OPTIONS labels
-// — filter dropdown and table cell render identical strings for the
-// same data.
-
-const NPS_STANDING_CLASSES: Record<string, string> = {
-  promoter: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-  neutral: 'bg-amber-100 text-amber-900 border-amber-200',
-  at_risk: 'bg-rose-100 text-rose-900 border-rose-200',
-}
-
-const NPS_STANDING_LABELS: Record<string, string> = {
+const NPS_STANDING_LABEL: Record<string, string> = {
   promoter: 'Promoter',
   neutral: 'Neutral',
   at_risk: 'At Risk',
@@ -93,26 +81,20 @@ const NPS_STANDING_LABELS: Record<string, string> = {
 
 export function NpsStandingPill({ standing }: { standing: string | null }) {
   if (!standing) return <span className="text-muted-foreground">—</span>
-  const cls =
-    NPS_STANDING_CLASSES[standing] ??
-    'bg-zinc-100 text-zinc-700 border-zinc-200'
-  const label = NPS_STANDING_LABELS[standing] ?? standing
-  return <Badge className={cn('border', cls)}>{label}</Badge>
+  const tier = NPS_STANDING_TIER[standing] ?? 'muted'
+  const label = NPS_STANDING_LABEL[standing] ?? standing
+  return <GegPill tier={tier} label={label} />
 }
 
-// Trustpilot pill — distinct sky/blue treatment on 'asked' so the four
-// states are visually distinguishable at a glance (Given=emerald,
-// Declined=rose, Ask=amber, Asked=sky). Labels match
-// lib/client-vocab.ts TRUSTPILOT_OPTIONS labels exactly.
+// ----- Trustpilot ---------------------------------------------------------
 
-const TRUSTPILOT_CLASSES: Record<string, string> = {
-  yes: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-  no: 'bg-rose-100 text-rose-900 border-rose-200',
-  ask: 'bg-amber-100 text-amber-900 border-amber-200',
-  asked: 'bg-sky-100 text-sky-900 border-sky-200',
+const TRUSTPILOT_TIER: Record<string, GegPillTier> = {
+  yes: 'pos',
+  ask: 'warn',
+  asked: 'gold',
+  no: 'neg',
 }
-
-const TRUSTPILOT_LABELS: Record<string, string> = {
+const TRUSTPILOT_LABEL: Record<string, string> = {
   yes: 'Yes',
   no: 'No',
   ask: 'Ask',
@@ -121,8 +103,41 @@ const TRUSTPILOT_LABELS: Record<string, string> = {
 
 export function TrustpilotPill({ status }: { status: string | null }) {
   if (!status) return <span className="text-muted-foreground">—</span>
-  const cls =
-    TRUSTPILOT_CLASSES[status] ?? 'bg-zinc-100 text-zinc-700 border-zinc-200'
-  const label = TRUSTPILOT_LABELS[status] ?? status
-  return <Badge className={cn('border', cls)}>{label}</Badge>
+  const tier = TRUSTPILOT_TIER[status] ?? 'muted'
+  const label = TRUSTPILOT_LABEL[status] ?? status
+  return <GegPill tier={tier} label={label} />
+}
+
+// ----- Journey stage ------------------------------------------------------
+
+export function JourneyStagePill({ stage }: { stage: string | null }) {
+  if (!stage) return <span className="text-muted-foreground">—</span>
+  const label = JOURNEY_STAGE_LABEL[stage] ?? stage
+  return <GegPill tier="muted" label={label} />
+}
+
+// ----- Needs-review (legacy — kept for detail page header) ----------------
+
+export function NeedsReviewPill() {
+  return <GegPill tier="warn" label="Needs review" />
+}
+
+// ----- Tags list ----------------------------------------------------------
+
+export function TagsList({ tags }: { tags: string[] }) {
+  if (!tags.length) return <span className="text-muted-foreground">—</span>
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tags.map((tag) => {
+        const isReview = tag === 'needs_review'
+        return (
+          <GegPill
+            key={tag}
+            tier={isReview ? 'warn' : 'muted'}
+            label={tag}
+          />
+        )
+      })}
+    </div>
+  )
 }

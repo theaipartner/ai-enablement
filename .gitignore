@@ -59,3 +59,9 @@ supabase/snippets/
 # Director / Builder MCP scaffold — persisted Builder session_id, regenerated
 # per delegate call. .claude/settings.local.json is checked in; this file is not.
 .claude/builder_session.txt
+.preview-cookie
+
+# Visual-verification screenshots from scripts/verify-ella-preview.mjs.
+# Snapshots of the live preview at run time — not source. Regenerate by
+# re-running the script.
+scripts/preview-screenshots/
