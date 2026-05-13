@@ -9,7 +9,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { EllaRunsListRow } from '@/lib/db/ella-runs'
-import { AnomalyFlagsRow, RelativeTime, RolePill, RunStatusPill } from './pills'
+import { RelativeTime, RolePill, RunStatusPill } from './pills'
+
+// Part 2 redesign:
+// - "Real author" column renamed → "Who Ella responded to".
+// - "Anomalies" column removed entirely.
+// - Channel column shows just #channel-name (client-name subtitle gone;
+//   that info is now redundant with the "Who Ella responded to" column).
+// AnomalyFlagsRow import dropped — surfacing anomalies is anti-goal
+// per the redesign; the data layer still computes them for future
+// alert-source work.
 
 function fmtCost(c: number | null): string {
   if (c == null) return '—'
@@ -41,9 +50,8 @@ export function EllaRunsTable({ rows }: { rows: EllaRunsListRow[] }) {
           <TableRow>
             <TableHead>When</TableHead>
             <TableHead>Channel</TableHead>
-            <TableHead>Real author</TableHead>
+            <TableHead>Who Ella responded to</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Anomalies</TableHead>
             <TableHead>Input</TableHead>
             <TableHead className="text-right">Tokens · Cost</TableHead>
             <TableHead className="w-8" />
@@ -60,9 +68,6 @@ export function EllaRunsTable({ rows }: { rows: EllaRunsListRow[] }) {
               <TableCell className="text-sm">
                 <Link href={`/ella/runs/${r.id}`} className="block">
                   <div className="font-medium">#{r.channel_name ?? '?'}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {r.channel_client_name ?? '—'}
-                  </div>
                 </Link>
               </TableCell>
               <TableCell className="text-sm">
@@ -76,11 +81,6 @@ export function EllaRunsTable({ rows }: { rows: EllaRunsListRow[] }) {
               <TableCell>
                 <Link href={`/ella/runs/${r.id}`} className="block">
                   <RunStatusPill status={r.status} />
-                </Link>
-              </TableCell>
-              <TableCell>
-                <Link href={`/ella/runs/${r.id}`} className="block">
-                  <AnomalyFlagsRow flags={r.anomaly_flags} />
                 </Link>
               </TableCell>
               <TableCell className="max-w-[320px] text-sm">
