@@ -46,6 +46,31 @@ async function main(): Promise<void> {
     await page.waitForSelector('table tbody tr', { timeout: 30_000 })
     const rowCount = await page.locator('table tbody tr').count()
     console.log(`[verify] list: ${rowCount} rows rendered`)
+
+    // Dump computed border state on the first body row + first cell so
+    // any "borders don't show" debugging has hard data to work from.
+    const borders = await page.evaluate(() => {
+      const tr = document.querySelector('tbody tr')
+      const td = tr?.querySelector('td')
+      if (!tr || !td) return null
+      const trCs = window.getComputedStyle(tr)
+      const tdCs = window.getComputedStyle(td)
+      return {
+        tr: {
+          borderTopColor: trCs.borderTopColor,
+          borderTopWidth: trCs.borderTopWidth,
+          borderBottomColor: trCs.borderBottomColor,
+          borderBottomWidth: trCs.borderBottomWidth,
+        },
+        td: {
+          borderBottomColor: tdCs.borderBottomColor,
+          borderBottomWidth: tdCs.borderBottomWidth,
+          backgroundColor: tdCs.backgroundColor,
+        },
+      }
+    })
+    console.log('[verify] computed borders:', JSON.stringify(borders, null, 2))
+
     const listPath = path.join(OUT_DIR, 'calls-list.png')
     // Viewport-only (1440×900 baseline) — matches the design mock's
     // canvas so visual comparison reads as a like-for-like.
