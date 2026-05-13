@@ -203,12 +203,21 @@ export function EditableField({
             : 'No'
           : String(committed)
 
+    // When label is empty AND compact is set, hide the label-row entirely.
+    // Otherwise the empty Label still occupies vertical space and the
+    // space-y-1.5 gap adds another sliver — both compound on the
+    // /clients/[id] Details box Primary CSM row, blowing it past sibling
+    // height. Standalone uses with a real label string keep the
+    // label-row regardless.
+    const hideLabelRow = compact && label === ''
     return (
-      <div className={cn('space-y-1.5', className)}>
-        <div className="flex items-center justify-between">
-          <Label>{label}</Label>
-          <StatusBadge status={status} error={error} />
-        </div>
+      <div className={cn(hideLabelRow ? null : 'space-y-1.5', className)}>
+        {hideLabelRow ? null : (
+          <div className="flex items-center justify-between">
+            <Label>{label}</Label>
+            <StatusBadge status={status} error={error} />
+          </div>
+        )}
         <div
           role="button"
           tabIndex={0}
@@ -241,12 +250,15 @@ export function EditableField({
   }
 
   // ----- EDIT MODE -----
+  const hideLabelRowEdit = compact && label === ''
   return (
-    <div className={cn('space-y-1.5', className)}>
-      <div className="flex items-center justify-between">
-        <Label>{label}</Label>
-        <StatusBadge status={status} error={error} />
-      </div>
+    <div className={cn(hideLabelRowEdit ? null : 'space-y-1.5', className)}>
+      {hideLabelRowEdit ? null : (
+        <div className="flex items-center justify-between">
+          <Label>{label}</Label>
+          <StatusBadge status={status} error={error} />
+        </div>
+      )}
       {renderEditor({
         variant,
         draft,
