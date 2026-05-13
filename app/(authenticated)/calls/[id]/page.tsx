@@ -18,11 +18,6 @@ function formatDuration(seconds: number | null): string {
   return `${mm}:${ss.toString().padStart(2, '0')}`
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
-}
-
 function formatStarted(iso: string): string {
   // "5/12/2026, 11:48 PM" — matches the mock.
   return new Date(iso).toLocaleString('en-US', {
