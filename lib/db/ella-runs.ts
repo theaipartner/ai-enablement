@@ -66,6 +66,13 @@ export type EllaRunsListRow = {
 
 export type EllaRunDetail = EllaRunsListRow & {
   output_summary: string | null
+  // Full Slack message text of the triggering message, joined from
+  // slack_messages on (slack_channel_id, slack_ts) = (run.slack_channel_id,
+  // run.trigger_ts). Null when realtime ingest hadn't landed yet or the
+  // ts isn't matchable. Detail page falls back to input_summary on null.
+  // Mention + emoji rendered for display consistency with the other
+  // text fields on this row.
+  triggering_message_full_text: string | null
   error_message: string | null
   trigger_ts: string | null
   thread_ts: string | null
@@ -1011,6 +1018,30 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     output_text:
       outputSummaryRendered?.trim() || slackTextRendered?.trim() || null,
     output_summary: outputSummaryRendered,
+    triggering_message_full_text: (() => {
+      // Pull the trigger row's raw text from the same rawMsgs fetched
+      // for thread_messages. The trigger-inclusion-guarantee block
+      // above already synthesizes a fallback row using input_summary
+      // when slack_messages didn't have the trigger — when that's the
+      // case, return null here so the page can choose the input_summary
+      // fallback at render time rather than silently masquerading the
+      // summary as a full message.
+      if (!trigger_ts) return null
+      const trig = rawMsgs.find((m) => m.slack_ts === trigger_ts)
+      if (!trig) return null
+      // The synthesized fallback row carries the input_summary as its
+      // text — detect it by checking whether the text equals the
+      // input_summary or the placeholder string. Real ingested rows
+      // have the full Slack message text.
+      const summary = r.input_summary ?? ''
+      if (
+        trig.text === summary ||
+        trig.text === '(triggering message not in slack_messages)'
+      ) {
+        return null
+      }
+      return renderSlackText(trig.text, detailMentionMap)
+    })(),
     error_message: r.error_message,
     trigger_ts,
     thread_ts,

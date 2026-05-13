@@ -3,6 +3,7 @@ import { getEllaRunDetail, type EllaRunDetail } from '@/lib/db/ella-runs'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { DiagnosticsCollapse } from '@/components/gregory/diagnostics-collapse'
 import { EmptyStateAwareSection } from '@/components/gregory/empty-state-aware-section'
+import { ExpandableMessage } from './expandable-message'
 import { RolePill, RunStatusPill } from '../pills'
 
 // Part 2 detail-and-cleanup redesign:
@@ -269,15 +270,25 @@ export default async function EllaRunDetailPage({
           Surrounding messages → Haiku decision. Workflow order. */}
       <MetaRowSection title="Triggering message">
         <div className="space-y-2 text-sm">
-          <div className="rounded bg-zinc-50 p-3">
-            {run.input_summary ?? (
-              <span className="text-muted-foreground">(no input recorded)</span>
-            )}
-          </div>
+          {run.triggering_message_full_text ?? run.input_summary ? (
+            <ExpandableMessage
+              text={
+                run.triggering_message_full_text ?? run.input_summary ?? ''
+              }
+            />
+          ) : (
+            <div className="rounded bg-zinc-50 p-3 text-muted-foreground">
+              (no input recorded)
+            </div>
+          )}
           <div className="text-xs text-muted-foreground">
             Trigger type: <code>{run.trigger_type}</code>
             {run.trigger_ts ? <> · ts: <code>{run.trigger_ts}</code></> : null}
             {run.thread_ts ? <> · thread_ts: <code>{run.thread_ts}</code></> : null}
+            {run.triggering_message_full_text == null &&
+            run.input_summary != null ? (
+              <> · <span className="text-amber-700">summary fallback</span></>
+            ) : null}
           </div>
         </div>
       </MetaRowSection>
@@ -291,13 +302,13 @@ export default async function EllaRunDetailPage({
               <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                 Client-facing (from `slack_messages`)
               </div>
-              <pre className="whitespace-pre-wrap rounded bg-zinc-50 p-3 font-sans">
-                {clientFacing ?? (
-                  <span className="text-muted-foreground">
-                    (no slack_messages match — falling back to output_summary below)
-                  </span>
-                )}
-              </pre>
+              {clientFacing ? (
+                <ExpandableMessage text={clientFacing} />
+              ) : (
+                <div className="rounded bg-zinc-50 p-3 text-muted-foreground">
+                  (no slack_messages match — falling back to output_summary below)
+                </div>
+              )}
             </div>
             {handoff ? (
               <div>
@@ -314,9 +325,7 @@ export default async function EllaRunDetailPage({
                 <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                   output_summary (200-char limit)
                 </div>
-                <pre className="whitespace-pre-wrap rounded bg-zinc-50 p-3 font-sans">
-                  {run.output_summary}
-                </pre>
+                <ExpandableMessage text={run.output_summary} />
               </div>
             ) : null}
           </div>
@@ -332,8 +341,6 @@ export default async function EllaRunDetailPage({
           </div>
         ) : null}
       </MetaRowSection>
-
-      <SurroundingMessagesSection run={run} />
 
       <HaikuDecisionSection run={run} reactive={reactive} />
 
@@ -414,62 +421,6 @@ export default async function EllaRunDetailPage({
         </pre>
       </DiagnosticsCollapse>
     </div>
-  )
-}
-
-function SurroundingMessagesSection({ run }: { run: EllaRunDetail }) {
-  // Data layer guarantees thread_messages has at least the trigger;
-  // no empty-state path. If the array is somehow empty (degenerate
-  // case — channel and trigger_ts both unresolvable), render a stub.
-  if (run.thread_messages.length === 0) {
-    return (
-      <EmptyStateAwareSection
-        title="Surrounding messages"
-        mode="stub"
-        stubContent={
-          <div className="text-sm text-muted-foreground">
-            No surrounding messages available.
-          </div>
-        }
-      />
-    )
-  }
-  return (
-    <MetaRowSection title="Surrounding messages">
-      <div className="space-y-1 text-sm">
-        {run.thread_messages.map((m) => {
-          const hhmm = new Date(m.sent_at).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-          const author = m.display_name ?? m.slack_user_id
-          return (
-            <div
-              key={m.slack_ts}
-              className={
-                m.is_trigger
-                  ? 'rounded bg-amber-50 p-2 font-medium'
-                  : 'p-2'
-              }
-            >
-              <span className="font-mono text-xs text-muted-foreground">
-                [{hhmm}]
-              </span>{' '}
-              <span className="text-xs text-muted-foreground">
-                {m.author_type}
-              </span>{' '}
-              <span className="font-medium">{author}:</span>{' '}
-              <span>{m.text}</span>
-              {m.is_trigger ? (
-                <span className="ml-1 text-xs uppercase tracking-wide text-amber-700">
-                  ← trigger
-                </span>
-              ) : null}
-            </div>
-          )
-        })}
-      </div>
-    </MetaRowSection>
   )
 }
 
