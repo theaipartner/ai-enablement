@@ -719,6 +719,10 @@
    commits → returns to display mode) doesn't leave the browser's default
    focus ring on the cell wrapper. Keyboard tab still surfaces a visible
    accent-colored ring. */
+[data-theme="gregory-editorial"] .geg-editable-display {
+  position: relative;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
 [data-theme="gregory-editorial"] .geg-editable-display:not(:focus-visible) {
   outline: none;
   box-shadow: none;
@@ -726,6 +730,51 @@
 [data-theme="gregory-editorial"] .geg-editable-display:focus-visible {
   outline: 2px solid var(--color-geg-accent);
   outline-offset: 1px;
+}
+/* Click-to-edit affordance on the editorial-dark theme: tailwind's
+   bg-muted/50 + border-input hover tokens are too subtle to read as
+   "interactive" against the dark surface. Override with a gold-tinted
+   wash + accent border so the entire cell visibly lights up on hover.
+   A small chevron at the right edge appears on hover too, mirroring the
+   <select> dropdown affordance the cell switches to on click. */
+[data-theme="gregory-editorial"] .geg-editable-display:hover {
+  background-color: var(--color-geg-accent-fill) !important;
+  border-color: var(--color-geg-accent-border) !important;
+}
+[data-theme="gregory-editorial"] .geg-editable-display::after {
+  content: "›";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%) rotate(90deg);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--color-geg-accent);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+[data-theme="gregory-editorial"] .geg-editable-display:hover::after {
+  opacity: 0.85;
+}
+
+/* PillToggle (click-to-flip boolean) — sibling affordance to
+   .geg-editable-display. Buttons render the GegPill inside; on hover
+   the pill itself gets a faint outer glow via box-shadow so the user
+   reads it as interactive without changing the pill's own color. */
+[data-theme="gregory-editorial"] .geg-pill-toggle {
+  transition: filter 140ms ease, transform 80ms ease;
+}
+[data-theme="gregory-editorial"] .geg-pill-toggle:hover:not(:disabled) {
+  filter: brightness(1.18);
+}
+[data-theme="gregory-editorial"] .geg-pill-toggle:active:not(:disabled) {
+  transform: scale(0.96);
+}
+[data-theme="gregory-editorial"] .geg-pill-toggle:focus-visible {
+  outline: 2px solid var(--color-geg-accent);
+  outline-offset: 2px;
+  border-radius: 999px;
 }
 
 /* Scrollbar styling, parallel to Promethean. */
