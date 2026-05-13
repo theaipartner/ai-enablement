@@ -336,6 +336,86 @@
   background: var(--color-geg-accent);
 }
 
+/* Detail-page Data / Standing rows. Two-column key/value grid with
+   a dashed gold divider between rows. */
+[data-theme="gregory-editorial"] .geg-data-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 13px;
+  align-items: baseline;
+}
+[data-theme="gregory-editorial"] .geg-data-row + .geg-data-row {
+  border-top: 1px dashed rgba(160, 136, 80, 0.18);
+}
+[data-theme="gregory-editorial"] .geg-data-row .geg-data-k {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-geg-text-faint);
+}
+[data-theme="gregory-editorial"] .geg-data-row .geg-data-v {
+  color: var(--color-geg-text);
+}
+[data-theme="gregory-editorial"] .geg-data-row .geg-data-v.mono {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--color-geg-text-2);
+  letter-spacing: 0.02em;
+}
+
+[data-theme="gregory-editorial"] .geg-edit-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 12px;
+  padding: 11px 0;
+  align-items: center;
+}
+[data-theme="gregory-editorial"] .geg-edit-row + .geg-edit-row {
+  border-top: 1px dashed rgba(160, 136, 80, 0.18);
+}
+[data-theme="gregory-editorial"] .geg-edit-row .geg-data-k {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-geg-text-faint);
+}
+
+/* Editorial checkbox (Action items box on /clients/[id]).
+   Square, 18px, gold border on hover, gold fill on check. */
+[data-theme="gregory-editorial"] .geg-checkbox {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--color-geg-border-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  flex-shrink: 0;
+  color: transparent;
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1;
+  transition: border-color 80ms ease, background-color 80ms ease, color 80ms ease;
+  padding: 0;
+}
+[data-theme="gregory-editorial"] .geg-checkbox:hover {
+  border-color: var(--color-geg-accent);
+}
+[data-theme="gregory-editorial"] .geg-checkbox--checked {
+  background: var(--color-geg-accent);
+  border-color: var(--color-geg-accent);
+  color: #0b0a09;
+}
+
 /* Health cell — number + 36px gradient bar, per Clients list mock.
    The bar is a static gradient (green→yellow→red) with a 2px white
    indicator positioned by --p (the score percentage). */
