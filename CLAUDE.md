@@ -413,27 +413,33 @@ Moved to `docs/state.md` as of 2026-05-11. Read on demand when a spec or task re
 
 ## Current Focus
 
-**Meeting tracking — bridge into Task Management.** Primary in-flight work as of 2026-05-08 close. Per-client + per-CSM cadence visibility, late flags, end-of-week report to Scott + Nabeel. Real scoping conversation needed at next session-start before any code work. Supersedes the previously-queued "missed-call detection" piece under Batch A. See § Next Session Priorities item 1 + `docs/future-ideas.md` once the scoping conversation defines the work.
+**Gregory redesign — shipped 2026-05-13.** Full Calls + Clients + Ella visual refresh + Part 1 foundation primitives (HeaderBand, SentimentPill, InlineEditableField, EmptyStateAwareSection, DiagnosticsCollapse). Design workflow with Claude Design established as the default for visual work (see `docs/runbooks/design-handoff.md`).
+
+**Next:** tomorrow's queue — see § Next Session Priorities item 1.
 
 ## Next Session Priorities
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Ella V2 Batch 2.3 — passive monitoring rollout.** Code + migrations shipped + applied 2026-05-11 (full spec + dashboard 1b/test_mode follow-up; 45 new tests passing; dual-verified post-apply). `#ella-test-drakeonly` now has `passive_monitoring_enabled=true` AND `test_mode=true` so Drake can smoke-test as himself. Outstanding work to validate: (a) Drake redeploys to pick up the latest passive_monitor.py changes (test_mode bypass + the dashboard read-side fix are in commits `2aeb845` + `c3791ff` + `f1f2f84` post-apply); (b) Drake posts test messages in `#ella-test-drakeonly` covering the four Haiku outcomes per the runbook's "Smoke testing in #ella-test-drakeonly" section; (c) Drake verifies `/ella/runs` dashboard renders the test-mode passive runs with correct channel name + author role + author name (Issue 1b fix); (d) production rollout to 7 client channels post-validation. Issue 2 (cost-today timezone) explicitly deferred per Drake's call.
+1. **Tomorrow's wrap-up bundle — three small client-detail fixes.** Single spec, fast warm-up: (a) make CSM standing editable again on `/clients/[id]` — Scott needs to play around with it; (b) make NPS-enabled and Accountability-enabled toggles actually toggleable on `/clients/[id]`; (c) fix "Back to clients" / "Back to calls" navigation everywhere — currently uses `router.back()` which goes to the previous page in history, not the list. Should always go to the list page.
 
-2. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Scheduled after 2.3 because 2.1 has anonymization and cross-client privacy constraints that need their own scoping pass. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Will need a per-client retrieval-scope gate similar to the call-summary retrieval pattern.
+2. **Send-to-Slack server action.** Wire the Send-to-Slack button on `/clients/[id]` to a real Slack post. Posts open action items to the client's mapped Slack channel. Format / channel-resolution / safety-net are spec questions; needs a real scoping conversation before drafting.
 
-3. **Meeting tracking — bridge into Task Management.** Gregory-side, was previous current focus before Ella jumped the queue. Per-client + per-CSM cadence visibility, late flags, end-of-week report to Scott + Nabeel. Real scoping conversation needed at session-start before any spec — don't pre-draft. Supersedes the "missed-call detection" piece previously queued under Batch A.
+3. **Action items transfer fix.** Action items completed on `/calls/[id]` (via the Confirm flow) need to actually appear on `/clients/[id]`'s Action items box. The data is there (`client.all_action_items` already includes them) but the wiring is incomplete — likely a query / display gap on the redesigned client detail page. Investigate first, spec second.
 
-4. **Batch A — CSM accountability visibility (remaining: call-tagging dashboard).** Per-call CS summary + daily accountability notification shipped M6.1 (2026-05-05); cron auth consolidated to single `CRON_SECRET` M6.2 (2026-05-06); missed-call detection rolled into Item 3's meeting tracking work. Remaining: call-tagging dashboard (gated on CSM ops adoption of a tagging convention). See `docs/future-ideas.md` § Batch A.
+4. **Ella redesign with the new design workflow.** Same Drake → Director → Design → Builder pass that worked on Calls + Clients. Higher confidence now that the workflow is established. Surface: `/ella/runs` and `/ella/runs/[id]`. The earlier Ella visual work shipped but had quality issues (row dividers, emoji rendering, surrounding messages); a clean redesign pass with Claude Design should be much better.
 
-5. **Batch B — Call review + health score activation (mostly delivered 2026-05-07/08; remaining: NPS score piping V1.5).** Call Review V1 + Gregory V2 brain (AI signal at 0.50, concerns subsumed) + the health-score rubric rebalance + the never-called-clients-land-green fix all shipped 2026-05-07/08. The remaining piece is **NPS score piping (V1.5)**: extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard. See `docs/future-ideas.md` § Batch B.
+5. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Carried from prior priorities. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Will need a per-client retrieval-scope gate similar to the call-summary retrieval pattern.
 
-6. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking.
+6. **Meeting tracking — bridge into Task Management.** Carried. Per-client + per-CSM cadence visibility, late flags, end-of-week report to Scott + Nabeel. Real scoping conversation needed at session-start before any spec.
 
-7. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
+7. **Batch B — NPS score piping V1.5.** Carried. Extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard.
 
-8. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
+8. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking. Item 2 (Send-to-Slack) is a piece of this lighting up.
+
+9. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
+
+10. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
 
 **~~Deferred-decision pending Monday onboarding~~** — resolved by NPS-is-gospel migration 0027 (2026-05-08). The 137 master-sheet-seed clients are no longer sticky against Path 1 NPS auto-derive; the override-sticky gate was retired entirely.
 
