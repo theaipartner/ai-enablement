@@ -1,23 +1,28 @@
-import { getCallsList, type CallsListFilters, type CallsListRow } from '@/lib/db/calls'
+import { getCallsList, listActiveCsms, type CallsListFilters, type CallsListRow } from '@/lib/db/calls'
 import { listMergeCandidates } from '@/lib/db/merge'
 import { CallsFilterBar } from './calls-filter-bar'
 import { CallsTable } from './calls-table'
 
+// Calls redesign · § 1 — list page (/calls).
+//
+//   - Header: geg-eyebrow → serif H1 "All calls." → right-aligned count.
+//   - Filter bar: search + client select + CSM select.
+//   - Table: Date · Title · Primary client · CSM · Sentiment · Duration.
+//   - Pre-filtered server-side to category='client' (data-layer default).
+
 type SortKey =
   | 'started_at'
   | 'title'
-  | 'call_category'
   | 'primary_client_name'
+  | 'csm_team_member_name'
   | 'duration_seconds'
-  | 'classification_confidence'
 
 const VALID_SORT_KEYS: SortKey[] = [
   'started_at',
   'title',
-  'call_category',
   'primary_client_name',
+  'csm_team_member_name',
   'duration_seconds',
-  'classification_confidence',
 ]
 
 function readFilters(
@@ -28,10 +33,10 @@ function readFilters(
     return Array.isArray(v) ? v[0] : v
   }
   return {
-    category: get('category'),
+    // No `category` param — list scope is always client (data-layer default).
     primary_client_id: get('client'),
-    needs_review: get('needs_review') === '1',
     search: get('q'),
+    csm_id: get('csm'),
   }
 }
 
@@ -64,7 +69,11 @@ export default async function CallsPage({
   searchParams: Record<string, string | string[] | undefined>
 }) {
   const filters = readFilters(searchParams)
-  const rows = await getCallsList(filters)
+  const [rows, clientOptions, csmOptions] = await Promise.all([
+    getCallsList(filters),
+    listMergeCandidates('00000000-0000-0000-0000-000000000000'),
+    listActiveCsms(),
+  ])
 
   const sortRaw = Array.isArray(searchParams.sort)
     ? searchParams.sort[0]
@@ -72,75 +81,67 @@ export default async function CallsPage({
   const dirRaw = Array.isArray(searchParams.dir)
     ? searchParams.dir[0]
     : searchParams.dir
-
-  // Default sort: started_at desc. When the needs_review toggle is on
-  // and the user hasn't explicitly chosen a sort, surface the lowest-
-  // confidence calls first by re-sorting on confidence ascending —
-  // matches the gregory.md spec.
-  const defaultSort: SortKey =
-    filters.needs_review && !sortRaw ? 'classification_confidence' : 'started_at'
-  const defaultDir: 'asc' | 'desc' =
-    filters.needs_review && !sortRaw ? 'asc' : 'desc'
-
   const sort: SortKey = (VALID_SORT_KEYS as string[]).includes(sortRaw ?? '')
     ? (sortRaw as SortKey)
-    : defaultSort
-  const dir: 'asc' | 'desc' =
-    dirRaw === 'asc' ? 'asc' : dirRaw === 'desc' ? 'desc' : defaultDir
+    : 'started_at'
+  const dir: 'asc' | 'desc' = dirRaw === 'asc' ? 'asc' : 'desc'
 
-  const sorted = sortRows(rows, sort, dir)
+  const sortedRows = sortRows(rows, sort, dir)
 
-  // Client list for the "Filter by client" picker. Reuses the same
-  // candidate-list shape the merge dialog uses (M3.2). The "exclude"
-  // arg is a meaningless placeholder UUID — we want every active
-  // client. 134 rows today; fetch-all is cheap.
-  const clientOptions = await listMergeCandidates(
-    '00000000-0000-0000-0000-000000000000',
-  )
-
-  // baseSearchParams strips sort/dir so column-header links generate
-  // hrefs that preserve filters but replace the sort.
-  const baseSearchParamsObj: Record<string, string> = {}
-  for (const [key, value] of Object.entries(searchParams)) {
+  // Echo every non-sort param into the sort URLs so toggling sort keeps
+  // the active filter state.
+  const baseSearchParams = new URLSearchParams()
+  for (const [key, raw] of Object.entries(searchParams)) {
     if (key === 'sort' || key === 'dir') continue
-    if (Array.isArray(value)) {
-      if (value[0] !== undefined) baseSearchParamsObj[key] = value[0]
-    } else if (value !== undefined) {
-      baseSearchParamsObj[key] = value
-    }
+    const value = Array.isArray(raw) ? raw[0] : raw
+    if (value) baseSearchParams.set(key, value)
   }
-  const baseSearchParams = new URLSearchParams(baseSearchParamsObj)
 
   return (
-    <div className="px-8 py-8 space-y-6">
+    <div style={{ padding: '36px 48px 0' }}>
       <header
         className="flex items-end justify-between gap-6"
-        style={{
-          paddingBottom: 24,
-          borderBottom: '1px solid var(--color-geg-border-strong)',
-        }}
+        style={{ paddingBottom: 24 }}
       >
         <div>
           <div className="geg-eyebrow">CSM · CALLS</div>
           <h1
-            className="geg-display"
-            style={{ fontSize: 52, lineHeight: '54px', marginTop: 8 }}
+            className="geg-serif"
+            style={{
+              fontWeight: 500,
+              fontSize: 48,
+              lineHeight: 1.05,
+              letterSpacing: '-0.015em',
+              color: 'var(--color-geg-text)',
+              margin: '8px 0 0',
+            }}
           >
             All calls.
           </h1>
         </div>
         <div
-          className="geg-eyebrow geg-numeric"
-          style={{ paddingBottom: 6 }}
+          className="geg-mono"
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'var(--color-geg-text-2)',
+          }}
         >
-          {sorted.length} {sorted.length === 1 ? 'CALL' : 'CALLS'}
+          <b style={{ color: 'var(--color-geg-text)', fontWeight: 500 }}>
+            {sortedRows.length}
+          </b>{' '}
+          CLIENT CALLS
         </div>
       </header>
 
-      <CallsFilterBar clientOptions={clientOptions} />
+      <CallsFilterBar
+        clientOptions={clientOptions}
+        csmOptions={csmOptions}
+      />
 
       <CallsTable
-        rows={sorted}
+        rows={sortedRows}
         sort={sort}
         dir={dir}
         baseSearchParams={baseSearchParams}

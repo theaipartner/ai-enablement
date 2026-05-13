@@ -52,6 +52,11 @@ export type CallsListRow = {
   // a direct FK on clients.
   csm_team_member_id: string | null
   csm_team_member_name: string | null
+  // Sentiment tier surfaced from the latest call_review document for
+  // this call. 'green' | 'yellow' | 'red' | null (null when no review
+  // exists yet OR the review predates the sentiment_tier backfill).
+  // Display-only — see components/gregory/sentiment-pill.tsx.
+  sentiment_tier: 'green' | 'yellow' | 'red' | null
   participants: Array<{
     email: string
     display_name: string | null
@@ -169,9 +174,42 @@ export async function getCallsList(
       primary_client_name: row.primary_client?.full_name ?? null,
       csm_team_member_id: activeCsm?.team_members?.id ?? null,
       csm_team_member_name: activeCsm?.team_members?.full_name ?? null,
+      sentiment_tier: null,
       participants: row.call_participants ?? [],
     }
   })
+
+  // Batch-fetch sentiment_tier from the latest call_review doc per call
+  // (one round trip with .in on metadata->>'call_id'). The metadata
+  // jsonb path is indexed via the call_summary partial index so the
+  // filter is cheap. Multiple call_review rows per call would be a bug
+  // (the upsert key is (source, external_id, document_type)), so we
+  // pick the first match per call_id.
+  if (rows.length > 0) {
+    const callIds = rows.map((r) => r.id)
+    const { data: reviewRows } = await supabase
+      .from('documents')
+      .select('metadata')
+      .eq('document_type', 'call_review')
+      .in('metadata->>call_id', callIds)
+    const tierByCallId = new Map<string, 'green' | 'yellow' | 'red'>()
+    for (const r of (reviewRows ?? []) as Array<{
+      metadata: { call_id?: string; sentiment_tier?: string } | null
+    }>) {
+      const callId = r.metadata?.call_id
+      const tier = r.metadata?.sentiment_tier
+      if (
+        typeof callId === 'string' &&
+        (tier === 'green' || tier === 'yellow' || tier === 'red')
+      ) {
+        tierByCallId.set(callId, tier)
+      }
+    }
+    rows = rows.map((row) => ({
+      ...row,
+      sentiment_tier: tierByCallId.get(row.id) ?? null,
+    }))
+  }
 
   if (filters.search) {
     const q = filters.search.toLowerCase()
@@ -555,4 +593,35 @@ export async function updateCallClassification(
     history_rows_written: result.history_rows_written,
     auto_cleared_primary_client_id: result.auto_cleared_primary_client_id,
   }
+}
+
+// ----------------------------------------------------------------------
+// listActiveCsms — populates the "Filter by CSM" select on /calls.
+//
+// Pulls distinct team_members who hold an active primary_csm assignment
+// on at least one non-archived client. Sorted alphabetically by full_name
+// so the dropdown order is stable.
+// ----------------------------------------------------------------------
+export async function listActiveCsms(): Promise<
+  Array<{ id: string; full_name: string }>
+> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from("client_team_assignments")
+    .select("team_members(id, full_name)")
+    .eq("role", "primary_csm")
+    .is("unassigned_at", null)
+  if (error) throw error
+  const seen = new Map<string, string>()
+  for (const row of (data ?? []) as Array<{
+    team_members: { id: string; full_name: string } | null
+  }>) {
+    const tm = row.team_members
+    if (tm && tm.id && tm.full_name && !seen.has(tm.id)) {
+      seen.set(tm.id, tm.full_name)
+    }
+  }
+  return Array.from(seen.entries())
+    .map(([id, full_name]) => ({ id, full_name }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name))
 }

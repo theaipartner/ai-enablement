@@ -63,22 +63,44 @@
    express directly (deck text, numeric serif color, etc.).
    ========================================================================= */
 @theme inline {
-  --color-geg-bg: #0a0a0a;
-  --color-geg-bg-elev: #16161a;
-  --color-geg-bg-elev-2: #1c1c20;
+  /* Surfaces — warm-zinc dark per the Calls redesign handoff (§ 0). */
+  --color-geg-bg: #0b0a09;
+  --color-geg-bg-elev: #131211;
+  --color-geg-bg-elev-2: #1a1816;
   --color-geg-border: rgba(245, 244, 239, 0.08);
   --color-geg-border-strong: rgba(245, 244, 239, 0.14);
-  --color-geg-text: #f5f4ef;
-  --color-geg-text-2: rgba(245, 244, 239, 0.60);
-  --color-geg-text-3: rgba(245, 244, 239, 0.40);
-  --color-geg-accent: #0066ff;
-  --color-geg-accent-dim: rgba(0, 102, 255, 0.16);
-  --color-geg-accent-strong: #1f7dff;
-  --color-geg-pos: #0066ff;
-  --color-geg-neg: #ff6b47;
-  --color-geg-neg-dim: rgba(255, 107, 71, 0.16);
-  --color-geg-warn: #f4b740;
-  --color-geg-warn-dim: rgba(244, 183, 64, 0.16);
+  --color-geg-text: #edeae3;
+  --color-geg-text-2: rgba(237, 234, 227, 0.66);
+  --color-geg-text-3: rgba(237, 234, 227, 0.42);
+  --color-geg-text-faint: #6b6660;
+  --color-geg-text-dim: #4a4642;
+
+  /* Accent — gold (replaces prior blue). The token-level swap lets every
+     accent-consuming surface (nav indicator, link hover, sort arrows,
+     focus rings, inline links, gold-border boxes) inherit without
+     per-component edits. */
+  --color-geg-accent: #a08850;
+  --color-geg-accent-strong: #b89a5c;
+  --color-geg-accent-dim: rgba(160, 136, 80, 0.16);
+  --color-geg-accent-border: rgba(160, 136, 80, 0.40);
+  --color-geg-accent-fill: rgba(160, 136, 80, 0.05);
+  --color-geg-accent-focus: rgba(160, 136, 80, 0.55);
+
+  /* Sentiment — DECOUPLED from accent per the redesign's explicit
+     callout ("the green sentiment tier should stay literal green and
+     be uncoupled from the accent family so it survives any future
+     accent swap"). Same chroma family as gold — no neon. */
+  --color-geg-pos: #7a9e6f;
+  --color-geg-pos-fill: rgba(122, 158, 111, 0.12);
+  --color-geg-pos-border: rgba(122, 158, 111, 0.40);
+  --color-geg-warn: #c9a657;
+  --color-geg-warn-dim: rgba(201, 166, 87, 0.12);
+  --color-geg-warn-fill: rgba(201, 166, 87, 0.12);
+  --color-geg-warn-border: rgba(201, 166, 87, 0.40);
+  --color-geg-neg: #c97766;
+  --color-geg-neg-dim: rgba(201, 119, 102, 0.16);
+  --color-geg-neg-fill: rgba(201, 119, 102, 0.12);
+  --color-geg-neg-border: rgba(201, 119, 102, 0.40);
 }
 
 [data-theme="gregory-editorial"] {
@@ -114,27 +136,157 @@
 
   background: var(--color-geg-bg);
   color: var(--color-geg-text);
-  font-family: var(--font-prom-sans, ui-sans-serif, system-ui, sans-serif);
+  font-family: var(--font-prom-sans, "Inter", ui-sans-serif, system-ui, sans-serif);
+}
+
+/* Editorial-mono utility for IDs, eyebrows, durations, dates. Points at
+   JetBrains Mono via the Calls redesign typography spec; safe fallback
+   chain keeps SSR/no-JS surfaces legible. */
+[data-theme="gregory-editorial"] .geg-mono {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, "SF Mono", monospace);
+}
+
+/* Editorial-link hover — applied to inline links inside the gold-accent
+   surfaces (table cells, data rows, backlinks). The underline carries
+   the same accent color so the hover reads as a single accent gesture. */
+[data-theme="gregory-editorial"] .geg-link {
+  transition: color 80ms ease, border-color 80ms ease;
+}
+[data-theme="gregory-editorial"] .geg-link:hover {
+  color: var(--color-geg-accent) !important;
+  border-bottom-color: var(--color-geg-accent) !important;
+}
+
+/* Filter bar primitives — search input + selects on /calls (and other
+   editorial pages that want the same chrome). Transparent background
+   with the editorial-dark border + gold focus ring per the mock. */
+[data-theme="gregory-editorial"] .geg-filter-input {
+  flex: 1;
+  max-width: 320px;
+  background: transparent;
+  border: 1px solid var(--color-geg-border-strong);
+  color: var(--color-geg-text);
+  font-family: var(--font-prom-sans, "Inter", system-ui, sans-serif);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
+}
+[data-theme="gregory-editorial"] .geg-filter-input::placeholder {
+  color: var(--color-geg-text-faint);
+}
+[data-theme="gregory-editorial"] .geg-filter-input:focus {
+  border-color: var(--color-geg-accent);
+  box-shadow: 0 0 0 2px var(--color-geg-accent-focus);
+}
+
+[data-theme="gregory-editorial"] .geg-filter-select {
+  background-color: transparent;
+  border: 1px solid var(--color-geg-border-strong);
+  color: var(--color-geg-text-2);
+  font-family: var(--font-prom-sans, "Inter", system-ui, sans-serif);
+  font-size: 13px;
+  padding: 8px 30px 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-geg-text-faint) 50%),
+    linear-gradient(135deg, var(--color-geg-text-faint) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  outline: none;
+  transition: border-color 80ms ease, color 80ms ease;
+}
+[data-theme="gregory-editorial"] .geg-filter-select:hover {
+  border-color: var(--color-geg-text-dim);
+  color: var(--color-geg-text);
+}
+[data-theme="gregory-editorial"] .geg-filter-select:focus {
+  border-color: var(--color-geg-accent);
+}
+[data-theme="gregory-editorial"] .geg-filter-select option {
+  background-color: var(--color-geg-bg-elev);
+  color: var(--color-geg-text);
+}
+
+/* Gold-box — the translucent gold-bordered surface used by the Calls
+   detail page (Data box, Action items box, Call review box). One
+   primitive · three uses. */
+[data-theme="gregory-editorial"] .geg-gold-box {
+  background: var(--color-geg-accent-fill);
+  border: 1px solid var(--color-geg-accent-border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+[data-theme="gregory-editorial"] .geg-gold-box-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-geg-accent-border);
+}
+[data-theme="gregory-editorial"] .geg-gold-box-header h3 {
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-geg-text-2);
+  margin: 0;
+}
+[data-theme="gregory-editorial"] .geg-gold-box-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Action item · X delete hover */
+[data-theme="gregory-editorial"] .geg-action-item-x:hover {
+  color: var(--color-geg-neg) !important;
+  border-color: var(--color-geg-neg-border) !important;
+  background: var(--color-geg-neg-fill) !important;
+}
+[data-theme="gregory-editorial"] .geg-action-item-input:focus {
+  background: rgba(160, 136, 80, 0.06);
+  border-radius: 3px;
+}
+
+/* Confirm button hover */
+[data-theme="gregory-editorial"] .geg-confirm-btn:hover:not(:disabled) {
+  background: var(--color-geg-accent-strong);
+  border-color: var(--color-geg-accent-strong);
 }
 
 /* Utility classes — parallel structure to Promethean's .prom-* family.
    Prefix .geg- ("gregory editorial") so future Promethean coexistence
    doesn't collide. */
 [data-theme="gregory-editorial"] .geg-serif {
-  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-family: var(--font-geg-serif, "Newsreader", "Tiempos Headline", Georgia, serif);
   font-weight: 400;
   letter-spacing: -0.01em;
 }
 
 [data-theme="gregory-editorial"] .geg-display {
-  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-family: var(--font-geg-serif, "Newsreader", "Tiempos Headline", Georgia, serif);
   font-weight: 400;
   letter-spacing: -0.035em;
   line-height: 0.98;
 }
 
 [data-theme="gregory-editorial"] .geg-section-title {
-  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-family: var(--font-geg-serif, "Newsreader", "Tiempos Headline", Georgia, serif);
   font-weight: 400;
   font-size: 28px;
   line-height: 32px;
@@ -143,7 +295,7 @@
 }
 
 [data-theme="gregory-editorial"] .geg-deck {
-  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-family: var(--font-geg-serif, "Newsreader", "Tiempos Headline", Georgia, serif);
   font-style: italic;
   font-weight: 400;
   color: var(--color-geg-text-2);
@@ -156,7 +308,7 @@
 }
 
 [data-theme="gregory-editorial"] .geg-numeric-serif {
-  font-family: var(--font-prom-serif, "Instrument Serif", Georgia, serif);
+  font-family: var(--font-geg-serif, "Newsreader", "Tiempos Headline", Georgia, serif);
   font-feature-settings: "tnum", "lnum";
   font-variant-numeric: tabular-nums lining-nums;
   letter-spacing: -0.02em;
@@ -307,22 +459,18 @@
   border-spacing: 0;
 }
 [data-theme="gregory-editorial"] thead tr {
-  border-bottom: 1px solid var(--color-geg-border-strong) !important;
-}
-[data-theme="gregory-editorial"] tbody tr {
-  /* Row divider contrast. Iterated:
-       0.08 (--color-geg-border) → invisible on warm-dark
-       0.14 (--color-geg-border-strong) → still too subtle
-       0.28 → still subtle
-       0.45 → screenshot-visible but Drake reported "no lines"
-       1.0  → current. Solid cream-white per "white lines" ask.
-     Token --color-geg-border-strong stays at 0.14 for non-table
-     chrome (HeaderBand hairlines, MetaRowSection borders) where
-     0.14 is the correct contrast. */
-  border-top: 1px solid var(--color-geg-text) !important;
+  border-bottom: 1px solid var(--color-geg-accent-border) !important;
 }
 [data-theme="gregory-editorial"] tbody tr:hover {
-  background-color: rgba(245, 244, 239, 0.025) !important;
+  background-color: var(--color-geg-accent-fill) !important;
+}
+[data-theme="gregory-editorial"] tbody tr {
+  /* Row divider — gold-bordered per the Calls redesign handoff
+     (§ 1 Page 1 — Call list, "gold row dividers"). Uses the accent's
+     border tint at 0.40 alpha so the rules read as elegant rather
+     than heavy. Survives accent swaps via the --color-geg-accent-border
+     token. */
+  border-top: 1px solid var(--color-geg-accent-border) !important;
 }
 
 /* Native <select> dropdown polish (gregory-native-select-polish).
