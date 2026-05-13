@@ -57,6 +57,18 @@ export type EditableFieldProps = {
   // $X,XXX.XX). Edit-mode input always shows the raw value.
   displayValue?: (value: RawValue) => ReactNode
   className?: string
+  // Drop the wrapper's min-h-9 + py-1.5 so the cell sits flush against
+  // plain-text sibling rows. Opt-in for surfaces where the editable cell
+  // lives in a list of mostly non-editable rows (e.g. Primary CSM in the
+  // Details box on /clients/[id]); not appropriate for the Standing box
+  // where every row is editable and the 36px target is the rhythm.
+  compact?: boolean
+  // Suppress the leading {value:'', label:'—'} option in enum / three_state_bool
+  // dropdowns. Opt-in for enum fields whose underlying write doesn't accept
+  // null (e.g. Primary CSM — change_primary_csm RPC requires a non-null
+  // team_member_id). Default behavior keeps the empty option for nullable
+  // fields like Status / CSM Standing / Trustpilot / Journey Stage.
+  omitEmptyOption?: boolean
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -72,6 +84,8 @@ export function EditableField({
   mono = false,
   displayValue,
   className,
+  compact = false,
+  omitEmptyOption = false,
 }: EditableFieldProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<string>(rawToDraft(value, variant))
@@ -189,12 +203,21 @@ export function EditableField({
             : 'No'
           : String(committed)
 
+    // When label is empty AND compact is set, hide the label-row entirely.
+    // Otherwise the empty Label still occupies vertical space and the
+    // space-y-1.5 gap adds another sliver — both compound on the
+    // /clients/[id] Details box Primary CSM row, blowing it past sibling
+    // height. Standalone uses with a real label string keep the
+    // label-row regardless.
+    const hideLabelRow = compact && label === ''
     return (
-      <div className={cn('space-y-1.5', className)}>
-        <div className="flex items-center justify-between">
-          <Label>{label}</Label>
-          <StatusBadge status={status} error={error} />
-        </div>
+      <div className={cn(hideLabelRow ? null : 'space-y-1.5', className)}>
+        {hideLabelRow ? null : (
+          <div className="flex items-center justify-between">
+            <Label>{label}</Label>
+            <StatusBadge status={status} error={error} />
+          </div>
+        )}
         <div
           role="button"
           tabIndex={0}
@@ -212,7 +235,8 @@ export function EditableField({
             // focus ring on the display-mode div after the select unmounts.
             // Keyboard navigation (Tab) still gets a visible focus ring
             // via :focus-visible.
-            'geg-editable-display min-h-9 rounded-md px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/50 border border-transparent hover:border-input transition-colors',
+            'geg-editable-display rounded-md px-2 text-sm cursor-pointer hover:bg-muted/50 border border-transparent hover:border-input transition-colors',
+            compact ? 'min-h-0 py-0.5' : 'min-h-9 py-1.5',
             mono && 'font-mono',
             isEmpty && 'text-muted-foreground',
             variant === 'textarea' && 'whitespace-pre-wrap',
@@ -226,12 +250,15 @@ export function EditableField({
   }
 
   // ----- EDIT MODE -----
+  const hideLabelRowEdit = compact && label === ''
   return (
-    <div className={cn('space-y-1.5', className)}>
-      <div className="flex items-center justify-between">
-        <Label>{label}</Label>
-        <StatusBadge status={status} error={error} />
-      </div>
+    <div className={cn(hideLabelRowEdit ? null : 'space-y-1.5', className)}>
+      {hideLabelRowEdit ? null : (
+        <div className="flex items-center justify-between">
+          <Label>{label}</Label>
+          <StatusBadge status={status} error={error} />
+        </div>
+      )}
       {renderEditor({
         variant,
         draft,
@@ -243,6 +270,7 @@ export function EditableField({
         mono,
         disabled: isPending,
         inputRef,
+        omitEmptyOption,
       })}
     </div>
   )
@@ -263,6 +291,7 @@ function renderEditor({
   mono,
   disabled,
   inputRef,
+  omitEmptyOption,
 }: {
   variant: FieldVariant
   draft: string
@@ -276,6 +305,7 @@ function renderEditor({
   inputRef: React.MutableRefObject<
     HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null
   >
+  omitEmptyOption: boolean
 }) {
   if (variant === 'textarea') {
     return (
@@ -309,7 +339,9 @@ function renderEditor({
             { value: 'true', label: 'Yes' },
             { value: 'false', label: 'No' },
           ]
-        : [{ value: '', label: '—' }, ...(options ?? [])]
+        : omitEmptyOption
+          ? [...(options ?? [])]
+          : [{ value: '', label: '—' }, ...(options ?? [])]
     return (
       <select
         ref={inputRef as React.RefObject<HTMLSelectElement>}

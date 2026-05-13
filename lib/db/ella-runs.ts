@@ -13,7 +13,24 @@ import { renderEmojis } from '@/lib/slack/render-emojis'
 // disjoint syntax — but keeping it consistent across call sites makes
 // the rendering pipeline obvious.
 function renderSlackText(text: string, mentionMap: Map<string, string>): string {
-  return renderEmojis(renderMentions(text, mentionMap))
+  return stripSlackLinkSyntax(renderEmojis(renderMentions(text, mentionMap)))
+}
+
+// Strip Slack's <url|label> and <url> link syntax to readable plain text.
+// `<https://...|label>` → `label`; `<https://...>` → `https://...` (bare
+// URL preserved). Non-URL bracketed tokens (e.g. residual unresolved
+// `<@U...>` mentions) are left untouched. The list-view table renders
+// the resulting string as plain text — links don't become anchors here.
+// The detail page's Mrkdwn renderer (lib/slack/render-mrkdwn.tsx)
+// handles the same syntax differently (returns <a> elements); both
+// pipelines are intentional — the list cell is a dense one-line
+// excerpt, anchors would clutter.
+const SLACK_LINK_REGEX = /<(https?:\/\/[^|>]+)(?:\|([^>]+))?>/g
+function stripSlackLinkSyntax(text: string): string {
+  if (!text) return text
+  return text.replace(SLACK_LINK_REGEX, (_full, url: string, label?: string) =>
+    label ?? url,
+  )
 }
 
 // Anomaly flag identifiers shared by the list filter + summary band + detail view.
@@ -55,6 +72,13 @@ export type EllaRunsListRow = {
   // mentions resolved to readable @First Last form before this lands
   // here — table renders dumb.
   output_text: string | null
+  // Escalation DM body, fetched from webhook_deliveries.payload.body for
+  // runs whose output_summary matches the `escalated via DM` placeholder.
+  // Forward-only (rows logged before 2026-05-13 don't carry the body
+  // key and stay null). When present, the list-view table renders this
+  // instead of the placeholder. Already mention/emoji/link-syntax
+  // rendered for direct display.
+  escalation_body: string | null
   llm_input_tokens: number | null
   llm_output_tokens: number | null
   llm_cost_usd: number | null
@@ -66,6 +90,13 @@ export type EllaRunsListRow = {
 
 export type EllaRunDetail = EllaRunsListRow & {
   output_summary: string | null
+  // Full Slack message text of the triggering message, joined from
+  // slack_messages on (slack_channel_id, slack_ts) = (run.slack_channel_id,
+  // run.trigger_ts). Null when realtime ingest hadn't landed yet or the
+  // ts isn't matchable. Detail page falls back to input_summary on null.
+  // Mention + emoji rendered for display consistency with the other
+  // text fields on this row.
+  triggering_message_full_text: string | null
   error_message: string | null
   trigger_ts: string | null
   thread_ts: string | null
@@ -448,6 +479,74 @@ async function fetchSlackResponseTexts(
   return out
 }
 
+// Recognizes the `escalated via DM; csm=...; dm_ok=...` placeholder
+// that passive_dispatch.py:_fire_escalation_dm writes into
+// agent_runs.output_summary. When matched, the projection falls
+// through to a webhook_deliveries lookup for the actual DM body
+// (which post-2026-05-13 lands in payload.body — see fetchEscalationBodies).
+const ESCALATION_PLACEHOLDER_PATTERN = /^escalated via DM/i
+
+async function fetchEscalationBodies(
+  supabase: ReturnType<typeof createAdminClient>,
+  runs: RawRunRow[],
+): Promise<Map<string, string>> {
+  // Filter to runs whose output_summary matches the escalation
+  // placeholder. Skip rows without trigger_metadata.channel/ts since
+  // those are the join keys.
+  const candidates = runs.filter((r) => {
+    const summary = r.output_summary?.trim() ?? ''
+    if (!ESCALATION_PLACEHOLDER_PATTERN.test(summary)) return false
+    const ch = extractChannelId(r.trigger_metadata)
+    const ts = extractTriggerField(r.trigger_metadata, 'triggering_message_ts')
+    return ch !== null && ts !== null && ts !== undefined
+  })
+  const out = new Map<string, string>()
+  if (candidates.length === 0) return out
+
+  // Time-window filter on received_at: earliest candidate's started_at
+  // minus 1 min, latest plus 1 min. The audit row is inserted at the
+  // top of _fire_escalation_dm — slightly after the run started_at —
+  // so a 1-min cushion on each side covers the window.
+  const startedTimes = candidates.map((r) => new Date(r.started_at).getTime())
+  const minStarted = Math.min(...startedTimes)
+  const maxStarted = Math.max(...startedTimes)
+  const fromTs = new Date(minStarted - 60_000).toISOString()
+  const toTs = new Date(maxStarted + 60_000).toISOString()
+
+  const { data: deliveries } = await supabase
+    .from('webhook_deliveries')
+    .select('payload')
+    .eq('source', 'ella_passive_escalation_dm')
+    .gte('received_at', fromTs)
+    .lte('received_at', toTs)
+  if (!deliveries || deliveries.length === 0) return out
+
+  // Index by (channel_id, ts) → body. Forward-only: payload rows
+  // written before 2026-05-13 don't carry the body key and get skipped.
+  const bodyByPair = new Map<string, string>()
+  for (const d of deliveries) {
+    const payload = d.payload as Record<string, unknown> | null
+    if (!payload) continue
+    const ch = typeof payload.slack_channel_id === 'string'
+      ? payload.slack_channel_id
+      : null
+    const ts = typeof payload.triggering_message_ts === 'string'
+      ? payload.triggering_message_ts
+      : null
+    const body = typeof payload.body === 'string' ? payload.body : null
+    if (!ch || !ts || !body) continue
+    bodyByPair.set(`${ch}|${ts}`, body)
+  }
+
+  for (const r of candidates) {
+    const ch = extractChannelId(r.trigger_metadata)!
+    const ts = extractTriggerField(r.trigger_metadata, 'triggering_message_ts')!
+    const body = bodyByPair.get(`${ch}|${ts}`)
+    if (body) out.set(r.id, body)
+  }
+  return out
+}
+
 async function fetchEscalationRunIds(
   supabase: ReturnType<typeof createAdminClient>,
   runIds: string[],
@@ -585,6 +684,7 @@ export async function getEllaRunsList(
   const channelMap = await fetchChannelMap(supabase)
   const userNameMap = await fetchUserNameMap(supabase, runs)
   const responseTexts = await fetchSlackResponseTexts(supabase, runs)
+  const escalationBodies = await fetchEscalationBodies(supabase, runs)
   const escalationIds = await fetchEscalationRunIds(
     supabase,
     runs.map((r) => r.id),
@@ -625,8 +725,24 @@ export async function getEllaRunsList(
     // the rows whose output_summary carried that placeholder don't
     // surface here at all. The Ella-spoke event is the linked
     // passive_substantive row with the real response text.
-    const rawOutput = r.output_summary?.trim() || slackText?.trim() || null
+    // Suppress the `escalated via DM` status-string placeholder from
+    // output_text — when an escalation row has no body in
+    // webhook_deliveries (historical), the cell should render `—`
+    // muted (per spec). When it DOES have a body, escalation_body
+    // wins. Either way, the raw placeholder string never reaches the
+    // table.
+    const summaryTrimmed = r.output_summary?.trim() ?? ''
+    const isEscalationPlaceholder = ESCALATION_PLACEHOLDER_PATTERN.test(
+      summaryTrimmed,
+    )
+    const rawOutput = isEscalationPlaceholder
+      ? slackText?.trim() || null
+      : r.output_summary?.trim() || slackText?.trim() || null
     const output_text = rawOutput ? renderSlackText(rawOutput, mentionNameMap) : null
+    const rawEscalationBody = escalationBodies.get(r.id) ?? null
+    const escalation_body = rawEscalationBody
+      ? renderSlackText(rawEscalationBody, mentionNameMap)
+      : null
 
     return {
       id: r.id,
@@ -640,6 +756,7 @@ export async function getEllaRunsList(
       real_author_name: extractAuthorName(r.trigger_metadata, userNameMap),
       input_summary: r.input_summary,
       output_text,
+      escalation_body,
       llm_input_tokens: r.llm_input_tokens,
       llm_output_tokens: r.llm_output_tokens,
       llm_cost_usd: r.llm_cost_usd,
@@ -752,6 +869,7 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
   const ch = extractChannelId(r.trigger_metadata)
   const channelInfo = ch ? channelMap.get(ch) : undefined
   const responseTexts = await fetchSlackResponseTexts(supabase, [r])
+  const escalationBodies = await fetchEscalationBodies(supabase, [r])
   const escalationIds = await fetchEscalationRunIds(supabase, [r.id])
 
   // Reactive path stores the triggering message ts under `ts`; passive
@@ -1010,7 +1128,35 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
     input_summary: inputSummaryRendered,
     output_text:
       outputSummaryRendered?.trim() || slackTextRendered?.trim() || null,
+    escalation_body: (() => {
+      const raw = escalationBodies.get(r.id)
+      return raw ? renderSlackText(raw, detailMentionMap) : null
+    })(),
     output_summary: outputSummaryRendered,
+    triggering_message_full_text: (() => {
+      // Pull the trigger row's raw text from the same rawMsgs fetched
+      // for thread_messages. The trigger-inclusion-guarantee block
+      // above already synthesizes a fallback row using input_summary
+      // when slack_messages didn't have the trigger — when that's the
+      // case, return null here so the page can choose the input_summary
+      // fallback at render time rather than silently masquerading the
+      // summary as a full message.
+      if (!trigger_ts) return null
+      const trig = rawMsgs.find((m) => m.slack_ts === trigger_ts)
+      if (!trig) return null
+      // The synthesized fallback row carries the input_summary as its
+      // text — detect it by checking whether the text equals the
+      // input_summary or the placeholder string. Real ingested rows
+      // have the full Slack message text.
+      const summary = r.input_summary ?? ''
+      if (
+        trig.text === summary ||
+        trig.text === '(triggering message not in slack_messages)'
+      ) {
+        return null
+      }
+      return renderSlackText(trig.text, detailMentionMap)
+    })(),
     error_message: r.error_message,
     trigger_ts,
     thread_ts,

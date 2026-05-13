@@ -243,6 +243,7 @@ export default async function ClientsPage({
         sort={sort}
         dir={dir}
         baseSearchParams={baseSearchParams}
+        csmOptions={teamMembers ?? []}
       />
     </div>
   )

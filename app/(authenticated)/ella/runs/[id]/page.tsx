@@ -1,28 +1,27 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getEllaRunDetail, type EllaRunDetail } from '@/lib/db/ella-runs'
-import { HeaderBand } from '@/components/gregory/header-band'
 import { DiagnosticsCollapse } from '@/components/gregory/diagnostics-collapse'
-import { EmptyStateAwareSection } from '@/components/gregory/empty-state-aware-section'
-import { RolePill, RunStatusPill } from '../pills'
+import { ExpandableMessage } from './expandable-message'
+import { RolePill, RunStatusPill, TriggerTypePill } from '../pills'
+import { GegPill } from '@/components/gregory/geg-pill'
 
-// Part 2 detail-and-cleanup redesign:
-// - Section order: Context → Triggering message → Ella's response →
-//   Surrounding messages → Haiku decision → Escalation → Diagnostics.
-//   Workflow order beats audit order; this matches the conventions doc.
-// - Haiku decision section ALWAYS renders. Reactive @-mentions get
-//   synthetic content ("Responded — direct mention" / "Direct @-mention
-//   from {name}") because the @-mention itself is the reason. Passive
-//   runs surface the real Haiku data (forward lookup on passive_monitor
-//   rows; reverse lookup via trigger_metadata.pending_id on
-//   passive_substantive / _general_inquiry rows — both handled in
-//   getEllaRunDetail).
-// - Surrounding messages ALWAYS includes the trigger (data layer
-//   guarantees this even when the trigger isn't in slack_messages).
-//   No empty-state.
-// - Cost display: for passive_substantive / _general_inquiry rows the
-//   user-visible cost is the SUM of the Sonnet response (the row
-//   itself) and the linked Haiku decision (forwarded from the data
-//   layer). Diagnostics shows the breakdown.
+// Ella audit redesign — detail page.
+//
+// Two-column grid (420 / 1fr). LEFT stack: Context + Haiku decision.
+// RIGHT stack: Triggering message + Ella's response — both rendered
+// via the slack-msg block (ExpandableMessage with optional author /
+// time). Both messages preserve the "Show more" toggle for content
+// over 500 chars.
+//
+// Section layering swap vs the prior V2 layout:
+//   - Removed the white MetaRowSection chrome. Boxes now follow the
+//     gold-box treatment from the Calls + Clients redesigns.
+//   - Surrounding messages section already removed in a prior spec;
+//     data layer paths preserved.
+//   - Header restyled to match the Calls + Clients detail headers:
+//     eyebrow + serif title + pill row + right-aligned mono stats.
+// Routes + data unchanged.
 
 function fmtCost(c: number | null | undefined): string {
   if (c == null) return '—'
@@ -32,44 +31,6 @@ function fmtCost(c: number | null | undefined): string {
 function fmtTokens(inTok: number | null, outTok: number | null): string {
   if (inTok == null && outTok == null) return '—'
   return `${(inTok ?? 0).toLocaleString()} / ${(outTok ?? 0).toLocaleString()}`
-}
-
-function MetaRowSection({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className="space-y-2 rounded-md border bg-white p-4">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h2>
-      {children}
-    </section>
-  )
-}
-
-function KeyValue({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[160px_1fr] items-baseline gap-3 text-sm">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div>{value}</div>
-    </div>
-  )
-}
-
-// Trigger-type display label.
-function triggerTypeDisplay(triggerType: string): string {
-  if (triggerType === 'slack_mention' || triggerType === 'app_mention') return '@-mention'
-  if (triggerType === 'bare_mention') return 'bare @-mention'
-  if (triggerType === 'passive_monitor') return 'passive monitor'
-  if (triggerType === 'passive_substantive') return 'passive response'
-  if (triggerType === 'passive_general_inquiry') return 'passive opener'
-  return triggerType.replace(/_/g, ' ')
 }
 
 function haikuDecisionDisplay(decision: string | null): string {
@@ -88,16 +49,14 @@ function haikuDecisionDisplay(decision: string | null): string {
   }
 }
 
-// Reactive @-mention shapes don't have a Haiku step — the user's
-// direct mention IS the reason Ella spoke. Synthesize a Decision +
-// Reasoning so the Haiku section can render consistently across both
-// trigger paths.
-function REACTIVE_TRIGGER_TYPES(): ReadonlySet<string> {
-  return new Set(['slack_mention', 'bare_mention', 'app_mention'])
-}
+const REACTIVE_TRIGGER_TYPES: ReadonlySet<string> = new Set([
+  'slack_mention',
+  'bare_mention',
+  'app_mention',
+])
 
 function isReactiveTrigger(triggerType: string): boolean {
-  return REACTIVE_TRIGGER_TYPES().has(triggerType)
+  return REACTIVE_TRIGGER_TYPES.has(triggerType)
 }
 
 function syntheticReactiveHaiku(run: EllaRunDetail): {
@@ -126,17 +85,10 @@ function deriveTitle(run: EllaRunDetail): string {
   return `${verb} ${responder} in ${channelLabel}`
 }
 
-// User-visible cost / tokens / model for the run header. For passive
-// Sonnet response runs (passive_substantive) and passive general-
-// inquiry runs, we sum the row's own cost with the linked Haiku
-// decision row's cost so the headline figure reflects the "true total"
-// for the user-visible event. Reactive and passive_monitor rows fall
-// through with their own row data.
 function rollupCost(run: EllaRunDetail): {
   total_cost: number | null
   total_input_tokens: number | null
   total_output_tokens: number | null
-  // Original row figures stay available for the Diagnostics breakdown.
   response_cost: number | null
   response_input_tokens: number | null
   response_output_tokens: number | null
@@ -151,7 +103,6 @@ function rollupCost(run: EllaRunDetail): {
   const haikuIn = run.haiku_input_tokens ?? null
   const haikuOut = run.haiku_output_tokens ?? null
 
-  // No linked Haiku row → totals match the response row.
   if (haikuCost == null && haikuIn == null && haikuOut == null) {
     return {
       total_cost: responseCost,
@@ -178,6 +129,23 @@ function rollupCost(run: EllaRunDetail): {
   }
 }
 
+function formatStartedAt(iso: string): string {
+  const d = new Date(iso)
+  const date = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
+  const time = d.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  return `${date} · ${time}`
+}
+
+function formatTimeOnly(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
 export default async function EllaRunDetailPage({
   params,
 }: {
@@ -186,8 +154,6 @@ export default async function EllaRunDetailPage({
   const run = await getEllaRunDetail(params.id)
   if (!run) notFound()
 
-  // Slack response detection: split client-facing + handoff if the
-  // marker is present (mirroring the Batch 1.5 detector).
   const fullResponse = run.slack_response_text
   let clientFacing: string | null = null
   let handoff: string | null = null
@@ -202,340 +168,620 @@ export default async function EllaRunDetailPage({
   const reactive = isReactiveTrigger(run.trigger_type)
   const cost = rollupCost(run)
 
+  const triggerAuthor =
+    run.real_author_name ?? run.real_author_role ?? 'Unknown'
+  const triggerTime = formatTimeOnly(run.started_at)
+
   return (
-    <div className="mx-auto max-w-4xl space-y-5 px-8 py-8">
-      <HeaderBand
-        eyebrow="ELLA · RUN"
-        title={deriveTitle(run)}
-        backlink={{ href: '/ella/runs', label: 'Back to Ella runs' }}
-        pills={
-          <>
+    <div style={{ padding: '24px 48px 28px' }}>
+      <Link
+        href="/ella/runs"
+        className="geg-mono"
+        style={{
+          color: 'var(--color-geg-accent)',
+          textDecoration: 'none',
+          fontSize: 11,
+          fontWeight: 500,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+        }}
+      >
+        ← BACK TO RUN HISTORY
+      </Link>
+
+      <header
+        style={{
+          padding: '26px 0 22px',
+          borderBottom: '1px solid var(--color-geg-border)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 24,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="geg-eyebrow">ELLA · RUN</div>
+          <h1
+            className="geg-serif"
+            style={{
+              fontWeight: 500,
+              fontSize: 36,
+              lineHeight: 1.1,
+              letterSpacing: '-0.012em',
+              color: 'var(--color-geg-text)',
+              margin: '8px 0 0',
+            }}
+          >
+            {deriveTitle(run)}.
+          </h1>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              marginTop: 12,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
             <RunStatusPill status={run.status} />
-            <span
-              className="inline-flex items-center rounded-full border bg-zinc-50 px-2 py-0.5 text-[11px] font-normal text-zinc-700"
-              aria-label={`Trigger type: ${triggerTypeDisplay(run.trigger_type)}`}
-            >
-              {triggerTypeDisplay(run.trigger_type)}
-            </span>
-          </>
-        }
-        actions={
-          <span className="font-mono text-xs text-muted-foreground">
-            {fmtCost(cost.total_cost)} · {fmtTokens(cost.total_input_tokens, cost.total_output_tokens)} · {run.duration_ms ?? '—'} ms
-          </span>
-        }
-      />
-
-      {/* Context — a single labeled row of contextual chrome below the title. */}
-      <MetaRowSection title="Context">
-        <KeyValue
-          label="Channel"
-          value={
-            run.channel_name ? (
-              <span>
-                #{run.channel_name}
-                {run.channel_client_name ? (
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    → {run.channel_client_name}
-                  </span>
-                ) : null}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">—</span>
-            )
-          }
-        />
-        <KeyValue
-          label="Who Ella responded to"
-          value={
-            <div className="flex items-center gap-2">
-              <span>{run.real_author_name ?? 'unresolved'}</span>
-              <RolePill role={run.real_author_role} />
-            </div>
-          }
-        />
-        <KeyValue
-          label="Started at"
-          value={
-            <span title={run.started_at}>
-              {new Date(run.started_at).toLocaleString()}
-            </span>
-          }
-        />
-        <KeyValue label="Model" value={run.llm_model ?? '—'} />
-      </MetaRowSection>
-
-      {/* Section order: Triggering message → Ella's response →
-          Surrounding messages → Haiku decision. Workflow order. */}
-      <MetaRowSection title="Triggering message">
-        <div className="space-y-2 text-sm">
-          <div className="rounded bg-zinc-50 p-3">
-            {run.input_summary ?? (
-              <span className="text-muted-foreground">(no input recorded)</span>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            Trigger type: <code>{run.trigger_type}</code>
-            {run.trigger_ts ? <> · ts: <code>{run.trigger_ts}</code></> : null}
-            {run.thread_ts ? <> · thread_ts: <code>{run.thread_ts}</code></> : null}
+            <TriggerTypePill triggerType={run.trigger_type} />
+            {run.llm_model ? (
+              <GegPill tier="muted" label={run.llm_model} />
+            ) : null}
           </div>
         </div>
-      </MetaRowSection>
+        <div
+          className="geg-mono"
+          style={{
+            fontSize: 11,
+            color: 'var(--color-geg-text-2)',
+            textAlign: 'right',
+            letterSpacing: '0.02em',
+            lineHeight: 1.6,
+            paddingBottom: 6,
+          }}
+        >
+          <b style={{ color: 'var(--color-geg-text)', fontWeight: 500 }}>
+            {fmtCost(cost.total_cost)}
+          </b>{' '}
+          total
+          <br />
+          {fmtTokens(cost.total_input_tokens, cost.total_output_tokens)} tokens
+          <br />
+          {run.duration_ms ?? '—'} ms
+        </div>
+      </header>
 
-      <MetaRowSection title="Ella's response">
-        {clientFacing == null && run.output_summary == null ? (
-          <div className="text-sm text-muted-foreground">No response found.</div>
-        ) : (
-          <div className="space-y-3 text-sm">
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '420px 1fr',
+          gap: 20,
+          paddingTop: 22,
+        }}
+      >
+        {/* LEFT COLUMN */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Context box */}
+          <div className="geg-gold-box">
+            <div className="geg-gold-box-header">
+              <h3>Context</h3>
+            </div>
             <div>
-              <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                Client-facing (from `slack_messages`)
-              </div>
-              <pre className="whitespace-pre-wrap rounded bg-zinc-50 p-3 font-sans">
-                {clientFacing ?? (
-                  <span className="text-muted-foreground">
-                    (no slack_messages match — falling back to output_summary below)
-                  </span>
-                )}
-              </pre>
-            </div>
-            {handoff ? (
-              <div>
-                <div className="mb-1 text-xs uppercase tracking-wide text-rose-700">
-                  Captured handoff (stripped before posting)
-                </div>
-                <pre className="whitespace-pre-wrap rounded bg-rose-50 p-3 font-sans">
-                  {handoff}
-                </pre>
-              </div>
-            ) : null}
-            {clientFacing == null && run.output_summary ? (
-              <div>
-                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                  output_summary (200-char limit)
-                </div>
-                <pre className="whitespace-pre-wrap rounded bg-zinc-50 p-3 font-sans">
-                  {run.output_summary}
-                </pre>
-              </div>
-            ) : null}
-          </div>
-        )}
-        {run.error_message ? (
-          <div className="mt-3">
-            <div className="mb-1 text-xs uppercase tracking-wide text-rose-700">
-              Error message
-            </div>
-            <pre className="whitespace-pre-wrap rounded bg-rose-50 p-3 font-mono text-xs">
-              {run.error_message}
-            </pre>
-          </div>
-        ) : null}
-      </MetaRowSection>
-
-      <SurroundingMessagesSection run={run} />
-
-      <HaikuDecisionSection run={run} reactive={reactive} />
-
-      {run.escalation ? (
-        <MetaRowSection title="Escalation">
-          <KeyValue
-            label="Reason"
-            value={<code className="text-xs">{run.escalation.reason}</code>}
-          />
-          <KeyValue label="Status" value={run.escalation.status} />
-          {run.escalation.handoff_reasoning ? (
-            <KeyValue
-              label="Handoff reasoning"
-              value={
-                <div className="whitespace-pre-wrap text-sm">
-                  {run.escalation.handoff_reasoning}
-                </div>
-              }
-            />
-          ) : null}
-          {run.escalation.resolution_note ? (
-            <KeyValue
-              label="Resolution note"
-              value={run.escalation.resolution_note}
-            />
-          ) : null}
-          <KeyValue
-            label="Resolved at"
-            value={
-              run.escalation.resolved_at ?? (
-                <span className="text-muted-foreground">pending</span>
-              )
-            }
-          />
-        </MetaRowSection>
-      ) : null}
-
-      <DiagnosticsCollapse>
-        {cost.haiku_cost != null ||
-        cost.haiku_input_tokens != null ||
-        cost.haiku_output_tokens != null ? (
-          <div className="mb-4">
-            <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-              Cost breakdown (response = Sonnet · decision = Haiku)
-            </div>
-            <div className="grid grid-cols-[200px_1fr] gap-2 text-xs font-mono">
-              <div className="text-muted-foreground">Sonnet response</div>
-              <div>
-                {fmtCost(cost.response_cost)} ·{' '}
-                {fmtTokens(cost.response_input_tokens, cost.response_output_tokens)}
-              </div>
-              <div className="text-muted-foreground">Haiku decision</div>
-              <div>
-                {fmtCost(cost.haiku_cost)} ·{' '}
-                {fmtTokens(cost.haiku_input_tokens, cost.haiku_output_tokens)}
-                {run.haiku_agent_run_id ? (
-                  <>
-                    {' '}
-                    <span className="text-muted-foreground">
-                      (run {run.haiku_agent_run_id})
+              <DataRow
+                k="Channel"
+                v={
+                  run.channel_name ? (
+                    <span
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 4,
+                      }}
+                    >
+                      <span style={{ color: 'var(--color-geg-text)' }}>
+                        #{run.channel_name}
+                      </span>
+                      {run.channel_client_name ? (
+                        <span
+                          className="geg-mono"
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--color-geg-text-2)',
+                            letterSpacing: '0.02em',
+                          }}
+                        >
+                          → {run.channel_client_name}
+                        </span>
+                      ) : null}
                     </span>
-                  </>
-                ) : null}
-              </div>
-              <div className="text-muted-foreground">Total</div>
-              <div>
-                {fmtCost(cost.total_cost)} ·{' '}
-                {fmtTokens(cost.total_input_tokens, cost.total_output_tokens)}
-              </div>
+                  ) : (
+                    <span style={{ color: 'var(--color-geg-text-faint)' }}>
+                      —
+                    </span>
+                  )
+                }
+              />
+              <DataRow
+                k="Responded to"
+                v={
+                  <span
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    {run.real_author_name ?? (
+                      <span style={{ color: 'var(--color-geg-text-faint)' }}>
+                        unresolved
+                      </span>
+                    )}
+                    <RolePill role={run.real_author_role} />
+                  </span>
+                }
+              />
+              <DataRow
+                k="Started"
+                v={
+                  <span
+                    className="geg-mono"
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--color-geg-text-2)',
+                      letterSpacing: '0.02em',
+                    }}
+                    title={run.started_at}
+                  >
+                    {formatStartedAt(run.started_at)}
+                  </span>
+                }
+              />
+              <DataRow
+                k="Trigger"
+                v={
+                  <span
+                    className="geg-mono"
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--color-geg-text-2)',
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    {run.trigger_type}
+                  </span>
+                }
+              />
+              <DataRow
+                k="Model"
+                v={
+                  <span
+                    className="geg-mono"
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--color-geg-text-2)',
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    {run.llm_model ?? '—'}
+                  </span>
+                }
+              />
             </div>
           </div>
-        ) : null}
-        <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-          Trigger metadata
+
+          {/* Haiku decision box */}
+          <HaikuDecisionBox run={run} reactive={reactive} />
+
+          {/* Escalation box (when present) */}
+          {run.escalation ? (
+            <div className="geg-gold-box">
+              <div className="geg-gold-box-header">
+                <h3>Escalation</h3>
+              </div>
+              <div>
+                <DataRow
+                  k="Reason"
+                  v={
+                    <span
+                      className="geg-mono"
+                      style={{
+                        fontSize: 12,
+                        color: 'var(--color-geg-text-2)',
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      {run.escalation.reason}
+                    </span>
+                  }
+                />
+                <DataRow k="Status" v={run.escalation.status} />
+                {run.escalation.resolved_at ? (
+                  <DataRow
+                    k="Resolved"
+                    v={
+                      <span
+                        className="geg-mono"
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--color-geg-text-2)',
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        {run.escalation.resolved_at}
+                      </span>
+                    }
+                  />
+                ) : (
+                  <DataRow
+                    k="Resolved"
+                    v={
+                      <span style={{ color: 'var(--color-geg-text-faint)' }}>
+                        pending
+                      </span>
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          ) : null}
         </div>
-        <pre className="overflow-x-auto rounded bg-zinc-50 p-3 font-mono text-xs">
-          {JSON.stringify(run.trigger_metadata, null, 2)}
-        </pre>
-      </DiagnosticsCollapse>
+
+        {/* RIGHT COLUMN */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Triggering message */}
+          <div className="geg-gold-box">
+            <div className="geg-gold-box-header">
+              <h3>Triggering message</h3>
+              <span
+                className="geg-mono"
+                style={{
+                  fontSize: 10,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-geg-text-faint)',
+                }}
+              >
+                {run.triggering_message_full_text == null &&
+                run.input_summary != null
+                  ? 'Summary fallback'
+                  : `From ${triggerAuthor} · ${triggerTime}`}
+              </span>
+            </div>
+            <div>
+              {run.triggering_message_full_text ?? run.input_summary ? (
+                <ExpandableMessage
+                  text={
+                    run.triggering_message_full_text ??
+                    run.input_summary ??
+                    ''
+                  }
+                  author={triggerAuthor}
+                  timeLabel={triggerTime}
+                />
+              ) : (
+                <div
+                  style={{
+                    background: 'rgba(0, 0, 0, 0.18)',
+                    border: '1px solid rgba(255, 255, 255, 0.04)',
+                    borderRadius: 6,
+                    padding: '14px 16px',
+                    color: 'var(--color-geg-text-faint)',
+                    fontStyle: 'italic',
+                  }}
+                >
+                  (no input recorded)
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ella's response */}
+          <div className="geg-gold-box">
+            <div className="geg-gold-box-header">
+              <h3>Ella&apos;s response</h3>
+              <span
+                className="geg-mono"
+                style={{
+                  fontSize: 10,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-geg-text-faint)',
+                }}
+              >
+                {clientFacing
+                  ? `From slack_messages · ${triggerTime}`
+                  : run.output_summary
+                    ? 'Output summary fallback'
+                    : 'No response'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {clientFacing == null && run.output_summary == null ? (
+                <div
+                  style={{
+                    color: 'var(--color-geg-text-faint)',
+                    fontStyle: 'italic',
+                    fontSize: 13,
+                  }}
+                >
+                  No response found.
+                </div>
+              ) : (
+                <>
+                  {clientFacing ? (
+                    <ExpandableMessage
+                      text={clientFacing}
+                      author="Ella"
+                      authorIsElla
+                      timeLabel={triggerTime}
+                    />
+                  ) : null}
+                  {handoff ? (
+                    <div>
+                      <div
+                        className="geg-mono"
+                        style={{
+                          fontSize: 10,
+                          letterSpacing: '0.14em',
+                          textTransform: 'uppercase',
+                          color: 'var(--color-geg-neg)',
+                          marginBottom: 6,
+                        }}
+                      >
+                        Captured handoff (stripped before posting)
+                      </div>
+                      <pre
+                        style={{
+                          background: 'rgba(201, 119, 102, 0.08)',
+                          border: '1px solid var(--color-geg-neg-border)',
+                          borderRadius: 6,
+                          padding: '12px 14px',
+                          whiteSpace: 'pre-wrap',
+                          color: 'var(--color-geg-text)',
+                          fontFamily: 'inherit',
+                          fontSize: 13,
+                          margin: 0,
+                        }}
+                      >
+                        {handoff}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {clientFacing == null && run.output_summary ? (
+                    <ExpandableMessage
+                      text={run.output_summary}
+                      author="Ella"
+                      authorIsElla
+                      timeLabel={triggerTime}
+                    />
+                  ) : null}
+                </>
+              )}
+              {run.error_message ? (
+                <div>
+                  <div
+                    className="geg-mono"
+                    style={{
+                      fontSize: 10,
+                      letterSpacing: '0.14em',
+                      textTransform: 'uppercase',
+                      color: 'var(--color-geg-neg)',
+                      marginBottom: 6,
+                    }}
+                  >
+                    Error message
+                  </div>
+                  <pre
+                    style={{
+                      background: 'rgba(201, 119, 102, 0.08)',
+                      border: '1px solid var(--color-geg-neg-border)',
+                      borderRadius: 6,
+                      padding: '12px 14px',
+                      whiteSpace: 'pre-wrap',
+                      fontFamily:
+                        'var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace)',
+                      fontSize: 12,
+                      color: 'var(--color-geg-text)',
+                      margin: 0,
+                    }}
+                  >
+                    {run.error_message}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 28 }}>
+        <DiagnosticsCollapse>
+          {cost.haiku_cost != null ||
+          cost.haiku_input_tokens != null ||
+          cost.haiku_output_tokens != null ? (
+            <div className="mb-4">
+              <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                Cost breakdown (response = Sonnet · decision = Haiku)
+              </div>
+              <div className="grid grid-cols-[200px_1fr] gap-2 text-xs font-mono">
+                <div className="text-muted-foreground">Sonnet response</div>
+                <div>
+                  {fmtCost(cost.response_cost)} ·{' '}
+                  {fmtTokens(
+                    cost.response_input_tokens,
+                    cost.response_output_tokens,
+                  )}
+                </div>
+                <div className="text-muted-foreground">Haiku decision</div>
+                <div>
+                  {fmtCost(cost.haiku_cost)} ·{' '}
+                  {fmtTokens(
+                    cost.haiku_input_tokens,
+                    cost.haiku_output_tokens,
+                  )}
+                  {run.haiku_agent_run_id ? (
+                    <>
+                      {' '}
+                      <span className="text-muted-foreground">
+                        (run {run.haiku_agent_run_id})
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+                <div className="text-muted-foreground">Total</div>
+                <div>
+                  {fmtCost(cost.total_cost)} ·{' '}
+                  {fmtTokens(
+                    cost.total_input_tokens,
+                    cost.total_output_tokens,
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+            Trigger metadata
+          </div>
+          <pre className="overflow-x-auto rounded bg-zinc-900 p-3 font-mono text-xs text-zinc-300">
+            {JSON.stringify(run.trigger_metadata, null, 2)}
+          </pre>
+        </DiagnosticsCollapse>
+      </div>
     </div>
   )
 }
 
-function SurroundingMessagesSection({ run }: { run: EllaRunDetail }) {
-  // Data layer guarantees thread_messages has at least the trigger;
-  // no empty-state path. If the array is somehow empty (degenerate
-  // case — channel and trigger_ts both unresolvable), render a stub.
-  if (run.thread_messages.length === 0) {
-    return (
-      <EmptyStateAwareSection
-        title="Surrounding messages"
-        mode="stub"
-        stubContent={
-          <div className="text-sm text-muted-foreground">
-            No surrounding messages available.
-          </div>
-        }
-      />
-    )
-  }
+function DataRow({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <MetaRowSection title="Surrounding messages">
-      <div className="space-y-1 text-sm">
-        {run.thread_messages.map((m) => {
-          const hhmm = new Date(m.sent_at).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-          const author = m.display_name ?? m.slack_user_id
-          return (
-            <div
-              key={m.slack_ts}
-              className={
-                m.is_trigger
-                  ? 'rounded bg-amber-50 p-2 font-medium'
-                  : 'p-2'
-              }
-            >
-              <span className="font-mono text-xs text-muted-foreground">
-                [{hhmm}]
-              </span>{' '}
-              <span className="text-xs text-muted-foreground">
-                {m.author_type}
-              </span>{' '}
-              <span className="font-medium">{author}:</span>{' '}
-              <span>{m.text}</span>
-              {m.is_trigger ? (
-                <span className="ml-1 text-xs uppercase tracking-wide text-amber-700">
-                  ← trigger
-                </span>
-              ) : null}
-            </div>
-          )
-        })}
-      </div>
-    </MetaRowSection>
+    <div className="geg-data-row">
+      <span className="geg-data-k">{k}</span>
+      <span className="geg-data-v">{v}</span>
+    </div>
   )
 }
 
-function HaikuDecisionSection({
+function HaikuDecisionBox({
   run,
   reactive,
 }: {
   run: EllaRunDetail
   reactive: boolean
 }) {
-  // Reactive @-mention shapes: render synthetic content so the section
-  // appears consistently across all runs. The mention itself is the
-  // reason Ella spoke; we say that explicitly.
+  let decision: string
+  let reasoning: string | null
+  let isSynthetic = false
   if (reactive) {
     const synthetic = syntheticReactiveHaiku(run)
-    return (
-      <MetaRowSection title="What Haiku decided">
-        <KeyValue
-          label="Decision"
-          value={<span className="font-medium">{synthetic.decision}</span>}
-        />
-        <KeyValue
-          label="Reasoning"
-          value={
-            <div className="whitespace-pre-wrap text-sm">{synthetic.reasoning}</div>
-          }
-        />
-      </MetaRowSection>
-    )
+    decision = synthetic.decision
+    reasoning = synthetic.reasoning
+    isSynthetic = true
+  } else if (!run.haiku_decision && !run.haiku_reasoning) {
+    decision = '—'
+    reasoning = null
+  } else {
+    decision = haikuDecisionDisplay(run.haiku_decision)
+    reasoning = run.haiku_reasoning
   }
-  // Passive shapes — real data via forward lookup (passive_monitor) or
-  // reverse lookup (passive_substantive / passive_general_inquiry) in
-  // getEllaRunDetail. Empty = data-quality issue; render a stub.
-  if (!run.haiku_decision && !run.haiku_reasoning) {
-    return (
-      <EmptyStateAwareSection
-        title="What Haiku decided"
-        mode="stub"
-        stubContent={
-          <div className="text-sm text-muted-foreground">
-            No Haiku decision recorded for this run.
-          </div>
-        }
-      />
-    )
-  }
+
   return (
-    <MetaRowSection title="What Haiku decided">
-      <KeyValue
-        label="Decision"
-        value={
-          <span className="font-medium">
-            {haikuDecisionDisplay(run.haiku_decision)}
+    <div className="geg-gold-box" style={{ flex: 1 }}>
+      <div className="geg-gold-box-header">
+        <h3>Haiku decision</h3>
+        <span
+          className="geg-mono"
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: 'var(--color-geg-text-faint)',
+          }}
+        >
+          Why Ella spoke
+        </span>
+      </div>
+      <div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            paddingBottom: 14,
+            marginBottom: 14,
+            borderBottom: '1px solid var(--color-geg-accent-border)',
+          }}
+        >
+          <span
+            className="geg-mono"
+            style={{
+              fontSize: 10,
+              fontWeight: 500,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--color-geg-text-faint)',
+            }}
+          >
+            Decision
           </span>
-        }
-      />
-      {run.haiku_reasoning ? (
-        <KeyValue
-          label="Reasoning"
-          value={
-            <div className="whitespace-pre-wrap text-sm">
-              {run.haiku_reasoning}
-            </div>
-          }
-        />
-      ) : null}
-    </MetaRowSection>
+          <span
+            className="geg-serif"
+            style={{
+              fontWeight: 500,
+              fontSize: 22,
+              letterSpacing: '-0.01em',
+              color: 'var(--color-geg-text)',
+              marginLeft: 'auto',
+              textAlign: 'right',
+            }}
+          >
+            {decision}
+          </span>
+        </div>
+        {reasoning ? (
+          <>
+            <h4
+              className="geg-mono"
+              style={{
+                fontSize: 10,
+                fontWeight: 500,
+                letterSpacing: '0.16em',
+                textTransform: 'uppercase',
+                color: 'var(--color-geg-text-2)',
+                margin: '0 0 10px',
+              }}
+            >
+              Reasoning
+            </h4>
+            <p
+              className="geg-serif"
+              style={{
+                fontWeight: 400,
+                fontSize: 14.5,
+                lineHeight: 1.6,
+                color: isSynthetic
+                  ? 'var(--color-geg-text-2)'
+                  : 'var(--color-geg-text)',
+                fontStyle: isSynthetic ? 'italic' : 'normal',
+                margin: 0,
+              }}
+            >
+              {reasoning}
+            </p>
+          </>
+        ) : (
+          <p
+            style={{
+              fontSize: 13,
+              color: 'var(--color-geg-text-faint)',
+              fontStyle: 'italic',
+              margin: 0,
+            }}
+          >
+            No Haiku decision recorded for this run.
+          </p>
+        )}
+      </div>
+    </div>
   )
 }

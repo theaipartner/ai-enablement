@@ -89,35 +89,83 @@ export default async function EllaRunsPage({
   const showLoadMore = rows.length >= limit && rows.length < total
 
   return (
-    <div className="px-8 py-8 space-y-6">
+    <div style={{ padding: '32px 48px 28px' }}>
       <HeaderBand
         eyebrow="ELLA · AUDIT"
         title="Run history."
         actions={
-          <span className="geg-eyebrow geg-numeric">
-            {total} {total === 1 ? 'RUN' : 'RUNS'}
+          <span
+            className="geg-mono"
+            style={{
+              fontSize: 11,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--color-geg-text-2)',
+            }}
+          >
+            <b style={{ color: 'var(--color-geg-text)', fontWeight: 500 }}>
+              {total.toLocaleString()}
+            </b>{' '}
+            {total === 1 ? 'RUN' : 'RUNS'}
           </span>
         }
       />
 
-      <EllaRunsSummaryBand stats={stats} />
-      <EllaRunsFilterBar channelOptions={channelDropdownOptions} />
-      <EllaRunsTable rows={rows} />
+      <div style={{ marginTop: 24 }}>
+        <EllaRunsSummaryBand stats={stats} />
+        <EllaRunsFilterBar channelOptions={channelDropdownOptions} />
+        <EllaRunsTable rows={rows} />
+      </div>
 
       {showLoadMore ? (
-        <div className="flex justify-center">
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            marginTop: 24,
+          }}
+        >
           <Link
             href={loadMoreHref}
-            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-4 py-2 text-sm transition-colors hover:bg-muted"
+            className="geg-mono"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              border: '1px solid var(--color-geg-accent-border)',
+              borderRadius: 6,
+              fontSize: 11,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--color-geg-accent)',
+              background: 'var(--color-geg-accent-fill)',
+              textDecoration: 'none',
+            }}
           >
             Load 100 more
-            <span className="text-xs text-muted-foreground">
+            <span
+              style={{
+                color: 'var(--color-geg-text-faint)',
+                letterSpacing: '0.02em',
+                textTransform: 'none',
+              }}
+            >
               ({rows.length} of {total})
             </span>
           </Link>
         </div>
       ) : rows.length > 0 && rows.length >= total ? (
-        <div className="text-center text-xs text-muted-foreground">
+        <div
+          className="geg-mono"
+          style={{
+            textAlign: 'center',
+            marginTop: 24,
+            fontSize: 11,
+            letterSpacing: '0.02em',
+            color: 'var(--color-geg-text-faint)',
+          }}
+        >
           End of results — {total} runs.
         </div>
       ) : null}

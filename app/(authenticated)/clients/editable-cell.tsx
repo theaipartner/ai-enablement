@@ -232,10 +232,16 @@ export function EditablePrimaryCsmCell({
   clientId,
   value,
   options,
+  compact = false,
 }: {
   clientId: string
   value: string | null
   options: ReadonlyArray<{ id: string; full_name: string }>
+  // Pass true on the /clients/[id] Details box so the cell matches the
+  // height + visual rhythm of its plain-text siblings (Email, Phone,
+  // Country, ...). Leave default false in the /clients list table where
+  // the default min-h-9 matches the neighboring editable cells.
+  compact?: boolean
 }) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -247,6 +253,8 @@ export function EditablePrimaryCsmCell({
       value={value}
       variant="enum"
       options={enumOptions}
+      compact={compact}
+      omitEmptyOption
       displayValue={(raw) => {
         if (raw === null || raw === undefined || raw === '') {
           return <span style={{ color: 'var(--color-geg-text-faint)' }}>—</span>
@@ -254,15 +262,13 @@ export function EditablePrimaryCsmCell({
         return nameById.get(raw as string) ?? String(raw)
       }}
       onSave={async (newValue) => {
-        // Server-side change_primary_csm RPC archives the old assignment
-        // and inserts a new one atomically. No null path — the existing
-        // Server Action signature requires a non-null new_team_member_id.
-        // The "clear CSM" case from the spec (§ A.1) isn't wired; Drake
-        // accepted it as low-value.
+        // change_primary_csm RPC archives the old assignment and inserts
+        // a new one atomically. omitEmptyOption keeps null out of the
+        // dropdown, but the type still allows it — handle defensively.
         if (newValue === null || newValue === '') {
           return {
             success: false as const,
-            error: 'Clearing Primary CSM is not supported yet.',
+            error: 'Clearing Primary CSM is not supported.',
           }
         }
         if (newValue === value) {

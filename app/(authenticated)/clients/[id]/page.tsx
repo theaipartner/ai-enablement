@@ -270,6 +270,7 @@ export default async function ClientDetailPage({
                     clientId={client.id}
                     value={client.active_primary_csm?.team_member_id ?? null}
                     options={csmOptions}
+                    compact
                   />
                 }
               />
@@ -476,7 +477,11 @@ export default async function ClientDetailPage({
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <ActionItemsList clientId={client.id} items={openItems} />
+              <ActionItemsList
+                clientId={client.id}
+                items={openItems}
+                slackChannelId={client.slack_channel_id}
+              />
             </div>
           </div>
 

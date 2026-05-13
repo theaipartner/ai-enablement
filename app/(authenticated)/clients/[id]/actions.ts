@@ -19,6 +19,8 @@ import {
 } from '@/lib/db/clients'
 import { TRUSTPILOT_VALUES } from '@/lib/client-vocab'
 import { mergeClient, type MergeResult } from '@/lib/db/merge'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { postMessage } from '@/lib/slack/post'
 
 // ----------------------------------------------------------------------
 // updateClientField — generic inline-edit Server Action
@@ -394,6 +396,130 @@ export async function updateClientAlternateEmailsAction(
     revalidatePath(`/clients/${client_id}`)
   }
   return result
+}
+
+// ----------------------------------------------------------------------
+// sendActionItemsToSlackAction — post open action items to the client's
+// mapped Slack channel
+// ----------------------------------------------------------------------
+//
+// Fresh DB read on every call (per spec § Decision 3 — DB is the source
+// of truth, not React state). Channel resolution mirrors getClientById:
+// most recently created non-archived row in slack_channels for this
+// client. Action items filtered to status='open' and scoped to calls
+// where primary_client_id = clientId (matches the fixed predicate in
+// the gregory-action-items-transfer-fix spec).
+//
+// Dry-run mode (SLACK_DRY_RUN=true) skips the chat.postMessage call but
+// runs everything else — useful for verifying message shape and channel
+// resolution without sending to live channels during preview testing.
+//
+// Observability: every invocation logs a single console.info JSON line
+// regardless of dry-run vs live, with client_id / channel_id / item_count
+// / message_length / dry_run / timestamp. Vercel function logs are the
+// post-incident audit trail.
+
+function formatActionItemsMessage(
+  items: ReadonlyArray<{ description: string }>,
+): string {
+  const bullets = items.map((it) => `• ${it.description}`).join('\n')
+  return `*Open action items we discussed:*\n${bullets}`
+}
+
+export async function sendActionItemsToSlackAction(
+  client_id: string,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const supabase = createAdminClient()
+
+  // Resolve channel — same shape as getClientById's slack_channel_id
+  // derivation but isolated to this action's read.
+  const { data: channelRows, error: chanErr } = await supabase
+    .from('slack_channels')
+    .select('slack_channel_id, is_archived, created_at')
+    .eq('client_id', client_id)
+  if (chanErr) {
+    return { success: false, error: chanErr.message }
+  }
+  const channels = (channelRows ?? []) as Array<{
+    slack_channel_id: string
+    is_archived: boolean
+    created_at: string
+  }>
+  const activeChannel = channels
+    .filter((c) => !c.is_archived)
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )[0]
+  const channelId = activeChannel?.slack_channel_id ?? null
+  if (!channelId) {
+    return {
+      success: false,
+      error: 'No Slack channel mapped for this client',
+    }
+  }
+
+  // Fetch open action items via the same calls!inner JOIN the detail
+  // page now uses (gregory-action-items-transfer-fix). Items extracted
+  // from any of the client's calls surface here regardless of who's
+  // assigned as the doer.
+  const { data: itemRows, error: itemErr } = await supabase
+    .from('call_action_items')
+    .select('description, status, calls!inner(primary_client_id)')
+    .eq('calls.primary_client_id', client_id)
+    .eq('status', 'open')
+    .order('extracted_at', { ascending: false })
+  if (itemErr) {
+    return { success: false, error: itemErr.message }
+  }
+  const items = ((itemRows ?? []) as Array<{ description: string }>).filter(
+    (it) => typeof it.description === 'string' && it.description.length > 0,
+  )
+  if (items.length === 0) {
+    return { success: false, error: 'No open action items' }
+  }
+
+  const messageText = formatActionItemsMessage(items)
+  const dryRun = process.env.SLACK_DRY_RUN === 'true'
+  const logPayload = {
+    event: dryRun
+      ? 'send_action_items_to_slack_DRY_RUN'
+      : 'send_action_items_to_slack',
+    client_id,
+    channel_id: channelId,
+    item_count: items.length,
+    message_length: messageText.length,
+    dry_run: dryRun,
+    timestamp: new Date().toISOString(),
+  }
+  console.info(JSON.stringify(logPayload))
+  if (dryRun) {
+    // Echo the full message body in dry-run so Vercel function logs
+    // capture what would have been sent.
+    console.info(
+      JSON.stringify({
+        event: 'send_action_items_to_slack_DRY_RUN_body',
+        client_id,
+        channel_id: channelId,
+        message_body: messageText,
+      }),
+    )
+    return { success: true }
+  }
+
+  const result = await postMessage(channelId, messageText)
+  if (!result.ok) {
+    console.error(
+      JSON.stringify({
+        event: 'send_action_items_to_slack_FAILED',
+        client_id,
+        channel_id: channelId,
+        slack_error: result.slackError,
+      }),
+    )
+    return { success: false, error: result.slackError }
+  }
+  return { success: true }
 }
 
 // ----------------------------------------------------------------------
