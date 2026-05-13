@@ -269,6 +269,110 @@
   border-color: var(--color-geg-accent-strong);
 }
 
+/* Generic editorial pill — five tier variants, mono caps label + 6px
+   dot. Used by the Clients list (Status, CSM standing, NPS standing,
+   Trustpilot, Journey stage) and the detail-page summary header
+   (Health <N> as a gold tier). Sentiment pill renders the same shape
+   via tier='pos'|'warn'|'neg'. */
+[data-theme="gregory-editorial"] .geg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 8px 3px 7px;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+[data-theme="gregory-editorial"] .geg-pill-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+[data-theme="gregory-editorial"] .geg-pill--pos {
+  color: var(--color-geg-pos);
+  background: var(--color-geg-pos-fill);
+  border-color: var(--color-geg-pos-border);
+}
+[data-theme="gregory-editorial"] .geg-pill--pos .geg-pill-dot {
+  background: var(--color-geg-pos);
+}
+[data-theme="gregory-editorial"] .geg-pill--warn {
+  color: var(--color-geg-warn);
+  background: var(--color-geg-warn-fill);
+  border-color: var(--color-geg-warn-border);
+}
+[data-theme="gregory-editorial"] .geg-pill--warn .geg-pill-dot {
+  background: var(--color-geg-warn);
+}
+[data-theme="gregory-editorial"] .geg-pill--neg {
+  color: var(--color-geg-neg);
+  background: var(--color-geg-neg-fill);
+  border-color: var(--color-geg-neg-border);
+}
+[data-theme="gregory-editorial"] .geg-pill--neg .geg-pill-dot {
+  background: var(--color-geg-neg);
+}
+[data-theme="gregory-editorial"] .geg-pill--muted {
+  color: var(--color-geg-text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--color-geg-border-strong);
+}
+[data-theme="gregory-editorial"] .geg-pill--muted .geg-pill-dot {
+  background: var(--color-geg-text-faint);
+}
+[data-theme="gregory-editorial"] .geg-pill--gold {
+  color: var(--color-geg-accent);
+  background: var(--color-geg-accent-fill);
+  border-color: var(--color-geg-accent-border);
+}
+[data-theme="gregory-editorial"] .geg-pill--gold .geg-pill-dot {
+  background: var(--color-geg-accent);
+}
+
+/* Health cell — number + 36px gradient bar, per Clients list mock.
+   The bar is a static gradient (green→yellow→red) with a 2px white
+   indicator positioned by --p (the score percentage). */
+[data-theme="gregory-editorial"] .geg-health-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-size: 13px;
+}
+[data-theme="gregory-editorial"] .geg-health-cell-num {
+  color: var(--color-geg-text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+[data-theme="gregory-editorial"] .geg-health-cell-bar {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--color-geg-pos) 0%,
+    var(--color-geg-warn) 50%,
+    var(--color-geg-neg) 100%
+  );
+  position: relative;
+}
+[data-theme="gregory-editorial"] .geg-health-cell-bar::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--color-geg-text);
+  left: calc(var(--p, 0%) - 1px);
+}
+
 /* Utility classes — parallel structure to Promethean's .prom-* family.
    Prefix .geg- ("gregory editorial") so future Promethean coexistence
    doesn't collide. */

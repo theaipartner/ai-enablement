@@ -30,6 +30,12 @@ import {
   STATUS_OPTIONS,
   TRUSTPILOT_OPTIONS,
 } from '@/lib/client-vocab'
+import {
+  CsmStandingPill,
+  JourneyStagePill,
+  StatusPill,
+  TrustpilotPill,
+} from './pills'
 
 export function EditableStatusCell({
   clientId,
@@ -46,6 +52,7 @@ export function EditableStatusCell({
       value={value}
       variant="enum"
       options={STATUS_OPTIONS}
+      displayValue={(raw) => <StatusPill status={(raw ?? 'active') as string} />}
       onSave={async (newValue) => {
         const result = await updateClientStatusAction(
           clientId,
@@ -75,6 +82,7 @@ export function EditableJourneyStageCell({
       value={value}
       variant="enum"
       options={JOURNEY_STAGE_OPTIONS}
+      displayValue={(raw) => <JourneyStagePill stage={(raw as string | null) ?? null} />}
       onSave={async (newValue) => {
         const result = await updateClientJourneyStageAction(
           clientId,
@@ -104,6 +112,7 @@ export function EditableCsmStandingCell({
       value={value}
       variant="enum"
       options={CSM_STANDING_OPTIONS}
+      displayValue={(raw) => <CsmStandingPill standing={(raw as string | null) ?? null} />}
       onSave={async (newValue) => {
         const result = await updateClientCsmStandingAction(
           clientId,
@@ -133,6 +142,7 @@ export function EditableTrustpilotCell({
       value={value}
       variant="enum"
       options={TRUSTPILOT_OPTIONS}
+      displayValue={(raw) => <TrustpilotPill status={(raw as string | null) ?? null} />}
       onSave={async (newValue) => {
         const result = await updateClientField(
           clientId,
