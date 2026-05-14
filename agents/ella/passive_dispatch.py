@@ -13,10 +13,13 @@ Side effects per decision:
 
   - skip  -> agent_runs row (status='success', output_summary mentions
              the skip reason / Haiku reasoning).
-  - escalate -> agent_runs row + backend DM to the channel's primary
-             CSM via `shared.slack_post.post_message`. NO client-facing
-             post. Audit ledger: `webhook_deliveries.source=
-             'ella_passive_escalation_dm'`.
+  - escalate -> agent_runs row + escalations row (via
+             `agents.ella.escalation.escalate`) + backend DMs to Scott
+             (`ESCALATION_RECIPIENT_SLACK_USER_ID`) AND the channel's
+             primary CSM via the shared fan-out helper
+             `agents.ella.escalation_routing.fire_escalation_dms`. NO
+             client-facing post. Audit ledger: per-recipient
+             `webhook_deliveries.source='ella_escalation_dm'`.
   - respond_substantive -> agent_runs row + pending_ella_responses
              row queued for the per-minute cron to drain.
   - respond_general_inquiry -> same shape as respond_substantive.
@@ -25,15 +28,17 @@ Side effects per decision:
 from __future__ import annotations
 
 import logging
-import os
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from agents.ella.escalation import escalate as ella_escalate
+from agents.ella.escalation_routing import (
+    fire_escalation_dms,
+    resolve_escalation_recipients,
+)
 from agents.ella.passive_monitor import PassiveEvaluation
 from shared.db import get_client
 from shared.logging import end_agent_run, start_agent_run
-from shared.slack_post import post_message
 
 logger = logging.getLogger("ai_enablement.ella.passive_dispatch")
 
@@ -48,15 +53,6 @@ logger = logging.getLogger("ai_enablement.ella.passive_dispatch")
 # count is ~0 after meaningful traffic, Batch 2.4 rips out the queue and
 # moves to synchronous response from the ingest fork.
 _RESPOND_AFTER_DELAY = timedelta(minutes=1)
-
-# Audit-ledger source label for the escalation DM. Separate from the
-# realtime-ingest source so analytics can split escalation traffic from
-# message ingest traffic.
-_ESCALATION_DM_SOURCE = "ella_passive_escalation_dm"
-
-# Truncation cap for the haiku_reasoning section of the escalation DM
-# body. Spec § Trigger pipeline.9: "~200 chars".
-_DM_REASONING_TRUNC = 200
 
 
 def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
@@ -137,19 +133,31 @@ def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
         }
 
     if decision.decision == "escalate":
-        dm_result = _fire_escalation_dm(payload, decision, evaluation.primary_csm)
+        escalation_id = _write_passive_escalations_row(
+            run_id=run_id,
+            payload=payload,
+            decision=decision,
+            evaluation=evaluation,
+        )
+        recipients = resolve_escalation_recipients(evaluation.primary_csm)
+        dm_results = fire_escalation_dms(
+            recipients=recipients,
+            slack_channel_id=payload.slack_channel_id,
+            triggering_message_ts=payload.triggering_message_ts,
+            reasoning=decision.reasoning,
+            path="passive",
+            channel_client_id=payload.channel_client_id,
+        )
         end_agent_run(
             run_id,
-            status="success",
-            output_summary=(
-                f"escalated via DM; csm={dm_result.get('csm_name')}; "
-                f"dm_ok={dm_result.get('dm_ok')}"
-            ),
+            status="escalated" if escalation_id else "success",
+            output_summary=_format_escalation_summary(dm_results, escalation_id),
         )
         return {
             "agent_run_id": run_id,
             "decision": "escalate",
-            "dm_result": dm_result,
+            "escalation_id": escalation_id,
+            "dm_results": dm_results,
         }
 
     # decision.decision == 'skip'
@@ -216,153 +224,77 @@ def _insert_pending(
 
 
 # ---------------------------------------------------------------------------
-# Escalation DM
+# Escalation persistence + DM fan-out
 # ---------------------------------------------------------------------------
+#
+# Pre-2026-05-14 the passive escalation branch fired ONE DM to the
+# channel's primary CSM and never wrote an `escalations` row. The
+# unified-escalation spec moved the DM fan-out into the shared
+# `agents.ella.escalation_routing` module and added an `escalations`
+# row write so both reactive and passive paths persist identically.
+# Audit rows under `webhook_deliveries.source='ella_escalation_dm'`
+# (renamed from `ella_passive_escalation_dm`; the dashboard's
+# `fetchEscalationBodies` accepts both).
 
 
-def _fire_escalation_dm(
-    payload, decision, primary_csm: dict[str, Any] | None
-) -> dict[str, Any]:
-    """Post a backend DM to the channel's primary CSM. NO client-facing
-    post. The DM body carries a Slack deep-link to the triggering
-    message + the Haiku reasoning (truncated, no quoted client text).
-
-    Audited under `_ESCALATION_DM_SOURCE` so a future operations probe
-    can count escalation volume independently from response volume.
-    """
-    delivery_id = f"passive_escalation_{uuid.uuid4()}"
-    db = get_client()
-
-    # Construct the DM body up front so it can land in the audit row.
-    # The body doesn't depend on primary_csm — only on the triggering-
-    # message coordinates + the Haiku reasoning — so building it here
-    # works for both the no-primary-csm early-return path and the
-    # normal send path. The audit row's body always reflects what
-    # would have been (or was) sent.
-    link = _build_message_permalink(
-        payload.slack_channel_id, payload.triggering_message_ts
-    )
-    reasoning = (decision.reasoning or "")[:_DM_REASONING_TRUNC]
-    body = (
-        f":eyes: Worth a look — <{link}>\n"
-        f"_Ella decided to escalate rather than respond. "
-        f"Reasoning: {reasoning}_"
-    )
-
-    # Insert the audit row up front; we'll update terminal status at
-    # exit so failure paths still leave a row. `body` is persisted so
-    # the dashboard's /ella/runs list can surface Ella's actual
-    # escalation message in the Output column (see lib/db/ella-runs.ts
-    # getEllaRunsList, the escalation placeholder-skip fallback path).
-    # Forward-only — historical rows without this key continue to show
-    # the placeholder.
-    audit_payload = {
-        "slack_channel_id": payload.slack_channel_id,
-        "triggering_message_ts": payload.triggering_message_ts,
-        "channel_client_id": payload.channel_client_id,
-        "haiku_reasoning": decision.reasoning,
-        "body": body,
-    }
-    _insert_dm_audit(db, delivery_id, audit_payload, status="received")
-
-    if not primary_csm or not primary_csm.get("slack_user_id"):
-        _mark_dm_audit(
-            db,
-            delivery_id,
-            status="failed",
-            error="no_primary_csm_slack_user_id",
-        )
-        logger.warning(
-            "passive_dispatch: escalate decision but no primary_csm "
-            "slack_user_id for channel=%s",
-            payload.slack_channel_id,
-        )
-        return {"csm_name": None, "dm_ok": False, "delivery_id": delivery_id}
-
-    csm_slack_id = primary_csm["slack_user_id"]
-    csm_name = primary_csm.get("full_name")
-
-    result = post_message(csm_slack_id, body)
-
-    _mark_dm_audit(
-        db,
-        delivery_id,
-        status="processed" if result["ok"] else "failed",
-        error=None if result["ok"] else f"slack_post_failed: {result.get('slack_error')}",
-    )
-
-    return {
-        "csm_name": csm_name,
-        "csm_slack_id": csm_slack_id,
-        "dm_ok": bool(result["ok"]),
-        "delivery_id": delivery_id,
-        "slack_error": result.get("slack_error"),
-    }
-
-
-def _build_message_permalink(slack_channel_id: str, slack_ts: str) -> str:
-    """Construct an `archives/{channel}/p{ts_compact}` URL for the
-    workspace. Optional env var `SLACK_WORKSPACE` lets us emit
-    workspace-scoped permalinks; fallback omits the subdomain and
-    Slack still routes correctly when clicked from a logged-in
-    workspace.
-
-    Slack permalink format: `https://<workspace>.slack.com/archives/<channel>/p<ts*1e6>`
-    where `<ts*1e6>` is the slack_ts string with the dot removed.
-    """
-    workspace = os.environ.get("SLACK_WORKSPACE") or ""
-    ts_compact = slack_ts.replace(".", "")
-    subdomain = f"{workspace}." if workspace else ""
-    return f"https://{subdomain}slack.com/archives/{slack_channel_id}/p{ts_compact}"
-
-
-# ---------------------------------------------------------------------------
-# Audit ledger
-# ---------------------------------------------------------------------------
-
-
-def _insert_dm_audit(
-    db, delivery_id: str, payload: dict[str, Any], *, status: str
-) -> None:
-    try:
-        row: dict[str, Any] = {
-            "webhook_id": delivery_id,
-            "source": _ESCALATION_DM_SOURCE,
-            "processing_status": status,
-            "payload": payload,
-            "headers": {},
-        }
-        if status != "received":
-            row["processed_at"] = datetime.now(timezone.utc).isoformat()
-        db.table("webhook_deliveries").insert(row).execute()
-    except Exception as exc:
-        logger.warning(
-            "passive_dispatch: dm audit insert failed delivery_id=%s: %s",
-            delivery_id,
-            exc,
-        )
-
-
-def _mark_dm_audit(
-    db,
-    delivery_id: str,
+def _write_passive_escalations_row(
     *,
-    status: str,
-    error: str | None,
-) -> None:
+    run_id: str,
+    payload,
+    decision,
+    evaluation: PassiveEvaluation,
+) -> str | None:
+    """Write the `escalations` row for a passive escalation.
+
+    Mirrors the reactive-path `context` shape closely — `query_text` is
+    the triggering message text, `ella_response` is empty (passive
+    never posts), `handoff_reasoning` is the Haiku reasoning. Returns
+    the new escalation id, or `None` on failure (logged; the DM fan-out
+    proceeds either way so a single DB blip doesn't suppress the
+    escalation surface).
+    """
+    if not payload.channel_client_id:
+        return None
     try:
-        update: dict[str, Any] = {
-            "processing_status": status,
-            "processed_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if error is not None:
-            update["processing_error"] = error[:2000]
-        db.table("webhook_deliveries").update(update).eq(
-            "webhook_id", delivery_id
-        ).execute()
+        return ella_escalate(
+            reason="ella_passive_escalated",
+            context={
+                "query_text": payload.triggering_message_text,
+                "ella_response": "",
+                "handoff_reasoning": decision.reasoning,
+                "client_id": payload.channel_client_id,
+                "haiku_decision": "escalate",
+                "kb_chunks_count": len(evaluation.kb_chunks),
+            },
+            client_id=payload.channel_client_id,
+            agent_run_id=run_id,
+        )
     except Exception as exc:
         logger.warning(
-            "passive_dispatch: dm audit update failed delivery_id=%s: %s",
-            delivery_id,
+            "passive_dispatch: escalations row write failed run_id=%s: %s",
+            run_id,
             exc,
         )
+        return None
+
+
+def _format_escalation_summary(
+    dm_results: list[dict[str, Any]], escalation_id: str | None
+) -> str:
+    """Build the `agent_runs.output_summary` line for the escalate branch.
+
+    Format kept short for the audit dashboard's Output column. Includes
+    every recipient label + dm_ok so partial failures stay visible
+    without a separate join.
+    """
+    if not dm_results:
+        return (
+            f"escalated; no_recipients; escalation_id={escalation_id or 'none'}"
+        )
+    parts = [
+        f"{r['label']}={'ok' if r['dm_ok'] else 'fail'}" for r in dm_results
+    ]
+    return (
+        f"escalated via DM; {', '.join(parts)}; "
+        f"escalation_id={escalation_id or 'none'}"
+    )

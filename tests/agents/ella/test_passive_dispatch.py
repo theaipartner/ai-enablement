@@ -57,6 +57,10 @@ class _Chain:
         self._filters.append((k, v))
         return self
 
+    def is_(self, k, v):
+        self._filters.append((k, v))
+        return self
+
     def limit(self, *_a, **_kw):
         return self
 
@@ -77,6 +81,14 @@ class _Chain:
         if self._mode == "update" and self.table == "webhook_deliveries":
             self.fake.webhook_updates.append((self._filters, self._payload))
             return SimpleNamespace(data=[{}])
+        if self._mode == "insert" and self.table == "escalations":
+            self.fake.escalation_inserts.append(self._payload)
+            new_id = f"esc-{len(self.fake.escalation_inserts)}"
+            return SimpleNamespace(data=[{"id": new_id}])
+        if self._mode == "select" and self.table == "client_team_assignments":
+            return SimpleNamespace(data=[])
+        if self._mode == "select" and self.table == "team_members":
+            return SimpleNamespace(data=[])
         raise AssertionError(
             f"unexpected execute table={self.table} mode={self._mode}"
         )
@@ -89,6 +101,7 @@ class _FakeDb:
         self.pending_inserts = []
         self.webhook_inserts = []
         self.webhook_updates = []
+        self.escalation_inserts = []
 
     def table(self, name):
         return _Chain(name, self)
@@ -104,6 +117,16 @@ def fake_db(monkeypatch):
     # shared.logging's start_agent_run / end_agent_run also use get_client
     # at call time via its own top-level import.
     monkeypatch.setattr("shared.logging.get_client", lambda: db)
+    # The shared escalation-routing fan-out and the Ella escalation
+    # wrapper both reach for the DB; route them through the same fake
+    # so audit-row writes + the `escalations` row write are observable.
+    monkeypatch.setattr(
+        "agents.ella.escalation_routing.get_client", lambda: db
+    )
+    # `agents.ella.escalation._resolve_primary_csm_id` and `shared.hitl.escalate`
+    # each bind `get_client` at import time — patch both.
+    monkeypatch.setattr("agents.ella.escalation.get_client", lambda: db)
+    monkeypatch.setattr("shared.hitl.get_client", lambda: db)
     return db
 
 
@@ -203,18 +226,19 @@ def test_respond_general_inquiry_inserts_pending_row(fake_db):
 # ---------------------------------------------------------------------------
 
 
-def test_escalate_fires_dm_to_primary_csm(fake_db, monkeypatch):
-    """Captures the DM target via the shared.slack_post.post_message
-    monkeypatch (conftest's autouse fixture returns ok=True by default)."""
-    captured: dict[str, Any] = {}
+def test_escalate_writes_escalations_row_and_fans_out_dms(fake_db, monkeypatch):
+    """Post-2026-05-14 unification: every escalation writes an
+    `escalations` row (was: passive path skipped this) AND fans DMs to
+    Scott + primary CSM via the shared `fire_escalation_dms` helper."""
+    monkeypatch.setenv("ESCALATION_RECIPIENT_SLACK_USER_ID", "U_SCOTT")
+    sent: list[dict[str, Any]] = []
 
     def _capture(channel_id, text, **_kw):
-        captured["channel_id"] = channel_id
-        captured["text"] = text
+        sent.append({"channel_id": channel_id, "text": text})
         return {"ok": True, "slack_error": None}
 
     monkeypatch.setattr(
-        "agents.ella.passive_dispatch.post_message", _capture
+        "agents.ella.escalation_routing.post_message", _capture
     )
 
     ev = PassiveEvaluation(
@@ -225,34 +249,66 @@ def test_escalate_fires_dm_to_primary_csm(fake_db, monkeypatch):
         ),
         primary_csm={
             "id": "tm-uuid",
-            "full_name": "Scott Lyons",
-            "slack_user_id": "UCSMSCOTT",
+            "full_name": "Lou Perez",
+            "slack_user_id": "U_LOU",
         },
     )
 
     result = pd.persist_passive_evaluation(ev)
 
     assert result["decision"] == "escalate"
-    assert result["dm_result"]["dm_ok"] is True
-    # DM went to the CSM's slack_user_id (not the channel).
-    assert captured["channel_id"] == "UCSMSCOTT"
-    # Body contains link + reasoning but NO quoted client message.
-    assert ":eyes: Worth a look —" in captured["text"]
-    assert "Reasoning: billing dispute" in captured["text"]
-    # The triggering message's text must NOT leak into the DM body.
-    assert "Hey is the curriculum updated?" not in captured["text"]
-    # Audit row pair: insert + update.
-    assert len(fake_db.webhook_inserts) == 1
-    audit = fake_db.webhook_inserts[0]
-    assert audit["source"] == "ella_passive_escalation_dm"
+    assert result["escalation_id"] == "esc-1"
+    # New: an `escalations` row was written with the passive context
+    # shape (mirrors the reactive escalate() context closely).
+    assert len(fake_db.escalation_inserts) == 1
+    esc = fake_db.escalation_inserts[0]
+    assert esc["agent_name"] == "ella"
+    assert esc["reason"] == "ella_passive_escalated"
+    assert esc["context"]["client_id"] == "cli-uuid"
+    assert esc["context"]["ella_response"] == ""
+    assert esc["context"]["handoff_reasoning"].startswith(
+        "billing dispute"
+    )
+
+    # Two DMs fanned out: Scott first, primary CSM second.
+    assert [s["channel_id"] for s in sent] == ["U_SCOTT", "U_LOU"]
+    # Both DMs carry the same body shape.
+    assert sent[0]["text"] == sent[1]["text"]
+    assert ":eyes: Worth a look —" in sent[0]["text"]
+    assert "Reasoning: billing dispute" in sent[0]["text"]
+    # The triggering message text NEVER leaks into the DM body.
+    assert "Hey is the curriculum updated?" not in sent[0]["text"]
+    # Two audit rows (one per recipient) under the renamed source.
+    assert len(fake_db.webhook_inserts) == 2
+    for audit in fake_db.webhook_inserts:
+        assert audit["source"] == "ella_escalation_dm"
+        assert audit["payload"]["path"] == "passive"
+        assert audit["payload"]["channel_client_id"] == "cli-uuid"
+    # The escalate-decision agent_runs row's terminal status is now
+    # 'escalated' so the dashboard treats it identically to reactive
+    # escalations in the response-scope filter.
+    cost_or_status_updates = fake_db.agent_runs_updates
+    end_update = next(
+        (p for _, p in cost_or_status_updates if "status" in p), None
+    )
+    assert end_update is not None
+    assert end_update["status"] == "escalated"
 
 
-def test_escalate_no_primary_csm_records_gap(fake_db, monkeypatch):
-    """An escalate decision with no primary_csm should record the gap
-    in the audit ledger and return cleanly — never raise."""
+def test_escalate_no_primary_csm_still_dms_scott(fake_db, monkeypatch):
+    """With Scott configured, an escalate decision with no primary_csm
+    still fires a DM to Scott and writes the escalations row. The
+    legacy 'failed audit with no_primary_csm_slack_user_id' path is
+    retired — primary_csm absence is no longer load-bearing."""
+    monkeypatch.setenv("ESCALATION_RECIPIENT_SLACK_USER_ID", "U_SCOTT")
+    sent: list[dict[str, Any]] = []
+
+    def _capture(channel_id, text, **_kw):
+        sent.append({"channel_id": channel_id})
+        return {"ok": True, "slack_error": None}
+
     monkeypatch.setattr(
-        "agents.ella.passive_dispatch.post_message",
-        lambda *a, **kw: {"ok": True, "slack_error": None},
+        "agents.ella.escalation_routing.post_message", _capture
     )
 
     ev = PassiveEvaluation(
@@ -263,15 +319,44 @@ def test_escalate_no_primary_csm_records_gap(fake_db, monkeypatch):
 
     result = pd.persist_passive_evaluation(ev)
 
-    assert result["dm_result"]["dm_ok"] is False
+    assert result["decision"] == "escalate"
+    assert result["escalation_id"] == "esc-1"
+    assert [s["channel_id"] for s in sent] == ["U_SCOTT"]
     assert len(fake_db.webhook_inserts) == 1
-    audit = fake_db.webhook_inserts[0]
-    assert audit["source"] == "ella_passive_escalation_dm"
-    # The audit row was updated to a failed terminal status.
-    assert len(fake_db.webhook_updates) == 1
-    _, update_payload = fake_db.webhook_updates[0]
-    assert update_payload["processing_status"] == "failed"
-    assert "no_primary_csm_slack_user_id" in update_payload["processing_error"]
+    assert fake_db.webhook_inserts[0]["source"] == "ella_escalation_dm"
+
+
+def test_escalate_safer_floor_env_unset_and_no_primary_csm(fake_db, monkeypatch):
+    """Both env var unset AND primary_csm missing → no DMs fanned out,
+    but the escalations row still lands. The output_summary records the
+    no_recipients state so the audit dashboard can spot the gap."""
+    monkeypatch.delenv("ESCALATION_RECIPIENT_SLACK_USER_ID", raising=False)
+
+    sent: list = []
+    monkeypatch.setattr(
+        "agents.ella.escalation_routing.post_message",
+        lambda *a, **kw: (sent.append(a) or {"ok": True}),
+    )
+
+    ev = PassiveEvaluation(
+        payload=_payload(),
+        decision=_decision(decision="escalate", reasoning="billing"),
+        primary_csm=None,
+    )
+
+    result = pd.persist_passive_evaluation(ev)
+
+    assert result["decision"] == "escalate"
+    assert result["escalation_id"] == "esc-1"
+    assert sent == []
+    assert fake_db.webhook_inserts == []
+    # Terminal status records the no-recipients summary so the gap is
+    # visible in /ella/runs.
+    end_update = next(
+        (p for _, p in fake_db.agent_runs_updates if "status" in p), None
+    )
+    assert end_update is not None
+    assert "no_recipients" in end_update["output_summary"]
 
 
 # ---------------------------------------------------------------------------

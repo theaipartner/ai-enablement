@@ -479,12 +479,23 @@ async function fetchSlackResponseTexts(
   return out
 }
 
-// Recognizes the `escalated via DM; csm=...; dm_ok=...` placeholder
-// that passive_dispatch.py:_fire_escalation_dm writes into
-// agent_runs.output_summary. When matched, the projection falls
-// through to a webhook_deliveries lookup for the actual DM body
-// (which post-2026-05-13 lands in payload.body — see fetchEscalationBodies).
+// Recognizes the `escalated via DM; ...` placeholder that the
+// escalation branches in agents/ella/passive_dispatch.py and (post-
+// 2026-05-14 unification) agents/ella/agent.py's reactive escalate
+// branch write into agent_runs.output_summary. When matched, the
+// projection falls through to a webhook_deliveries lookup for the
+// actual DM body (which lives at payload.body).
 const ESCALATION_PLACEHOLDER_PATTERN = /^escalated via DM/i
+
+// Audit-source labels for escalation DMs. Pre-2026-05-14 passive-only
+// rows landed under 'ella_passive_escalation_dm'; the unified spec
+// renamed the source to 'ella_escalation_dm' and added per-recipient
+// rows (one for Scott, one for the primary CSM). Both labels accepted
+// so historical rows continue to surface bodies in the audit dashboard.
+const ESCALATION_DM_SOURCES = [
+  'ella_passive_escalation_dm',
+  'ella_escalation_dm',
+] as const
 
 async function fetchEscalationBodies(
   supabase: ReturnType<typeof createAdminClient>,
@@ -505,8 +516,8 @@ async function fetchEscalationBodies(
 
   // Time-window filter on received_at: earliest candidate's started_at
   // minus 1 min, latest plus 1 min. The audit row is inserted at the
-  // top of _fire_escalation_dm — slightly after the run started_at —
-  // so a 1-min cushion on each side covers the window.
+  // top of the fan-out — slightly after the run started_at — so a
+  // 1-min cushion on each side covers the window.
   const startedTimes = candidates.map((r) => new Date(r.started_at).getTime())
   const minStarted = Math.min(...startedTimes)
   const maxStarted = Math.max(...startedTimes)
@@ -516,7 +527,7 @@ async function fetchEscalationBodies(
   const { data: deliveries } = await supabase
     .from('webhook_deliveries')
     .select('payload')
-    .eq('source', 'ella_passive_escalation_dm')
+    .in('source', ESCALATION_DM_SOURCES as unknown as string[])
     .gte('received_at', fromTs)
     .lte('received_at', toTs)
   if (!deliveries || deliveries.length === 0) return out
