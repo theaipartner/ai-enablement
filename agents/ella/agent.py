@@ -26,6 +26,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from agents.ella.escalation import escalate
+from agents.ella.escalation_routing import (
+    fire_escalation_dms,
+    resolve_escalation_recipients,
+)
 from agents.ella.identity import SpeakerIdentity, resolve_speaker_identity
 from agents.ella.prompts import build_system_prompt
 from agents.ella.retrieval import (
@@ -229,10 +233,29 @@ def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> E
             client_id=channel_client["id"],
             agent_run_id=run_id,
         )
+        # Fan DMs out to Scott + primary CSM. Reactive path keeps its
+        # in-channel client-facing ack (without the <@advisor> mention
+        # per the 2026-05-14 prompt edit) — the backend DMs are the
+        # reliable notification channel and the in-channel mention
+        # would double-ping.
+        recipients = resolve_escalation_recipients(context.primary_csm)
+        dm_results = fire_escalation_dms(
+            recipients=recipients,
+            slack_channel_id=channel_client.get("slack_channel_id")
+            or event_data.get("channel"),
+            triggering_message_ts=event_data.get("ts")
+            or event_data.get("event_ts")
+            or "",
+            reasoning=handoff_context,
+            path="reactive",
+            channel_client_id=channel_client["id"],
+        )
         end_agent_run(
             run_id,
             status="escalated",
-            output_summary=f"escalated to advisor (escalation_id={escalation_id})",
+            output_summary=_format_reactive_escalation_summary(
+                escalation_id, dm_results
+            ),
             confidence_score=confidence,
         )
         return EllaResponse(
@@ -481,7 +504,9 @@ def respond_to_passive_trigger(
             # though the Haiku gate already routed substantive. Honor
             # the escalation: write the escalations row, do NOT post
             # client-facing on the passive path (the spec is explicit
-            # — passive escalations are backend-only).
+            # — passive escalations are backend-only). Fan DMs out to
+            # Scott + primary CSM via the shared helper so this branch
+            # routes identically to the Haiku-side escalate decision.
             escalation_id = escalate(
                 reason="ella_escalated_from_passive_substantive",
                 context={
@@ -495,12 +520,20 @@ def respond_to_passive_trigger(
                 client_id=channel_client["id"],
                 agent_run_id=run_id,
             )
+            recipients = resolve_escalation_recipients(context.primary_csm)
+            dm_results = fire_escalation_dms(
+                recipients=recipients,
+                slack_channel_id=synthetic_event["channel"],
+                triggering_message_ts=synthetic_event["ts"],
+                reasoning=handoff_context,
+                path="passive",
+                channel_client_id=channel_client["id"],
+            )
             end_agent_run(
                 run_id,
                 status="escalated",
-                output_summary=(
-                    f"sonnet-side escalation from passive substantive "
-                    f"(escalation_id={escalation_id})"
+                output_summary=_format_reactive_escalation_summary(
+                    escalation_id, dm_results
                 ),
                 confidence_score=confidence,
             )
@@ -613,6 +646,27 @@ def _fetch_message_text(slack_channel_id: str, slack_ts: str) -> str:
     if not rows:
         return ""
     return rows[0].get("text") or ""
+
+
+def _format_reactive_escalation_summary(
+    escalation_id: str, dm_results: list[dict[str, Any]]
+) -> str:
+    """Build the `agent_runs.output_summary` line for a reactive (or
+    Sonnet-side passive) escalation. Format mirrors the passive
+    Haiku-decided branch so the audit dashboard's Output column
+    renders the same way across all three escalation entry points.
+    """
+    if not dm_results:
+        return (
+            f"escalated via DM; no_recipients; escalation_id={escalation_id}"
+        )
+    parts = [
+        f"{r['label']}={'ok' if r['dm_ok'] else 'fail'}" for r in dm_results
+    ]
+    return (
+        f"escalated via DM; {', '.join(parts)}; "
+        f"escalation_id={escalation_id}"
+    )
 
 
 def _redact_event(

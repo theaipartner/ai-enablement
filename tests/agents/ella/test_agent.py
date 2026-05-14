@@ -96,6 +96,45 @@ def _patch_common(
     escalate = mocker.patch(
         "agents.ella.agent.escalate", return_value="esc-xyz"
     )
+    # Reactive escalations now fan DMs to Scott + primary CSM through
+    # the shared helper. Mock it so tests don't need to mock the
+    # transport layer underneath.
+    resolve_recipients = mocker.patch(
+        "agents.ella.agent.resolve_escalation_recipients",
+        return_value=[
+            {
+                "slack_user_id": "U_SCOTT",
+                "label": "Scott",
+                "source": "scott",
+            },
+            {
+                "slack_user_id": "U09HY5TG3NX",
+                "label": "Lou Perez",
+                "source": "primary_csm",
+            },
+        ],
+    )
+    fire_dms = mocker.patch(
+        "agents.ella.agent.fire_escalation_dms",
+        return_value=[
+            {
+                "slack_user_id": "U_SCOTT",
+                "label": "Scott",
+                "source": "scott",
+                "dm_ok": True,
+                "slack_error": None,
+                "delivery_id": "wd-1",
+            },
+            {
+                "slack_user_id": "U09HY5TG3NX",
+                "label": "Lou Perez",
+                "source": "primary_csm",
+                "dm_ok": True,
+                "slack_error": None,
+                "delivery_id": "wd-2",
+            },
+        ],
+    )
     return SimpleNamespace(
         start=start,
         end=end,
@@ -105,6 +144,8 @@ def _patch_common(
         build_prompt=build_prompt,
         call_claude=call_claude,
         escalate=escalate,
+        resolve_recipients=resolve_recipients,
+        fire_dms=fire_dms,
     )
 
 
@@ -154,6 +195,26 @@ def test_respond_to_mention_direct_answer_returns_text(mocker):
     spies.escalate.assert_not_called()
 
 
+def test_respond_to_mention_preserves_mentions_in_non_escalation_response(mocker):
+    """The 2026-05-14 prompt edit removed `<@...>` from escalation acks,
+    but Ella may still legitimately mention the advisor by name in
+    non-escalation conversational replies. Verify no postprocessor
+    strips mentions when there's no [ESCALATE] marker.
+    """
+    response_with_mention = (
+        "Good question — <@U09JYRAENPJ> covered something similar last "
+        "week, but the short answer is yes."
+    )
+    _patch_common(mocker, response_text=response_with_mention)
+
+    result = agent.respond_to_mention(_event())
+
+    assert result.escalated is False
+    # Mention flows back to the Slack handler untouched.
+    assert result.response_text == response_with_mention
+    assert "<@U09JYRAENPJ>" in result.response_text
+
+
 def test_respond_to_mention_plumbs_recent_channel_context_into_prompt(mocker):
     """Task 5: recent-channel-context string reaches build_system_prompt."""
     spies = _patch_common(mocker)
@@ -195,10 +256,14 @@ def test_respond_to_mention_advisor_speaker_real_author_in_metadata(mocker):
 
 
 def test_respond_to_mention_escalates_when_marker_at_end(mocker):
-    """V2 convention: marker at END of response, handoff note after it."""
+    """V2 convention: marker at END of response, handoff note after it.
+
+    Post-2026-05-14 unification: reactive escalations also fan DMs to
+    Scott + primary CSM via fire_escalation_dms(..., path="reactive").
+    """
     ack = (
-        "That's a hard place to be — let me loop in <@U09JYRAENPJ> on "
-        "this one, Scott will follow up directly."
+        "That's a hard place to be — let me make sure the right person "
+        "sees this. Someone will follow up with you directly."
     )
     handoff = (
         "Client is feeling stuck on a personal-judgment call. Worth a "
@@ -213,8 +278,13 @@ def test_respond_to_mention_escalates_when_marker_at_end(mocker):
     assert result.escalation_reason == "ella_escalated"
     assert result.escalation_id == "esc-xyz"
     assert "[ESCALATE]" not in result.response_text
-    # Everything before the marker, rstripped.
+    # Client-facing ack flows back untouched (no postprocessing that
+    # strips mentions — there are none to strip post-prompt-edit).
     assert result.response_text == ack
+    # And the post-2026-05-14 prompt edit instructs Sonnet to not
+    # write `<@...>` mentions in escalation acks; pin this in the test
+    # by asserting the canonical example doesn't carry one.
+    assert "<@" not in result.response_text
     assert result.confidence == 0.0
     assert result.agent_run_id == "run-abc"
 
@@ -228,8 +298,21 @@ def test_respond_to_mention_escalates_when_marker_at_end(mocker):
     assert esc_kwargs["context"]["speaker"]["role"] == "client"
     assert esc_kwargs["context"]["speaker"]["display_name"] == "Test Client"
 
+    # Post-unification: fire_escalation_dms is called with path="reactive"
+    # and the handoff context as the reasoning.
+    spies.fire_dms.assert_called_once()
+    fire_kwargs = spies.fire_dms.call_args.kwargs
+    assert fire_kwargs["path"] == "reactive"
+    assert fire_kwargs["reasoning"] == handoff
+    assert fire_kwargs["channel_client_id"] == "c-1"
+    assert len(fire_kwargs["recipients"]) == 2
+
     end_kwargs = spies.end.call_args.kwargs
     assert end_kwargs["status"] == "escalated"
+    # output_summary shape matches the passive escalate branch so the
+    # /ella/runs Output column renders identically.
+    assert end_kwargs["output_summary"].startswith("escalated via DM")
+    assert "Scott=ok" in end_kwargs["output_summary"]
 
 
 def test_respond_to_mention_escalates_when_marker_at_start(mocker):

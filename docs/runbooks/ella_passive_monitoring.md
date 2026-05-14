@@ -100,15 +100,22 @@ select id, started_at, trigger_type, output_summary
 
 ### Backend escalation DMs (no client-facing post)
 
+Post-2026-05-14 the audit source was renamed `ella_passive_escalation_dm` → `ella_escalation_dm` and the fan-out emits ONE row per recipient (Scott + primary CSM, deduplicated). The dashboard accepts both labels; query both here too:
+
 ```sql
 select id, processed_at, processing_status, processing_error,
        payload->>'slack_channel_id' as channel,
-       payload->>'haiku_reasoning' as reasoning
+       payload->>'recipient_label' as recipient,
+       payload->>'recipient_source' as recipient_source,  -- 'scott' | 'primary_csm'
+       payload->>'path' as path,                          -- 'reactive' | 'passive'
+       payload->>'reasoning' as reasoning
   from webhook_deliveries
- where source = 'ella_passive_escalation_dm'
+ where source in ('ella_escalation_dm', 'ella_passive_escalation_dm')
  order by processed_at desc
  limit 20;
 ```
+
+Pre-2026-05-14 rows under the old source carry the legacy payload shape (`haiku_reasoning` key, no `recipient_*` keys). New rows carry the full per-recipient shape. Both render correctly on `/ella/runs`.
 
 ### CSM intervention counter (the key Batch 2.4 prerequisite metric)
 
@@ -183,6 +190,7 @@ Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the pr
 |-----|---------|---------|
 | `ELLA_PASSIVE_MONITORING_ENABLED` | Global kill switch. `'true'` enables; anything else disables. | unset (= disabled) |
 | `ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD` | Pre-Haiku KB-relevance cutoff (cosine similarity). | `0.3` |
+| `ESCALATION_RECIPIENT_SLACK_USER_ID` | Slack user_id of the head CSM (Scott) DMed on every escalation alongside the channel's primary CSM. Unset → primary CSM only. Applied to both reactive and passive paths. | unset (= primary CSM only) |
 | `CRON_SECRET` | Bearer-token auth for the per-minute cron. Shared across all cron endpoints (single-var pattern per M6.2). | (set in Vercel) |
 | `SLACK_WORKSPACE` | Optional. Subdomain used in escalation-DM permalinks. | (omitted = clean fallback) |
 
