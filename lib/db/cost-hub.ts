@@ -28,6 +28,12 @@ export type BucketKey =
   | 'call_review_haiku'
   | 'gregory_brain_sonnet'
 
+// Sentinel earliestReliableDate for buckets that have never been used
+// (call_review_haiku — call_reviewer is Sonnet-only today). Swaps the
+// "(incomplete before <date>)" caveat for a human-readable note so the
+// box doesn't render a confusing far-future date.
+const NEVER_USED_SENTINEL = '9999-12-31'
+
 type BucketDefinition = {
   key: BucketKey
   label: string
@@ -74,9 +80,10 @@ export const BUCKET_DEFINITIONS: BucketDefinition[] = [
     agentName: 'call_reviewer',
     modelPrefix: 'claude-haiku',
     // call_reviewer is Sonnet-only today; bucket renders 0/0/$0 always.
-    // Earliest date set to "never" — caveat shows the bucket has no
-    // historical data at all.
-    earliestReliableDate: '9999-12-31',
+    // `neverUsed` swaps the "(incomplete before …)" caveat for a
+    // human-readable "(no usage — Sonnet-only today)" so the box
+    // doesn't look broken with a sentinel date.
+    earliestReliableDate: NEVER_USED_SENTINEL,
   },
   {
     key: 'gregory_brain_sonnet',
@@ -103,6 +110,10 @@ export type PeriodSummary = {
   // mid-May 2026.
   dataIncomplete: boolean
   incompleteSinceDate: string | null
+  // True for buckets that have never been used (call_review_haiku).
+  // The UI shows "(no usage — Sonnet-only today)" instead of an
+  // "(incomplete before …)" caveat with a sentinel date.
+  neverUsed: boolean
 }
 
 export type BucketSummary = {
@@ -362,9 +373,10 @@ function buildPeriodSummary(
   // earliest-reliable dates in practice. Bucket-by-bucket: if the
   // earliest reliable date falls AFTER the period start, the period
   // is partially uncovered.
+  const neverUsed = bucket.earliestReliableDate === NEVER_USED_SENTINEL
   let dataIncomplete = false
   let incompleteSinceDate: string | null = null
-  if (periodLabel === 'thisMonth') {
+  if (periodLabel === 'thisMonth' && !neverUsed) {
     const earliest = new Date(`${bucket.earliestReliableDate}T00:00:00Z`)
     if (earliest > periodStart) {
       dataIncomplete = true
@@ -377,6 +389,7 @@ function buildPeriodSummary(
     avgCost,
     dataIncomplete,
     incompleteSinceDate,
+    neverUsed,
   }
 }
 
@@ -406,9 +419,9 @@ export async function getAnthropicBucketSummaries(): Promise<BucketSummaries> {
     summaries[bucket.key] = {
       key: bucket.key,
       label: bucket.label,
-      today: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null },
-      thisWeek: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null },
-      thisMonth: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null },
+      today: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null, neverUsed: false },
+      thisWeek: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null, neverUsed: false },
+      thisMonth: { runs: 0, totalCost: 0, avgCost: 0, dataIncomplete: false, incompleteSinceDate: null, neverUsed: false },
     }
   }
   for (const r of results) {

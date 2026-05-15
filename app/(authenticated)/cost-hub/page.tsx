@@ -235,7 +235,19 @@ function PeriodRow({
         >
           {period}
         </div>
-        {summary.dataIncomplete && summary.incompleteSinceDate ? (
+        {summary.neverUsed && period === 'This month' ? (
+          <div
+            className="geg-mono"
+            style={{
+              fontSize: 10,
+              color: 'var(--color-geg-text-3)',
+              marginTop: 2,
+              fontStyle: 'italic',
+            }}
+          >
+            (no usage — Sonnet-only today)
+          </div>
+        ) : summary.dataIncomplete && summary.incompleteSinceDate ? (
           <div
             className="geg-mono"
             style={{
