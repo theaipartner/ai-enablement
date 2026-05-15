@@ -71,6 +71,12 @@ logger.setLevel(logging.INFO)
 # in V1 and that's not changing without a code edit.
 _DRAKE_EMAIL = "drake@theaipartner.io"
 
+# AIP Workspace email domain. Events get filtered at fetch time —
+# kept only if at least one attendee has an email outside this domain.
+# Drops OOO blocks, work blocks, internal-only meetings, solo focus
+# time. See docs/specs/teams-calendar-external-attendee-filter.md.
+_AIP_DOMAIN = "@theaipartner.io"
+
 # Calendar API endpoint shape:
 #   https://www.googleapis.com/calendar/v3/calendars/<urlencoded calendarId>/events?...
 _CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3/calendars"
@@ -276,6 +282,12 @@ def _upsert_events(
         end = (ev.get("end") or {}).get("dateTime")
         if not start or not end:
             continue
+        if not _has_external_attendee(ev):
+            # Filter: keep only events with at least one external
+            # attendee (someone outside the AIP Workspace domain).
+            # Drops OOO blocks, work blocks, solo focus time, and
+            # internal-only meetings — none of which belong on /teams.
+            continue
         row = {
             "team_member_id": team_member_id,
             "google_event_id": ev["id"],
@@ -303,6 +315,39 @@ def _upsert_events(
                 exc,
             )
     return upserted
+
+
+def _has_external_attendee(event: dict[str, Any]) -> bool:
+    """Return True if the event has at least one attendee outside the
+    AIP Workspace domain.
+
+    Filter rule used by `_upsert_events` to keep client-facing meetings
+    and drop internal-only events (OOO blocks, work blocks, internal
+    1:1s). Empty attendee lists return False — solo blocks have no
+    external attendee by definition.
+
+    Case-insensitive on the domain check (Google sometimes returns
+    canonicalized lowercase; user-typed entries may have mixed case).
+    Attendees without an `email` field (rare but legal in the API)
+    are skipped, not treated as external.
+
+    Resource calendars (conference rooms, equipment) get filtered out
+    earlier by `_extract_attendees`, but THIS helper runs on the raw
+    Google event so we also have to skip them here. Resources never
+    qualify as external attendees.
+    """
+    attendees = event.get("attendees") or []
+    if not attendees:
+        return False
+    for attendee in attendees:
+        if attendee.get("resource"):
+            continue
+        email = (attendee.get("email") or "").strip().lower()
+        if not email:
+            continue
+        if not email.endswith(_AIP_DOMAIN):
+            return True
+    return False
 
 
 def _extract_attendees(raw: list[dict[str, Any]]) -> list[dict[str, str]]:

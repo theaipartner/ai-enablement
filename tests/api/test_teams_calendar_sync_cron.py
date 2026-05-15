@@ -320,6 +320,182 @@ def test_cancelled_and_dateless_events_skipped(fake_db, monkeypatch):
     assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-keep"
 
 
+# ---------------------------------------------------------------------------
+# External-attendee filter (2026-05-15)
+# ---------------------------------------------------------------------------
+
+
+def _event_with_attendees(google_event_id: str, attendees: list[dict]):
+    return {
+        "id": google_event_id,
+        "summary": "Some meeting",
+        "start": {"dateTime": "2026-05-12T14:00:00Z"},
+        "end": {"dateTime": "2026-05-12T15:00:00Z"},
+        "attendees": attendees,
+    }
+
+
+def test_filter_drops_events_with_no_attendees(fake_db, monkeypatch):
+    """OOO block / focus block — zero attendees. Dropped at filter."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                {
+                    "id": "ev-ooo",
+                    "summary": "OOO",
+                    "start": {"dateTime": "2026-05-12T14:00:00Z"},
+                    "end": {"dateTime": "2026-05-12T18:00:00Z"},
+                    # No `attendees` key at all.
+                },
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 0
+    assert fake_db.calendar_upserts == []
+
+
+def test_filter_drops_internal_only_meetings(fake_db, monkeypatch):
+    """Every attendee is @theaipartner.io — internal-only meeting,
+    dropped at filter."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-internal",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "nico@theaipartner.io"},
+                        {"email": "scott@theaipartner.io"},
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 0
+    assert fake_db.calendar_upserts == []
+
+
+def test_filter_keeps_events_with_one_external_attendee(fake_db, monkeypatch):
+    """Mixed AIP + external attendees — kept. Most common client-meeting shape."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-client",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "client@gmail.com"},
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 1
+    assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-client"
+
+
+def test_filter_is_case_insensitive_on_aip_domain(fake_db, monkeypatch):
+    """`@THEAIPARTNER.IO` / `@TheAIPartner.io` are still recognized as
+    AIP — Google sometimes echoes user-typed casing."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-internal-uppercase",
+                    [
+                        {"email": "LOU@THEAIPARTNER.IO"},
+                        {"email": "Nico@TheAIPartner.IO"},
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 0
+
+
+def test_filter_skips_resource_calendars_when_checking_external(fake_db, monkeypatch):
+    """Conference rooms / equipment carry resource=true. They're not
+    real external attendees — an internal meeting that books a Zoom
+    Room shouldn't suddenly count as 'has external.'"""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-with-room",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "scott@theaipartner.io"},
+                        {"email": "boardroom@resource.calendar.google.com", "resource": True},
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 0
+
+
+def test_filter_handles_attendee_missing_email_field(fake_db, monkeypatch):
+    """Attendee entries without an `email` key (rare but legal in the
+    API) get skipped rather than treated as external."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "lou@theaipartner.io", "Lou Perez")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-no-email-attendee",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"displayName": "Someone without an email"},  # no `email` key
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    # Only AIP + a no-email entry — no external attendee → dropped.
+    assert result["events_upserted"] == 0
+
+
 def test_sentinel_team_members_excluded_from_csm_list(fake_db, monkeypatch):
     """metadata.sentinel=true rows (Gregory Bot, Scott Chasing) are
     excluded from the per-CSM loop even though they carry is_csm=true."""
