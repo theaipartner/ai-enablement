@@ -13,6 +13,16 @@ For Ella's deferred work see `docs/agents/ella/future-ideas.md`. For Gregory's k
 
 ---
 
+## Shelved 2026-05-15
+
+Items pulled off the live `CLAUDE.md § Next Session Priorities` pointer when that list collapsed to the Admin cost hub + Gregory V2 sales-side arc. The entries below remain on the table — just not on the active pointer:
+
+- **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Detailed entry in `docs/agents/ella/future-ideas.md`. The 3,600+ backfilled `slack_messages` rows + ongoing realtime ingestion are a rich retrieval surface, but a per-client scope gate needs to land before pulling another client's channel content into Ella's prompt context. Revisit when Ella's retrieval design needs more breadth than `documents` alone provides.
+- **NPS score piping V1.5.** See § Batch B § "NPS score piping (V1.5)" below. Extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard. Revisit when a CSM asks for the numeric score on a client's profile.
+- **Client Business Context Vault.** See § Batch E below — full subsection. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups. Revisit when V2 sales-side work surfaces a need for centralized client-context lookup, or when a specific Vault entry-point asks for it (e.g., a CSM-facing prompt that needs GHL state).
+
+---
+
 ## Batch A — CSM accountability visibility
 
 **Top priority. Active.** The CS-focus pivot for Gregory V2 starts here. Goal: make every CSM's daily accountability signal visible without anyone having to remember to look at the dashboard.

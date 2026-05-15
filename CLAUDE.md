@@ -431,27 +431,9 @@ The 36 migrations + 10 Python serverless functions + 5-tab TopNav (Clients / Cal
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Send-to-Slack production cutover.** The Send-to-Slack button on `/clients/[id]` is wired and dry-run-validated. Production cutover is the env-var flip: turn `SLACK_DRY_RUN` off (or unset) in Vercel Production. Confirm it stays set on Preview so Playwright can still safely click. Then let a CSM be the first real send; watch Vercel function logs for the first few real posts for shape correctness. Gate (d) — Drake handles the env-var flip.
+1. **Admin cost hub — closes Gregory V1.** Admin-tier-only view showing costs across the tools we use (Anthropic API via `agent_runs.llm_cost_usd`, Supabase, Vercel, Slack, etc.) so Nabeel can spot cost-reduction opportunities. This is the last piece before declaring Gregory V1 done.
 
-2. **Post-2026-05-18 title-convention adoption review.** Monday's the first day under the cutoff. Run the audit SQL in `docs/runbooks/call_title_convention.md` (`calls WHERE started_at >= cutoff AND call_category != 'client'`) Monday afternoon + Wednesday + Thursday. Catch the CSMs still using legacy titles + the legacy recurring meetings firing under old names. Cleanup: rename the recurring series or manual classification override on `/calls/[id]`.
-
-3. **`/teams` gate (c) walkthrough.** Drake completes the Google OAuth flow at `/api/auth/google/connect`, watches the next 30-min cron tick produce a clean audit row (`processing_status='processed'`, `events_upserted>0`), confirms each CSM's week renders on `/teams` with Fathom-match checkmarks. Until this happens, `/teams` shows the "Reconnect Google Calendar" banner for Drake + a muted unavailable line for other tiers.
-
-4. **CSM utilization check.** A quick routine to audit whether CSMs are actually using Gregory — logging in, editing action items, marking journey stages, sending Slack messages from the Action items box. Surface for Nabeel/Drake to see which CSMs lean on Gregory vs. ignore it. Format and scope deferred; needs a scoping conversation first. See `docs/future-ideas.md`.
-
-5. **Admin cost hub.** Admin-tier-only view showing costs across the tools we use (Anthropic API, Supabase, Vercel, Slack, etc.) so Nabeel can spot cost-reduction opportunities. Likely starts with what's already trackable (Anthropic via `agent_runs.llm_cost_usd` + Supabase) and grows. See `docs/future-ideas.md` § Admin cost hub.
-
-6. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Carried. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Per-client retrieval-scope gate needed, similar to the call-summary retrieval pattern.
-
-7. **Batch B — NPS score piping V1.5.** Carried. Extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard.
-
-8. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking. Send-to-Slack on `/clients/[id]` is a piece of this lit up.
-
-9. **Batch D — Classifier tuning.** Backstop only. The May 18 title-convention enforcement (ADR 0002) is the primary suppression path now; classifier tuning is only relevant for the residual FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`) that survive the new cutoff. Otherwise leave.
-
-10. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
-
-**~~Deferred-decision pending Monday onboarding~~** — resolved by NPS-is-gospel migration 0027 (2026-05-08). The 137 master-sheet-seed clients are no longer sticky against Path 1 NPS auto-derive; the override-sticky gate was retired entirely.
+2. **Gregory V2 — sales side.** The next major arc. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before specs land. Items previously queued as backlog (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved into `docs/future-ideas.md` so this section stays a tight pointer to the live arc.
 
 ## Ella (active focus)
 
