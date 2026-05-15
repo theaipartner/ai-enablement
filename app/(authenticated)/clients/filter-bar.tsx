@@ -187,15 +187,20 @@ export function FilterBar({
   }
 
   function clearAll() {
-    setSearchValue('')
-    // Preserve sort/dir; drop everything else (status back to default
-    // means absent param, not the explicit-empty sentinel — so clear
-    // brings the user back to the natural default state).
+    // Preserve sort/dir AND the active search query — spec § Piece 3:
+    // "preserve search since search is a different concern from
+    // filters." Drop everything else (status back to default means
+    // absent param, not the explicit-empty sentinel — so clear brings
+    // the user back to the natural default state). The search-state
+    // mirror in `searchValue` stays untouched, so the input keeps its
+    // value while the rest of the filter chips empty out.
     const sort = searchParams.get('sort')
     const dir = searchParams.get('dir')
+    const q = searchParams.get('q')
     const next = new URLSearchParams()
     if (sort) next.set('sort', sort)
     if (dir) next.set('dir', dir)
+    if (q) next.set('q', q)
     const queryString = next.toString()
     router.replace(queryString ? `${pathname}?${queryString}` : pathname)
   }
@@ -246,7 +251,7 @@ export function FilterBar({
             borderColor: 'var(--color-geg-border-strong)',
           }}
         >
-          Clear
+          Clear filters
         </Button>
       ) : null}
       <div className="flex flex-wrap items-center gap-2.5">

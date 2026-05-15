@@ -122,13 +122,27 @@ export function ClientsTable({
   dir,
   baseSearchParams,
   csmOptions,
+  showSlackColumn,
 }: {
   rows: ClientsListRow[]
   sort: SortKey
   dir: 'asc' | 'desc'
   baseSearchParams: URLSearchParams
   csmOptions: ReadonlyArray<{ id: string; full_name: string }>
+  // Conditional render: the Slack column only appears when the user
+  // has the Needs review or Missing Slack filter active. Drake's
+  // preference is the pre-Slack-column visual layout when neither
+  // filter is engaged. Detail page (/clients/[id]) still surfaces
+  // missing-Slack badges unconditionally — different concern.
+  showSlackColumn: boolean
 }) {
+  // Filter the Slack column out of COLUMNS when neither relevant
+  // filter is active. Keeps the rest of the table layout identical
+  // to the pre-Slack-column shipping.
+  const visibleColumns = showSlackColumn
+    ? COLUMNS
+    : COLUMNS.filter((c) => c.key !== 'slack')
+
   if (rows.length === 0) {
     return (
       <div
@@ -153,7 +167,7 @@ export function ClientsTable({
     >
       <thead>
         <tr>
-          {COLUMNS.map((column) => (
+          {visibleColumns.map((column) => (
             <th
               key={column.key}
               className="geg-mono"
@@ -182,7 +196,17 @@ export function ClientsTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
+        {(() => {
+          // Encode the current list-page query as `?from=…` on every
+          // row link so the detail page's Back button can return the
+          // user to the same filtered view (sticky filters, spec § 3).
+          // Empty when no params are set — bare /clients{id} link
+          // preserves the original visual shape.
+          const fromQs = baseSearchParams.toString()
+          const fromParam = fromQs
+            ? `?from=${encodeURIComponent(`/clients?${fromQs}`)}`
+            : ''
+          return rows.map((row) => (
           <tr key={row.id}>
             <td
               style={{
@@ -192,7 +216,7 @@ export function ClientsTable({
               }}
             >
               <Link
-                href={`/clients/${row.id}`}
+                href={`/clients/${row.id}${fromParam}`}
                 className="geg-link"
                 style={{
                   color: 'var(--color-geg-text)',
@@ -252,25 +276,28 @@ export function ClientsTable({
             >
               {row.meetings_this_month}
             </td>
-            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
-              {!row.slack_channel_id || !row.slack_user_id ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    alignItems: 'flex-start',
-                  }}
-                >
-                  {!row.slack_channel_id ? <MissingSlackChannelPill /> : null}
-                  {!row.slack_user_id ? <MissingSlackUserPill /> : null}
-                </div>
-              ) : (
-                <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
-              )}
-            </td>
+            {showSlackColumn ? (
+              <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+                {!row.slack_channel_id || !row.slack_user_id ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      alignItems: 'flex-start',
+                    }}
+                  >
+                    {!row.slack_channel_id ? <MissingSlackChannelPill /> : null}
+                    {!row.slack_user_id ? <MissingSlackUserPill /> : null}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+                )}
+              </td>
+            ) : null}
           </tr>
-        ))}
+        ))
+        })()}
       </tbody>
     </table>
   )

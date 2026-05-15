@@ -171,7 +171,17 @@ export function CallsTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
+        {(() => {
+          // Sticky filters: encode the current list-page query string
+          // as `?from=…` on the title link so the detail page's Back
+          // button returns the user to the same filtered/sorted view.
+          // Empty string when no params are set, so default visits
+          // get a clean `/calls/{id}` link.
+          const fromQs = baseSearchParams.toString()
+          const fromParam = fromQs
+            ? `?from=${encodeURIComponent(`/calls?${fromQs}`)}`
+            : ''
+          return rows.map((row) => (
           <tr
             key={row.id}
             style={{ transition: 'background 80ms ease' }}
@@ -198,7 +208,7 @@ export function CallsTable({
               }}
             >
               <Link
-                href={`/calls/${row.id}`}
+                href={`/calls/${row.id}${fromParam}`}
                 className="geg-link"
                 style={{
                   color: 'var(--color-geg-text)',
@@ -264,7 +274,8 @@ export function CallsTable({
               {formatDuration(row.duration_seconds)}
             </td>
           </tr>
-        ))}
+        ))
+        })()}
       </tbody>
     </table>
   )

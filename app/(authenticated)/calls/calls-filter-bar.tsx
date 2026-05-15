@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { Button } from '@/components/ui/button'
 import type { CandidateClient } from '@/lib/db/merge'
 
 // Calls redesign · § 1 — filter bar.
@@ -58,6 +59,23 @@ export function CallsFilterBar({
   const activeClientId = searchParams.get('client') ?? ''
   const activeCsmId = searchParams.get('csm') ?? ''
 
+  // Spec § Piece 3 — Clear filters button visible when at least one
+  // non-search filter param is set. Search and sort/dir are preserved
+  // on clear (search is a different concern from filters per spec).
+  const hasAnyFilter = activeClientId !== '' || activeCsmId !== ''
+
+  function clearAll() {
+    const next = new URLSearchParams()
+    const q = searchParams.get('q')
+    const sort = searchParams.get('sort')
+    const dir = searchParams.get('dir')
+    if (q) next.set('q', q)
+    if (sort) next.set('sort', sort)
+    if (dir) next.set('dir', dir)
+    const queryString = next.toString()
+    router.replace(queryString ? `${pathname}?${queryString}` : pathname)
+  }
+
   return (
     <div
       className="flex items-center gap-2.5"
@@ -73,6 +91,23 @@ export function CallsFilterBar({
         onChange={(e) => setSearchValue(e.target.value)}
         className="geg-filter-input"
       />
+      {hasAnyFilter ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={clearAll}
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            background: 'transparent',
+            color: 'var(--color-geg-text-2)',
+            borderColor: 'var(--color-geg-border-strong)',
+          }}
+        >
+          Clear filters
+        </Button>
+      ) : null}
       <select
         value={activeClientId}
         onChange={(e) => applyParam('client', e.target.value)}

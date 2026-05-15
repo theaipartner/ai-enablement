@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getCallById, type CallDetail } from '@/lib/db/calls'
 import { SentimentPill } from '@/components/gregory/sentiment-pill'
 import { ActionItemsBox } from './action-items-box'
+import { BackToCallsButton } from './back-to-calls-button'
 
 // Calls redesign · § 2 — call detail page (/calls/[id]).
 //
@@ -85,20 +86,7 @@ export default async function CallDetailPage({
 
   return (
     <div style={{ padding: '24px 48px 28px' }}>
-      <Link
-        href="/calls"
-        className="geg-mono"
-        style={{
-          color: 'var(--color-geg-accent)',
-          textDecoration: 'none',
-          fontSize: 11,
-          fontWeight: 500,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-        }}
-      >
-        ← BACK TO CALLS
-      </Link>
+      <BackToCallsButton />
 
       <header
         style={{

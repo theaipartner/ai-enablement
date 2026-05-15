@@ -3,20 +3,19 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 
-// Back-to-list button that preserves the URL query string the user
-// came from. List page row links append `?from=<encoded path+query>`;
-// this component reads the param + validates it starts with `/clients`
-// to prevent open-redirect via crafted URLs. Anything else falls back
-// to bare `/clients`.
+// Back-to-list button for /calls. Mirrors BackToClientsButton: reads
+// the `from` query param the list-page row links wrote, validates it
+// starts with `/calls`, falls back to bare `/calls` for anything
+// else (defense against open-redirect via crafted URLs).
 //
 // Spec: docs/specs/director-tasks-and-list-ux-polish.md § Piece 3.
-export function BackToClientsButton() {
+export function BackToCallsButton() {
   const searchParams = useSearchParams()
   const from = searchParams.get('from')
   const safeFrom =
-    from && from.startsWith('/clients') && !from.startsWith('//')
+    from && from.startsWith('/calls') && !from.startsWith('//')
       ? from
-      : '/clients'
+      : '/calls'
 
   return (
     <Link
@@ -31,7 +30,7 @@ export function BackToClientsButton() {
         textTransform: 'uppercase',
       }}
     >
-      ← BACK TO CLIENTS
+      ← BACK TO CALLS
     </Link>
   )
 }

@@ -245,6 +245,9 @@ export default async function ClientsPage({
         dir={dir}
         baseSearchParams={baseSearchParams}
         csmOptions={teamMembers ?? []}
+        showSlackColumn={
+          filters.needs_review === true || filters.missing_slack === true
+        }
       />
     </div>
   )
