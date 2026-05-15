@@ -341,17 +341,26 @@ def _classify_by_new_convention(
     external_emails: list[str],
 ) -> ClassificationResult:
     """Post-cutoff: title matched one of the six canonical patterns.
-    Classify as `client` + resolve `primary_client_id` from the
-    external participants. Participant resolution mirrors the old
-    cascade — try email first (including `metadata.alternate_emails`),
-    fall back to display-name (including `metadata.alternate_names`).
 
-    If no external participant resolves to a known client, the row
-    still lands as `client` with `primary_client_id=null` per spec
-    § 4. The auto-create-client flow lives in `_classify_scott_1on1`
-    pre-cutoff; this path intentionally does NOT auto-create — the
-    new convention assumes Zain's onboarding has the client record
-    in place before the booking link is shared.
+    Classify as `client` with confidence 1.0. Resolve
+    `primary_client_id` from the external participants using the same
+    email + alternate-name lookup the rest of the cascade uses.
+
+    When no external participant resolves to a known client AND at
+    least one external participant exists, emit an `AutoCreateRequest`
+    for the FIRST unresolved external email. The pipeline's
+    `_lookup_or_create_auto_client` does the dedup-then-insert dance
+    and tags the new row `needs_review` — same primitive the legacy
+    Scott-1:1 pre-cutoff path uses. Reason string is distinct
+    (`"new title convention with unresolved participant"`) so audit
+    queries can split new-pattern auto-creates from legacy ones.
+
+    When the title matches but NO external participants are present
+    at all (booking-link title with only team members on the invite —
+    degenerate but legal), the row lands as `client` with no primary
+    and no auto-create. Surfaces as a data hygiene flag.
+
+    Spec: docs/specs/auto-created-client-lifecycle.md.
     """
     matched_client_id: str | None = None
     matched_email: str | None = None
@@ -379,9 +388,30 @@ def _classify_by_new_convention(
             f"new-convention title; {matched_email} matched existing client "
             f"via {matched_via}"
         )
-    else:
+        auto_create: AutoCreateRequest | None = None
+    elif external_emails:
+        # No external participant resolved. Auto-create the FIRST
+        # unresolved external — V1 simple. Multi-external cases (rare:
+        # client invites a coworker) get the first attendee promoted
+        # to client; others surface via call_participants for later
+        # manual review.
+        first_unresolved = external_emails[0]
+        display = _find_display_name(record.participants, first_unresolved)
+        auto_create = AutoCreateRequest(
+            email=first_unresolved,
+            display_name=display,
+            reason="new title convention with unresolved participant",
+        )
         reasoning = (
-            "new-convention title; no external participant matched a client — "
+            f"new-convention title; {first_unresolved} unresolved — "
+            "auto-create requested"
+        )
+    else:
+        # No external participants at all. Booking-link title but only
+        # team on the invite. Degenerate but valid; no auto-create.
+        auto_create = None
+        reasoning = (
+            "new-convention title but no external participants — "
             "primary_client_id stays null"
         )
 
@@ -395,6 +425,7 @@ def _classify_by_new_convention(
         classification_confidence=1.0,
         classification_method="title_pattern",
         primary_client_id=matched_client_id,
+        should_auto_create_client=auto_create,
         reasoning=reasoning,
     )
 

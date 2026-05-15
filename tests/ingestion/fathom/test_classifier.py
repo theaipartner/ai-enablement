@@ -654,13 +654,17 @@ def test_cutoff_boundary_inclusive():
     assert c.classify(record_before, resolver).call_category == "client"
 
 
-def test_post_cutoff_new_title_with_no_resolvable_client_still_classifies_as_client():
-    """Spec § 4: when the new pattern matches but no external
-    participant resolves to a known client, the row still lands as
-    `client` with `primary_client_id=null`. The new convention assumes
-    Zain's onboarding seeds the client record before the booking link
-    is shared; an unresolved attendee surfaces as a data-hygiene gap,
-    not a classification failure."""
+def test_post_cutoff_new_title_with_no_resolvable_client_auto_creates():
+    """Auto-create on new patterns (auto-created-client-lifecycle
+    spec, 2026-05-15): when the new title matches and no external
+    participant resolves to a known client, the classifier emits an
+    AutoCreateRequest so the pipeline reifies a minimal clients row
+    tagged needs_review. Distinct reason string from the legacy
+    Scott-1:1 path so audit queries can tell them apart.
+
+    Reverses the prior-spec assertion. Prior behavior (no auto-create)
+    was a side effect of the cutoff implementation; new behavior fills
+    the gap so every post-cutoff client call gets a client row."""
     record = _record(
         title="Coaching Call with Scott",
         participants=[
@@ -675,7 +679,13 @@ def test_post_cutoff_new_title_with_no_resolvable_client_still_classifies_as_cli
     assert result.call_category == "client"
     assert result.classification_confidence == 1.0
     assert result.primary_client_id is None
-    assert result.should_auto_create_client is None
+    assert result.should_auto_create_client is not None
+    assert result.should_auto_create_client.email == "brand-new@unknown.com"
+    assert result.should_auto_create_client.display_name == "Brand New"
+    assert (
+        result.should_auto_create_client.reason
+        == "new title convention with unresolved participant"
+    )
 
 
 def test_post_cutoff_internal_title_still_internal():
@@ -751,3 +761,128 @@ def test_helper_is_after_new_convention_cutoff_handles_iso_strings():
         )
         is True
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-create on new title convention (2026-05-15) — spec:
+# auto-created-client-lifecycle. The pre-cutoff legacy Scott-1:1 auto-create
+# stays; this section pins the new post-cutoff auto-create behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_post_cutoff_new_title_matched_client_does_not_auto_create():
+    """When the external participant resolves to a known client, no
+    auto-create — the existing row is used as primary_client_id and
+    should_auto_create_client stays None."""
+    record = _record(
+        title="Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.primary_client_id == "c-andrew"
+    assert result.should_auto_create_client is None
+
+
+def test_post_cutoff_new_title_multiple_unresolved_externals_auto_creates_first():
+    """Rare but possible: a client invites a coworker we don't know
+    about. V1 simple: auto-create the FIRST unresolved external email.
+    Others surface through call_participants for later manual review.
+    Spec § "Multiple unresolved external participants"."""
+    record = _record(
+        title="Sales Call with Nico",
+        participants=[
+            _pt("nico@theaipartner.io"),
+            _pt("first-unknown@example.com", "First Unknown"),
+            _pt("second-unknown@example.com", "Second Unknown"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.primary_client_id is None
+    assert result.should_auto_create_client is not None
+    # FIRST external (participants list order) wins.
+    assert (
+        result.should_auto_create_client.email == "first-unknown@example.com"
+    )
+
+
+def test_post_cutoff_new_title_no_external_participants_no_auto_create():
+    """Degenerate but valid: booking-link title with only team members
+    on the invite. Row lands as client with no primary, no auto-create.
+    Surfaces as a data hygiene flag without polluting clients table."""
+    record = _record(
+        title="Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("lou@theaipartner.io"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_confidence == 1.0
+    assert result.primary_client_id is None
+    assert result.should_auto_create_client is None
+
+
+def test_post_cutoff_auto_create_distinct_reason_from_scott_1on1():
+    """Reason string distinguishes new-convention auto-creates from the
+    legacy Scott-1:1 path's auto-creates. Audit queries can split via
+    metadata.auto_create_reason (set by the pipeline from this field)."""
+    record = _record(
+        title="Coaching Call with Lou",
+        participants=[
+            _pt("lou@theaipartner.io"),
+            _pt("unknown@example.com", "Unknown"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    assert result.should_auto_create_client is not None
+    assert (
+        result.should_auto_create_client.reason
+        == "new title convention with unresolved participant"
+    )
+    # Distinct from the legacy AutoCreateRequest default:
+    assert (
+        result.should_auto_create_client.reason
+        != "30mins_with_Scott pattern with unresolved participant"
+    )
+
+
+def test_pre_cutoff_new_title_does_not_take_new_path():
+    """Pre-cutoff calls with new-convention titles still go through
+    the prior cascade — they classify as client via participant match
+    if the participant resolves, NOT via the new-convention path. No
+    new-convention auto-create on pre-cutoff calls."""
+    record = _record(
+        title="Coaching Call with Scott",  # matches new pattern
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("unknown@example.com", "Unknown"),
+        ],
+        started_at=_PRE_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    # Pre-cutoff falls to participant match. Unknown email + no client
+    # resolver → external (not client). No new-convention auto-create.
+    assert result.call_category != "client"
+    assert result.should_auto_create_client is None
