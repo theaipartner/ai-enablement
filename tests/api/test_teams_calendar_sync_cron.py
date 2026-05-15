@@ -496,6 +496,149 @@ def test_filter_handles_attendee_missing_email_field(fake_db, monkeypatch):
     assert result["events_upserted"] == 0
 
 
+# ---------------------------------------------------------------------------
+# Personal-email exclusion (2026-05-15)
+# ---------------------------------------------------------------------------
+
+
+def test_personal_email_treated_as_internal(fake_db, monkeypatch):
+    """An event whose ONLY non-AIP attendee is a teammate's personal
+    email is dropped at the filter — the personal email is in
+    team_members.metadata.personal_emails and counts as internal."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [
+        # CSM list returns team_members rows; the fake fixture's
+        # metadata is where personal_emails would live in real prod.
+        {
+            "id": "tm-1",
+            "email": "lou@theaipartner.io",
+            "full_name": "Lou Perez",
+            "metadata": {},
+        },
+        {
+            "id": "tm-huzaifa",
+            "email": "huzaifa@theaipartner.io",
+            "full_name": "Huzaifa",
+            "metadata": {
+                "personal_emails": ["huzaifasaeed460@gmail.com"],
+            },
+        },
+    ]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                # An internal meeting where Huzaifa joined from his
+                # personal Gmail. Pre-spec: would have leaked past the
+                # filter because gmail.com isn't @theaipartner.io.
+                # Post-spec: dropped, because the gmail is on the
+                # team_members.metadata.personal_emails list.
+                _event_with_attendees(
+                    "ev-csm-sync",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "huzaifasaeed460@gmail.com"},
+                    ],
+                ),
+            ],
+            "huzaifa@theaipartner.io": [],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 0
+    assert fake_db.calendar_upserts == []
+
+
+def test_real_external_attendee_still_kept_when_personal_email_present(
+    fake_db, monkeypatch
+):
+    """Mixed shape: AIP + personal email + a real external client. The
+    real external attendee qualifies, even though a personal email is
+    also on the invite. Kept."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [
+        {
+            "id": "tm-1",
+            "email": "lou@theaipartner.io",
+            "full_name": "Lou Perez",
+            "metadata": {},
+        },
+        {
+            "id": "tm-huzaifa",
+            "email": "huzaifa@theaipartner.io",
+            "full_name": "Huzaifa",
+            "metadata": {
+                "personal_emails": ["huzaifasaeed460@gmail.com"],
+            },
+        },
+    ]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-three-way",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "huzaifasaeed460@gmail.com"},
+                        {"email": "client@gmail.com"},
+                    ],
+                ),
+            ],
+            "huzaifa@theaipartner.io": [],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 1
+    assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-three-way"
+
+
+def test_empty_personal_emails_set_behaves_identically_to_previous_filter(
+    fake_db, monkeypatch
+):
+    """Backward compat: when no team_members carry a personal_emails
+    entry, the filter behaves exactly as before — any non-AIP email
+    qualifies as external. Guards against accidental over-filtering
+    on a fresh deploy where the metadata key isn't yet populated."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [
+        {
+            "id": "tm-1",
+            "email": "lou@theaipartner.io",
+            "full_name": "Lou Perez",
+            "metadata": {},  # no personal_emails key at all
+        },
+    ]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "lou@theaipartner.io": [
+                _event_with_attendees(
+                    "ev-pre-spec-shape",
+                    [
+                        {"email": "lou@theaipartner.io"},
+                        {"email": "personal@gmail.com"},
+                    ],
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    # Pre-spec behavior: personal@gmail.com qualifies as external
+    # because it's not on any personal_emails list. Kept.
+    assert result["events_upserted"] == 1
+    assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-pre-spec-shape"
+
+
 def test_sentinel_team_members_excluded_from_csm_list(fake_db, monkeypatch):
     """metadata.sentinel=true rows (Gregory Bot, Scott Chasing) are
     excluded from the per-CSM loop even though they carry is_csm=true."""

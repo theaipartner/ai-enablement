@@ -154,6 +154,9 @@ def run_teams_calendar_sync_cron() -> dict[str, Any]:
         return {"error": "oauth_token_unavailable", "detail": str(exc)}
 
     csms = _fetch_csms(db)
+    # Personal-email exclusion list built once per tick. Treated as
+    # internal during the external-attendee scan inside _upsert_events.
+    personal_emails = _fetch_personal_emails(db)
     time_min, time_max = _current_week_window()
 
     counts = {
@@ -194,6 +197,7 @@ def run_teams_calendar_sync_cron() -> dict[str, Any]:
             team_member_id=csm["id"],
             calendar_id=csm["email"],
             events=events,
+            personal_emails=personal_emails,
         )
         counts["events_upserted"] += upserted
         counts["csms_succeeded"] += 1
@@ -262,7 +266,12 @@ def _fetch_csms(db) -> list[dict[str, Any]]:
 
 
 def _upsert_events(
-    db, *, team_member_id: str, calendar_id: str, events: list[dict[str, Any]]
+    db,
+    *,
+    team_member_id: str,
+    calendar_id: str,
+    events: list[dict[str, Any]],
+    personal_emails: set[str],
 ) -> int:
     """Upsert each Google Calendar event into calendar_events keyed by
     (team_member_id, google_event_id). Returns the count of events
@@ -282,11 +291,13 @@ def _upsert_events(
         end = (ev.get("end") or {}).get("dateTime")
         if not start or not end:
             continue
-        if not _has_external_attendee(ev):
+        if not _has_external_attendee(ev, personal_emails):
             # Filter: keep only events with at least one external
-            # attendee (someone outside the AIP Workspace domain).
-            # Drops OOO blocks, work blocks, solo focus time, and
-            # internal-only meetings — none of which belong on /teams.
+            # attendee (someone outside the AIP Workspace domain AND
+            # outside every team member's personal-email list). Drops
+            # OOO blocks, work blocks, solo focus time, internal-only
+            # meetings, and meetings where teammates joined via
+            # personal accounts (Huzaifa's case, 2026-05-15).
             continue
         row = {
             "team_member_id": team_member_id,
@@ -317,24 +328,30 @@ def _upsert_events(
     return upserted
 
 
-def _has_external_attendee(event: dict[str, Any]) -> bool:
-    """Return True if the event has at least one attendee outside the
-    AIP Workspace domain.
+def _has_external_attendee(
+    event: dict[str, Any], personal_emails: set[str]
+) -> bool:
+    """Return True if the event has at least one attendee outside both
+    the AIP Workspace domain AND every team member's personal-email
+    list.
+
+    Personal emails (e.g., a teammate's @gmail.com used to attend
+    internal meetings) are treated as internal here — without this
+    layer, internal-only meetings leak past the filter when teammates
+    use personal accounts (Huzaifa's case prompted the addition;
+    see docs/specs/teams-personal-email-exclusion-and-nabeel-removal.md).
 
     Filter rule used by `_upsert_events` to keep client-facing meetings
     and drop internal-only events (OOO blocks, work blocks, internal
     1:1s). Empty attendee lists return False — solo blocks have no
     external attendee by definition.
 
-    Case-insensitive on the domain check (Google sometimes returns
-    canonicalized lowercase; user-typed entries may have mixed case).
-    Attendees without an `email` field (rare but legal in the API)
-    are skipped, not treated as external.
-
-    Resource calendars (conference rooms, equipment) get filtered out
-    earlier by `_extract_attendees`, but THIS helper runs on the raw
-    Google event so we also have to skip them here. Resources never
-    qualify as external attendees.
+    Case-insensitive on both checks. `personal_emails` is expected to
+    be a lowercased, trimmed set (built by `_fetch_personal_emails`).
+    Attendees without an `email` field (rare but legal in the API) are
+    skipped. Resource calendars (conference rooms, equipment) get
+    filtered out by `_extract_attendees` later, but THIS helper runs
+    on the raw Google event so we also have to skip them here.
     """
     attendees = event.get("attendees") or []
     if not attendees:
@@ -345,9 +362,37 @@ def _has_external_attendee(event: dict[str, Any]) -> bool:
         email = (attendee.get("email") or "").strip().lower()
         if not email:
             continue
+        if email in personal_emails:
+            # Team member on a personal account — counts as internal.
+            continue
         if not email.endswith(_AIP_DOMAIN):
             return True
     return False
+
+
+def _fetch_personal_emails(db) -> set[str]:
+    """Pull every `team_members.metadata.personal_emails` entry into a
+    single lowercased, trimmed set. Used by `_has_external_attendee` to
+    treat teammates' personal accounts as internal for filter purposes.
+
+    Empty / missing arrays are tolerated — most rows don't carry a
+    `personal_emails` key. Single DB query per cron tick (no caching);
+    cardinality is the team_members count (~11 rows today).
+    """
+    resp = (
+        db.table("team_members")
+        .select("metadata")
+        .is_("archived_at", "null")
+        .execute()
+    )
+    out: set[str] = set()
+    for row in resp.data or []:
+        metadata = row.get("metadata") or {}
+        personal = metadata.get("personal_emails") or []
+        for email in personal:
+            if isinstance(email, str) and email.strip():
+                out.add(email.strip().lower())
+    return out
 
 
 def _extract_attendees(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
