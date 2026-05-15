@@ -31,11 +31,14 @@ from agents.call_reviewer.prompt import PROMPT_VERSION, SYSTEM_PROMPT
 
 logger = logging.getLogger("ai_enablement.call_reviewer")
 
-# Output cap. 4096 is generous for the structured JSON output the prompt
-# produces — typical reviews land at 600-1500 tokens. Bumped from a
-# tighter 2048 to bulletproof against truncated JSON when a particularly
-# detailed call generates many pain_points / wins.
-_MAX_OUTPUT_TOKENS = 4096
+# Output cap. Bumped to 8192 on 2026-05-15 with the v2 prompt: the
+# new questions_asked field can produce 10+ items on dense calls,
+# which combined with the existing four sections pushed output past
+# 4096 tokens mid-JSON for one real call (Dhamen Hothi - Lou - 1 on 1,
+# 2026-05-08; JSON truncated at ~15.1k chars / ~3800 tokens). Typical
+# reviews still land at 600-1500 tokens; the higher cap is a safety
+# net for long-transcript calls with many questions.
+_MAX_OUTPUT_TOKENS = 8192
 
 # Top-level keys the response must contain. Extra keys are tolerated;
 # missing keys raise.
