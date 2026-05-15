@@ -3,8 +3,10 @@ import {
   BUCKET_DEFINITIONS,
   getAnthropicBucketSummaries,
   getCurrentMonthExtras,
+  getCurrentMonthBoundaries,
   getCurrentMonthTotal,
   getMonthlySubscriptions,
+  subscriptionActiveInMonth,
   getRecentMonthTotals,
   type BucketSummary,
   type PeriodSummary,
@@ -61,17 +63,32 @@ export default async function CostHubPage() {
     getCurrentMonthExtras(),
     getRecentMonthTotals(12),
   ])
+
+  // Filter the non-archived subs to those active in the CURRENT month
+  // (effective_from has started, not future-dated). The same filtered
+  // list feeds both the editable table render AND the running total
+  // so the two never disagree.
+  const { monthStart, monthEnd } = getCurrentMonthBoundaries()
+  const activeSubscriptions = subscriptions.filter((s) =>
+    subscriptionActiveInMonth(
+      { effective_from: s.effective_from, archived_at: null },
+      monthStart,
+      monthEnd,
+    ),
+  )
+
   const totalThisMonth = await getCurrentMonthTotal(
     summaries,
-    subscriptions,
+    activeSubscriptions,
     extras,
   )
 
-  const subRows: SubscriptionRow[] = subscriptions.map((s) => ({
+  const subRows: SubscriptionRow[] = activeSubscriptions.map((s) => ({
     id: s.id,
     provider: s.provider,
     monthly_cost_usd: s.monthly_cost_usd,
     notes: s.notes,
+    effective_from: s.effective_from,
   }))
   const extraRows: CostExtraRow[] = extras.map((e) => ({
     id: e.id,

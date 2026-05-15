@@ -1206,6 +1206,7 @@ export type Database = {
         Row: {
           archived_at: string | null
           created_at: string
+          effective_from: string
           id: string
           monthly_cost_usd: number
           notes: string | null
@@ -1215,6 +1216,7 @@ export type Database = {
         Insert: {
           archived_at?: string | null
           created_at?: string
+          effective_from?: string
           id?: string
           monthly_cost_usd: number
           notes?: string | null
@@ -1224,6 +1226,7 @@ export type Database = {
         Update: {
           archived_at?: string | null
           created_at?: string
+          effective_from?: string
           id?: string
           monthly_cost_usd?: number
           notes?: string | null

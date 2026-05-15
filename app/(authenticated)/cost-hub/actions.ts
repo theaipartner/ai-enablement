@@ -35,10 +35,32 @@ async function requireAdmin(): Promise<true | { error: string }> {
 // monthly_subscriptions
 // ---------------------------------------------------------------------------
 
+// effective_from validation. Defaults to today (EST) when omitted —
+// defensive; the form always passes it, but a fallback prevents a
+// crash if a future caller doesn't.
+function resolveEffectiveFrom(
+  effectiveFrom: string | undefined,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (effectiveFrom === undefined || effectiveFrom === '') {
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+    return { ok: true, value: today }
+  }
+  if (!ISO_DATE_RE.test(effectiveFrom)) {
+    return { ok: false, error: 'effective_from must be YYYY-MM-DD' }
+  }
+  return { ok: true, value: effectiveFrom }
+}
+
 export async function addMonthlySubscriptionAction(
   provider: string,
   monthlyCost: number,
   notes: string | null,
+  effectiveFrom?: string,
 ): Promise<ActionResult> {
   const trimmedProvider = provider.trim()
   if (!trimmedProvider) {
@@ -54,6 +76,10 @@ export async function addMonthlySubscriptionAction(
   if (trimmedNotes.length > 1000) {
     return { success: false, error: 'Notes too long (1000 char max)' }
   }
+  const eff = resolveEffectiveFrom(effectiveFrom)
+  if (!eff.ok) {
+    return { success: false, error: eff.error }
+  }
   const auth = await requireAdmin()
   if (auth !== true) {
     return { success: false, error: auth.error }
@@ -63,6 +89,7 @@ export async function addMonthlySubscriptionAction(
     provider: trimmedProvider,
     monthly_cost_usd: monthlyCost,
     notes: trimmedNotes || null,
+    effective_from: eff.value,
   })
   if (error) {
     return { success: false, error: error.message }
@@ -76,6 +103,7 @@ export async function updateMonthlySubscriptionAction(
   provider: string,
   monthlyCost: number,
   notes: string | null,
+  effectiveFrom?: string,
 ): Promise<ActionResult> {
   const trimmedProvider = provider.trim()
   if (!trimmedProvider) {
@@ -85,6 +113,10 @@ export async function updateMonthlySubscriptionAction(
     return { success: false, error: 'Monthly cost must be a non-negative number' }
   }
   const trimmedNotes = (notes ?? '').trim()
+  const eff = resolveEffectiveFrom(effectiveFrom)
+  if (!eff.ok) {
+    return { success: false, error: eff.error }
+  }
   const auth = await requireAdmin()
   if (auth !== true) {
     return { success: false, error: auth.error }
@@ -96,6 +128,7 @@ export async function updateMonthlySubscriptionAction(
       provider: trimmedProvider,
       monthly_cost_usd: monthlyCost,
       notes: trimmedNotes || null,
+      effective_from: eff.value,
     })
     .eq('id', id)
   if (error) {

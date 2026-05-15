@@ -24,6 +24,7 @@ export type SubscriptionRow = {
   provider: string
   monthly_cost_usd: number
   notes: string | null
+  effective_from: string // YYYY-MM-DD
 }
 
 export type CostExtraRow = {
@@ -53,23 +54,26 @@ export function MonthlySubscriptionsTable({
   const [draftProvider, setDraftProvider] = useState('')
   const [draftCost, setDraftCost] = useState('')
   const [draftNotes, setDraftNotes] = useState('')
+  const [draftEffectiveFrom, setDraftEffectiveFrom] = useState(todayIsoDate())
 
   function submitAdd(event: React.FormEvent) {
     event.preventDefault()
     const provider = draftProvider.trim()
     const cost = Number.parseFloat(draftCost)
-    if (!provider || !Number.isFinite(cost)) return
+    if (!provider || !Number.isFinite(cost) || !draftEffectiveFrom) return
     setError(null)
     startTransition(async () => {
       const result = await addMonthlySubscriptionAction(
         provider,
         cost,
         draftNotes.trim() || null,
+        draftEffectiveFrom,
       )
       if (result.success) {
         setDraftProvider('')
         setDraftCost('')
         setDraftNotes('')
+        setDraftEffectiveFrom(todayIsoDate())
         router.refresh()
       } else {
         setError(result.error)
@@ -77,10 +81,22 @@ export function MonthlySubscriptionsTable({
     })
   }
 
-  function onSaveEdit(id: string, provider: string, cost: number, notes: string | null) {
+  function onSaveEdit(
+    id: string,
+    provider: string,
+    cost: number,
+    notes: string | null,
+    effectiveFrom: string,
+  ) {
     setError(null)
     startTransition(async () => {
-      const result = await updateMonthlySubscriptionAction(id, provider, cost, notes)
+      const result = await updateMonthlySubscriptionAction(
+        id,
+        provider,
+        cost,
+        notes,
+        effectiveFrom,
+      )
       if (result.success) {
         setEditingId(null)
         router.refresh()
@@ -112,7 +128,7 @@ export function MonthlySubscriptionsTable({
         onSubmit={submitAdd}
         style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 1fr 3fr auto',
+          gridTemplateColumns: '2fr 1fr 3fr 1fr auto',
           gap: 8,
           marginBottom: 16,
         }}
@@ -145,9 +161,18 @@ export function MonthlySubscriptionsTable({
           className="geg-filter-input"
           disabled={isPending}
         />
+        <input
+          type="date"
+          value={draftEffectiveFrom}
+          onChange={(e) => setDraftEffectiveFrom(e.target.value)}
+          aria-label="Effective from"
+          title="Effective from — which month this sub starts counting"
+          className="geg-filter-input"
+          disabled={isPending}
+        />
         <button
           type="submit"
-          disabled={isPending || !draftProvider.trim() || !draftCost}
+          disabled={isPending || !draftProvider.trim() || !draftCost || !draftEffectiveFrom}
           style={{
             padding: '6px 14px',
             fontSize: 13,
@@ -190,8 +215,8 @@ export function MonthlySubscriptionsTable({
               isEditing={editingId === row.id}
               onStartEdit={() => setEditingId(row.id)}
               onCancelEdit={() => setEditingId(null)}
-              onSave={(provider, cost, notes) =>
-                onSaveEdit(row.id, provider, cost, notes)
+              onSave={(provider, cost, notes, effectiveFrom) =>
+                onSaveEdit(row.id, provider, cost, notes, effectiveFrom)
               }
               onDelete={() => onDelete(row.id, row.provider)}
               disabled={isPending}
@@ -243,20 +268,26 @@ function SubscriptionRowCmp({
   isEditing: boolean
   onStartEdit: () => void
   onCancelEdit: () => void
-  onSave: (provider: string, cost: number, notes: string | null) => void
+  onSave: (
+    provider: string,
+    cost: number,
+    notes: string | null,
+    effectiveFrom: string,
+  ) => void
   onDelete: () => void
   disabled: boolean
 }) {
   const [provider, setProvider] = useState(row.provider)
   const [cost, setCost] = useState(String(row.monthly_cost_usd))
   const [notes, setNotes] = useState(row.notes ?? '')
+  const [effectiveFrom, setEffectiveFrom] = useState(row.effective_from)
 
   if (isEditing) {
     return (
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 1fr 3fr auto auto',
+          gridTemplateColumns: '2fr 1fr 3fr 1fr auto auto',
           gap: 8,
           alignItems: 'center',
           padding: '8px 0',
@@ -285,11 +316,18 @@ function SubscriptionRowCmp({
           maxLength={1000}
           className="geg-filter-input"
         />
+        <input
+          type="date"
+          value={effectiveFrom}
+          onChange={(e) => setEffectiveFrom(e.target.value)}
+          aria-label="Effective from"
+          className="geg-filter-input"
+        />
         <button
           onClick={() => {
             const parsedCost = Number.parseFloat(cost)
-            if (provider.trim() && Number.isFinite(parsedCost)) {
-              onSave(provider.trim(), parsedCost, notes.trim() || null)
+            if (provider.trim() && Number.isFinite(parsedCost) && effectiveFrom) {
+              onSave(provider.trim(), parsedCost, notes.trim() || null, effectiveFrom)
             }
           }}
           disabled={disabled}
@@ -328,7 +366,7 @@ function SubscriptionRowCmp({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '2fr 1fr 3fr auto auto',
+        gridTemplateColumns: '2fr 1fr 3fr 1fr auto auto',
         gap: 8,
         alignItems: 'center',
         padding: '10px 0',
@@ -352,6 +390,13 @@ function SubscriptionRowCmp({
         }}
       >
         {row.notes ?? '(no notes)'}
+      </span>
+      <span
+        className="geg-mono"
+        style={{ fontSize: 12, color: 'var(--color-geg-text-3)' }}
+        title="Effective from"
+      >
+        {row.effective_from}
       </span>
       <button
         onClick={onStartEdit}
