@@ -21,6 +21,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
   { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
   { href: '/ella/runs', label: 'Ella', requiredTier: 'admin' },
+  { href: '/cost-hub', label: 'Cost hub', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
 
@@ -47,6 +48,7 @@ export function TopNav({
     if (href === '/ella/runs') return pathname === '/ella/runs' || pathname.startsWith('/ella/runs/')
     if (href === '/teams') return pathname === '/teams' || pathname.startsWith('/teams/')
     if (href === '/tasks') return pathname === '/tasks' || pathname.startsWith('/tasks/')
+    if (href === '/cost-hub') return pathname === '/cost-hub' || pathname.startsWith('/cost-hub/')
     return false
   }
 
