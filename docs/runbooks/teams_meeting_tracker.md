@@ -90,6 +90,32 @@ curl -i -X POST -H "Authorization: Bearer $CRON_SECRET" \
 
 Useful for debugging without waiting 30 min. Response body has the same `counts` + `errors` shape as the audit row.
 
+## Filter behavior
+
+The sync cron only stores events with **at least one attendee outside the `@theaipartner.io` domain**. Applied at fetch time inside `_upsert_events` (helper: `_has_external_attendee`) before any row writes. Calibrated to keep client-facing meetings + drop everything else.
+
+**Kept:**
+- Client meetings (any external email — client@gmail.com, client@theirbusiness.com, etc.).
+- Meetings with vendors, prospects, accountants, contractors — anyone outside the AIP Workspace.
+- Mixed meetings (AIP team + external attendees).
+
+**Dropped:**
+- Events with zero attendees (OOO blocks, work blocks, focus time).
+- Events where every attendee is `@theaipartner.io` (internal 1:1s, team syncs, leadership meetings).
+- Events where AIP attendees + resource calendars (conference rooms, equipment) are the only entries — resource calendars don't count as external attendees.
+
+**Edge cases worth knowing:**
+- Domain match is case-insensitive (Google sometimes echoes user-typed casing).
+- Attendees without an `email` field are skipped (treated as neither AIP nor external).
+- A trialed-future-team-member client with an `@theaipartner.io` alias would be incorrectly filtered out. Vanishingly rare — if it happens, the symptom is "this client meeting isn't showing up on /teams" and the fix is to remove the alias or surface a follow-up spec.
+
+**Why this exists**: pre-filter, the page showed every CSM's full calendar including OOO / focus time / internal meetings. Noise vs signal was unmanageable. Filter shipped 2026-05-15 per `docs/specs/teams-calendar-external-attendee-filter.md`.
+
+**Debugging "why doesn't meeting X show up on /teams":**
+1. Check that the meeting has at least one external attendee on the actual Google Calendar entry. CSMs sometimes invite themselves only ("hold this slot") — that won't show.
+2. Check `calendar_events` directly: if the row is missing, the filter dropped it. If the row is present but the page doesn't render it, look at the title-and-time match (next section).
+3. If the row is missing AND the filter SHOULD have kept it, look at the cron's audit row for the most recent tick — was there a transport error?
+
 ## Title-and-time match logic
 
 The `/teams` page joins `calendar_events` to `calls` in JS:
