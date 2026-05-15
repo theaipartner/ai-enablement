@@ -431,9 +431,7 @@ The 36 migrations + 10 Python serverless functions + 5-tab TopNav (Clients / Cal
 
 Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Admin cost hub — closes Gregory V1.** Admin-tier-only view showing costs across the tools we use (Anthropic API via `agent_runs.llm_cost_usd`, Supabase, Vercel, Slack, etc.) so Nabeel can spot cost-reduction opportunities. This is the last piece before declaring Gregory V1 done.
-
-2. **Gregory V2 — sales side.** The next major arc. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before specs land. Items previously queued as backlog (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved into `docs/future-ideas.md` so this section stays a tight pointer to the live arc.
+1. **Gregory V2 — sales side.** The next major arc, and now the only item on the pointer — the Admin cost hub shipped 2026-05-15 (`/cost-hub`, migration 0038), which was the last piece of Gregory V1. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before specs land. Items previously queued as backlog (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved into `docs/future-ideas.md` so this section stays a tight pointer to the live arc.
 
 ## Ella (active focus)
 
