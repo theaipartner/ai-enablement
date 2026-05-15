@@ -66,6 +66,21 @@ The forcing function would silently drop legitimate edge cases if there were no 
 - **Auto-create safety net:** `docs/runbooks/auto_created_client_management.md`.
 - **Operational guide:** `docs/runbooks/call_title_convention.md`.
 
+## Revision: 2026-05-15 — v2 name-prefixed titles
+
+**What changed.** Zain naturally iterated the booking-link convention from `Coaching Call with Scott` to `Andrew Hsu - Coaching Call with Scott` — the client's name now prefixes the canonical pattern. This is a refinement of the same forcing function, not a new policy.
+
+**Decisions:**
+
+- **Both v1 and v2 patterns stay valid indefinitely. No second cutoff.** v1 (`Coaching/Sales Call with {Scott|Lou|Nico}`) and v2 (`[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`) both classify as `client` post-2026-05-18. A booking link mid-migration may emit either; both work. There is no v2 cutoff date — adding one would re-introduce the exact confusion the original ADR's safety net exists to prevent.
+- **v2 uses the name prefix as the PRIMARY client-resolution signal; participant email is the backup.** When a v2-shaped title resolves its name prefix via `ClientResolver.lookup_by_name`, that sets `primary_client_id` directly — no dependency on the participant's email being mapped. If the name doesn't resolve (client joined from an unmapped email, or a duplicate-`full_name` collision left this client un-indexed in the name map), the classifier falls back to the existing participant-email resolution. If neither resolves, the same `AutoCreateRequest` safety net fires.
+- **v2 matches surface `classification_method='title_pattern_v2'`** (v1 stays `'title_pattern'`) so audit queries can split adoption of the two conventions.
+- **Why no separate ADR 0003.** Same management lever, same forcing function, same safety net, same fence — v2 is strictly an improvement to the title shape, not a new decision. A separate ADR would imply a separate policy choice; there isn't one. This revision section is the durable record.
+
+**Collision surface.** `ClientResolver.lookup_by_name` indexes a single `client_id` per normalized `full_name`. If two non-archived clients share a name, only one is name-resolvable; the other gracefully falls back to email matching. A SQL count of duplicate non-archived `full_name` values returned **0 groups** at implementation time (2026-05-15) — no clients currently collide. Revisit if that count climbs (the spec's threshold was >5).
+
+**Implementation:** `ingestion/fathom/classifier.py` constants `_V2_TITLE_RE` + helper `_extract_v2_title_prefix_and_type`; `_matches_new_client_title_convention` ORs in the v2 matcher; `_classify_by_new_convention` does name-prefix-first resolution for v2-shaped titles. Tests: `tests/ingestion/fathom/test_classifier.py` (11 v2 tests added; the ~46 pre-existing cutoff tests stay green). Spec: `docs/specs/cost-hub-effective-from-and-title-convention-v2.md`.
+
 ## Review
 
 Revisit this ADR if:
