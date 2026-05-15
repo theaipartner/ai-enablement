@@ -50,6 +50,11 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/faq_digest_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
@@ -57,6 +62,7 @@
     { "path": "/api/gregory_brain_cron", "schedule": "0 9 * * *" },
     { "path": "/api/accountability_notification_cron", "schedule": "0 12 * * *" },
     { "path": "/api/passive_ella_cron", "schedule": "* * * * *" },
-    { "path": "/api/teams_calendar_sync_cron", "schedule": "*/30 * * * *" }
+    { "path": "/api/teams_calendar_sync_cron", "schedule": "*/30 * * * *" },
+    { "path": "/api/faq_digest_cron", "schedule": "0 19 * * 5" }
   ]
 }
