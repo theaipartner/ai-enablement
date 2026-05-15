@@ -20,7 +20,10 @@ import {
 import { TRUSTPILOT_VALUES } from '@/lib/client-vocab'
 import { mergeClient, type MergeResult } from '@/lib/db/merge'
 import { createAdminClient } from '@/lib/supabase/admin'
+import type { Database } from '@/lib/supabase/types'
 import { postMessage } from '@/lib/slack/post'
+
+type ClientRow = Database['public']['Tables']['clients']['Row']
 
 // ----------------------------------------------------------------------
 // updateClientField — generic inline-edit Server Action
@@ -539,4 +542,67 @@ export async function mergeClientAction(
     revalidatePath('/clients')
   }
   return result
+}
+
+// ----------------------------------------------------------------------
+// removeNeedsReviewTagAction — clears the `needs_review` tag on a single
+// client + stamps an audit timestamp under metadata. Does NOT touch
+// status, primary_csm_id, assignments, or any other column. The CSM
+// can re-add the tag manually via inline-edit if needed (no
+// destructive-confirmation flow needed for re-adding — the side
+// effects of having the tag are surfacing-only).
+//
+// Spec: docs/specs/auto-created-client-lifecycle.md § Remove-tag button.
+// ----------------------------------------------------------------------
+export async function removeNeedsReviewTagAction(
+  clientId: string,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const supabase = createAdminClient()
+
+  const { data: client, error: readErr } = await supabase
+    .from('clients')
+    .select('tags, metadata, full_name')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (readErr || !client) {
+    return { success: false, error: readErr?.message ?? 'Client not found' }
+  }
+
+  // `tags` is the top-level text[] column on clients. Some metadata
+  // breadcrumbs reference tags too (e.g., older auto-create flows
+  // wrote into metadata.tags). The clients table column is the
+  // authoritative location — the merge RPC and the dashboard filter
+  // both query the column. Drop `needs_review` from the column only;
+  // metadata.tags (if present, legacy) is left for the existing
+  // metadata-merge logic to clean up on its own cadence.
+  const currentTags: string[] = Array.isArray(client.tags) ? client.tags : []
+  if (!currentTags.includes('needs_review')) {
+    return {
+      success: false,
+      error: 'Client does not have the needs_review tag',
+    }
+  }
+  const newTags = currentTags.filter((t) => t !== 'needs_review')
+
+  const existingMetadata =
+    (client.metadata as Record<string, unknown> | null) ?? {}
+  // Cast through unknown — matches the existing
+  // updateClientProfileField pattern. Supabase types `metadata` as
+  // Json (recursive union) but we know it's an object at this point.
+  const newMetadata = {
+    ...existingMetadata,
+    needs_review_cleared_at: new Date().toISOString(),
+  } as unknown as ClientRow['metadata']
+
+  const { error: writeErr } = await supabase
+    .from('clients')
+    .update({ tags: newTags, metadata: newMetadata })
+    .eq('id', clientId)
+  if (writeErr) {
+    return { success: false, error: writeErr.message }
+  }
+
+  revalidatePath(`/clients/${clientId}`)
+  revalidatePath('/clients')
+  return { success: true }
 }

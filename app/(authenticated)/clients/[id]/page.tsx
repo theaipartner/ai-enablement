@@ -1,9 +1,12 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getClientById, listAvailableCsms, type ClientDetail } from '@/lib/db/clients'
+import { listMergeCandidates } from '@/lib/db/merge'
 import { GegPill } from '@/components/gregory/geg-pill'
 import {
   CsmStandingPill,
+  MissingSlackChannelPill,
+  MissingSlackUserPill,
   NpsStandingPill,
   StatusPill,
 } from '../pills'
@@ -18,6 +21,8 @@ import {
 } from '../editable-cell'
 import { ActionItemsList, type ActionItemRow } from './action-items-list'
 import { BackToClientsButton } from './back-to-clients-button'
+import { MergeClientButton } from './merge-client-button'
+import { RemoveNeedsReviewButton } from './remove-needs-review-button'
 
 // Clients redesign · § 2 — /clients/[id] detail page.
 //
@@ -141,6 +146,15 @@ export default async function ClientDetailPage({
   ])
   if (!client) notFound()
 
+  // Merge candidates only when the client is tagged needs_review —
+  // the merge button hides on every other client, so the candidate
+  // fetch is wasted work in the common case.
+  const tags: string[] = Array.isArray(client.tags) ? client.tags : []
+  const needsReview = tags.includes('needs_review')
+  const mergeCandidates = needsReview
+    ? await listMergeCandidates(client.id)
+    : []
+
   const concerns = readConcerns(client)
 
   // Action items enriched with their source call's title + date, derived
@@ -216,6 +230,43 @@ export default async function ClientDetailPage({
           ) : null}
         </div>
       </header>
+
+      {/* Action row + Slack-hygiene badges. Renders only when at least
+          one signal is present, so default clients don't get an empty
+          band below the header. */}
+      {(needsReview ||
+        !client.slack_channel_id ||
+        !client.slack_user_id) && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+            padding: '14px 0',
+            borderBottom: '1px solid var(--color-geg-border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {!client.slack_channel_id ? <MissingSlackChannelPill /> : null}
+            {!client.slack_user_id ? <MissingSlackUserPill /> : null}
+          </div>
+          {needsReview ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <MergeClientButton
+                sourceId={client.id}
+                sourceFullName={client.full_name}
+                candidates={mergeCandidates}
+              />
+              <RemoveNeedsReviewButton
+                clientId={client.id}
+                clientName={client.full_name}
+              />
+            </div>
+          ) : null}
+        </div>
+      )}
 
       <div
         style={{

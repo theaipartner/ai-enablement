@@ -122,6 +122,22 @@ export function NeedsReviewPill() {
   return <GegPill tier="warn" label="Needs review" />
 }
 
+// ----- Missing-Slack badges ----------------------------------------------
+//
+// Two distinct warn pills surfaced on /clients and /clients/[id] when a
+// client lacks `slack_channel_id` or `slack_user_id`. Computed read-time;
+// no stored state. Independent of `needs_review` — a legacy client with
+// broken Slack data shows missing-Slack but not needs_review.
+// Spec: docs/specs/auto-created-client-lifecycle.md § Missing-Slack badges.
+
+export function MissingSlackChannelPill() {
+  return <GegPill tier="warn" label="Missing Slack channel" />
+}
+
+export function MissingSlackUserPill() {
+  return <GegPill tier="warn" label="Missing Slack user" />
+}
+
 // ----- Tags list ----------------------------------------------------------
 
 export function TagsList({ tags }: { tags: string[] }) {

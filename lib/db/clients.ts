@@ -126,6 +126,11 @@ export type ClientsListFilters = {
   accountability?: Array<'on' | 'off'>
   nps_toggle?: Array<'on' | 'off'>
   needs_review?: boolean
+  // missing_slack === true → narrow to clients where slack_user_id OR
+  // slack_channel_id is null. Computed read-time; no stored column.
+  // Both badges (channel + user) on /clients[/[id]] feed off the same
+  // two underlying nullable fields.
+  missing_slack?: boolean
   search?: string
 }
 
@@ -142,6 +147,12 @@ export type ClientsListRow = ClientRow & {
   // round trip. inactive: true when last_call_date is null OR > 30 days ago.
   meetings_this_month: number
   inactive: boolean
+  // 2026-05-15: Slack-hygiene fields surfaced for the missing-Slack
+  // badges + filter. `slack_channel_id` comes from the joined
+  // `slack_channels` nested select (most recent non-archived); null
+  // when the client has no active channel. `slack_user_id` is a
+  // direct column on `clients`. Both feed the warn-tier pills.
+  slack_channel_id: string | null
 }
 
 // ----------------------------------------------------------------------
@@ -180,7 +191,8 @@ export async function getClientsList(
       ),
       client_health_scores(score, tier, computed_at),
       calls!calls_primary_client_id_fkey(started_at),
-      call_action_items!call_action_items_owner_client_id_fkey(id, status, due_date)
+      call_action_items!call_action_items_owner_client_id_fkey(id, status, due_date),
+      slack_channels(slack_channel_id, is_archived, created_at)
     `,
     )
     .is('archived_at', null)
@@ -216,6 +228,11 @@ export async function getClientsList(
   if (filters.needs_review === true) {
     query = query.contains('tags', ['needs_review'])
   }
+  // missing_slack is applied JS-side after the projection below —
+  // `slack_channel_id` isn't a column on `clients` (it lives on the
+  // joined slack_channels rows), so a PostgREST .or() across both
+  // fields can't express the filter cleanly. JS-filter happens
+  // post-select; cheap at ~200 clients.
   if (filters.search) {
     const q = filters.search.replace(/[%,]/g, '')
     query = query.or(`full_name.ilike.%${q}%,email.ilike.%${q}%`)
@@ -285,6 +302,19 @@ export async function getClientsList(
       (a) => a.due_date !== null && new Date(a.due_date) < today,
     )
 
+    // Resolve the active Slack channel for this client from the
+    // nested join. Mirrors getClientById's "most recent non-archived"
+    // pick. null when no active channel exists.
+    const slackChannels = (row.slack_channels ?? []) as Array<{
+      slack_channel_id: string
+      is_archived: boolean
+      created_at: string
+    }>
+    const activeChannel =
+      slackChannels
+        .filter((c) => !c.is_archived)
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] ?? null
+
     // Strip the nested-select arrays from the row — they're already
     // captured in the derived fields below — and return a clean
     // ClientsListRow. Spread inherits all ClientRow columns (including
@@ -294,6 +324,7 @@ export async function getClientsList(
     delete stripped.client_health_scores
     delete stripped.calls
     delete stripped.call_action_items
+    delete stripped.slack_channels
     const client = stripped as unknown as ClientRow
 
     return {
@@ -307,6 +338,7 @@ export async function getClientsList(
       overdue_action_items_count: overdueItems.length,
       meetings_this_month: meetingsThisMonth,
       inactive,
+      slack_channel_id: activeChannel?.slack_channel_id ?? null,
     }
   })
 
@@ -314,6 +346,12 @@ export async function getClientsList(
     const allowed = new Set(filters.primary_csm_ids)
     rows = rows.filter(
       (r) => r.primary_csm_id !== null && allowed.has(r.primary_csm_id),
+    )
+  }
+
+  if (filters.missing_slack === true) {
+    rows = rows.filter(
+      (r) => r.slack_channel_id === null || r.slack_user_id === null,
     )
   }
 

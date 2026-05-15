@@ -1,5 +1,9 @@
 import Link from 'next/link'
-import { NpsStandingPill } from './pills'
+import {
+  MissingSlackChannelPill,
+  MissingSlackUserPill,
+  NpsStandingPill,
+} from './pills'
 import {
   EditableCsmStandingCell,
   EditableJourneyStageCell,
@@ -33,6 +37,7 @@ type SortKey =
   | 'trustpilot_status'
   | 'latest_health_score'
   | 'meetings_this_month'
+  | 'slack'
 
 type ColumnDef = {
   key: SortKey
@@ -56,6 +61,11 @@ const COLUMNS: ColumnDef[] = [
     align: 'right',
     width: '120px',
   },
+  // Slack hygiene badges (channel / user). Not sortable in V1 — the
+  // SortableHeader still renders a link, but the page's sort whitelist
+  // ignores 'slack' so the sort indicator never shows active on this
+  // column. Filter chip on the bar handles the narrowing pattern.
+  { key: 'slack', label: 'Slack', width: '180px' },
 ]
 
 function SortableHeader({
@@ -241,6 +251,23 @@ export function ClientsTable({
               }}
             >
               {row.meetings_this_month}
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              {!row.slack_channel_id || !row.slack_user_id ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  {!row.slack_channel_id ? <MissingSlackChannelPill /> : null}
+                  {!row.slack_user_id ? <MissingSlackUserPill /> : null}
+                </div>
+              ) : (
+                <span style={{ color: 'var(--color-geg-text-3)' }}>—</span>
+              )}
             </td>
           </tr>
         ))}

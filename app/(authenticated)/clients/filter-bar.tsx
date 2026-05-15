@@ -47,6 +47,15 @@ const NEEDS_REVIEW_OPTIONS = [
   { value: '1', label: 'Auto-created — needs review' },
 ] as const
 
+// Missing Slack filter — toggle on to narrow to clients with null
+// slack_user_id OR null slack_channel_id. Both badges feed off the
+// same nullable fields; the filter is single-toggle, not per-badge,
+// because the actionable data-hygiene question is "do any of these
+// have broken Slack identity?" — not "which one is broken?"
+const MISSING_SLACK_OPTIONS = [
+  { value: '1', label: 'Missing Slack channel or user' },
+] as const
+
 // M5.7 — Accountability / NPS toggle dropdowns. Same OR-within multi-select
 // shape as the other filters even though there are only two values; users can
 // pick On, Off, or both. Mapping 'on'|'off' → boolean happens in the data
@@ -122,6 +131,8 @@ export function FilterBar({
   const npsToggleSelected = parseMulti(searchParams.get('nps_toggle'))
   const needsReviewSelected =
     searchParams.get('needs_review') === '1' ? ['1'] : []
+  const missingSlackSelected =
+    searchParams.get('missing_slack') === '1' ? ['1'] : []
 
   const primaryCsmDropdownOptions = primaryCsmOptions.map((o) => ({
     value: o.id,
@@ -168,6 +179,13 @@ export function FilterBar({
     })
   }
 
+  function setMissingSlack(values: string[]) {
+    writeParams((params) => {
+      if (values.includes('1')) params.set('missing_slack', '1')
+      else params.delete('missing_slack')
+    })
+  }
+
   function clearAll() {
     setSearchValue('')
     // Preserve sort/dir; drop everything else (status back to default
@@ -195,7 +213,8 @@ export function FilterBar({
     countrySelected.length > 0 ||
     accountabilitySelected.length > 0 ||
     npsToggleSelected.length > 0 ||
-    needsReviewSelected.length > 0
+    needsReviewSelected.length > 0 ||
+    missingSlackSelected.length > 0
 
   return (
     <div
@@ -266,6 +285,13 @@ export function FilterBar({
           options={NEEDS_REVIEW_OPTIONS}
           selected={needsReviewSelected}
           onChange={setNeedsReview}
+          mode="toggle"
+        />
+        <MultiSelectDropdown
+          label="Missing Slack"
+          options={MISSING_SLACK_OPTIONS}
+          selected={missingSlackSelected}
+          onChange={setMissingSlack}
           mode="toggle"
         />
         <MultiSelectDropdown

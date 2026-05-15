@@ -89,6 +89,7 @@ function readFilters(searchParams: Record<string, string | string[] | undefined>
     accountability,
     nps_toggle: npsToggle,
     needs_review: get('needs_review') === '1',
+    missing_slack: get('missing_slack') === '1',
     search: get('q'),
   }
 }
