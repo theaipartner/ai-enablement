@@ -162,6 +162,30 @@ Symptom: a billing / refund / crisis message gets `decision='respond_substantive
 
 Mitigation: the audit dashboard (`/ella/runs`) surfaces every Haiku decision with the input message text + reasoning. Drake reviews post-hoc; iterate the Haiku system prompt's auto-escalate fence in `_HAIKU_SYSTEM_PROMPT`. Add the missed pattern to the explicit list.
 
+### Gate 4 silently dropping an escalation-worthy message
+
+Symptom: an escalation-worthy message (cancellation intent, refund demand, crisis content) lands as `skip_reason='no_kb_match'` instead of reaching Haiku. Production smoke surfaced this 2026-05-14 — three messages with similarities 0.22 / 0.23 / 0.28 died at Gate 4 before Haiku could see them.
+
+Mitigation: an escalation-keyword bypass in `agents/ella/passive_monitor.py` (`_ESCALATION_BYPASS_KEYWORDS` + `_has_escalation_bypass_keyword`) now routes context-thin messages with high-signal escalation keywords through to Haiku. The matched keyword is persisted on `agent_runs.trigger_metadata.kb_relevance_bypass_keyword` for audit. If a sensitive-topic miss recurs:
+
+1. Check `kb_relevance_bypass_keyword` on the affected run. If unset, the bypass didn't fire — the message uses phrasing the keyword list doesn't cover. Add it.
+2. If the keyword fired but Haiku returned `skip`, that's a prompt-side miss — iterate `_HAIKU_SYSTEM_PROMPT`.
+
+Query bypass-fired runs:
+
+```sql
+select id, started_at, input_summary, output_summary,
+       trigger_metadata->>'kb_relevance_bypass_keyword' as bypass_keyword,
+       trigger_metadata->>'haiku_decision' as decision,
+       trigger_metadata->>'haiku_reasoning' as reasoning
+  from agent_runs
+ where agent_name = 'ella'
+   and trigger_type = 'passive_monitor'
+   and trigger_metadata ? 'kb_relevance_bypass_keyword'
+ order by started_at desc
+ limit 20;
+```
+
 ## Initial validation rollout (post-deploy)
 
 After Drake flips `ELLA_PASSIVE_MONITORING_ENABLED=true` in Vercel and redeploys, before broadening:
