@@ -29,6 +29,16 @@ today) filter by `asker='client'`.
   before `validate_document_metadata`. Output is merged into
   `metadata.sentiment_tier`. Display-only and never load-bearing —
   classifier failures log a warning and proceed without the field.
+  As of 2026-05-15 (spec `cost-hub-call-review-haiku-audit`) it opens
+  its **own** `agent_runs` row — `agent_name='call_reviewer'`,
+  `trigger_type='sentiment_classifier'` — and threads `run_id` through
+  `complete()` so the Haiku spend is cost-tracked (the cost hub's Call
+  Review Haiku bucket reads this). Telemetry is fail-soft: a logging
+  failure never breaks the display-only classification or its
+  fallback-to-yellow contract. Both call sites
+  (`persistence.py:upsert_call_review`,
+  `scripts/backfill_sentiment_tiers.py`) inherit this since the
+  telemetry lives inside the shared function.
 - `scripts/backfill_call_reviews.py` — one-shot bulk reviewer for a
   date window.
 - `scripts/backfill_sentiment_tiers.py` — one-shot bulk sentiment
@@ -65,7 +75,15 @@ sets are pinned in `shared/ingestion/validate.py` against
   `agent_name='call_reviewer'`, threads its `run_id` through the
   Sonnet `complete` call so token + cost columns auto-populate, and
   closes via `end_agent_run` on both success and exception paths.
-- `classify_sentiment_tier` is utility-scoped — no `run_id`, no
-  `agent_runs` write. Per spec § A: cost is rolled into the
-  call-review pipeline's existing cost-attribution path if it
-  cares, or accepted as untracked otherwise.
+- `classify_sentiment_tier` opens its own `agent_runs` row
+  (`agent_name='call_reviewer'`, `trigger_type='sentiment_classifier'`)
+  and threads `run_id` through the Haiku `complete` call so token +
+  cost columns auto-populate; closes via `end_agent_run` on success
+  and exception paths. Telemetry is fail-soft — a logging failure
+  leaves `run_id` None and the classification still happens untracked
+  (pre-2026-05-15 behavior). Changed 2026-05-15 by spec
+  `cost-hub-call-review-haiku-audit`: previously this was
+  utility-scoped (no `run_id`), which left the sentiment Haiku spend
+  invisible to the cost hub. Forward-only — pre-fix Haiku spend is
+  not backfilled. Query the sentiment runs specifically via
+  `trigger_type='sentiment_classifier'`.

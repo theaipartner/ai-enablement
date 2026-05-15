@@ -44,6 +44,21 @@ starts using Claude under a new `agent_name`, add a sixth bucket to
 | Call review Haiku | `call_reviewer` | `claude-haiku%` |
 | Gregory brain Sonnet | `ai_call_signal` | `claude-sonnet%` |
 
+**Note on "Call review Haiku":** this bucket captures the sentiment
+classifier (`agents/call_reviewer/sentiment_classifier.py`) — a Haiku
+call that fires on every call review write. It opens its own
+`agent_runs` row with `agent_name='call_reviewer'` +
+`trigger_type='sentiment_classifier'` (the Sonnet review pass uses
+`trigger_type` of `manual_backfill` / `fathom_pipeline`). Telemetry
+was added 2026-05-15 (spec `cost-hub-call-review-haiku-audit`); before
+that the sentiment Haiku spend was real but untracked (the classifier
+called `complete()` without a `run_id`). **Forward-only fix — the
+pre-2026-05-15 sentiment Haiku spend is not backfilled and stays
+invisible.** The bucket's `earliestReliableDate` is `2026-05-15`, so
+the "(incomplete before 2026-05-15)" caveat communicates the gap until
+it ages out (~30 days post-fix). To split sentiment runs from review
+runs in a query: filter `trigger_type='sentiment_classifier'`.
+
 **Note on "Gregory brain Sonnet":** the bucket filters on
 `agent_name='ai_call_signal'`, NOT `'gregory_brain'`. The Gregory brain
 V2's Sonnet calls land under `ai_call_signal` (`agents/gregory/ai_call_signal.py`
@@ -65,7 +80,7 @@ current month. Determined via a pre-flight inventory query against
 | Ella Sonnet | 2026-04-24 (Ella V1) | No caveat — predates any current month going forward |
 | Ella Haiku | 2026-05-11 (V2.3 passive monitor added Haiku) | "(incomplete before 2026-05-11)" while current month is May 2026 |
 | Call review Sonnet | 2026-05-07 (call_reviewer launch) | "(incomplete before 2026-05-07)" while current month is May 2026 |
-| Call review Haiku | never used (call_reviewer is Sonnet-only) | "(no usage — Sonnet-only today)" |
+| Call review Haiku | 2026-05-15 (sentiment-classifier telemetry added — spec `cost-hub-call-review-haiku-audit`) | "(incomplete before 2026-05-15)" until ~30 days post-fix |
 | Gregory brain Sonnet | 2026-05-07 (ai_call_signal launch) | "(incomplete before 2026-05-07)" while current month is May 2026 |
 
 Today + This week rows never show the caveat — they're always recent
