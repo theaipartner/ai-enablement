@@ -21,7 +21,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
   { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
   { href: '/ella/runs', label: 'Ella', requiredTier: 'admin' },
-  { href: '/cost-hub', label: 'Cost hub', requiredTier: 'admin' },
+  { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
 

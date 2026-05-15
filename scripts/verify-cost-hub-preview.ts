@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     await page.waitForSelector('h1', { timeout: 30_000 })
     const h1 = await page.locator('h1').first().textContent()
     console.log(`[verify] h1: ${h1?.trim()}`)
-    if (!h1 || !h1.includes('Cost hub')) {
+    if (!h1 || !h1.includes('Cost Hub')) {
       throw new Error(`unexpected h1: ${h1}`)
     }
 

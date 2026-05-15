@@ -101,7 +101,7 @@ export default async function CostHubPage() {
     <div style={{ padding: '32px 48px 80px', maxWidth: 1200, margin: '0 auto' }}>
       <HeaderBand
         eyebrow="COST · HUB"
-        title="Cost hub."
+        title="Cost Hub."
         actions={
           <span
             className="geg-mono"
