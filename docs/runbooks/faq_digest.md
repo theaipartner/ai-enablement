@@ -30,16 +30,58 @@ Pipeline (one entry per fire):
    for stability.
 8. **Cap.** Top 50 clusters surface in the Slack message; an
    "...and N more" footer caps the bottom.
-9. **Send.** Resolve Scott's `slack_user_id` dynamically from
-   `team_members` (`full_name ILIKE 'Scott Wilson%'`); post via
-   `shared.slack_post.post_message`. The user ID works as a `channel`
-   value for `chat.postMessage` (Slack resolves it to the IM channel).
-10. **Mark audit.** Final `processing_status='processed'` (or `'failed'`
-    with `processing_error`) plus the full payload shape on the row.
+9. **Send (fan-out).** Resolve recipients: Scott (primary) from
+   `team_members` (`full_name ILIKE 'Scott Wilson%'`) PLUS an optional
+   CC recipient via `FAQ_DIGEST_CC_SLACK_USER_ID` (see § Recipients
+   below). Post one DM per recipient via `shared.slack_post.post_message`.
+   The user ID works as a `channel` value for `chat.postMessage`
+   (Slack resolves it to the IM channel). Pattern mirrors
+   `ella_escalation_dm` fan-out — one `post_message` + one
+   `webhook_deliveries` audit row per recipient.
+10. **Mark audit (per recipient).** Each recipient gets its own audit
+    row with `payload.recipient_source` (`"scott"` or `"cc"`) and a
+    final `processing_status` (`'processed'` or `'failed'`). Pre-fanout
+    failures (Scott lookup, document fetch) return failed without
+    writing audit rows — they surface in Vercel logs only.
 
 The cron returns 200 regardless of Slack outcome — failed sends are
 captured in the audit row but don't trigger Vercel Cron retries
-(retries on Slack failures don't help and risk dup-DMs).
+(retries on Slack failures don't help and risk dup-DMs). Scott is the
+source-of-truth recipient: top-level `status` flips to
+`slack_post_failed` only when Scott's send fails. CC failures land in
+the recipients list + their own audit row but don't change the
+top-level cron status.
+
+## Recipients
+
+**Scott (primary).** Always resolved dynamically from `team_members`
+where `full_name ILIKE 'Scott Wilson%'` AND `archived_at is null`. The
+first row with a non-null `slack_user_id` wins. No hardcoding — keeps
+the cron robust against future re-onboarding.
+
+**Optional CC (`FAQ_DIGEST_CC_SLACK_USER_ID`).** When set in Vercel env
+vars to a syntactically valid Slack user_id (matches `^U[A-Z0-9]+$`),
+the cron DMs both Scott and the CC. Same body to both; one
+`post_message` + one `webhook_deliveries` audit row per recipient.
+
+Today's value: `U0AMC23G1SM` (Drake's slack_user_id), set during the
+FAQ digest validation period so Drake sees the same DM Scott sees.
+Gate (d) — Drake adds this to Vercel Production env vars; Builder
+never hardcodes it.
+
+Edge cases the cron handles:
+
+- **CC env var unset.** Scott-only. Pre-CC behavior preserved.
+- **CC env var malformed** (e.g., display name, email, missing `U`
+  prefix). Logged warning at `WARNING` level; cron degrades to
+  Scott-only. Never raises.
+- **CC env var set to Scott's own slack_user_id.** Dedup'd to one DM
+  (Scott wins; CC is dropped from the recipient list).
+- **CC Slack send fails** (rate limit, channel not found, etc.).
+  Audit row carries `processing_status='failed'` +
+  `processing_error='slack_post_failed: <reason>'`; Scott still
+  receives normally; cron returns `status='ok'` because Scott (the
+  source-of-truth recipient) succeeded.
 
 ## Schedule
 
@@ -173,6 +215,12 @@ Remove the cron entry from `vercel.json`:
 
 Redeploy. Re-add to resume. The function entry under `functions:` can
 stay — only the `crons:` entry triggers the weekly fire.
+
+**To remove the CC alone without affecting Scott's delivery:** unset
+`FAQ_DIGEST_CC_SLACK_USER_ID` in Vercel env vars and redeploy. Scott
+continues to receive the weekly DM uninterrupted; the CC recipient
+just drops off. Setting the var back later resumes CC delivery on the
+next tick.
 
 ## Tuning surfaces
 
