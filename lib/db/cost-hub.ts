@@ -79,11 +79,15 @@ export const BUCKET_DEFINITIONS: BucketDefinition[] = [
     label: 'Call review Haiku',
     agentName: 'call_reviewer',
     modelPrefix: 'claude-haiku',
-    // call_reviewer is Sonnet-only today; bucket renders 0/0/$0 always.
-    // `neverUsed` swaps the "(incomplete before …)" caveat for a
-    // human-readable "(no usage — Sonnet-only today)" so the box
-    // doesn't look broken with a sentinel date.
-    earliestReliableDate: NEVER_USED_SENTINEL,
+    // The sentiment classifier (agents/call_reviewer/sentiment_classifier.py)
+    // is a Haiku call that fires on every call review write, under
+    // agent_name='call_reviewer' + trigger_type='sentiment_classifier'.
+    // Telemetry was added 2026-05-15 (spec
+    // cost-hub-call-review-haiku-audit) — pre-fix Haiku spend was never
+    // recorded, so this bucket's reliable data starts at the fix date.
+    // The "(incomplete before 2026-05-15)" caveat communicates the
+    // historical gap; it ages out ~30 days after the fix.
+    earliestReliableDate: '2026-05-15',
   },
   {
     key: 'gregory_brain_sonnet',
