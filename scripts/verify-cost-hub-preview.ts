@@ -86,25 +86,59 @@ async function main(): Promise<void> {
     const subBox = page
       .locator('.geg-gold-box', { hasText: 'MONTHLY · SUBSCRIPTIONS' })
       .first()
+
+    // Two-months-ago date for the backdated sub.
+    const now = new Date()
+    const backMonth = new Date(now.getFullYear(), now.getMonth() - 2, 15)
+    const backDated = `${backMonth.getFullYear()}-${String(
+      backMonth.getMonth() + 1,
+    ).padStart(2, '0')}-15`
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      '0',
+    )}-${String(now.getDate()).padStart(2, '0')}`
+
+    const TEST_SUB_BACKDATED = `${TEST_SUB_PROVIDER}_backdated`
+
+    // 4a. Backdated sub (effective_from = ~2 months ago). Appears in
+    // the active table because backdated ≤ today.
+    await subBox.locator('input[placeholder="Provider"]').fill(TEST_SUB_BACKDATED)
+    await subBox.locator('input[placeholder="Monthly cost USD"]').fill('20.00')
+    await subBox.locator('input[placeholder="Notes (optional)"]').fill('backdated')
+    await subBox.locator('input[aria-label="Effective from"]').fill(backDated)
+    await subBox.locator('button[type="submit"]:has-text("Add")').click()
+    await page.waitForSelector(`text=${TEST_SUB_BACKDATED}`, { timeout: 15_000 })
+    console.log(
+      `[verify] backdated subscription added (effective_from=${backDated}) + visible in active table`,
+    )
+
+    // 4b. Today-dated sub. Also appears in the active table.
     await subBox.locator('input[placeholder="Provider"]').fill(TEST_SUB_PROVIDER)
-    await subBox
-      .locator('input[placeholder="Monthly cost USD"]')
-      .fill('12.34')
+    await subBox.locator('input[placeholder="Monthly cost USD"]').fill('12.34')
     await subBox.locator('input[placeholder="Notes (optional)"]').fill('verify')
+    await subBox.locator('input[aria-label="Effective from"]').fill(today)
     await subBox.locator('button[type="submit"]:has-text("Add")').click()
     await page.waitForSelector(`text=${TEST_SUB_PROVIDER}`, { timeout: 15_000 })
-    console.log('[verify] test subscription added + visible')
+    console.log(
+      `[verify] today-dated subscription added (effective_from=${today}) + visible in active table`,
+    )
 
-    page.once('dialog', (d) => d.accept())
-    const subRow = subBox
-      .locator('div', { hasText: TEST_SUB_PROVIDER })
-      .last()
-    await subRow.locator(`button[aria-label="Delete ${TEST_SUB_PROVIDER}"]`).click()
-    await page.waitForSelector(`text=${TEST_SUB_PROVIDER}`, {
-      state: 'detached',
-      timeout: 15_000,
-    })
-    console.log('[verify] test subscription deleted (soft-archived)')
+    // Cost-rollup correctness (backdated sub counts in 2-months-ago
+    // history, today-dated sub does NOT) is validated via SQL
+    // inspection in the report — the History view's per-month totals
+    // are server-rendered and fiddly to assert through Playwright.
+
+    // 4c. Delete both (soft-archive cleanup).
+    for (const prov of [TEST_SUB_BACKDATED, TEST_SUB_PROVIDER]) {
+      page.once('dialog', (d) => d.accept())
+      const subRow = subBox.locator('div', { hasText: prov }).last()
+      await subRow.locator(`button[aria-label="Delete ${prov}"]`).click()
+      await page.waitForSelector(`text=${prov}`, {
+        state: 'detached',
+        timeout: 15_000,
+      })
+    }
+    console.log('[verify] both test subscriptions deleted (soft-archived)')
 
     // --- 5. Add + delete a one-off extra ---
     const extraBox = page

@@ -101,15 +101,55 @@ If reality drifts, update `earliestReliableDate` per bucket in
 
 ## Manual subs + extras workflow
 
-**Add a subscription:** fill provider / monthly cost / notes in the
-Monthly subscriptions box → Add. **Edit:** click Edit on a row, change
-fields, Save. **Delete:** click × → confirm. Delete is a SOFT archive
-(sets `archived_at`), so historical month totals stay accurate for
-months when the sub was active.
+**Add a subscription:** fill provider / monthly cost / notes /
+effective from in the Monthly subscriptions box → Add. **Edit:** click
+Edit on a row, change fields (including effective from), Save.
+**Delete:** click × → confirm. Delete is a SOFT archive (sets
+`archived_at`), so historical month totals stay accurate for months
+when the sub was active.
 
 **Add an extra:** fill date / description / cost in the One-off extras
 box → Add. The date defaults to today (EST) but can be backdated for
 late-arriving invoices. Same edit / soft-archive-delete shape.
+
+## Subscription effective date
+
+Each subscription carries an `effective_from` date (migration 0039).
+It governs which months the sub contributes to in the total + the
+History view. The rule (implemented once in
+`lib/db/cost-hub.ts:subscriptionActiveInMonth`):
+
+> A sub counts toward month **M** when `effective_from <= last_day_of_M`
+> **and** (`archived_at IS NULL` **or** `archived_at >= first_day_of_M`).
+
+**Why it exists.** Before 0039 the History view summed *every*
+non-archived subscription into *every* past month. A sub added today
+inflated last month, the month before, and so on back to the start of
+history. `effective_from` ties a sub to when it actually started.
+
+**The default.** The Add form defaults `effective_from` to today
+(EST). Add a sub normally and it counts from this month forward — it
+does **not** retroactively appear in prior months.
+
+**Backdating use case.** Drake realizes a subscription has been
+billing since (say) March but was only just added to the hub. Set
+`effective_from` to the March date (in the Add form, or Edit an
+existing row). The History view then retroactively attributes it to
+March, April, May, … — every month at-or-after `effective_from`. This
+is the intended escape hatch for "I forgot to log this sub for a few
+months."
+
+**Archived subs still count for their active window.** Soft-archiving
+a sub sets `archived_at`; the sub still contributes to every month
+between `effective_from` and the archive date. It only drops out of
+months that begin on/after the archive date. So deleting a sub today
+does not erase it from last month's total.
+
+**Existing-row backfill.** Migration 0039 set `effective_from =
+created_at::date` for the rows present at apply time — they retain
+the "started when I added them" semantic rather than silently
+counting back forever. If one of those should count from earlier,
+Edit the row and set the correct `effective_from`.
 
 ## Historical sub price drift (locked trade-off)
 
@@ -118,9 +158,14 @@ Monthly subs are stored as "current state" — one row per provider with
 use today's price even if the actual cost was different at the time.
 If a sub price changes mid-period, edit the row in place; old month
 totals shift slightly. This is a deliberate V1 simplification (Drake
-confirmed). If the drift becomes a reconciliation problem, future
-iteration is an `effective_from` column for per-row price history —
-out of scope for V1.
+confirmed).
+
+Note `effective_from` (migration 0039) does **not** solve this — it
+governs *which months a sub counts in*, not *what it cost in each
+month*. A sub that was $20 in March and $25 now still contributes $25
+to March's total. True per-month price history (a price-versioned
+sub-rows table or an `effective_from`-keyed price ledger) remains the
+out-of-scope-for-V1 future iteration if reconciliation ever needs it.
 
 ## Recovering a bad delete
 
