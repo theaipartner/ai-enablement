@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getEstPeriodBoundary } from '@/lib/time/est-periods'
 import {
   collectMentionedUserIds,
   renderMentions,
@@ -146,24 +147,22 @@ export type EllaRunDetail = EllaRunsListRow & {
 }
 
 export type EllaSummaryStats = {
-  // Response-scope counts: runs where Ella attempted to send a message
-  // (status IN success/escalated/error AND haiku_decision != 'skip').
-  // Passive-monitor skip-decision rows count as observations, not
-  // responses — they're excluded here.
+  // All-LLM-cost-bearing scope (ADR 0003): every Ella run with a
+  // non-null llm_cost_usd in the EST calendar period. Matches the
+  // cost hub's combined Ella Sonnet + Ella Haiku buckets exactly —
+  // same filter, same EST windows. (Previously response-scoped, which
+  // excluded passive_monitor skip-decision Haiku spend and made the
+  // two surfaces disagree.)
   total_today: number
   total_week: number
   total_month: number
   status_counts: Record<string, number>
-  // Response-scope cost totals.
+  // Cost totals over the all-LLM-cost-bearing scope above.
   cost_today: number
   cost_week: number
   cost_month: number
-  // Out-of-scope cost: today's spend on Haiku-decided skip evaluations.
-  // Surfaced separately on the Cost card so the response-scope total
-  // stays the headline figure.
-  skip_cost_today: number
-  // status='error' counts within the response-scope window. error is
-  // always in-scope; this is shorthand for "Ella tried and failed."
+  // status='error' counts per EST window — every Ella run that
+  // errored, regardless of cost ("Ella tried and failed").
   errors_today: number
   errors_week: number
   errors_month: number
@@ -1193,13 +1192,14 @@ export async function getEllaRunDetail(id: string): Promise<EllaRunDetail | null
 
 export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
   const supabase = createAdminClient()
-  const now = new Date()
-  const todayStart = new Date(now)
-  todayStart.setHours(0, 0, 0, 0)
-  const weekStart = new Date(todayStart)
-  weekStart.setDate(weekStart.getDate() - 6)
-  const monthStart = new Date(todayStart)
-  monthStart.setDate(monthStart.getDate() - 29)
+  // EST calendar period boundaries (ADR 0003) — the same primitives
+  // the cost hub uses, so /ella/runs and /cost-hub agree on what
+  // "today / this week / this month" mean. Was server-local
+  // setHours(0,0,0,0) + rolling 7d/30d (fixed 2026-05-15, spec
+  // ella-summary-est-alignment-and-timezone-adr).
+  const todayStart = getEstPeriodBoundary('today')
+  const weekStart = getEstPeriodBoundary('week')
+  const monthStart = getEstPeriodBoundary('month')
 
   const { data: monthRuns } = await supabase
     .from('agent_runs')
@@ -1219,80 +1219,50 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
 
   const todayMs = todayStart.getTime()
   const weekMs = weekStart.getTime()
+  const inToday = (r: RawRunRow) =>
+    new Date(r.started_at).getTime() >= todayMs
+  const inWeek = (r: RawRunRow) =>
+    new Date(r.started_at).getTime() >= weekMs
 
-  // Response-scope predicate (mirrors getEllaRunsList's filter): one
-  // row per user-visible "Ella spoke" event. Includes reactive
-  // @-mention paths, passive Sonnet responses, passive canned
-  // openers, and escalate-only passive_monitor rows (which have no
-  // substantive row to take their place). Excludes every other
-  // passive_monitor row (skip decisions and substantive-decision rows
-  // whose linked substantive row IS in scope).
-  const RESPONSE_TRIGGER_TYPES = new Set([
-    'slack_mention',
-    'bare_mention',
-    'app_mention',
-    'passive_substantive',
-    'passive_general_inquiry',
-  ])
-  const isResponseScope = (r: RawRunRow): boolean => {
-    if (!['success', 'escalated', 'error'].includes(r.status)) return false
-    if (RESPONSE_TRIGGER_TYPES.has(r.trigger_type)) return true
-    if (r.trigger_type === 'passive_monitor') {
-      const haikuDecision = extractTriggerField(r.trigger_metadata, 'haiku_decision')
-      return haikuDecision === 'escalate'
-    }
-    return false
-  }
-  // Skip-scope retained for telemetry parity even though the Cost-card
-  // hint that surfaced it is reverted per Decision 2. Field stays on
-  // EllaSummaryStats; downstream callers can render it if needed.
-  const isSkipScope = (r: RawRunRow): boolean => {
-    return (
-      r.trigger_type === 'passive_monitor' &&
-      extractTriggerField(r.trigger_metadata, 'haiku_decision') === 'skip'
-    )
-  }
+  // Headline scope = ALL LLM-cost-bearing Ella runs (ADR 0003 / spec
+  // ella-summary-est-alignment-and-timezone-adr). This matches the
+  // cost hub's combined Ella Sonnet + Ella Haiku buckets exactly:
+  // same filter (agent_name='ella' + llm_cost_usd IS NOT NULL — for
+  // Ella that is equivalently a claude-sonnet/haiku model), same EST
+  // windows. Previously response-scoped, which excluded
+  // passive_monitor skip-decision Haiku spend (~$0.10/mo) and was why
+  // /cost-hub and /ella/runs disagreed. The headline now means "all
+  // Ella LLM spend", not "what Ella did" — the deliberate alignment.
+  const costRuns = runs.filter((r) => r.llm_cost_usd != null)
 
-  const responseRuns = runs.filter(isResponseScope)
-  const skipRuns = runs.filter(isSkipScope)
-
-  // total_* + cost_* + errors_* all reflect response scope. The Surface
-  // band's headline is "what did Ella actually do" — observation noise
-  // doesn't belong in the count or the cost figure.
-  const total_today = responseRuns.filter((r) => new Date(r.started_at).getTime() >= todayMs).length
-  const total_week = responseRuns.filter((r) => new Date(r.started_at).getTime() >= weekMs).length
-  const total_month = responseRuns.length
+  const total_today = costRuns.filter(inToday).length
+  const total_week = costRuns.filter(inWeek).length
+  const total_month = costRuns.length
 
   const status_counts: Record<string, number> = {}
-  for (const r of responseRuns) status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
+  for (const r of costRuns)
+    status_counts[r.status] = (status_counts[r.status] ?? 0) + 1
 
-  const cost_today = responseRuns
-    .filter((r) => new Date(r.started_at).getTime() >= todayMs)
+  const cost_today = costRuns
+    .filter(inToday)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-  const cost_week = responseRuns
-    .filter((r) => new Date(r.started_at).getTime() >= weekMs)
+  const cost_week = costRuns
+    .filter(inWeek)
     .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-  const cost_month = responseRuns.reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
+  const cost_month = costRuns.reduce(
+    (sum, r) => sum + (r.llm_cost_usd ?? 0),
+    0,
+  )
 
-  // Skip-cost broken out separately on the Cost card hint line so the
-  // headline figure stays response-scope while the observation-cost is
-  // still visible. Only the today figure is broken out.
-  const skip_cost_today = skipRuns
-    .filter((r) => new Date(r.started_at).getTime() >= todayMs)
-    .reduce((sum, r) => sum + (r.llm_cost_usd ?? 0), 0)
-
-  // status='error' counts per window. status='error' is in response
-  // scope by definition (Ella tried and failed); skip rows have
-  // status='success' not 'error', so a plain filter against responseRuns
-  // is correct.
-  const errorsRuns = responseRuns.filter((r) => r.status === 'error')
-  const errors_today = errorsRuns.filter(
-    (r) => new Date(r.started_at).getTime() >= todayMs,
-  ).length
-  const errors_week = errorsRuns.filter(
-    (r) => new Date(r.started_at).getTime() >= weekMs,
-  ).length
-  const errors_month = errorsRuns.length
+  // Errors = every Ella run that errored in the window, regardless of
+  // cost (error runs frequently have null llm_cost_usd, so they are
+  // NOT a subset of costRuns). Was response-scoped; widened to all
+  // Ella errors since the response split is gone and "Ella tried and
+  // failed" is the honest all-up audit number.
+  const errorRuns = runs.filter((r) => r.status === 'error')
+  const errors_today = errorRuns.filter(inToday).length
+  const errors_week = errorRuns.filter(inWeek).length
+  const errors_month = errorRuns.length
 
   const anomaly_count_today = runs.filter((r) => {
     if (new Date(r.started_at).getTime() < todayMs) return false
@@ -1316,7 +1286,6 @@ export async function getEllaSummaryStats(): Promise<EllaSummaryStats> {
     cost_today,
     cost_week,
     cost_month,
-    skip_cost_today,
     errors_today,
     errors_week,
     errors_month,
