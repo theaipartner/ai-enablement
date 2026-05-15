@@ -1,13 +1,19 @@
 # call_reviewer
 
 Generates a structured per-call review (pain points, wins, dodged
-questions, sentiment arc) from the call transcript and persists it as
-a `documents` row of type `call_review`.
+questions, sentiment arc, questions asked) from the call transcript and
+persists it as a `documents` row of type `call_review`.
 
 The review is a display-only artifact for the Gregory dashboard's
 Calls detail page; it's never retrieved by other agents (`is_active`
 is forced to `false` at write time so the row stays out of
 `match_document_chunks` results).
+
+The `questions_asked` field (added in prompt v2, 2026-05-15) feeds the
+weekly Friday FAQ digest cron at `api/faq_digest_cron.py` — see
+`docs/runbooks/faq_digest.md`. Captures both client-asked and CSM-asked
+questions with an `asker` field; downstream consumers (the digest cron
+today) filter by `asker='client'`.
 
 ## Surface area
 
@@ -41,7 +47,7 @@ sets are pinned in `shared/ingestion/validate.py` against
 | `call_id` | ✓ | The call's UUID. |
 | `call_category` | ✓ | Denormalized from `calls.call_category`. |
 | `started_at` | ✓ | Denormalized from `calls.started_at`. |
-| `prompt_version` | optional | The reviewer-prompt version that produced the review. |
+| `prompt_version` | optional | The reviewer-prompt version that produced the review. Currently `"v2"` — bumped from `"v1"` on 2026-05-15 when `questions_asked` was added to the JSON shape. |
 | `model` | optional | The Claude model id used. |
 | `sentiment_tier` | optional | `green` \| `yellow` \| `red`. Written by the Haiku classifier; absent when the classifier failed or the source review lacked a `sentiment_arc`. |
 
