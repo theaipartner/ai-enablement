@@ -30,7 +30,7 @@ These four principles protect the system from lock-in and rebuilds. Apply them t
 | Hosting | Vercel | Frontend + serverless Python functions. |
 | Voice | ElevenLabs | Course audio, future voice agents. |
 | Dev environment | WSL2 Ubuntu on Windows | All dev happens inside WSL. VS Code with Remote-WSL extension. |
-| Secrets | Bitwarden master list + env vars | `.env.local` locally, Vercel env vars in production. See `.env.example` for the full inventory and `docs/state.md` for the live production set. Core keys (all environments): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`. Feature-specific: `ESCALATION_RECIPIENT_SLACK_USER_ID` (Ella head-CSM DM target), `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` + `NEXT_PUBLIC_APP_URL` (`/teams` Meeting Tracker Calendar API), `SLACK_DRY_RUN` (Preview-mode flag for Send-to-Slack on `/clients/[id]`), `ELLA_PASSIVE_MONITORING_ENABLED` (passive monitor kill switch). `SUPABASE_DB_PASSWORD` is also set in `.env.local` for ops scripts that connect directly via psycopg2 (migrations, seeds, diagnostics) — not required by webhooks or the agent runtime. |
+| Secrets | Bitwarden master list + env vars | `.env.local` locally, Vercel env vars in production. See `.env.example` for the full inventory and `docs/state.md` for the live production set. Core keys (all environments): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`. Feature-specific: `ESCALATION_RECIPIENT_SLACK_USER_ID` (Ella head-CSM DM target), `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` + `NEXT_PUBLIC_APP_URL` (`/teams` Meeting Tracker Calendar API), `SLACK_DRY_RUN` (Preview-mode flag for Send-to-Slack on `/clients/[id]`), `ELLA_PASSIVE_MONITORING_ENABLED` (passive monitor kill switch), `FAQ_DIGEST_CC_SLACK_USER_ID` (optional CC recipient for the Friday FAQ digest cron — unset = Scott only). `SUPABASE_DB_PASSWORD` is also set in `.env.local` for ops scripts that connect directly via psycopg2 (migrations, seeds, diagnostics) — not required by webhooks or the agent runtime. |
 
 ## Working Norms
 
@@ -309,7 +309,7 @@ ai-enablement/
 │   ├── slack/                  # Channel history backfill (REST only; Events API deferred to Ella V2)
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
 │   └── crm/                    # (planned)
-├── api/                        # Vercel Python serverless functions (10 deployed — see state.md § Vercel deployment for the inventory)
+├── api/                        # Vercel Python serverless functions (11 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
 ├── components/                 # Dashboard UI — top-nav, ui/* primitives, client-detail/*
 ├── lib/                        # Dashboard utilities — db/, supabase/, etc.
