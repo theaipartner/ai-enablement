@@ -166,7 +166,7 @@ Mitigation: the audit dashboard (`/ella/runs`) surfaces every Haiku decision wit
 
 Symptom: an escalation-worthy message (cancellation intent, refund demand, crisis content) lands as `skip_reason='no_kb_match'` instead of reaching Haiku. Production smoke surfaced this 2026-05-14 — three messages with similarities 0.22 / 0.23 / 0.28 died at Gate 4 before Haiku could see them.
 
-Mitigation: an escalation-keyword bypass in `agents/ella/passive_monitor.py` (`_ESCALATION_BYPASS_KEYWORDS` + `_has_escalation_bypass_keyword`) now routes context-thin messages with high-signal escalation keywords through to Haiku. The matched keyword is persisted on `agent_runs.trigger_metadata.kb_relevance_bypass_keyword` for audit. If a sensitive-topic miss recurs:
+Mitigation: an escalation-keyword bypass in `agents/ella/passive_monitor.py` (`_ESCALATION_BYPASS_KEYWORDS` + `_has_escalation_bypass_keyword`) now routes context-thin messages with high-signal escalation keywords through to Haiku. The matched keyword is persisted on `agent_runs.trigger_metadata.kb_relevance_bypass_keyword` for audit. Categorical coverage today: money / commitment, complaints / dissatisfaction, crisis / self-harm, quitting / leaving, legal, and (2026-05-15 extension per Scott) uncertainty / mismatched expectations / clarification-seeking / soft frustration. The frozenset itself is the source of truth — the categories iterate too fast to keep this doc keyword-synced. If a sensitive-topic miss recurs:
 
 1. Check `kb_relevance_bypass_keyword` on the affected run. If unset, the bypass didn't fire — the message uses phrasing the keyword list doesn't cover. Add it.
 2. If the keyword fired but Haiku returned `skip`, that's a prompt-side miss — iterate `_HAIKU_SYSTEM_PROMPT`.

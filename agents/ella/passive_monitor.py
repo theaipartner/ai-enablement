@@ -116,6 +116,13 @@ _SAFER_FALLBACK_DECISION = "skip"
 # (false positives are acceptable — the cost is one Haiku call that
 # correctly returns "skip"). Categories mirror Haiku's auto-escalate
 # fence in `_HAIKU_SYSTEM_PROMPT`.
+#
+# Coverage extension 2026-05-15 (Scott): softer signals
+# (uncertainty / mismatched expectations / clarification-seeking /
+# soft frustration). Scott explicitly fine with FPs — coverage matters
+# more than precision because Haiku still arbitrates. Sanity-checked
+# against 1568 historical client messages; max match rate 0.26% on
+# "lost" (well under the 5% hard-numerical threshold).
 _ESCALATION_BYPASS_KEYWORDS = frozenset({
     # Money / commitment
     "cancel", "cancelling", "canceling", "refund", "refunded",
@@ -139,6 +146,22 @@ _ESCALATION_BYPASS_KEYWORDS = frozenset({
 
     # Legal
     "lawyer", "lawsuit", "sue you", "legal action", "attorney",
+
+    # Uncertainty / confusion
+    "confused", "confusing", "not sure i understand",
+    "i don't understand", "don't understand", "doesn't make sense",
+    "makes no sense", "lost",
+
+    # Mismatched expectations
+    "not what i expected", "thought this was", "thought it was",
+    "expected something", "expected this to",
+
+    # Clarification-seeking with implied frustration
+    "can you clarify", "clarify why", "why did you", "why does",
+    "explain why", "what do you mean",
+
+    # Soft frustration
+    "this isn't working", "not working for me", "struggling with this",
 })
 
 
