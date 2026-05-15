@@ -1202,6 +1202,66 @@ export type Database = {
           },
         ]
       }
+      monthly_subscriptions: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          id: string
+          monthly_cost_usd: number
+          notes: string | null
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          monthly_cost_usd: number
+          notes?: string | null
+          provider: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          monthly_cost_usd?: number
+          notes?: string | null
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      cost_extras: {
+        Row: {
+          archived_at: string | null
+          cost_usd: number
+          created_at: string
+          description: string
+          id: string
+          incurred_on: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          cost_usd: number
+          created_at?: string
+          description: string
+          id?: string
+          incurred_on: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          cost_usd?: number
+          created_at?: string
+          description?: string
+          id?: string
+          incurred_on?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       slack_channels: {
         Row: {
           client_id: string | null
