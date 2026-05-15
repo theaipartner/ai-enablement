@@ -886,3 +886,252 @@ def test_pre_cutoff_new_title_does_not_take_new_path():
     # resolver → external (not client). No new-convention auto-create.
     assert result.call_category != "client"
     assert result.should_auto_create_client is None
+
+
+# ---------------------------------------------------------------------------
+# Title convention v2 — `[Client Name] - Coaching/Sales Call with {CSM}`
+# spec: cost-hub-effective-from-and-title-convention-v2
+# ---------------------------------------------------------------------------
+
+
+def test_v2_title_name_resolves_to_existing_client():
+    """v2 title + name prefix resolves via lookup_by_name → primary set,
+    method='title_pattern_v2', reasoning mentions the name + call_type."""
+    record = _record(
+        title="Andrew Hsu - Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.call_type == "coaching"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.classification_confidence == 1.0
+    assert result.primary_client_id == "c-andrew"
+    assert "name prefix" in result.reasoning.lower()
+
+
+def test_v2_title_name_resolves_even_when_email_does_not_match():
+    """Name prefix is the PRIMARY signal — resolves even when the
+    participant joined from an email not in the resolver."""
+    record = _record(
+        title="Andrew Hsu - Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("different-email@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={},  # email NOT mapped
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id == "c-andrew"
+    assert result.should_auto_create_client is None
+
+
+def test_v2_title_name_misses_email_resolves():
+    """Name prefix doesn't resolve → fall back to email resolution.
+    Still v2-shaped so method stays title_pattern_v2."""
+    record = _record(
+        title="Unknown Person - Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("known@example.com", "Unknown Person"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"known@example.com": "c-known"},
+        client_id_by_name={},  # name NOT indexed
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id == "c-known"
+
+
+def test_v2_title_neither_name_nor_email_resolves_auto_creates():
+    """v2 title, name + email both unresolvable → AutoCreateRequest
+    for the first external email (same safety net as v1)."""
+    record = _record(
+        title="Unknown Person - Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("nobody@example.com", "Unknown Person"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={}, client_id_by_name={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id is None
+    assert result.should_auto_create_client is not None
+    assert result.should_auto_create_client.email == "nobody@example.com"
+    assert (
+        result.should_auto_create_client.reason
+        == "new title convention with unresolved participant"
+    )
+
+
+def test_v2_title_no_external_participants_no_auto_create():
+    """v2 title but only team on the invite → client, no primary, no
+    auto-create (degenerate-but-valid, same as v1)."""
+    record = _record(
+        title="Andrew Hsu - Coaching Call with Scott",
+        participants=[_pt("scott@theaipartner.io")],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={}, client_id_by_name={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id is None
+    assert result.should_auto_create_client is None
+
+
+def test_v2_title_pre_cutoff_uses_prior_cascade():
+    """v2-shaped title before the cutoff → prior cascade, not the
+    new-convention path. Participant match against a known client."""
+    record = _record(
+        title="Andrew Hsu - Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_PRE_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "participant_match"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_v1_title_post_cutoff_still_works_regression():
+    """v1 canonical title post-cutoff still classifies cleanly and
+    keeps classification_method='title_pattern' (NOT v2)."""
+    record = _record(
+        title="Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_v2_title_trailing_context_tolerated():
+    """Trailing context after the CSM name still matches v2."""
+    record = _record(
+        title="Andrew Hsu - Coaching Call with Scott - May 22 follow up",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={},
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_v2_title_case_insensitive():
+    """ALL-CAPS / mixed-case v2 title still matches + resolves by name
+    (lookup_by_name is case-insensitive)."""
+    record = _record(
+        title="ANDREW HSU - coaching call with SCOTT",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={},
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.call_type == "coaching"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_v2_title_whitespace_trimmed():
+    """Leading/trailing whitespace + padded separators still match."""
+    record = _record(
+        title="  Andrew Hsu  -  Coaching Call with Scott  ",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={},
+        client_id_by_name={"Andrew Hsu": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_v2_sales_title_derives_sales_call_type():
+    """v2 'Sales Call with X' → call_type='sales' from the regex
+    capture (distinct classification_method from v1)."""
+    record = _record(
+        title="Prospect Co - Sales Call with Nico",
+        participants=[
+            _pt("nico@theaipartner.io"),
+            _pt("prospect@example.com", "Prospect Co"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={},
+        client_id_by_name={"Prospect Co": "c-prospect"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.call_type == "sales"
+    assert result.classification_method == "title_pattern_v2"
+    assert result.primary_client_id == "c-prospect"

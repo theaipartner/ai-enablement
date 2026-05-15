@@ -20,6 +20,7 @@ classifier stays a pure function.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable
@@ -56,6 +57,25 @@ NEW_CLIENT_TITLE_PATTERNS: tuple[str, ...] = (
     "sales call with scott",
     "sales call with lou",
     "sales call with nico",
+)
+
+# v2 convention (Zain's natural iteration, 2026-05-15): the booking
+# link now prefixes the client's name —
+# `[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`. Both v1
+# and v2 stay valid indefinitely; no second cutoff (same management
+# lever, ADR 0002 revision). The name prefix becomes the PRIMARY
+# client-resolution signal (participant email is the backup).
+#
+# Non-greedy name capture anchors to the FIRST ` - (Coaching|Sales)
+# Call with` so a drifted "FW: Andrew Hsu - Coaching Call with Scott"
+# captures name="FW: Andrew Hsu" — that lookup just fails and falls
+# back to email resolution, which is the correct degradation (the
+# booking link never emits an FW: prefix). Trailing context after the
+# CSM name is tolerated ("... with Scott - May 22 follow up").
+_V2_TITLE_RE = re.compile(
+    r"^(?P<name>.+?)\s+-\s+(?P<type>coaching|sales)\s+call\s+with\s+"
+    r"(?:scott|lou|nico)\b",
+    re.IGNORECASE,
 )
 
 CONFIDENCE_HIGH = 0.9
@@ -309,7 +329,32 @@ def _matches_new_client_title_convention(title: str | None) -> bool:
     normalized = title.strip().lower()
     if not normalized:
         return False
-    return any(normalized.startswith(p) for p in NEW_CLIENT_TITLE_PATTERNS)
+    if any(normalized.startswith(p) for p in NEW_CLIENT_TITLE_PATTERNS):
+        return True
+    # v2: `[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`.
+    return _extract_v2_title_prefix_and_type(title) is not None
+
+
+def _extract_v2_title_prefix_and_type(
+    title: str | None,
+) -> tuple[str, str] | None:
+    """Match the v2 booking-link convention. Returns
+    `(client_name_prefix, call_type)` with `call_type` one of
+    `'coaching'` / `'sales'`, or None when the title isn't v2-shaped.
+
+    Case-insensitive; leading/trailing whitespace trimmed; trailing
+    context after the CSM name tolerated. Empty captured name → None
+    (a title like " - Coaching Call with Scott" is malformed, not v2).
+    """
+    if not title:
+        return None
+    m = _V2_TITLE_RE.match(title.strip())
+    if not m:
+        return None
+    name = m.group("name").strip()
+    if not name:
+        return None
+    return name, m.group("type").lower()
 
 
 def _is_after_new_convention_cutoff(started_at: datetime | str | None) -> bool:
@@ -360,34 +405,71 @@ def _classify_by_new_convention(
     degenerate but legal), the row lands as `client` with no primary
     and no auto-create. Surfaces as a data hygiene flag.
 
-    Spec: docs/specs/auto-created-client-lifecycle.md.
+    v2 (2026-05-15): when the title is the name-prefixed shape
+    `[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`, the
+    name prefix is the PRIMARY client-resolution signal — try
+    `resolver.lookup_by_name(name_prefix)` first; only fall back to
+    participant-email resolution when the name doesn't resolve.
+    v2-shaped titles surface `classification_method='title_pattern_v2'`
+    (v1 stays `'title_pattern'`) so audit queries can split them, and
+    `call_type` comes from the regex's Coaching/Sales capture rather
+    than the prefix heuristic. Both conventions stay valid
+    indefinitely — no second cutoff (ADR 0002 revision 2026-05-15).
+
+    Spec: docs/specs/cost-hub-effective-from-and-title-convention-v2.md,
+    docs/specs/auto-created-client-lifecycle.md.
     """
+    v2 = _extract_v2_title_prefix_and_type(record.title)
+    classification_method = "title_pattern_v2" if v2 is not None else "title_pattern"
+
     matched_client_id: str | None = None
     matched_email: str | None = None
     matched_via: str = ""
-    for email in external_emails:
-        cid, via = _resolve_participant(resolver, record.participants, email)
+
+    # v2: name-prefix resolution is primary.
+    if v2 is not None:
+        name_prefix, _v2_type = v2
+        cid = resolver.lookup_by_name(name_prefix)
         if cid is not None:
             matched_client_id = cid
-            matched_email = email
-            matched_via = via
-            break
+            matched_via = "title_name_prefix"
 
-    # Derive call_type from the title prefix. "Coaching Call with X" →
-    # coaching; "Sales Call with X" → sales.
-    title_lower = (record.title or "").strip().lower()
-    if title_lower.startswith("coaching call"):
-        call_type = "coaching"
-    elif title_lower.startswith("sales call"):
-        call_type = "sales"
+    # Email resolution: the v1 path's only mechanism, AND the v2
+    # fallback when the name prefix didn't resolve (client joined from
+    # an unmapped email, name not indexed due to a duplicate, etc.).
+    if matched_client_id is None:
+        for email in external_emails:
+            cid, via = _resolve_participant(resolver, record.participants, email)
+            if cid is not None:
+                matched_client_id = cid
+                matched_email = email
+                matched_via = via
+                break
+
+    # call_type: from the v2 regex capture when v2-shaped; otherwise
+    # the v1 title-prefix heuristic.
+    if v2 is not None:
+        call_type = v2[1]
     else:
-        call_type = None
+        title_lower = (record.title or "").strip().lower()
+        if title_lower.startswith("coaching call"):
+            call_type = "coaching"
+        elif title_lower.startswith("sales call"):
+            call_type = "sales"
+        else:
+            call_type = None
 
     if matched_client_id is not None:
-        reasoning = (
-            f"new-convention title; {matched_email} matched existing client "
-            f"via {matched_via}"
-        )
+        if matched_via == "title_name_prefix":
+            reasoning = (
+                f"v2 title; name prefix {v2[0]!r} resolved to existing "
+                f"client ({call_type} call)"
+            )
+        else:
+            reasoning = (
+                f"new-convention title; {matched_email} matched existing "
+                f"client via {matched_via}"
+            )
         auto_create: AutoCreateRequest | None = None
     elif external_emails:
         # No external participant resolved. Auto-create the FIRST
@@ -423,7 +505,7 @@ def _classify_by_new_convention(
         call_category="client",
         call_type=call_type,
         classification_confidence=1.0,
-        classification_method="title_pattern",
+        classification_method=classification_method,
         primary_client_id=matched_client_id,
         should_auto_create_client=auto_create,
         reasoning=reasoning,
