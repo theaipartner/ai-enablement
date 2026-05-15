@@ -18,7 +18,7 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 | `slack_user_id` | `text` | Partial-unique where `archived_at is null`. Slack `U...` id for mentions and matching |
 | `is_active` | `boolean` | Default `true`. Cheap filter; `archived_at` is the durable signal |
 | `is_csm` | `boolean` | Added in 0022. Not null, default `false`. Marks a team_member as eligible for `primary_csm` assignments. Surfaces in dashboard Primary CSM dropdowns (filter dropdown on `/clients`, swap dialog on `/clients/[id]` — both filter `is_csm = true`). Default `false` so non-CSM team_members (engineering, ops, sales) are excluded; flipping to `true` is an explicit choice. Orthogonal to the free-text `role` column — Scott Wilson and Nabeel Junaid carry `role='leadership'` but `is_csm=true` because they actively own clients. The Scott Chasing sentinel carries `is_csm=true` so it appears in the dropdowns alongside the four real CSMs |
-| `metadata` | `jsonb` | Extensible blob for attributes we haven't promoted to columns |
+| `metadata` | `jsonb` | Extensible blob for attributes we haven't promoted to columns. Known keys: `seeded_at`/`seed_source` (manual-seed provenance), `sentinel` (true for system identities like Gregory Bot + Scott Chasing — see § Sentinel rows), `personal_emails` (array of non-AIP email addresses a team member uses for internal meetings — treated as internal by the Teams Meeting Tracker's external-attendee filter, see § Personal emails) |
 | `created_at` | `timestamptz` | Default `now()` |
 | `updated_at` | `timestamptz` | Default `now()`, bumped by trigger on update |
 | `archived_at` | `timestamptz` | Soft delete; null = current |
@@ -57,6 +57,27 @@ Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib
 Auth-side identity is `team_members.email == supabase auth user.email`, looked up via the admin (service-role) client. Email match is case-insensitive (`ilike`).
 
 No UI for managing tiers in V1 — changes happen via SQL or future migration. Settings page is a separate spec.
+
+## Personal emails
+
+`metadata.personal_emails` is an array of email addresses a team member uses to attend internal AIP meetings from accounts outside the `@theaipartner.io` Workspace. The Teams Meeting Tracker's external-attendee filter (`api/teams_calendar_sync_cron.py:_has_external_attendee`) treats these as internal — without the list, internal-only meetings leak past the filter when a teammate joined from a personal Gmail or similar.
+
+Today's set (2026-05-15): one entry — `huzaifasaeed460@gmail.com` on Huzaifa's row. Lou Perez's `loumantis@gmail.com` is NOT on the list because that pattern appears on a real client named Lou, not Lou Perez.
+
+To add a new team member's personal email when a leak pattern surfaces:
+
+```sql
+UPDATE team_members
+SET metadata = jsonb_set(
+  COALESCE(metadata, '{}'::jsonb),
+  '{personal_emails}',
+  COALESCE(metadata->'personal_emails', '[]'::jsonb) || '["<new-personal-email>"]'::jsonb,
+  true
+)
+WHERE full_name = '<team member name>';
+```
+
+The cron picks up the change on the next 30-minute tick — no code deploy required.
 
 ## Sentinel rows
 

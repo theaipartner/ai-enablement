@@ -111,6 +111,17 @@ The sync cron only stores events with **at least one attendee outside the `@thea
 
 **Why this exists**: pre-filter, the page showed every CSM's full calendar including OOO / focus time / internal meetings. Noise vs signal was unmanageable. Filter shipped 2026-05-15 per `docs/specs/teams-calendar-external-attendee-filter.md`.
 
+### Personal-email exclusion (2026-05-15)
+
+A teammate joining an internal meeting from a personal account (e.g. Huzaifa attending CSM Sync from `huzaifasaeed460@gmail.com`) would slip past the AIP-domain check unless we explicitly recognize their personal address as internal. `team_members.metadata.personal_emails` is the list; the cron's `_fetch_personal_emails` loads them per tick into a lowercased set that `_has_external_attendee` consults alongside the `@theaipartner.io` check.
+
+Current entries:
+- Huzaifa → `huzaifasaeed460@gmail.com`
+
+When a new leak pattern surfaces, add to the list via SQL — no code deploy needed. See `docs/schema/team_members.md` § Personal emails for the exact UPDATE shape. The next cron tick picks it up.
+
+If you add a personal email and existing rows in `calendar_events` should be dropped, run a one-time cleanup DELETE matching the spec's pattern (see `docs/reports/teams-personal-email-exclusion-and-nabeel-removal.md` § Verification for the SQL).
+
 **Debugging "why doesn't meeting X show up on /teams":**
 1. Check that the meeting has at least one external attendee on the actual Google Calendar entry. CSMs sometimes invite themselves only ("hold this slot") — that won't show.
 2. Check `calendar_events` directly: if the row is missing, the filter dropped it. If the row is present but the page doesn't render it, look at the title-and-time match (next section).
