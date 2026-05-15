@@ -6,6 +6,8 @@
 
 Ella answers client questions in their private Slack channels at near-CSM quality. She reduces CSM load on repetitive or factual questions while CSMs retain oversight and handle anything judgment-based.
 
+**Audit-dashboard access (2026-05-14).** The `/ella/runs` audit pages live behind the Admin tier of the permissions infrastructure shipped under `docs/specs/permissions-access-tiers.md`. Creator (Drake) + Admin (Nabeel) see the routes; Head CSM (Scott Wilson) + CSM (Lou / Nico / Zain) get a server-side redirect to `/clients?error=insufficient_access` plus a hidden Ella link in the top nav. Rationale: every escalation row carries cross-client context CSMs shouldn't see for clients they don't own.
+
 ## Scope (V1)
 
 **In scope:**

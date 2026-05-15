@@ -14,6 +14,7 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 | `email` | `text` | Not null. Partial-unique where `archived_at is null`. Primary join key for inbound sources (Fathom, Slack Connect emails) |
 | `full_name` | `text` | Not null |
 | `role` | `text` | Free-form: `csm`, `leadership`, `engineering`, `ops`, `sales`, `system_bot` |
+| `access_tier` | `text` | Added in 0032. Not null, default `'csm'`. CHECK pins the four values `csm`/`head_csm`/`admin`/`creator`. Separate concern from `role` (job function) — controls what each user sees in the dashboard. See § Access tiers |
 | `slack_user_id` | `text` | Partial-unique where `archived_at is null`. Slack `U...` id for mentions and matching |
 | `is_active` | `boolean` | Default `true`. Cheap filter; `archived_at` is the durable signal |
 | `is_csm` | `boolean` | Added in 0022. Not null, default `false`. Marks a team_member as eligible for `primary_csm` assignments. Surfaces in dashboard Primary CSM dropdowns (filter dropdown on `/clients`, swap dialog on `/clients/[id]` — both filter `is_csm = true`). Default `false` so non-CSM team_members (engineering, ops, sales) are excluded; flipping to `true` is an explicit choice. Orthogonal to the free-text `role` column — Scott Wilson and Nabeel Junaid carry `role='leadership'` but `is_csm=true` because they actively own clients. The Scott Chasing sentinel carries `is_csm=true` so it appears in the dropdowns alongside the four real CSMs |
@@ -39,6 +40,23 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 
 - Manual seed for V1. Live cloud roster as of 2026-05-04: Scott Wilson, Nabeel Junaid (both `role='leadership'`, `is_csm=true`), Lou Perez, Nico Sandoval (both `role='csm'`, `is_csm=true`), Drake (engineering), Aman (sales), Ellis, Huzaifa, Zain (ops). All `is_csm=false` except the four CSMs above and the Scott Chasing sentinel.
 - Later: programmatic sync from the CRM or an internal admin UI.
+
+## Access tiers
+
+Added in migration `0032_team_members_access_tier.sql` (2026-05-14). Four hierarchical values pinned by a CHECK constraint:
+
+| Tier | Outranks | Sees today |
+|------|----------|------------|
+| `creator` | admin, head_csm, csm | Everything. Drake. |
+| `admin` | head_csm, csm | Everything Drake sees. Nabeel today; will host the future Settings / admin-cost-hub surfaces. Also sees `/ella/runs` (the Ella audit dashboard). |
+| `head_csm` | csm | Clients, Calls; not Ella. Scott Wilson today; future Meeting Tracker surface is head-CSM gated. |
+| `csm` | (default) | Clients, Calls. Lou Perez, Nico Sandoval, Zain, plus every default row. |
+
+Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib/auth/access-tier-shared.ts` (pure type + `tierAtLeast` helper, importable from Client Components). The `(authenticated)` layout calls `getCurrentUserAccessTier()` once per page load; a missing `team_members` row for the authenticated user redirects to `/login?error=no_team_member_row` with an error banner. Sub-layouts (`app/(authenticated)/ella/layout.tsx`) call `tierAtLeast(tier, 'admin')` and redirect to `/clients?error=insufficient_access` on failure. `components/top-nav.tsx` receives the resolved tier as a prop and filters `NAV_ITEMS` by `requiredTier` so a CSM doesn't see the Ella link at all.
+
+Auth-side identity is `team_members.email == supabase auth user.email`, looked up via the admin (service-role) client. Email match is case-insensitive (`ilike`).
+
+No UI for managing tiers in V1 — changes happen via SQL or future migration. Settings page is a separate spec.
 
 ## Sentinel rows
 
