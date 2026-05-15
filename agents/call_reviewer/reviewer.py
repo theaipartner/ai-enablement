@@ -39,7 +39,13 @@ _MAX_OUTPUT_TOKENS = 4096
 
 # Top-level keys the response must contain. Extra keys are tolerated;
 # missing keys raise.
-_REQUIRED_KEYS = ("pain_points", "wins", "dodged_questions", "sentiment_arc")
+_REQUIRED_KEYS = (
+    "pain_points",
+    "wins",
+    "dodged_questions",
+    "sentiment_arc",
+    "questions_asked",
+)
 
 # Optional markdown fence stripper. Sonnet usually obeys "no fences"
 # but defends-in-depth: ```json\n{...}\n``` and bare ``` variants.
@@ -195,7 +201,7 @@ def _validate_review_shape(review: dict[str, Any]) -> None:
         raise ValueError(
             f"call_reviewer response missing required keys: {missing}"
         )
-    for array_key in ("pain_points", "wins", "dodged_questions"):
+    for array_key in ("pain_points", "wins", "dodged_questions", "questions_asked"):
         if not isinstance(review[array_key], list):
             raise ValueError(
                 f"call_reviewer response key {array_key!r} must be a list, "

@@ -27,6 +27,13 @@ _VALID_REVIEW = {
     ],
     "dodged_questions": [],
     "sentiment_arc": "Started anxious, ended hopeful after the next-step plan.",
+    "questions_asked": [
+        {
+            "question": "How do I share GHL access with my VA?",
+            "asker": "client",
+            "evidence": "client asked for help adding a teammate to GHL",
+        }
+    ],
 }
 
 
@@ -197,6 +204,37 @@ def test_review_call_raises_on_wrong_type_for_array_key(stub_telemetry):
         return_value=_completion(fake_text),
     ):
         with pytest.raises(ValueError, match=r"pain_points"):
+            r.review_call(db, "call-1")
+
+
+def test_review_call_raises_on_missing_questions_asked(stub_telemetry):
+    """questions_asked is required (v2 prompt). A response shaped like
+    the v1 schema must fail validation now."""
+    db = _FakeDb(_call_row())
+    bad_review = dict(_VALID_REVIEW)
+    bad_review.pop("questions_asked")
+    fake_text = json.dumps(bad_review)
+
+    with patch(
+        "agents.call_reviewer.reviewer.complete",
+        return_value=_completion(fake_text),
+    ):
+        with pytest.raises(ValueError, match=r"questions_asked"):
+            r.review_call(db, "call-1")
+
+
+def test_review_call_raises_on_wrong_type_for_questions_asked(stub_telemetry):
+    """questions_asked must be a list (matching the other array keys)."""
+    db = _FakeDb(_call_row())
+    bad_review = dict(_VALID_REVIEW)
+    bad_review["questions_asked"] = "should be a list"
+    fake_text = json.dumps(bad_review)
+
+    with patch(
+        "agents.call_reviewer.reviewer.complete",
+        return_value=_completion(fake_text),
+    ):
+        with pytest.raises(ValueError, match=r"questions_asked"):
             r.review_call(db, "call-1")
 
 
