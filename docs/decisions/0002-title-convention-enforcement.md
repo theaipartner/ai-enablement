@@ -79,7 +79,7 @@ The forcing function would silently drop legitimate edge cases if there were no 
 
 **Collision surface.** `ClientResolver.lookup_by_name` indexes a single `client_id` per normalized `full_name`. If two non-archived clients share a name, only one is name-resolvable; the other gracefully falls back to email matching. A SQL count of duplicate non-archived `full_name` values returned **0 groups** at implementation time (2026-05-15) — no clients currently collide. Revisit if that count climbs (the spec's threshold was >5).
 
-**Implementation:** `ingestion/fathom/classifier.py` constants `_V2_TITLE_RE` + helper `_extract_v2_title_prefix_and_type`; `_matches_new_client_title_convention` ORs in the v2 matcher; `_classify_by_new_convention` does name-prefix-first resolution for v2-shaped titles. Tests: `tests/ingestion/fathom/test_classifier.py` (11 v2 tests added; the ~46 pre-existing cutoff tests stay green). Spec: `docs/specs/cost-hub-effective-from-and-title-convention-v2.md`.
+**Implementation:** `ingestion/fathom/classifier.py` constants `_V2_TITLE_RE` + helper `_extract_v2_title_prefix_and_type`; `_matches_new_client_title_convention` ORs in the v2 matcher; `_classify_by_new_convention` does name-prefix-first resolution for v2-shaped titles. Tests: `tests/ingestion/fathom/test_classifier.py` (11 v2 tests added; the ~46 pre-existing cutoff tests stay green). Spec slug `cost-hub-effective-from-and-title-convention-v2` (spec + report deleted at 2026-05-15 EOD — recover from git history if needed).
 
 ## Review
 

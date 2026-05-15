@@ -1,7 +1,9 @@
 # Runbook: Cost hub
 
-Operational guide for the admin-tier `/cost-hub` page (spec:
-`docs/specs/cost-hub.md`, migration 0038). Closes Gregory V1 — the
+Operational guide for the admin-tier `/cost-hub` page (migration 0038;
+origin specs `cost-hub` + `cost-hub-effective-from-and-title-convention-v2`
++ `cost-hub-call-review-haiku-audit`, deleted at 2026-05-15 EOD —
+recover from git history if needed). Closes Gregory V1 — the
 cost-reduction-opportunity surface for Nabeel + Drake.
 
 ## What the page shows
