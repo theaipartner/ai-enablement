@@ -1167,6 +1167,41 @@ export type Database = {
           },
         ]
       }
+      director_tasks: {
+        Row: {
+          created_at: string
+          done: boolean
+          done_at: string | null
+          id: string
+          team_member_id: string
+          title: string
+        }
+        Insert: {
+          created_at?: string
+          done?: boolean
+          done_at?: string | null
+          id?: string
+          team_member_id: string
+          title: string
+        }
+        Update: {
+          created_at?: string
+          done?: boolean
+          done_at?: string | null
+          id?: string
+          team_member_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "director_tasks_team_member_id_fkey"
+            columns: ["team_member_id"]
+            isOneToOne: false
+            referencedRelation: "team_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       slack_channels: {
         Row: {
           client_id: string | null
