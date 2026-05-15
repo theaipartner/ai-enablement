@@ -34,6 +34,12 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-15 — EOD (evening): Gregory V1 closed — cost hub + FAQ harvest + title v2 + timezone alignment
+
+Seven specs landed after the morning EOD. Gregory V1 is now closed: the admin-tier cost hub at `/cost-hub` (migration 0038) gives Nabeel five Anthropic LLM-spend buckets + editable monthly subscriptions / one-off extras + a 12-month history view, with subscription `effective_from` month-attribution (migration 0039) so a sub added today no longer inflates prior months. The call_reviewer prompt went to v2 (`questions_asked` extraction) feeding a new Friday Slack DM to Scott (`api/faq_digest_cron.py`, optional `FAQ_DIGEST_CC_SLACK_USER_ID` CC), and the May 2026 backlog was regenerated under v2. Ella's passive-monitor escalation thresholds were lowered (uncertainty / confusion / clarification-seeking now surface through Gate 4), the Trustpilot cascade gained a first-month carve-out (migration 0037), and a scenario-1 audit fixed the previously-untracked sentiment-classifier Haiku spend. Title convention v2 (`[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`) extends the May 18 forcing function with name-prefix-as-primary client resolution. A cost-hub-vs-`/ella/runs` discrepancy was diagnosed (different windows + scope, not a timezone bug) and resolved by aligning `getEllaSummaryStats` to EST calendar boundaries + all-LLM-cost-bearing scope via a shared `lib/time/est-periods.ts`; the store-UTC/render-ET standard is codified in ADR 0003 with a `docs/runbooks/cron_schedule.md` UTC→ET map. Naming polish: "Cost hub" → "Cost Hub" in the page + nav.
+
+Post-state: **39 migrations, 11 Python serverless functions, 6 TopNav tabs (Clients / Calls / Teams / Ella / Cost Hub / Tasks), 607 pytest passing**, `tsc --noEmit` + `next lint` clean. ADRs: 0001 (foundational stack), 0002 (title-convention enforcement + v2 revision), 0003 (timezone conventions). Per-spec evening-cycle detail in the entries below. Drake gates still open: (d) `FAQ_DIGEST_CC_SLACK_USER_ID` in Vercel + FAQ digest first fire (Fri May 22); (c) eyeball `/cost-hub` History after a real backdated sub, and `/cost-hub` ↔ `/ella/runs` agreement on real data.
+
 ### 2026-05-15 — EOD: Director-tier surfaces + permissions infrastructure + May 18 forcing function
 
 Ten specs landed across 2026-05-14 + 2026-05-15. Plain-English post-state:
