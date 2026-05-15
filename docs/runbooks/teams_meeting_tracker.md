@@ -109,7 +109,7 @@ The sync cron only stores events with **at least one attendee outside the `@thea
 - Attendees without an `email` field are skipped (treated as neither AIP nor external).
 - A trialed-future-team-member client with an `@theaipartner.io` alias would be incorrectly filtered out. Vanishingly rare — if it happens, the symptom is "this client meeting isn't showing up on /teams" and the fix is to remove the alias or surface a follow-up spec.
 
-**Why this exists**: pre-filter, the page showed every CSM's full calendar including OOO / focus time / internal meetings. Noise vs signal was unmanageable. Filter shipped 2026-05-15 per `docs/specs/teams-calendar-external-attendee-filter.md`.
+**Why this exists**: pre-filter, the page showed every CSM's full calendar including OOO / focus time / internal meetings. Noise vs signal was unmanageable. Filter shipped 2026-05-15 alongside the original Meeting Tracker.
 
 ### Personal-email exclusion (2026-05-15)
 
@@ -169,7 +169,7 @@ When a matched call's `started_at` is more than 2 minutes after the Calendar eve
 | `NEXT_PUBLIC_APP_URL` | Base URL for OAuth redirect | `https://ai-enablement-sigma.vercel.app` |
 | `CRON_SECRET` | Bearer auth for the cron, shared across all crons | (set in Vercel) |
 
-## Spec + migration
+## Origin
 
-- Spec: `docs/specs/teams-meeting-tracker.md`
 - Migrations: `0033_oauth_tokens.sql`, `0034_calendar_events.sql`
+- Schema docs: `docs/schema/oauth_tokens.md`, `docs/schema/calendar_events.md`

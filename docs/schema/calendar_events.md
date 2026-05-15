@@ -35,7 +35,7 @@ Local mirror of every CSM's current-week meetings so the `/teams` page never cal
 
 ## Populated By
 
-- `api/teams_calendar_sync_cron.py` — every 30 minutes. Per CSM, pulls `events.list` for the current Mon-Sun EST week, upserts each non-cancelled point-in-time event keyed by `(team_member_id, google_event_id)`. Cancelled events + all-day events (no `start.dateTime`) are dropped. **External-attendee filter (2026-05-15):** also dropped at upsert time are events with zero non-`@theaipartner.io` attendees — OOO blocks, focus time, internal-only 1:1s. Only events with at least one external attendee land in the table. See `_has_external_attendee` in the cron and `docs/specs/teams-calendar-external-attendee-filter.md`.
+- `api/teams_calendar_sync_cron.py` — every 30 minutes. Per CSM, pulls `events.list` for the current Mon-Sun EST week, upserts each non-cancelled point-in-time event keyed by `(team_member_id, google_event_id)`. Cancelled events + all-day events (no `start.dateTime`) are dropped. **External-attendee filter (2026-05-15):** also dropped at upsert time are events with zero non-`@theaipartner.io` attendees — OOO blocks, focus time, internal-only 1:1s. Only events with at least one external attendee land in the table. See `_has_external_attendee` in the cron and `docs/runbooks/teams_meeting_tracker.md` § Filter behavior.
 
 ## Read By
 
@@ -68,6 +68,6 @@ group by team_member_id
 order by last_synced desc;
 ```
 
-## Spec
+## Origin
 
-`docs/specs/teams-meeting-tracker.md`, migration `0034_calendar_events.sql`.
+Migration `0034_calendar_events.sql`. Operational guide at `docs/runbooks/teams_meeting_tracker.md`.

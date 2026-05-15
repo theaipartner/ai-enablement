@@ -73,9 +73,8 @@ The current shape is V1 minimum. Surface area that doesn't ship today but might 
 - **Per-user pages** for other tiers. The team_member_id keying is already there; gating the page to all tiers + filtering each user to their own row set is straightforward.
 - **Categorization / projects.** Tag column or a separate task_lists table for grouping.
 
-## Spec + code pointers
+## Code + schema pointers
 
-- Spec: `docs/specs/director-tasks-and-list-ux-polish.md`
 - Migration: `supabase/migrations/0036_director_tasks.sql`
 - Schema doc: `docs/schema/director_tasks.md`
 - Code: `app/(authenticated)/tasks/` (page, layout, actions, task-list)

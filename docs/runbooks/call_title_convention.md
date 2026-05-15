@@ -21,7 +21,7 @@ Pre-cutoff calls use the prior cascade unchanged. No retroactive reclassificatio
 
 Drake is pushing the team to use Zain's new booking links exclusively. The links generate one of the six canonical titles automatically. Making non-compliance technically visible — via classification dropping out — is the forcing function. A CSM who books outside the link, names a meeting ad-hoc, or keeps a legacy recurring under the old name will find their call doesn't show up on `/clients`, isn't retrieved by Ella, and renders without the Fathom checkmark on `/teams`. The friction is the lever.
 
-Per spec `docs/specs/classifier-enforce-new-title-convention.md`. Spec context paragraph quotes the rationale (Nabeel's expectation that Drake make the new convention happen as part of growing into the Director role).
+Rationale captured in `docs/decisions/0002-title-convention-enforcement.md` (ADR) — including Nabeel's expectation that Drake make the new convention happen as part of growing into the Director role, plus the safety-net design (auto-create + merge UI + manual override).
 
 ## What gets dropped post-cutoff
 
@@ -106,8 +106,8 @@ ORDER BY occurrences DESC;
 
 Repeated non-canonical titles → recurring series that need renaming.
 
-## Spec + code pointers
+## Decision + code pointers
 
-- Spec: `docs/specs/classifier-enforce-new-title-convention.md`
+- ADR: `docs/decisions/0002-title-convention-enforcement.md` (why this rule exists; the management-lever framing).
 - Code: `ingestion/fathom/classifier.py` — constants `NEW_CLIENT_TITLE_PATTERNS` + `_NEW_TITLE_CONVENTION_CUTOFF`; helpers `_matches_new_client_title_convention` + `_is_after_new_convention_cutoff` + `_classify_by_new_convention`.
 - Tests: `tests/ingestion/fathom/test_classifier.py` — see test functions starting with `test_pre_cutoff_` / `test_post_cutoff_` / `test_cutoff_boundary_`.

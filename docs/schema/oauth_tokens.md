@@ -69,6 +69,6 @@ set access_token_expires_at = now() - interval '1 hour'
 where team_member_id = '<drake-uuid>' and provider = 'google';
 ```
 
-## Spec
+## Origin
 
-`docs/specs/teams-meeting-tracker.md`, migration `0033_oauth_tokens.sql`.
+Migration `0033_oauth_tokens.sql`. Operational guide at `docs/runbooks/teams_meeting_tracker.md`.

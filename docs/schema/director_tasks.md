@@ -54,6 +54,6 @@ WHERE team_member_id = (
 ORDER BY done ASC, created_at DESC;
 ```
 
-## Spec
+## Origin
 
-`docs/specs/director-tasks-and-list-ux-polish.md`, migration `0036_director_tasks.sql`.
+Migration `0036_director_tasks.sql`. Operational guide at `docs/runbooks/director_tasks.md`.

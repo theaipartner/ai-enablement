@@ -6,7 +6,7 @@ Primary context for any Claude instance working on this repo. Read this fully be
 
 Internal AI enablement system for a coaching/consulting agency. Replaces and augments human work across customer success, sales, and operations. The consumer business runs on this system first; later, the same system will be deployed to other agencies as a productized consulting offering.
 
-**Active focus:** Gregory V2, organized into batches A–E (`docs/future-ideas.md`). Batch A — CSM accountability visibility — is the in-flight priority. See § Current Focus and § Next Session Priorities.
+**Active focus:** Director-tier surfaces + role-gated visibility are the post-Gregory-V2 shape. Permissions infrastructure, `/teams` Meeting Tracker (Google-Calendar-backed), `/tasks` Director task list, plus the May 18 title-convention forcing function all shipped 2026-05-15. The original batch-A-through-E V2 framing in `docs/future-ideas.md` is the queued backlog beneath this. See § Current Focus and § Next Session Priorities.
 
 ## Core Principles (Non-Negotiable)
 
@@ -30,7 +30,7 @@ These four principles protect the system from lock-in and rebuilds. Apply them t
 | Hosting | Vercel | Frontend + serverless Python functions. |
 | Voice | ElevenLabs | Course audio, future voice agents. |
 | Dev environment | WSL2 Ubuntu on Windows | All dev happens inside WSL. VS Code with Remote-WSL extension. |
-| Secrets | Bitwarden master list + env vars | `.env.local` locally, Vercel env vars in production. See `.env.example` — required keys today: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`. `SUPABASE_DB_PASSWORD` is also set in `.env.local` for ops scripts that connect directly via psycopg2 (migrations, seeds, diagnostics) — not required by webhooks or the agent runtime. |
+| Secrets | Bitwarden master list + env vars | `.env.local` locally, Vercel env vars in production. See `.env.example` for the full inventory and `docs/state.md` for the live production set. Core keys (all environments): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`. Feature-specific: `ESCALATION_RECIPIENT_SLACK_USER_ID` (Ella head-CSM DM target), `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` + `NEXT_PUBLIC_APP_URL` (`/teams` Meeting Tracker Calendar API), `SLACK_DRY_RUN` (Preview-mode flag for Send-to-Slack on `/clients/[id]`), `ELLA_PASSIVE_MONITORING_ENABLED` (passive monitor kill switch). `SUPABASE_DB_PASSWORD` is also set in `.env.local` for ops scripts that connect directly via psycopg2 (migrations, seeds, diagnostics) — not required by webhooks or the agent runtime. |
 
 ## Working Norms
 
@@ -309,7 +309,7 @@ ai-enablement/
 │   ├── slack/                  # Channel history backfill (REST only; Events API deferred to Ella V2)
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
 │   └── crm/                    # (planned)
-├── api/                        # Vercel Python serverless functions (8 deployed)
+├── api/                        # Vercel Python serverless functions (10 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
 ├── components/                 # Dashboard UI — top-nav, ui/* primitives, client-detail/*
 ├── lib/                        # Dashboard utilities — db/, supabase/, etc.
@@ -413,9 +413,19 @@ Moved to `docs/state.md` as of 2026-05-11. Read on demand when a spec or task re
 
 ## Current Focus
 
-**Gregory redesign — fully shipped 2026-05-14.** Full Calls + Clients + Ella visual refresh on top of Part 1 foundation primitives (HeaderBand, SentimentPill, InlineEditableField, EmptyStateAwareSection, DiagnosticsCollapse). Editable Primary CSM on detail + list. Action items transfer between `/calls` and `/clients` fixed (broken `owner_client_id` predicate). Send-to-Slack action items wired with dry-run mode (production cutover pending — flip `SLACK_DRY_RUN` off in Vercel Production). Ella pre-redesign fixes shipped (mrkdwn renderer, full-message expansion with "Show more", escalation DM body persistence to `webhook_deliveries.payload`). Ella visual redesign by Claude Design + Builder shipped via the design-handoff workflow.
+**Director-tier surfaces + permissions infrastructure — fully shipped 2026-05-15.** Seven specs landed end-to-end in one day on top of yesterday's Gregory redesign + Ella escalation unification + passive Gate 4 keyword bypass:
 
-**Next:** see § Next Session Priorities item 1.
+1. **Permissions infrastructure (ADR-able).** Migration 0032 added `team_members.access_tier` (`csm`/`head_csm`/`admin`/`creator`) with the 6 known users backfilled (Drake creator, Nabeel admin, Scott Wilson head_csm, Lou/Nico/Zain csm). `lib/auth/access-tier.ts` (server) + `lib/auth/access-tier-shared.ts` (Client-Component-safe) own the tier resolution. Route gating via sub-layouts; the `(authenticated)/` layout calls `getCurrentUserAccessTier()` once per page load. `/ella/runs` moved to Admin; `/teams` to Head CSM; `/tasks` to Creator. TopNav filters items by `requiredTier`.
+2. **`/teams` Meeting Tracker.** Head-CSM-and-up dashboard backed by Google Calendar via Drake's stored OAuth token. Migrations 0033 (`oauth_tokens`) + 0034 (`calendar_events`). 30-min cron at `api/teams_calendar_sync_cron.py`. Title+time JS-side join against `calls`; lateness pill when Fathom started >2 min after the calendar event.
+3. **`/teams` external-attendee filter + personal-email exclusion.** Calendar events without at least one non-`@theaipartner.io` attendee get dropped at upsert. `team_members.metadata.personal_emails` adds teammates' personal addresses (Huzaifa's gmail today) to the internal list so internal-only meetings don't leak past the filter.
+4. **Migration 0035: Nabeel removed from CSM roster.** `team_members.is_csm` flipped false. His 3 active `client_team_assignments` rows stay intact per Drake's direction.
+5. **May 18 title-convention enforcement (ADR 0002).** Post-cutoff calls only auto-classify as `client` when titles match `Coaching/Sales Call with {Scott|Lou|Nico}`. Forcing function for the booking-link adoption. Auto-create + Merge + Mark-as-reviewed UI are the safety net.
+6. **Auto-created client lifecycle.** Merge button re-surfaced on `/clients/[id]` under `needs_review` gate; new "Mark as reviewed" button; missing-Slack badges on detail + list pages with the "Missing Slack" filter.
+7. **Migration 0036: `director_tasks` + `/tasks` page.** Creator-tier-only personal task list with add/toggle/delete server actions. Sticky filters on `/clients` + `/calls` via `?from=` URL param. Conditional Slack column on `/clients` (renders only when needs_review or missing_slack filter is active).
+
+The 36 migrations + 10 Python serverless functions + 5-tab TopNav (Clients / Calls / Teams / Ella / Tasks) describe the post-state. Full per-spec detail in `docs/state.md`. ADRs for major decisions: 0001 foundational stack, 0002 title-convention enforcement.
+
+**Next:** see § Next Session Priorities — Send-to-Slack production cutover stays #1.
 
 ## Next Session Priorities
 
@@ -423,21 +433,21 @@ Pick these up in order. **Read this section first** when starting a new session 
 
 1. **Send-to-Slack production cutover.** The Send-to-Slack button on `/clients/[id]` is wired and dry-run-validated. Production cutover is the env-var flip: turn `SLACK_DRY_RUN` off (or unset) in Vercel Production. Confirm it stays set on Preview so Playwright can still safely click. Then let a CSM be the first real send; watch Vercel function logs for the first few real posts for shape correctness. Gate (d) — Drake handles the env-var flip.
 
-2. **CSM utilization check.** A quick routine to audit whether CSMs are actually using Gregory — logging in, editing action items, marking journey stages, sending Slack messages from the Action items box. Surface for Nabeel/Drake to see which CSMs lean on Gregory vs. ignore it. Format and scope deferred; needs a scoping conversation first. See `docs/future-ideas.md`.
+2. **Post-2026-05-18 title-convention adoption review.** Monday's the first day under the cutoff. Run the audit SQL in `docs/runbooks/call_title_convention.md` (`calls WHERE started_at >= cutoff AND call_category != 'client'`) Monday afternoon + Wednesday + Thursday. Catch the CSMs still using legacy titles + the legacy recurring meetings firing under old names. Cleanup: rename the recurring series or manual classification override on `/calls/[id]`.
 
-3. **Teams page.** A Google Calendar-backed meeting tracker view. V1: each CSM sees their own meetings; Nabeel sees all team members'. Permission scoping is the load-bearing part. Builds toward CSM cadence tracking + late-flag workflow. See `docs/future-ideas.md` for scoping notes.
+3. **`/teams` gate (c) walkthrough.** Drake completes the Google OAuth flow at `/api/auth/google/connect`, watches the next 30-min cron tick produce a clean audit row (`processing_status='processed'`, `events_upserted>0`), confirms each CSM's week renders on `/teams` with Fathom-match checkmarks. Until this happens, `/teams` shows the "Reconnect Google Calendar" banner for Drake + a muted unavailable line for other tiers.
 
-4. **Admin cost hub.** Admin-only view showing costs across the tools we use (Anthropic API, Supabase, Vercel, Slack, etc.) so Nabeel can spot cost-reduction opportunities. Likely starts with what's already trackable (Anthropic + Supabase) and grows. See `docs/future-ideas.md`.
+4. **CSM utilization check.** A quick routine to audit whether CSMs are actually using Gregory — logging in, editing action items, marking journey stages, sending Slack messages from the Action items box. Surface for Nabeel/Drake to see which CSMs lean on Gregory vs. ignore it. Format and scope deferred; needs a scoping conversation first. See `docs/future-ideas.md`.
 
-5. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Carried. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Per-client retrieval-scope gate needed, similar to the call-summary retrieval pattern.
+5. **Admin cost hub.** Admin-tier-only view showing costs across the tools we use (Anthropic API, Supabase, Vercel, Slack, etc.) so Nabeel can spot cost-reduction opportunities. Likely starts with what's already trackable (Anthropic via `agent_runs.llm_cost_usd` + Supabase) and grows. See `docs/future-ideas.md` § Admin cost hub.
 
-6. **Meeting tracking — bridge into Task Management.** Carried. Per-client + per-CSM cadence visibility, late flags, end-of-week report to Scott + Nabeel. Real scoping conversation needed at session-start before any spec. Overlaps somewhat with item 3 (Teams page); the two may fuse into one spec when scoping happens.
+6. **Ella V2 Batch 2.1 — Slack messages as retrieval surface.** Carried. The 3,641 backfilled `slack_messages` rows + ongoing realtime ingestion produce a rich retrieval surface, but pulling another client's channel content into Ella's prompt context for client X would be a privacy violation. Per-client retrieval-scope gate needed, similar to the call-summary retrieval pattern.
 
 7. **Batch B — NPS score piping V1.5.** Carried. Extend Path 1 to ingest the numeric NPS score alongside the segment classification, write to `nps_submissions.score`, surface in the dashboard.
 
 8. **Batch C — Action item HITL flow (Nabeel's "transcript vision", V2 flagship).** Queued. AI drafts action item messages from transcripts → CSM reviews + edits in Gregory → CSM approves → Slack send to client channel + assigned-vs-completed tracking. Send-to-Slack on `/clients/[id]` is a piece of this lit up.
 
-9. **Batch D — Classifier tuning.** Backstop only. Address only if titling discipline doesn't suppress the existing FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`). Otherwise leave.
+9. **Batch D — Classifier tuning.** Backstop only. The May 18 title-convention enforcement (ADR 0002) is the primary suppression path now; classifier tuning is only relevant for the residual FP patterns (hiring-interview / spousal-rep / iMIP — see `docs/known-issues.md`) that survive the new cutoff. Otherwise leave.
 
 10. **Batch E — Client business context vault.** Queued. Login credentials, brand assets, GHL snapshots, hosting/domain/email-setup info. Long-arc destination: a CSM-facing chatbot that queries the vault + brain for quick lookups.
 

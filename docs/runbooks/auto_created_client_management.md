@@ -2,7 +2,7 @@
 
 Operational guide for the full lifecycle of auto-created `clients` rows: how they're produced, how to merge them into real clients, how to mark them reviewed, and the data-hygiene badges (Missing Slack channel / Missing Slack user) that frequently surface alongside.
 
-Spec: `docs/specs/auto-created-client-lifecycle.md`. Related: `docs/runbooks/call_title_convention.md` (the title-cutoff rule that triggers most new auto-creates), `docs/schema/clients.md` § needs_review lifecycle.
+Related: `docs/runbooks/call_title_convention.md` (the May 18 title-cutoff rule that triggers most new auto-creates) and `docs/decisions/0002-title-convention-enforcement.md` (rationale for the cutoff). Schema: `docs/schema/clients.md` § needs_review lifecycle.
 
 ## What gets auto-created
 
@@ -113,9 +113,9 @@ LIMIT 50;
 - **No automatic re-merge.** If a CSM marks an auto-created row as reviewed but then realizes it should have been merged, the path is: re-add `needs_review` to the tag list → the merge button reappears → merge.
 - **Missing-Slack state is NOT stored.** Read-time computation from the two source fields. Filling in either field via the dashboard inline editor causes the badge to disappear on the next render with no extra cleanup.
 
-## Spec + code pointers
+## Code + decision pointers
 
-- Spec: `docs/specs/auto-created-client-lifecycle.md`
+- Decision: `docs/decisions/0002-title-convention-enforcement.md` — auto-create is the safety net for the May 18 cutoff.
 - Classifier: `ingestion/fathom/classifier.py` — `_classify_by_new_convention` emits `AutoCreateRequest`.
 - Pipeline: `ingestion/fathom/pipeline.py` — `_lookup_or_create_auto_client` (idempotent insert).
 - Merge: `lib/db/merge.ts:mergeClient` + migration `0015_merge_clients_function.sql`.
