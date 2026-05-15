@@ -32,6 +32,14 @@ Per spec `docs/specs/classifier-enforce-new-title-convention.md`. Spec context p
 
 Internal-title patterns (CSM Sync, Backend Team, NCF, etc.) keep working post-cutoff — those continue to classify as `internal`. The cutoff gate only governs `client` classification.
 
+## Auto-create on new patterns (2026-05-15)
+
+When a post-cutoff call matches one of the six canonical title patterns AND has an external participant we can't resolve to an existing client, the classifier emits an `AutoCreateRequest` and the pipeline reifies a minimal `clients` row tagged `needs_review`. Closes the gap left by the cutoff (where unresolved-participant calls would have landed as `client` with `primary_client_id=null` forever) so every post-cutoff client call gets a client row attached.
+
+Auto-create reason string: `"new title convention with unresolved participant"` (distinct from the legacy `30mins_with_Scott` reason). Surfaces in `metadata.auto_create_reason` for split-by-source audit queries.
+
+Cleanup flow for auto-created rows lives at `docs/runbooks/auto_created_client_management.md` — covers the `/clients` needs-review filter, the merge button, the remove-tag button, and the missing-Slack badges that frequently co-occur with fresh auto-creates.
+
 ## Recovery: manual override
 
 When a call SHOULD have been classified as `client` but the classifier dropped it (ad-hoc title for a legitimate client call, emergency reschedule outside the link, etc.), the fix is the manual override on the Calls detail page.

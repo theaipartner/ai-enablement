@@ -24,7 +24,7 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 | `start_date` | `date` | When the client entered the program |
 | `program_type` | `text` | `9k_consumer`, `b2b_enterprise`, etc. |
 | `tags` | `text[]` | Ad-hoc labels; GIN-indexed |
-| `metadata` | `jsonb` | Long-tail attributes (goals, SWOT, profession, age, etc.) |
+| `metadata` | `jsonb` | Long-tail attributes (goals, SWOT, profession, age, etc.). Known keys include `alternate_emails` / `alternate_names` (case-insensitive resolution surface — see § Client Identity Resolution in CLAUDE.md), `profile.*` (sub-object for free-text fields editable from the Profile section), `auto_create_*` breadcrumbs (set on auto-create — see § needs_review lifecycle), `needs_review_cleared_at` ISO timestamp (audit field stamped when the dashboard's "Mark as reviewed" button clears the tag) |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
 | `archived_at` | `timestamptz` | Soft delete |
@@ -52,6 +52,29 @@ The `metadata` jsonb is open-ended, but current ingestion sources are pinned:
 **Excluded by design:** revenue fields (stale) and `Standing` (reliability unclear). See `docs/data-hygiene.md`.
 
 Extension is cheap: add keys to future rows freely. Renaming or reshaping existing keys is expensive — per the `docs/ingestion/metadata-conventions.md` principle.
+
+## needs_review lifecycle
+
+Auto-created clients (Fathom classifier's `should_auto_create_client` path) land with `tags` containing `needs_review`. The dashboard surfaces them on `/clients` via the existing "Needs review" filter chip, and on `/clients/[id]` via two action buttons (visible only when the tag is present): "Merge into…" (calls the `merge_clients` RPC, migration 0015 — source archives, calls + participants reattribute to the target) and "Mark as reviewed" (clears just the `needs_review` tag, stamps `metadata.needs_review_cleared_at` for audit).
+
+As of 2026-05-15, the auto-create path is alive on both the legacy `30mins with Scott` pattern (pre-cutoff calls only) AND the six new-convention patterns (post-cutoff calls — `Coaching/Sales Call with {Scott|Lou|Nico}`). The two paths use distinct `metadata.auto_create_reason` strings so audit queries can split them:
+
+```sql
+-- New-convention auto-creates
+SELECT id, full_name, email, created_at, metadata->>'auto_create_reason'
+FROM clients
+WHERE 'needs_review' = ANY(tags)
+  AND metadata->>'auto_create_reason' = 'new title convention with unresolved participant'
+ORDER BY created_at DESC;
+
+-- Legacy Scott-1:1 auto-creates
+SELECT id, full_name, email, created_at
+FROM clients
+WHERE 'needs_review' = ANY(tags)
+  AND metadata->>'auto_create_reason' = '30mins_with_Scott pattern with unresolved participant';
+```
+
+The Slack-hygiene badges on the same surfaces (`Missing Slack channel`, `Missing Slack user`) are independent of `needs_review` — computed read-time from `slack_user_id` + the joined `slack_channels` table. A legacy client with broken Slack identity shows the missing-Slack badges but not the needs-review pill, and vice versa. The "Missing Slack" filter on `/clients` narrows to clients where either field is null. See `docs/runbooks/auto_created_client_management.md`.
 
 ## Uniqueness
 
