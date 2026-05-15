@@ -79,6 +79,13 @@ def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
     # production passive runs never carry this flag.
     if payload.test_mode:
         trigger_metadata["test_mode_run"] = True
+    # Stamp the escalation-keyword bypass when it fired on Gate 4
+    # (see `agents.ella.passive_monitor._ESCALATION_BYPASS_KEYWORDS`).
+    # /ella/runs reads this field to surface which trigger reached
+    # Haiku via the bypass path; production iteration on the keyword
+    # list reads aggregates from here.
+    if evaluation.bypass_keyword:
+        trigger_metadata["kb_relevance_bypass_keyword"] = evaluation.bypass_keyword
     input_summary = (payload.triggering_message_text or "")[:200]
 
     run_id = start_agent_run(

@@ -130,12 +130,12 @@ def fake_db(monkeypatch):
     return db
 
 
-def _payload(test_mode=False, author_type="client"):
+def _payload(test_mode=False, author_type="client", text="Hey is the curriculum updated?"):
     return PassiveTriggerPayload(
         slack_channel_id="C123",
         triggering_message_ts="1745500100.000100",
         triggering_message_slack_user_id="UCLIENT1",
-        triggering_message_text="Hey is the curriculum updated?",
+        triggering_message_text=text,
         author_type=author_type,
         channel_client_id="cli-uuid",
         test_mode=test_mode,
@@ -420,3 +420,49 @@ def test_production_run_does_not_carry_test_mode_run_flag(fake_db):
 
     insert = fake_db.agent_runs_inserts[0]
     assert "test_mode_run" not in insert["trigger_metadata"]
+
+
+# ---------------------------------------------------------------------------
+# Escalation-keyword bypass plumbing (2026-05-14)
+# ---------------------------------------------------------------------------
+
+
+def test_bypass_keyword_lands_in_trigger_metadata(fake_db):
+    """When evaluate_passive_trigger sets `bypass_keyword`, the
+    persistence layer plumbs it onto agent_runs.trigger_metadata as
+    `kb_relevance_bypass_keyword` so /ella/runs can surface which
+    trigger fired."""
+    ev = PassiveEvaluation(
+        payload=_payload(text="I want my money back"),
+        decision=_decision(decision="escalate", reasoning="cancellation intent"),
+        bypass_keyword="money back",
+        primary_csm={
+            "id": "tm-uuid",
+            "full_name": "Lou Perez",
+            "slack_user_id": "U_LOU",
+        },
+    )
+
+    pd.persist_passive_evaluation(ev)
+
+    insert = fake_db.agent_runs_inserts[0]
+    assert insert["trigger_metadata"]["kb_relevance_bypass_keyword"] == "money back"
+
+
+def test_no_bypass_keyword_omits_field_from_trigger_metadata(fake_db):
+    """When bypass_keyword is None (the common case — message reached
+    Haiku via the normal KB-anchor path), the field is omitted entirely
+    rather than written as null. Audit queries can use
+    `trigger_metadata ? 'kb_relevance_bypass_keyword'` to count
+    bypass-fired runs without false positives."""
+    ev = PassiveEvaluation(
+        payload=_payload(),
+        decision=_decision(),
+        skip_reason="csm_directed",
+        bypass_keyword=None,
+    )
+
+    pd.persist_passive_evaluation(ev)
+
+    insert = fake_db.agent_runs_inserts[0]
+    assert "kb_relevance_bypass_keyword" not in insert["trigger_metadata"]

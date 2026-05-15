@@ -100,6 +100,47 @@ _PASSIVE_DECISIONS = frozenset({
 # the spec's default-stance.
 _SAFER_FALLBACK_DECISION = "skip"
 
+# Escalation-keyword bypass list. Messages containing any of these
+# tokens skip Gate 4 (KB relevance) and proceed directly to Haiku.
+# This closes the gap where escalation-worthy content has no
+# curriculum anchor and gets silently dropped at the relevance gate
+# before Haiku can ever evaluate it. Three real prod misses on
+# 2026-05-14 (similarities 0.22 / 0.23 / 0.28) drove this:
+#
+#   - "I'm really frustrated, I want to talk about canceling my account"
+#   - "hey ella ... give me my god damn money back"
+#   - "I want my money back"
+#
+# Haiku still makes the final decision; keyword presence only decides
+# whether Haiku gets to look. Match is case-insensitive, substring
+# (false positives are acceptable — the cost is one Haiku call that
+# correctly returns "skip"). Categories mirror Haiku's auto-escalate
+# fence in `_HAIKU_SYSTEM_PROMPT`.
+_ESCALATION_BYPASS_KEYWORDS = frozenset({
+    # Money / commitment
+    "cancel", "cancelling", "canceling", "refund", "refunded",
+    "money back", "my money", "chargeback", "dispute", "billing",
+    "charge", "charged", "contract", "agreement",
+
+    # Complaints / dissatisfaction
+    "frustrated", "frustrating", "angry", "pissed", "disappointed",
+    "complaint", "complain", "unhappy", "fed up",
+
+    # Crisis / self-harm. Same bypass mechanism — Haiku's escalate
+    # criteria already cover crisis content, and the reactive prompt
+    # already directs Ella to surface 988 when appropriate. Crisis
+    # content reaching Haiku at all is the gap.
+    "kill myself", "end my life", "suicide", "suicidal",
+    "hurt myself", "harm myself", "want to die", "end it all",
+
+    # Quitting / leaving
+    "quit", "quitting", "leaving", "done with this", "done with you",
+    "stop coming", "wasted my time",
+
+    # Legal
+    "lawyer", "lawsuit", "sue you", "legal action", "attorney",
+})
+
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -160,6 +201,12 @@ class PassiveEvaluation:
     kb_chunks: list[Chunk] = field(default_factory=list)
     recent_channel_context: str = ""
     primary_csm: dict[str, Any] | None = None
+    # Set when the message hit the escalation-keyword bypass on Gate 4
+    # (see `_ESCALATION_BYPASS_KEYWORDS`). Records the specific matched
+    # keyword for audit purposes — `passive_dispatch.persist_passive_evaluation`
+    # plumbs it onto `agent_runs.trigger_metadata.kb_relevance_bypass_keyword`
+    # so /ella/runs can surface which trigger fired.
+    bypass_keyword: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +296,22 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         )
 
     # Gate 4: KB-relevance gate. Cheap vector search; if nothing comes
-    # back above threshold we skip the Haiku call.
+    # back above threshold we skip the Haiku call — UNLESS the message
+    # contains an escalation bypass keyword (cancel / refund / crisis
+    # phrasing / etc.), in which case we let Haiku decide even on
+    # context-thin messages. This protects against the failure mode
+    # where escalation-worthy content has no curriculum anchor and
+    # gets silently dropped at the relevance gate. Bypass routes to
+    # Haiku; it does NOT auto-escalate — Haiku is still the decider.
     threshold = _kb_relevance_threshold()
     kb_chunks = _kb_search(
         payload.triggering_message_text, payload.channel_client_id
     )
     relevant_chunks = [c for c in kb_chunks if c.similarity >= threshold]
-    if not relevant_chunks:
+    bypass_keyword = _has_escalation_bypass_keyword(
+        payload.triggering_message_text
+    )
+    if not relevant_chunks and bypass_keyword is None:
         return PassiveEvaluation(
             payload=payload,
             decision=PassiveDecision(
@@ -292,9 +348,14 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
             skip_reason="firm_after_first",
             kb_chunks=relevant_chunks,
             primary_csm=primary_csm,
+            bypass_keyword=bypass_keyword,
         )
 
-    # Gate 6: Haiku decision call.
+    # Gate 6: Haiku decision call. When the bypass keyword fired and
+    # KB returned no anchors, `relevant_chunks` is empty here —
+    # `_render_kb_block` handles that case and Haiku sees `(none)`,
+    # which is exactly the signal it needs to lean on the message
+    # text alone for an escalate vs skip call.
     recent_context = fetch_recent_channel_context(
         payload.slack_channel_id,
         before_ts=payload.triggering_message_ts,
@@ -313,6 +374,7 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         kb_chunks=relevant_chunks,
         recent_channel_context=recent_context,
         primary_csm=primary_csm,
+        bypass_keyword=bypass_keyword,
     )
 
 
@@ -399,6 +461,25 @@ def _kb_search(query: str, client_id: str) -> list[Chunk]:
     """Top-k retrieval for the channel's client. Same shape as the
     reactive path uses — keeps the safety invariants intact."""
     return search_for_client(query, client_id=client_id, k=8, include_global=True)
+
+
+def _has_escalation_bypass_keyword(message_text: str) -> str | None:
+    """Return the matched keyword if the message contains any escalation
+    bypass keyword, None otherwise. Case-insensitive substring match.
+
+    Returns the keyword (not a boolean) so the caller can persist
+    which trigger fired on `agent_runs.trigger_metadata.kb_relevance_bypass_keyword`.
+    False positives ("cancellation policy" matches "cancel") are
+    acceptable — Haiku is the final arbiter and the cost of one extra
+    Haiku call (~$0.001) is trivial vs. the cost of a missed escalation.
+    """
+    if not message_text:
+        return None
+    text_lower = message_text.lower()
+    for keyword in _ESCALATION_BYPASS_KEYWORDS:
+        if keyword in text_lower:
+            return keyword
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -354,6 +354,149 @@ def test_gate_kb_threshold_override_via_env(fake_db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Gate 4 — escalation-keyword bypass (2026-05-14 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _stub_haiku_escalate(monkeypatch):
+    """Stub the Haiku call to return decision='escalate'. The bypass
+    routes context-thin escalation-worthy messages to Haiku; Haiku
+    decides escalate."""
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.complete",
+        lambda **kw: SimpleNamespace(
+            text='{"decision":"escalate","reasoning":"cancellation intent — escalate per fence"}',
+            input_tokens=120, output_tokens=15,
+            cost_usd=Decimal("0.0001"), model="haiku", raw=None,
+        ),
+    )
+
+
+def test_bypass_keyword_with_no_kb_chunks_reaches_haiku(fake_db, monkeypatch):
+    """The headline failure mode: escalation-worthy message with no
+    curriculum anchor. Pre-bypass it died at Gate 4; post-bypass it
+    reaches Haiku and Haiku escalates."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [])  # no KB results at all
+    _stub_recent_context(monkeypatch)
+    _stub_haiku_escalate(monkeypatch)
+
+    ev = evaluate_passive_trigger(
+        _payload(text="I want my money back")
+    )
+
+    # Reached Haiku; did NOT die at Gate 4.
+    assert ev.skip_reason != "no_kb_match"
+    assert ev.decision.decision == "escalate"
+    # bypass_keyword field carries which trigger fired for audit.
+    assert ev.bypass_keyword in {"money back", "my money"}
+
+
+def test_bypass_keyword_with_relevant_kb_chunks_still_records_keyword(
+    fake_db, monkeypatch
+):
+    """When KB also has chunks (normal Gate 4 pass), the bypass field
+    is still set for audit purposes — answers "did the bypass fire on
+    this message?" reliably regardless of whether the gate would have
+    passed anyway."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [_chunk(similarity=0.8)])
+    _stub_recent_context(monkeypatch)
+    _stub_haiku_escalate(monkeypatch)
+
+    ev = evaluate_passive_trigger(
+        _payload(text="quick refund question about my last charge")
+    )
+
+    assert ev.decision.decision == "escalate"
+    # 'refund' or 'charge' would both qualify; either is correct.
+    assert ev.bypass_keyword in {"refund", "charge"}
+
+
+def test_no_bypass_keyword_with_no_kb_chunks_still_skips(fake_db, monkeypatch):
+    """Control case: benign context-thin message with no escalation
+    keywords still skips at Gate 4 (no regression on the existing
+    KB-relevance behavior)."""
+    fake_db.assignments_response = []
+    _stub_kb(monkeypatch, [])
+    _stub_recent_context(monkeypatch)
+
+    ev = evaluate_passive_trigger(
+        _payload(text="what's the offer ladder lesson")
+    )
+
+    assert ev.decision.decision == "skip"
+    assert ev.skip_reason == "no_kb_match"
+    assert ev.bypass_keyword is None
+
+
+def test_bypass_keyword_case_insensitive(fake_db, monkeypatch):
+    """Uppercase / mixed-case escalation keywords still trigger."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [])
+    _stub_recent_context(monkeypatch)
+    _stub_haiku_escalate(monkeypatch)
+
+    for variant in ("CANCEL", "Cancel", "cancel", "I want to CaNcEl"):
+        ev = evaluate_passive_trigger(_payload(text=variant))
+        assert ev.bypass_keyword == "cancel", f"variant={variant!r}"
+
+
+def test_bypass_keyword_multi_word_phrase(fake_db, monkeypatch):
+    """Multi-word keywords ('money back') match when they appear as a
+    phrase in the message."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [])
+    _stub_recent_context(monkeypatch)
+    _stub_haiku_escalate(monkeypatch)
+
+    ev = evaluate_passive_trigger(
+        _payload(text="please give me my money back now")
+    )
+
+    # Either 'money back' or 'my money' is acceptable — both are in
+    # the keyword set and a frozenset iteration order isn't deterministic.
+    assert ev.bypass_keyword in {"money back", "my money"}
+
+
+@pytest.mark.parametrize(
+    "category_message,expected_keyword_options",
+    [
+        # Money / commitment
+        ("I want to cancel my subscription", {"cancel"}),
+        # Complaints / dissatisfaction
+        ("I'm really frustrated with this", {"frustrated"}),
+        # Crisis / self-harm
+        ("I want to die honestly", {"want to die"}),
+        # Quitting / leaving
+        ("I'm done with this program", {"done with this"}),
+        # Legal
+        ("I'm getting a lawyer involved", {"lawyer"}),
+    ],
+)
+def test_bypass_keyword_each_category_triggers(
+    fake_db, monkeypatch, category_message, expected_keyword_options
+):
+    """At least one keyword from each of the five categories triggers
+    the bypass. Sample coverage — full list isn't pinned because the
+    constant is iterable code, not a contract surface."""
+    fake_db.assignments_response = []
+    fake_db.agent_runs_response = []
+    _stub_kb(monkeypatch, [])
+    _stub_recent_context(monkeypatch)
+    _stub_haiku_escalate(monkeypatch)
+
+    ev = evaluate_passive_trigger(_payload(text=category_message))
+
+    assert ev.bypass_keyword in expected_keyword_options
+    assert ev.skip_reason != "no_kb_match"
+
+
+# ---------------------------------------------------------------------------
 # Gate 5 — firm after first
 # ---------------------------------------------------------------------------
 
