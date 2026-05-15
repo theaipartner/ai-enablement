@@ -1070,6 +1070,103 @@ export type Database = {
           },
         ]
       }
+      oauth_tokens: {
+        Row: {
+          access_token: string
+          access_token_expires_at: string
+          created_at: string
+          id: string
+          provider: string
+          refresh_token: string
+          scope: string
+          team_member_id: string
+          updated_at: string
+        }
+        Insert: {
+          access_token: string
+          access_token_expires_at: string
+          created_at?: string
+          id?: string
+          provider: string
+          refresh_token: string
+          scope: string
+          team_member_id: string
+          updated_at?: string
+        }
+        Update: {
+          access_token?: string
+          access_token_expires_at?: string
+          created_at?: string
+          id?: string
+          provider?: string
+          refresh_token?: string
+          scope?: string
+          team_member_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oauth_tokens_team_member_id_fkey"
+            columns: ["team_member_id"]
+            isOneToOne: false
+            referencedRelation: "team_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      calendar_events: {
+        Row: {
+          attendees: Json
+          calendar_id: string
+          created_at: string
+          end_time: string
+          fetched_at: string
+          google_event_id: string
+          id: string
+          meeting_link: string | null
+          raw_payload: Json
+          start_time: string
+          team_member_id: string
+          title: string | null
+        }
+        Insert: {
+          attendees?: Json
+          calendar_id: string
+          created_at?: string
+          end_time: string
+          fetched_at?: string
+          google_event_id: string
+          id?: string
+          meeting_link?: string | null
+          raw_payload: Json
+          start_time: string
+          team_member_id: string
+          title?: string | null
+        }
+        Update: {
+          attendees?: Json
+          calendar_id?: string
+          created_at?: string
+          end_time?: string
+          fetched_at?: string
+          google_event_id?: string
+          id?: string
+          meeting_link?: string | null
+          raw_payload?: Json
+          start_time?: string
+          team_member_id?: string
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_events_team_member_id_fkey"
+            columns: ["team_member_id"]
+            isOneToOne: false
+            referencedRelation: "team_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       slack_channels: {
         Row: {
           client_id: string | null

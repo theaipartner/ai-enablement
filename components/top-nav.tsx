@@ -19,6 +19,7 @@ type NavItem = {
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/clients', label: 'Clients', requiredTier: 'csm' },
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
+  { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
   { href: '/ella/runs', label: 'Ella', requiredTier: 'admin' },
 ] as const
 
@@ -43,6 +44,7 @@ export function TopNav({
     if (href === '/clients') return pathname === '/clients' || pathname.startsWith('/clients/')
     if (href === '/calls') return pathname === '/calls' || pathname.startsWith('/calls/')
     if (href === '/ella/runs') return pathname === '/ella/runs' || pathname.startsWith('/ella/runs/')
+    if (href === '/teams') return pathname === '/teams' || pathname.startsWith('/teams/')
     return false
   }
 
