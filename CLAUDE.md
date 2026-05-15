@@ -413,25 +413,25 @@ Moved to `docs/state.md` as of 2026-05-11. Read on demand when a spec or task re
 
 ## Current Focus
 
-**Director-tier surfaces + permissions infrastructure — fully shipped 2026-05-15.** Seven specs landed end-to-end in one day on top of yesterday's Gregory redesign + Ella escalation unification + passive Gate 4 keyword bypass:
+**Gregory V1 — closed 2026-05-15.** The Director-tier surfaces (permissions infrastructure with `team_members.access_tier`, `/teams` Meeting Tracker, the May 18 title-convention forcing function, the `/tasks` Director page) shipped 2026-05-14 + the morning of 2026-05-15. The admin-tier cost hub at `/cost-hub` shipped 2026-05-15 evening and closed out Gregory V1 — Nabeel's cost-visibility ask is met: five Anthropic LLM-spend buckets, editable monthly subscriptions + one-off extras with `effective_from` month-attribution, a 12-month history view.
 
-1. **Permissions infrastructure (ADR-able).** Migration 0032 added `team_members.access_tier` (`csm`/`head_csm`/`admin`/`creator`) with the 6 known users backfilled (Drake creator, Nabeel admin, Scott Wilson head_csm, Lou/Nico/Zain csm). `lib/auth/access-tier.ts` (server) + `lib/auth/access-tier-shared.ts` (Client-Component-safe) own the tier resolution. Route gating via sub-layouts; the `(authenticated)/` layout calls `getCurrentUserAccessTier()` once per page load. `/ella/runs` moved to Admin; `/teams` to Head CSM; `/tasks` to Creator. TopNav filters items by `requiredTier`.
-2. **`/teams` Meeting Tracker.** Head-CSM-and-up dashboard backed by Google Calendar via Drake's stored OAuth token. Migrations 0033 (`oauth_tokens`) + 0034 (`calendar_events`). 30-min cron at `api/teams_calendar_sync_cron.py`. Title+time JS-side join against `calls`; lateness pill when Fathom started >2 min after the calendar event.
-3. **`/teams` external-attendee filter + personal-email exclusion.** Calendar events without at least one non-`@theaipartner.io` attendee get dropped at upsert. `team_members.metadata.personal_emails` adds teammates' personal addresses (Huzaifa's gmail today) to the internal list so internal-only meetings don't leak past the filter.
-4. **Migration 0035: Nabeel removed from CSM roster.** `team_members.is_csm` flipped false. His 3 active `client_team_assignments` rows stay intact per Drake's direction.
-5. **May 18 title-convention enforcement (ADR 0002).** Post-cutoff calls only auto-classify as `client` when titles match `Coaching/Sales Call with {Scott|Lou|Nico}`. Forcing function for the booking-link adoption. Auto-create + Merge + Mark-as-reviewed UI are the safety net.
-6. **Auto-created client lifecycle.** Merge button re-surfaced on `/clients/[id]` under `needs_review` gate; new "Mark as reviewed" button; missing-Slack badges on detail + list pages with the "Missing Slack" filter.
-7. **Migration 0036: `director_tasks` + `/tasks` page.** Creator-tier-only personal task list with add/toggle/delete server actions. Sticky filters on `/clients` + `/calls` via `?from=` URL param. Conditional Slack column on `/clients` (renders only when needs_review or missing_slack filter is active).
+Operational refinements landed in parallel that evening: Ella's passive-monitor escalation thresholds were lowered so softer signals (uncertainty / confusion / clarification-seeking) surface through Gate 4; the Trustpilot cascade gained a first-month carve-out; the `call_reviewer` prompt went to v2 with `questions_asked` extraction feeding a weekly Friday Slack DM to Scott (the FAQ digest). Title convention v2 (`[Client Name] - Coaching/Sales Call with {Scott|Lou|Nico}`) extends the May 18 forcing function with name-prefix-as-primary client resolution. Timezone handling was codified as ADR 0003 (store-UTC, render-ET, EST calendar periods, UTC crons with a doc-mapped EST equivalent) after a cost-hub-vs-`/ella/runs` discrepancy was diagnosed and aligned via a shared `lib/time/est-periods.ts`.
 
-The 36 migrations + 10 Python serverless functions + 5-tab TopNav (Clients / Calls / Teams / Ella / Tasks) describe the post-state. Full per-spec detail in `docs/state.md`. ADRs for major decisions: 0001 foundational stack, 0002 title-convention enforcement.
+The 39 migrations + 11 Python serverless functions + 6-tab TopNav (Clients / Calls / Teams / Ella / Cost Hub / Tasks) describe the post-state. Full per-spec detail in `docs/state.md`. ADRs: 0001 foundational stack, 0002 title-convention enforcement (+ v2 revision), 0003 timezone conventions.
 
-**Next:** see § Next Session Priorities — Send-to-Slack production cutover stays #1.
+**Next major arc: Gregory V2 — sales-side.** Specifics TBD; the scoping conversation happens in a future session. See § Next Session Priorities.
 
 ## Next Session Priorities
 
-Pick these up in order. **Read this section first** when starting a new session — it's the single source of truth for where to start.
+**Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Gregory V2 — sales side.** The next major arc, and now the only item on the pointer — the Admin cost hub shipped 2026-05-15 (`/cost-hub`, migration 0038), which was the last piece of Gregory V1. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before specs land. Items previously queued as backlog (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved into `docs/future-ideas.md` so this section stays a tight pointer to the live arc.
+1. **Gregory V2 — sales-side.** The next major arc. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before any spec is drafted. Backlog items previously on this pointer (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved in `docs/future-ideas.md` so this stays a tight pointer to the live arc.
+
+**Watch posture (no spec yet — EOD-eyeball, not forward work):**
+
+- **Ella weekly cost trend.** Per Nabeel's "90% of messages through Ella" goal, cost-per-message matters at scale. Run rate today is ~$1.25/month — premature to optimize. Check the `/cost-hub` Ella buckets weekly; if the month-total trends toward a sustained $200+/month, spec optimization (model routing, prompt caching, output-token caps).
+- **FAQ digest first real fire** — Friday May 22, 15:00 EDT. Pending Drake gate (d): set `FAQ_DIGEST_CC_SLACK_USER_ID=U0AMC23G1SM` in Vercel + manual curl to test, then confirm Scott receives the DM.
+- **Post-2026-05-18 title-convention adoption.** Zain's booking-link rollout. Audit SQL in `docs/runbooks/call_title_convention.md`; Drake runs it Monday afternoon / Wednesday / Thursday next week to catch stragglers (both v1 and v2 patterns are valid).
 
 ## Ella (active focus)
 
