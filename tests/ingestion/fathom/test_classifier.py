@@ -19,11 +19,15 @@ def _record(
     title: str = "Test call",
     duration_seconds: int | None = 600,
     participants: list[Participant] | None = None,
+    started_at: datetime | None = None,
 ) -> FathomCallRecord:
     return FathomCallRecord(
         external_id="test-1",
         title=title,
-        started_at=datetime(2026, 3, 15, tzinfo=timezone.utc),
+        # Default 2026-03-15 is pre-cutoff (new-convention cutoff is
+        # 2026-05-18 EST). Tests covering post-cutoff behavior pass
+        # `started_at=` explicitly.
+        started_at=started_at or datetime(2026, 3, 15, tzinfo=timezone.utc),
         scheduled_start=None,
         scheduled_end=None,
         recording_start=None,
@@ -448,3 +452,302 @@ def test_unknown_name_and_email_still_auto_creates():
     assert result.classification_confidence == c.CONFIDENCE_MEDIUM
     assert result.should_auto_create_client is not None
     assert result.should_auto_create_client.email == "prospect@example.com"
+
+
+# ---------------------------------------------------------------------------
+# New-convention cutoff (2026-05-18 EST onward) — spec: classifier-enforce-
+# new-title-convention.md. Post-cutoff calls require one of the six
+# canonical title patterns for `client` classification; pre-cutoff calls
+# use the prior cascade unchanged.
+# ---------------------------------------------------------------------------
+
+
+from zoneinfo import ZoneInfo as _ZoneInfo
+
+# Boundary moment (Mon May 18 2026 00:00 EST), used as the post-cutoff
+# anchor for the tests below. May 19 is comfortably past EDT-side noise;
+# the boundary itself is tested separately.
+_POST_CUTOFF = datetime(2026, 5, 19, 14, 0, tzinfo=timezone.utc)
+_PRE_CUTOFF = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
+
+
+def test_pre_cutoff_old_title_still_classifies_as_client():
+    """Pre-cutoff: prior cascade unchanged. Participant match against
+    a known client still promotes to `client`."""
+    record = _record(
+        title="[Client] Session with Scott (Andrew Hsu)",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_PRE_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_method == "participant_match"
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_post_cutoff_new_title_classifies_as_client_with_confidence_one():
+    """Post-cutoff: canonical new-convention title → `client`,
+    method='title_pattern', confidence=1.0. Primary client resolved
+    from external participant."""
+    record = _record(
+        title="Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.call_type == "coaching"
+    assert result.classification_method == "title_pattern"
+    assert result.classification_confidence == 1.0
+    assert result.primary_client_id == "c-andrew"
+
+
+def test_post_cutoff_sales_call_pattern_classifies_with_sales_type():
+    """The 'Sales Call with X' family produces call_type='sales'."""
+    record = _record(
+        title="Sales Call with Lou",
+        participants=[
+            _pt("lou@theaipartner.io"),
+            _pt("prospect@example.com", "Prospect"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"prospect@example.com": "c-prospect"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.call_type == "sales"
+
+
+def test_post_cutoff_new_title_with_trailing_extra_still_matches():
+    """Case-insensitive prefix match — trailing context after the
+    canonical prefix doesn't break the match."""
+    record = _record(
+        title="Coaching Call with Scott - Andrew Hsu follow-up",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_confidence == 1.0
+
+
+def test_post_cutoff_old_style_title_does_not_classify_as_client():
+    """The forcing function: post-cutoff calls with the old title style
+    do NOT get promoted to `client` even when participant match would
+    have classified them as such pre-cutoff."""
+    record = _record(
+        title="[Client] Session with Scott (Andrew Hsu)",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category != "client"
+    # Suppression note lands in reasoning for audit.
+    assert "post-cutoff title gate" in (result.reasoning or "")
+
+
+def test_post_cutoff_adhoc_title_with_known_client_participant_does_not_classify_as_client():
+    """Even with a known client on the invite, an ad-hoc title doesn't
+    earn `client` classification. Falls through to `external`."""
+    record = _record(
+        title="Quick sync with Andrew",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "external"
+    assert result.primary_client_id is None
+
+
+def test_post_cutoff_case_variants_all_match():
+    """ALL CAPS, all lowercase, and mixed-case titles all match the
+    same patterns (case-insensitive prefix)."""
+    for variant in (
+        "COACHING CALL WITH SCOTT",
+        "coaching call with scott",
+        "Coaching Call With Scott",
+        "  coaching call with scott  ",  # whitespace
+    ):
+        record = _record(
+            title=variant,
+            participants=[
+                _pt("scott@theaipartner.io"),
+                _pt("andrew@example.com", "Andrew Hsu"),
+            ],
+            started_at=_POST_CUTOFF,
+        )
+        resolver = c.ClientResolver(
+            client_id_by_email={"andrew@example.com": "c-andrew"},
+        )
+        result = c.classify(record, resolver)
+        assert result.call_category == "client", f"variant {variant!r} failed"
+        assert result.classification_confidence == 1.0
+
+
+def test_cutoff_boundary_inclusive():
+    """`started_at` exactly at the cutoff moment uses the new logic."""
+    boundary = datetime(2026, 5, 18, 0, 0, 0, tzinfo=_ZoneInfo("America/New_York"))
+    one_min_before = datetime(2026, 5, 17, 23, 59, 0, tzinfo=_ZoneInfo("America/New_York"))
+
+    # At-boundary call with old title → NOT client.
+    record_at = _record(
+        title="[Client] Session with Scott (Andrew)",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com"),
+        ],
+        started_at=boundary,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    assert c.classify(record_at, resolver).call_category != "client"
+
+    # One-minute-before call with old title → still client (pre-cutoff
+    # cascade applies).
+    record_before = _record(
+        title="[Client] Session with Scott (Andrew)",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com"),
+        ],
+        started_at=one_min_before,
+    )
+    assert c.classify(record_before, resolver).call_category == "client"
+
+
+def test_post_cutoff_new_title_with_no_resolvable_client_still_classifies_as_client():
+    """Spec § 4: when the new pattern matches but no external
+    participant resolves to a known client, the row still lands as
+    `client` with `primary_client_id=null`. The new convention assumes
+    Zain's onboarding seeds the client record before the booking link
+    is shared; an unresolved attendee surfaces as a data-hygiene gap,
+    not a classification failure."""
+    record = _record(
+        title="Coaching Call with Scott",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("brand-new@unknown.com", "Brand New"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "client"
+    assert result.classification_confidence == 1.0
+    assert result.primary_client_id is None
+    assert result.should_auto_create_client is None
+
+
+def test_post_cutoff_internal_title_still_internal():
+    """Internal-title patterns (CSM Sync, etc.) still produce `internal`
+    post-cutoff. The cutoff gate only governs `client` classification."""
+    record = _record(
+        title="CSM Sync",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("lou@theaipartner.io"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(client_id_by_email={})
+    result = c.classify(record, resolver)
+
+    assert result.call_category == "internal"
+
+
+def test_post_cutoff_scott_1on1_does_not_classify_as_client():
+    """The legacy `30mins with Scott` pattern is retired post-cutoff —
+    it's a title pattern that produced `client`, and only the six
+    canonical patterns can do that now."""
+    record = _record(
+        title="30mins with Scott (Andrew Hsu)",
+        participants=[
+            _pt("scott@theaipartner.io"),
+            _pt("andrew@example.com", "Andrew Hsu"),
+        ],
+        started_at=_POST_CUTOFF,
+    )
+    resolver = c.ClientResolver(
+        client_id_by_email={"andrew@example.com": "c-andrew"},
+    )
+    result = c.classify(record, resolver)
+
+    assert result.call_category != "client"
+
+
+def test_helper_matches_new_client_title_convention_edge_cases():
+    """Direct coverage of the helper for empty / None / non-matching
+    titles."""
+    assert c._matches_new_client_title_convention(None) is False
+    assert c._matches_new_client_title_convention("") is False
+    assert c._matches_new_client_title_convention("   ") is False
+    assert c._matches_new_client_title_convention("Some Other Call") is False
+    # Prefix doesn't have to be the full string.
+    assert c._matches_new_client_title_convention("Coaching Call with Scott") is True
+    # All six canonical patterns return True.
+    for pattern in (
+        "Coaching Call with Scott",
+        "Coaching Call with Lou",
+        "Coaching Call with Nico",
+        "Sales Call with Scott",
+        "Sales Call with Lou",
+        "Sales Call with Nico",
+    ):
+        assert c._matches_new_client_title_convention(pattern) is True
+
+
+def test_helper_is_after_new_convention_cutoff_handles_iso_strings():
+    """Helper accepts both datetime and ISO string. Naive ISO strings
+    are treated as UTC."""
+    assert c._is_after_new_convention_cutoff(None) is False
+    assert c._is_after_new_convention_cutoff("not-a-date") is False
+    # Z suffix tolerated.
+    assert c._is_after_new_convention_cutoff("2026-05-19T14:00:00Z") is True
+    assert c._is_after_new_convention_cutoff("2026-05-17T14:00:00Z") is False
+    # Datetime branch.
+    assert (
+        c._is_after_new_convention_cutoff(
+            datetime(2026, 5, 19, tzinfo=timezone.utc)
+        )
+        is True
+    )

@@ -21,13 +21,42 @@ classifier stays a pure function.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from ingestion.fathom.parser import FathomCallRecord, Participant
 
 TEAM_EMAIL_DOMAIN = "@theaipartner.io"
 AMAN_EMAIL = "aman@theaipartner.io"
 CSM_EMAILS = frozenset({"lou@theaipartner.io", "nico@theaipartner.io"})
+
+# New-convention title cutoff. Calls with `started_at` at or after this
+# point can ONLY be classified as `client` if their title matches one
+# of the six canonical new-convention patterns below. Pre-cutoff calls
+# use the prior cascade unchanged.
+#
+# America/New_York anchored to dodge DST math; May 18 2026 is in EDT
+# (UTC-4) so the cutoff lands at 2026-05-18T04:00:00Z. Spec:
+# docs/specs/classifier-enforce-new-title-convention.md.
+_NEW_TITLE_CONVENTION_CUTOFF = datetime(
+    2026, 5, 18, 0, 0, 0, tzinfo=ZoneInfo("America/New_York")
+)
+
+# The six canonical post-cutoff client-call titles. Lowercased here for
+# case-insensitive prefix match; trailing extras after the canonical
+# prefix are tolerated ("Coaching Call with Scott - Andrew Hsu follow
+# up" still matches). Booking links generate these exactly; ad-hoc /
+# manually-titled meetings must match the prefix to be classified
+# as client post-cutoff.
+NEW_CLIENT_TITLE_PATTERNS: tuple[str, ...] = (
+    "coaching call with scott",
+    "coaching call with lou",
+    "coaching call with nico",
+    "sales call with scott",
+    "sales call with lou",
+    "sales call with nico",
+)
 
 CONFIDENCE_HIGH = 0.9
 CONFIDENCE_MEDIUM = 0.6
@@ -183,6 +212,29 @@ def classify(
             reasoning=f"title matched internal pattern {title_hit!r}",
         )
 
+    # New-convention cutoff gate (spec: classifier-enforce-new-title-
+    # convention). Post-cutoff calls can ONLY produce `client`
+    # classification via the six canonical new-convention titles. The
+    # Scott-1:1 title pattern and participant-match-as-client both stop
+    # promoting to client post-cutoff; participant match still produces
+    # internal/external/unclassified as appropriate.
+    post_cutoff = _is_after_new_convention_cutoff(record.started_at)
+    if post_cutoff:
+        if _matches_new_client_title_convention(record.title):
+            return _classify_by_new_convention(record, resolver, external_emails)
+        # No new-convention title; client classification is BLOCKED.
+        # Skip Scott-1:1 (which is itself a client classifier) and
+        # gate participant-match against producing `client`.
+        step2 = _classify_by_participants(
+            record,
+            resolver,
+            team_emails,
+            external_emails,
+            allow_client_classification=False,
+        )
+        return _apply_aman_sales_override(step2, team_emails)
+
+    # Pre-cutoff path — existing cascade unchanged.
     # Step 4 — 30mins-with-Scott 1:1.
     if _matches_scott_1on1(title_norm):
         return _classify_scott_1on1(record, resolver, external_emails)
@@ -238,6 +290,113 @@ def _internal_call_type(title_norm: str) -> str:
 
 def _matches_scott_1on1(title_norm: str) -> bool:
     return title_norm.startswith(SCOTT_1ON1_PATTERN)
+
+
+def _matches_new_client_title_convention(title: str | None) -> bool:
+    """Return True iff `title` (case-insensitive, trimmed) starts with
+    one of the six canonical new-convention patterns. Empty / None
+    titles return False — the cutoff gate falls through to non-client
+    classification when there's nothing to match.
+
+    Trailing context after the pattern is tolerated; a CSM appending
+    the client's name ("Coaching Call with Scott - Andrew Hsu") still
+    matches the prefix. Prefixes like "FW:" or "[CANCELED]" do NOT
+    match — the booking link generates clean titles, so anything else
+    is drift from convention and should fail.
+    """
+    if not title:
+        return False
+    normalized = title.strip().lower()
+    if not normalized:
+        return False
+    return any(normalized.startswith(p) for p in NEW_CLIENT_TITLE_PATTERNS)
+
+
+def _is_after_new_convention_cutoff(started_at: datetime | str | None) -> bool:
+    """Return True iff `started_at` is on or after the new-convention
+    cutoff. Accepts datetime or ISO string. Returns False on None
+    (defensive — pre-cutoff behavior is the safe default if a call
+    somehow lacks `started_at`).
+
+    Naive datetimes are assumed UTC (the codebase convention; the
+    Fathom parser always emits tz-aware UTC, so the naive branch is
+    a defensive safety net for downstream callers that might strip
+    tzinfo somewhere).
+    """
+    if started_at is None:
+        return False
+    if isinstance(started_at, str):
+        try:
+            started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return started_at >= _NEW_TITLE_CONVENTION_CUTOFF
+
+
+def _classify_by_new_convention(
+    record: FathomCallRecord,
+    resolver: ClientResolver,
+    external_emails: list[str],
+) -> ClassificationResult:
+    """Post-cutoff: title matched one of the six canonical patterns.
+    Classify as `client` + resolve `primary_client_id` from the
+    external participants. Participant resolution mirrors the old
+    cascade — try email first (including `metadata.alternate_emails`),
+    fall back to display-name (including `metadata.alternate_names`).
+
+    If no external participant resolves to a known client, the row
+    still lands as `client` with `primary_client_id=null` per spec
+    § 4. The auto-create-client flow lives in `_classify_scott_1on1`
+    pre-cutoff; this path intentionally does NOT auto-create — the
+    new convention assumes Zain's onboarding has the client record
+    in place before the booking link is shared.
+    """
+    matched_client_id: str | None = None
+    matched_email: str | None = None
+    matched_via: str = ""
+    for email in external_emails:
+        cid, via = _resolve_participant(resolver, record.participants, email)
+        if cid is not None:
+            matched_client_id = cid
+            matched_email = email
+            matched_via = via
+            break
+
+    # Derive call_type from the title prefix. "Coaching Call with X" →
+    # coaching; "Sales Call with X" → sales.
+    title_lower = (record.title or "").strip().lower()
+    if title_lower.startswith("coaching call"):
+        call_type = "coaching"
+    elif title_lower.startswith("sales call"):
+        call_type = "sales"
+    else:
+        call_type = None
+
+    if matched_client_id is not None:
+        reasoning = (
+            f"new-convention title; {matched_email} matched existing client "
+            f"via {matched_via}"
+        )
+    else:
+        reasoning = (
+            "new-convention title; no external participant matched a client — "
+            "primary_client_id stays null"
+        )
+
+    # Confidence 1.0 because the new patterns are the strongest signal
+    # we have — booking-link-generated titles are explicit declarations
+    # of intent, not heuristics. Above CONFIDENCE_HIGH so
+    # `should_be_retrievable` fires correctly.
+    return ClassificationResult(
+        call_category="client",
+        call_type=call_type,
+        classification_confidence=1.0,
+        classification_method="title_pattern",
+        primary_client_id=matched_client_id,
+        reasoning=reasoning,
+    )
 
 
 def _resolve_participant(
@@ -327,8 +486,18 @@ def _classify_by_participants(
     resolver: ClientResolver,
     team_emails: list[str],
     external_emails: list[str],
+    *,
+    allow_client_classification: bool = True,
 ) -> ClassificationResult:
-    """Step 2 — participant match."""
+    """Step 2 — participant match.
+
+    `allow_client_classification=False` is the post-cutoff path: the
+    "matched external → client" promotion is suppressed. Internal /
+    external / unclassified outcomes still fire as normal. Used by
+    the new-convention cutoff gate to enforce "client classification
+    requires a canonical title post-cutoff" without losing the rest
+    of the participant-match cascade.
+    """
     # 2+ team + no external → internal, high
     if len(team_emails) >= 2 and not external_emails:
         return ClassificationResult(
@@ -341,17 +510,19 @@ def _classify_by_participants(
         )
 
     # Any external matches a client (by email, then alternate_name)
-    # → client, high
+    # → client, high. Gated by `allow_client_classification` so the
+    # post-cutoff path can suppress this promotion.
     matched_client_id: str | None = None
     matched_email: str | None = None
     matched_via: str = ""
-    for email in external_emails:
-        cid, via = _resolve_participant(resolver, record.participants, email)
-        if cid is not None:
-            matched_client_id = cid
-            matched_email = email
-            matched_via = via
-            break
+    if allow_client_classification:
+        for email in external_emails:
+            cid, via = _resolve_participant(resolver, record.participants, email)
+            if cid is not None:
+                matched_client_id = cid
+                matched_email = email
+                matched_via = via
+                break
 
     if matched_client_id is not None:
         return ClassificationResult(
@@ -363,8 +534,16 @@ def _classify_by_participants(
             reasoning=f"{matched_email} matched existing client via {matched_via}",
         )
 
-    # External but no match → external, medium
+    # External but no match (OR matched-client-blocked-by-cutoff) →
+    # external, medium. Post-cutoff: a call with an external attendee
+    # who's actually a known client but lacks the new title falls
+    # here, which is the intended forcing-function behavior.
     if external_emails:
+        suppressed_note = (
+            "; matched-client promotion suppressed by post-cutoff title gate"
+            if not allow_client_classification
+            else ""
+        )
         return ClassificationResult(
             call_category="external",
             call_type=None,
@@ -373,6 +552,7 @@ def _classify_by_participants(
             primary_client_id=None,
             reasoning=(
                 f"{len(external_emails)} external email(s), none matching clients"
+                f"{suppressed_note}"
             ),
         )
 
