@@ -440,3 +440,162 @@ def test_slack_failure_records_audit_returns_status(fake_db, monkeypatch):
         or (isinstance(payload, dict) and payload.get("slack_error") == "channel_not_found")
         for _, payload in fake_db.audit_updates
     )
+
+
+# ---------------------------------------------------------------------------
+# CC recipient (FAQ_DIGEST_CC_SLACK_USER_ID)
+# ---------------------------------------------------------------------------
+
+
+def _seed_one_question_with_scott(fake_db):
+    """Common fixture for the CC tests — one client question + Scott row."""
+    fake_db.documents_rows = [
+        _document_row(
+            questions=[
+                {"question": "How do I export contacts?",
+                 "asker": "client", "evidence": "..."}
+            ],
+        ),
+    ]
+    fake_db.team_members_rows = [_scott_row()]
+
+
+def test_cc_env_unset_scott_only(fake_db, stub_slack, monkeypatch):
+    """Regression: with CC env var unset, the cron still DMs only Scott
+    — the pre-CC behavior is preserved."""
+    monkeypatch.delenv("FAQ_DIGEST_CC_SLACK_USER_ID", raising=False)
+    _seed_one_question_with_scott(fake_db)
+
+    result = cron.run_faq_digest_cron()
+
+    assert result["status"] == "ok"
+    assert result["cc_present"] is False
+    assert result["cc_slack_ok"] is None
+    assert result["cc_slack_error"] is None
+    assert len(result["recipients"]) == 1
+    assert result["recipients"][0]["source"] == "scott"
+    # Exactly one Slack post, to Scott.
+    assert len(stub_slack) == 1
+    channel, _ = stub_slack[0]
+    assert channel == "USCOTT1"
+
+
+def test_cc_env_valid_uid_both_recipients_dmed(fake_db, stub_slack, monkeypatch):
+    """CC set to a valid Slack user_id → both Scott and CC get DMed,
+    each with its own webhook_deliveries audit row."""
+    monkeypatch.setenv("FAQ_DIGEST_CC_SLACK_USER_ID", "U0AMC23G1SM")
+    _seed_one_question_with_scott(fake_db)
+
+    result = cron.run_faq_digest_cron()
+
+    assert result["status"] == "ok"
+    assert result["cc_present"] is True
+    assert result["cc_slack_ok"] is True
+    assert result["cc_slack_error"] is None
+    assert len(result["recipients"]) == 2
+
+    sources = {r["source"] for r in result["recipients"]}
+    assert sources == {"scott", "cc"}
+    cc_recipient = next(r for r in result["recipients"] if r["source"] == "cc")
+    assert cc_recipient["slack_user_id"] == "U0AMC23G1SM"
+    assert cc_recipient["slack_ok"] is True
+
+    # Both Slack posts fired, both to the correct channels.
+    assert len(stub_slack) == 2
+    channels = {channel for channel, _ in stub_slack}
+    assert channels == {"USCOTT1", "U0AMC23G1SM"}
+    # Both bodies identical (same message text, different recipient).
+    bodies = {body for _, body in stub_slack}
+    assert len(bodies) == 1
+
+    # Two per-recipient audit rows inserted, two final-state updates.
+    assert len(fake_db.audit_inserts) == 2
+    assert len(fake_db.audit_updates) == 2
+
+
+def test_cc_env_malformed_value_scott_only_warning_logged(
+    fake_db, stub_slack, monkeypatch, caplog
+):
+    """CC set to a value that doesn't match ^U[A-Z0-9]+$ degrades to
+    Scott-only with a logged warning. Doesn't crash the cron."""
+    import logging
+    monkeypatch.setenv("FAQ_DIGEST_CC_SLACK_USER_ID", "drake@example.com")
+    _seed_one_question_with_scott(fake_db)
+
+    with caplog.at_level(logging.WARNING, logger="ai_enablement.faq_digest_cron"):
+        result = cron.run_faq_digest_cron()
+
+    assert result["status"] == "ok"
+    assert result["cc_present"] is False
+    assert len(result["recipients"]) == 1
+    assert result["recipients"][0]["source"] == "scott"
+    assert len(stub_slack) == 1
+    # Warning surfaces in logs with the offending env var value.
+    assert any(
+        "FAQ_DIGEST_CC_SLACK_USER_ID" in r.message and "malformed" in r.message
+        for r in caplog.records
+    )
+
+
+def test_cc_env_valid_but_cc_slack_send_fails_scott_still_ok(
+    fake_db, monkeypatch
+):
+    """CC's Slack send fails (e.g., channel_not_found) but Scott's
+    succeeds. Cron returns 200/ok at top level (Scott is the
+    source-of-truth recipient); CC's failure lands in the recipients
+    list + its own audit row carries the error."""
+    monkeypatch.setenv("FAQ_DIGEST_CC_SLACK_USER_ID", "U0AMC23G1SM")
+    _seed_one_question_with_scott(fake_db)
+
+    calls: list[tuple[str, str]] = []
+
+    def _selective_post(channel_id, text, **_kw):
+        calls.append((channel_id, text))
+        # Scott ok; CC fails.
+        if channel_id == "USCOTT1":
+            return {"ok": True, "slack_error": None}
+        return {"ok": False, "slack_error": "channel_not_found"}
+
+    monkeypatch.setattr("api.faq_digest_cron.post_message", _selective_post)
+
+    result = cron.run_faq_digest_cron()
+
+    assert result["status"] == "ok"
+    assert result["slack_ok"] is True
+    assert result["cc_present"] is True
+    assert result["cc_slack_ok"] is False
+    assert result["cc_slack_error"] == "channel_not_found"
+    # Both attempts fired.
+    assert len(calls) == 2
+    # CC's audit row carries the slack_post_failed error. The recorded
+    # `payload` is the full update dict written via
+    # webhook_deliveries.update(...); the inner final_payload is nested
+    # under the "payload" key. Find the update whose inner payload has
+    # recipient_source='cc'.
+    cc_update = next(
+        update for _, update in fake_db.audit_updates
+        if isinstance(update, dict)
+        and isinstance(update.get("payload"), dict)
+        and update["payload"].get("recipient_source") == "cc"
+    )
+    assert cc_update["processing_status"] == "failed"
+    assert "channel_not_found" in cc_update["processing_error"]
+    assert cc_update["payload"]["slack_ok"] is False
+    assert cc_update["payload"]["slack_error"] == "channel_not_found"
+
+
+def test_cc_env_equal_to_scott_uid_deduplicated_to_one_recipient(
+    fake_db, stub_slack, monkeypatch
+):
+    """Edge case: CC env set to Scott's own slack_user_id. Don't
+    double-DM. Scott wins; CC is dropped."""
+    monkeypatch.setenv("FAQ_DIGEST_CC_SLACK_USER_ID", "USCOTT1")
+    _seed_one_question_with_scott(fake_db)
+
+    result = cron.run_faq_digest_cron()
+
+    assert result["status"] == "ok"
+    assert result["cc_present"] is False
+    assert len(result["recipients"]) == 1
+    assert result["recipients"][0]["source"] == "scott"
+    assert len(stub_slack) == 1

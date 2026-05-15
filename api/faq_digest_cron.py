@@ -57,6 +57,16 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+# Optional CC recipient. When `FAQ_DIGEST_CC_SLACK_USER_ID` is set to a
+# syntactically valid Slack user_id (^U[A-Z0-9]+$), the cron fans out
+# the same DM to both Scott and the CC. Drake uses this during the
+# validation period to see the same DM Scott sees. Drake's slack_user_id
+# is the expected value (`U0AMC23G1SM`), but the cron resolves it from
+# the env var rather than hardcoding — keeps the cron robust against
+# future re-targeting. Unset = current behavior (Scott-only).
+_CC_ENV_VAR = "FAQ_DIGEST_CC_SLACK_USER_ID"
+_SLACK_USER_ID_RE = re.compile(r"^U[A-Z0-9]+$")
+
 # Make sibling packages importable when Vercel instantiates this handler.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -159,23 +169,20 @@ class handler(BaseHTTPRequestHandler):
 
 def run_faq_digest_cron() -> dict[str, Any]:
     """Run one cron iteration. Returns a structured result dict for the
-    HTTP layer to serialize. NEVER raises."""
-    delivery_id = f"faq_digest_{uuid.uuid4()}"
+    HTTP layer to serialize. NEVER raises.
+
+    Slack delivery fans out one DM + one webhook_deliveries audit row
+    per recipient — Scott is always primary; an optional CC recipient
+    is appended when `FAQ_DIGEST_CC_SLACK_USER_ID` is set to a
+    syntactically valid Slack user_id. Mirrors the `ella_escalation_dm`
+    fan-out shape. Pre-fanout failures (Scott lookup, document fetch)
+    return failed status without writing audit rows — those surface in
+    Vercel logs; only the per-recipient send rows hit
+    `webhook_deliveries`."""
     now_utc = datetime.now(timezone.utc)
     window_start = now_utc - timedelta(days=_WINDOW_DAYS)
 
     db = get_client()
-
-    _insert_delivery(
-        db,
-        delivery_id,
-        payload={
-            "window_start": window_start.isoformat(),
-            "window_end": now_utc.isoformat(),
-            "stage": "starting",
-        },
-        status="received",
-    )
 
     # 1. Extract client-asked questions from the past 7 days of
     # call_review documents.
@@ -183,14 +190,9 @@ def run_faq_digest_cron() -> dict[str, Any]:
         questions = _fetch_client_questions(db, window_start, now_utc)
     except Exception as exc:
         error_message = f"document_fetch_failed: {type(exc).__name__}: {exc}"
-        logger.exception(
-            "faq_digest_cron: document fetch failed delivery_id=%s",
-            delivery_id,
-        )
-        _mark_delivery(db, delivery_id, status="failed", error=error_message)
+        logger.exception("faq_digest_cron: document fetch failed: %s", exc)
         return {
             "status": "failed",
-            "delivery_id": delivery_id,
             "error": error_message,
         }
 
@@ -201,36 +203,28 @@ def run_faq_digest_cron() -> dict[str, Any]:
     truncated = total_clusters > _MAX_CLUSTERS_IN_MESSAGE
     display_clusters = clusters[:_MAX_CLUSTERS_IN_MESSAGE]
 
-    # 3. Resolve Scott's slack_user_id.
+    # 3. Resolve recipients (Scott primary + optional CC). Pre-fanout
+    # failure path returns failed without writing audit rows.
     try:
-        scott = _fetch_scott(db)
+        recipients = _resolve_recipients(db)
     except Exception as exc:
-        error_message = f"scott_lookup_failed: {type(exc).__name__}: {exc}"
-        logger.exception(
-            "faq_digest_cron: scott lookup failed delivery_id=%s",
-            delivery_id,
-        )
-        _mark_delivery(db, delivery_id, status="failed", error=error_message)
+        error_message = f"recipient_resolution_failed: {type(exc).__name__}: {exc}"
+        logger.exception("faq_digest_cron: recipient resolution failed: %s", exc)
         return {
             "status": "failed",
-            "delivery_id": delivery_id,
             "error": error_message,
         }
-    if scott is None or not scott.get("slack_user_id"):
+    if not recipients:
         error_message = "scott_slack_user_id_not_resolved"
-        logger.error(
-            "faq_digest_cron: %s delivery_id=%s", error_message, delivery_id
-        )
-        _mark_delivery(db, delivery_id, status="failed", error=error_message)
+        logger.error("faq_digest_cron: %s", error_message)
         return {
             "status": "failed",
-            "delivery_id": delivery_id,
             "error": error_message,
         }
 
     # 4. Format the Slack DM body. Always send something — even if zero
     # questions surfaced, the explicit "no questions" message lets
-    # Scott know the cron ran.
+    # recipients know the cron ran.
     message_text = _format_digest_message(
         window_start=window_start,
         window_end=now_utc,
@@ -240,54 +234,162 @@ def run_faq_digest_cron() -> dict[str, Any]:
         total_questions=len(questions),
     )
 
-    # 5. Send via shared.slack_post.post_message. The high-level helper
-    # accepts a user ID as `channel_id` for DMs; Slack's chat.postMessage
-    # resolves it to the IM channel server-side.
-    slack_result = post_message(scott["slack_user_id"], message_text)
-
-    payload_update = {
+    base_payload: dict[str, Any] = {
         "window_start": window_start.isoformat(),
         "window_end": now_utc.isoformat(),
         "total_questions": len(questions),
         "total_clusters": total_clusters,
         "displayed_clusters": len(display_clusters),
         "truncated": truncated,
-        "scott_slack_user_id": scott["slack_user_id"],
+    }
+
+    # 5. Fan out — one Slack post + one audit row per recipient.
+    recipient_results: list[dict[str, Any]] = []
+    for recipient in recipients:
+        recipient_results.append(
+            _fire_recipient_dm(db, recipient, message_text, base_payload)
+        )
+
+    # 6. Aggregate. Scott is the source-of-truth recipient; CC is
+    # best-effort. Status flips to slack_post_failed only when Scott's
+    # send fails. CC failures land in the recipients list but don't
+    # change the cron's top-level status.
+    scott_result = next(
+        (r for r in recipient_results if r["source"] == "scott"), None
+    )
+    cc_result = next(
+        (r for r in recipient_results if r["source"] == "cc"), None
+    )
+    scott_ok = bool(scott_result and scott_result["slack_ok"])
+
+    logger.info(
+        "faq_digest_cron: complete questions=%d clusters=%d scott_ok=%s "
+        "cc_present=%s cc_ok=%s",
+        len(questions),
+        total_clusters,
+        scott_ok,
+        cc_result is not None,
+        cc_result["slack_ok"] if cc_result else None,
+    )
+    return {
+        "status": "ok" if scott_ok else "slack_post_failed",
+        # Backwards-compat: top-level delivery_id / slack_ok / slack_error
+        # reflect Scott's send. Per-recipient detail is in `recipients`.
+        "delivery_id": scott_result["delivery_id"] if scott_result else None,
+        "window_start": window_start.isoformat(),
+        "window_end": now_utc.isoformat(),
+        "total_questions": len(questions),
+        "total_clusters": total_clusters,
+        "displayed_clusters": len(display_clusters),
+        "truncated": truncated,
+        "slack_ok": scott_ok,
+        "slack_error": scott_result["slack_error"] if scott_result else None,
+        "recipients": recipient_results,
+        "cc_present": cc_result is not None,
+        "cc_slack_ok": cc_result["slack_ok"] if cc_result else None,
+        "cc_slack_error": cc_result["slack_error"] if cc_result else None,
+    }
+
+
+def _resolve_recipients(db) -> list[dict[str, str]]:
+    """Build the recipient list for one tick.
+
+    Returns `[Scott]` when only Scott is resolvable, or
+    `[Scott, CC]` when `FAQ_DIGEST_CC_SLACK_USER_ID` is set to a
+    syntactically valid Slack user_id (and isn't a duplicate of Scott).
+
+    Each entry shape:
+        {"slack_user_id": str, "label": str, "source": "scott" | "cc"}
+
+    Edge cases:
+      - Scott row missing or `slack_user_id` null → returns `[]`
+        (the cron caller treats empty as failure and short-circuits).
+      - CC env unset → Scott-only list.
+      - CC env set to malformed value (doesn't match ^U[A-Z0-9]+$) →
+        log a warning, return Scott-only list (do NOT raise).
+      - CC env set to Scott's own slack_user_id → deduplicated to one
+        entry (Scott wins; CC dropped).
+    """
+    recipients: list[dict[str, str]] = []
+
+    scott = _fetch_scott(db)
+    if scott is None or not scott.get("slack_user_id"):
+        return recipients
+    recipients.append(
+        {
+            "slack_user_id": scott["slack_user_id"],
+            "label": scott.get("full_name") or "Scott",
+            "source": "scott",
+        }
+    )
+
+    cc_raw = (os.environ.get(_CC_ENV_VAR) or "").strip()
+    if not cc_raw:
+        return recipients
+    if not _SLACK_USER_ID_RE.match(cc_raw):
+        logger.warning(
+            "faq_digest_cron: %s=%r is malformed (must match ^U[A-Z0-9]+$); "
+            "proceeding with Scott-only",
+            _CC_ENV_VAR,
+            cc_raw,
+        )
+        return recipients
+    if any(r["slack_user_id"] == cc_raw for r in recipients):
+        # CC is the same Slack user as Scott — don't double-DM.
+        return recipients
+    recipients.append(
+        {
+            "slack_user_id": cc_raw,
+            "label": "CC",
+            "source": "cc",
+        }
+    )
+    return recipients
+
+
+def _fire_recipient_dm(
+    db,
+    recipient: dict[str, str],
+    message_text: str,
+    base_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Send one DM to one recipient and write one webhook_deliveries
+    audit row. Returns the per-recipient result dict. Never raises."""
+    delivery_id = f"faq_digest_{uuid.uuid4()}"
+    payload: dict[str, Any] = {
+        **base_payload,
+        "recipient_slack_user_id": recipient["slack_user_id"],
+        "recipient_label": recipient["label"],
+        "recipient_source": recipient["source"],
+        "stage": "starting",
+    }
+    _insert_delivery(db, delivery_id, payload=payload, status="received")
+
+    slack_result = post_message(recipient["slack_user_id"], message_text)
+
+    final_payload = {
+        **payload,
         "slack_ok": slack_result["ok"],
         "slack_error": slack_result.get("slack_error"),
         "stage": "complete",
     }
-    if slack_result["ok"]:
-        _mark_delivery(
-            db, delivery_id, status="processed", error=None,
-            payload_update=payload_update,
-        )
-    else:
-        _mark_delivery(
-            db,
-            delivery_id,
-            status="failed",
-            error=f"slack_post_failed: {slack_result.get('slack_error')}",
-            payload_update=payload_update,
-        )
-    logger.info(
-        "faq_digest_cron: complete delivery_id=%s "
-        "questions=%d clusters=%d slack_ok=%s",
+    _mark_delivery(
+        db,
         delivery_id,
-        len(questions),
-        total_clusters,
-        slack_result["ok"],
+        status="processed" if slack_result["ok"] else "failed",
+        error=(
+            None
+            if slack_result["ok"]
+            else f"slack_post_failed: {slack_result.get('slack_error')}"
+        ),
+        payload_update=final_payload,
     )
     return {
-        "status": "ok" if slack_result["ok"] else "slack_post_failed",
+        "slack_user_id": recipient["slack_user_id"],
+        "label": recipient["label"],
+        "source": recipient["source"],
         "delivery_id": delivery_id,
-        "window_start": window_start.isoformat(),
-        "window_end": now_utc.isoformat(),
-        "total_questions": len(questions),
-        "total_clusters": total_clusters,
-        "displayed_clusters": len(display_clusters),
-        "truncated": truncated,
-        "slack_ok": slack_result["ok"],
+        "slack_ok": bool(slack_result["ok"]),
         "slack_error": slack_result.get("slack_error"),
     }
 
