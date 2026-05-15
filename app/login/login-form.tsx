@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-export function LoginForm() {
+export function LoginForm({ errorMessage = null }: { errorMessage?: string | null }) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -67,6 +67,23 @@ export function LoginForm() {
         >
           The CSM brain for The AI Partner.
         </p>
+
+        {errorMessage ? (
+          <div
+            role="alert"
+            className="text-sm"
+            style={{
+              background: 'var(--color-geg-warn-fill)',
+              border: '1px solid var(--color-geg-warn-border)',
+              borderRadius: 6,
+              color: 'var(--color-geg-warn)',
+              padding: '10px 14px',
+              marginBottom: 16,
+            }}
+          >
+            {errorMessage}
+          </div>
+        ) : null}
 
         <form
           onSubmit={onSubmit}

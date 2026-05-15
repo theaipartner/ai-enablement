@@ -1167,6 +1167,7 @@ export type Database = {
       }
       team_members: {
         Row: {
+          access_tier: string
           archived_at: string | null
           created_at: string
           email: string
@@ -1180,6 +1181,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          access_tier?: string
           archived_at?: string | null
           created_at?: string
           email: string
@@ -1193,6 +1195,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          access_tier?: string
           archived_at?: string | null
           created_at?: string
           email?: string

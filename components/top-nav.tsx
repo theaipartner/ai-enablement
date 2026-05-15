@@ -4,14 +4,31 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
+import { tierAtLeast, type AccessTier } from '@/lib/auth/access-tier-shared'
 
-const NAV_ITEMS = [
-  { href: '/clients', label: 'Clients' },
-  { href: '/calls', label: 'Calls' },
-  { href: '/ella/runs', label: 'Ella' },
+type NavItem = {
+  href: string
+  label: string
+  requiredTier: AccessTier
+}
+
+// Nav vocabulary + per-item gate. Server-side filter in the layout
+// passes the resolved tier down; the conditional render below hides
+// items the user can't access. requiredTier='csm' is "everyone with an
+// authenticated session", admin gates Ella, etc.
+const NAV_ITEMS: ReadonlyArray<NavItem> = [
+  { href: '/clients', label: 'Clients', requiredTier: 'csm' },
+  { href: '/calls', label: 'Calls', requiredTier: 'csm' },
+  { href: '/ella/runs', label: 'Ella', requiredTier: 'admin' },
 ] as const
 
-export function TopNav({ userEmail }: { userEmail: string }) {
+export function TopNav({
+  userEmail,
+  accessTier,
+}: {
+  userEmail: string
+  accessTier: AccessTier
+}) {
   const router = useRouter()
   const supabase = createClient()
   const pathname = usePathname() ?? ''
@@ -64,7 +81,7 @@ export function TopNav({ userEmail }: { userEmail: string }) {
         </div>
 
         <div className="flex items-center gap-1">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => tierAtLeast(accessTier, item.requiredTier)).map((item) => {
             const active = isActive(item.href)
             return (
               <Link

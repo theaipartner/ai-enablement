@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { TopNav } from '@/components/top-nav'
+import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 
 export default async function AuthenticatedLayout({
   children,
@@ -12,6 +13,9 @@ export default async function AuthenticatedLayout({
   // env), skip the Supabase auth check and render with a stub user so
   // the layout still mounts. Off by default — any other value (or
   // missing env var) falls through to the real auth check unchanged.
+  // Preview bypass also stubs the access tier as 'creator' so every
+  // gated surface (Ella, future Admin-tier views) stays visible to the
+  // Playwright verifiers that depend on this flag.
   if (process.env.NEXT_PUBLIC_DISABLE_AUTH === 'true') {
     return (
       <div
@@ -22,7 +26,7 @@ export default async function AuthenticatedLayout({
           color: 'var(--color-geg-text)',
         }}
       >
-        <TopNav userEmail="preview@disabled" />
+        <TopNav userEmail="preview@disabled" accessTier="creator" />
         <main>{children}</main>
       </div>
     )
@@ -40,6 +44,15 @@ export default async function AuthenticatedLayout({
     redirect('/login')
   }
 
+  // Permissions gate (migration 0032 — spec
+  // docs/specs/permissions-access-tiers.md). Every authenticated user
+  // must have a matching team_members row; ghost users are setup errors
+  // and get surfaced via a /login redirect with an error banner.
+  const access = await getCurrentUserAccessTier()
+  if (!access) {
+    redirect('/login?error=no_team_member_row')
+  }
+
   return (
     <div
       className="min-h-screen"
@@ -49,7 +62,7 @@ export default async function AuthenticatedLayout({
         color: 'var(--color-geg-text)',
       }}
     >
-      <TopNav userEmail={user.email ?? ''} />
+      <TopNav userEmail={user.email ?? ''} accessTier={access.tier} />
       <main>{children}</main>
     </div>
   )
