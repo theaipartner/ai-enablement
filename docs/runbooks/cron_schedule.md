@@ -10,7 +10,7 @@ Crons are scheduled in **UTC** (Vercel's scheduler is UTC-native). ET
 column shows both DST states: **EDT = UTC−4** (≈ mid-March → early
 November) and **EST = UTC−5** (rest of year).
 
-## Current crons (as of 2026-05-15)
+## Current crons (as of 2026-05-18)
 
 | Path | UTC schedule | ET equivalent | What it does |
 |---|---|---|---|
@@ -20,6 +20,7 @@ November) and **EST = UTC−5** (rest of year).
 | `/api/passive_ella_cron` | `* * * * *` | every minute (TZ-independent) | Drains the Ella passive-response queue |
 | `/api/teams_calendar_sync_cron` | `*/30 * * * *` | every 30 min (TZ-independent) | Google Calendar → `calendar_events` sync |
 | `/api/faq_digest_cron` | `0 19 * * 5` | Fridays 15:00 EDT / 14:00 EST | Weekly FAQ digest DM to Scott |
+| `/api/ella_daily_digest_cron` | `30 20 * * *` | daily 16:30 EDT / 15:30 EST | Daily Ella-flags digest DM to Scott + Drake |
 
 The two interval crons (`* * * * *`, `*/30 * * * *`) have no meaningful
 ET translation — they fire on a fixed cadence regardless of wall-clock

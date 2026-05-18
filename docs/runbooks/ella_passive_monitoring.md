@@ -9,8 +9,15 @@ Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) t
 Pipeline (one entry per client-authored message):
 
 1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py:ingest_message_event`) — every Slack `message` event lands here; passive fork attaches after the existing client-channel + subtype gates and the message upsert.
-2. **Passive decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — runs six gates in order: global kill switch → author-type gate → CSM-directed auto-skip → KB-relevance gate → firm-after-first gate → Haiku decision call. Returns one of four outcomes.
-3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — writes the `agent_runs` row (always), and: for `respond_*` outcomes inserts a `pending_ella_responses` row with `respond_after_ts = now() + 1 minute`; for `escalate` fires a backend DM to the primary CSM; for `skip` does nothing further.
+2. **Passive decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **unified-decision rewrite (2026-05-18)**: only **two pre-LLM gates** (global kill switch → author-type), then a KB vector search (context, *not* a gate) + recent-channel-context fetch, then a single decision Haiku call. Returns `skip` / `respond_haiku_self` / `respond_via_sonnet` / `digest_only` plus an independent `digest_flag` + `digest_category`. The old CSM-directed, KB-relevance (+escalation-keyword bypass), and firm-after-first gates were removed — Haiku decides all of it now.
+3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`):
+   - `skip_reason='kill_switch'` → **no `agent_runs` row at all** (Gate 1 optimization — saves writes + audit noise when Ella is globally off).
+   - otherwise an `agent_runs` row always writes, plus per decision:
+     - `respond_haiku_self` → response Haiku posts a reply directly; on `[FALLBACK_TO_SONNET]` it falls through to the Sonnet queue path.
+     - `respond_via_sonnet` (or Haiku-fallback) → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, `respond_after_ts = now() + 1 min`) drained by the unchanged per-minute cron.
+     - `digest_only` → **no client post, no `escalations` row, no CSM DM**; a `pending_digest_items` row only.
+     - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
+   - Independent of decision: any `digest_flag=true` writes a `pending_digest_items` row for the daily digest (`docs/runbooks/ella_daily_digest.md`).
 4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute, picks due rows, re-checks the kill switches + per-channel toggle + CSM-intervention, dispatches the response or cancels the row.
 
 Real-world perceived latency is **1-2 minutes** end-to-end: the 1-minute insert-time delay plus up to 60 seconds of cron-tick lag. Per-minute is the floor on Vercel Cron (Pro plan); going lower would require a different scheduling primitive.
@@ -98,24 +105,25 @@ select id, started_at, trigger_type, output_summary
  limit 20;
 ```
 
-### Backend escalation DMs (no client-facing post)
+### Digest-flagged messages (replaces passive escalation DMs)
 
-Post-2026-05-14 the audit source was renamed `ella_passive_escalation_dm` → `ella_escalation_dm` and the fan-out emits ONE row per recipient (Scott + primary CSM, deduplicated). The dashboard accepts both labels; query both here too:
+**2026-05-18:** the passive path no longer fires escalation DMs or
+writes `escalations` rows. Human-attention messages land in
+`pending_digest_items` and surface via the daily digest cron — see
+`docs/runbooks/ella_daily_digest.md`. Query what was flagged:
 
 ```sql
-select id, processed_at, processing_status, processing_error,
-       payload->>'slack_channel_id' as channel,
-       payload->>'recipient_label' as recipient,
-       payload->>'recipient_source' as recipient_source,  -- 'scott' | 'primary_csm'
-       payload->>'path' as path,                          -- 'reactive' | 'passive'
-       payload->>'reasoning' as reasoning
-  from webhook_deliveries
- where source in ('ella_escalation_dm', 'ella_passive_escalation_dm')
- order by processed_at desc
+select created_at, slack_channel_id, haiku_decision, digest_category,
+       haiku_reasoning, ella_responded, sent_in_digest_at
+  from pending_digest_items
+ order by created_at desc
  limit 20;
 ```
 
-Pre-2026-05-14 rows under the old source carry the legacy payload shape (`haiku_reasoning` key, no `recipient_*` keys). New rows carry the full per-recipient shape. Both render correctly on `/ella/runs`.
+Historical `webhook_deliveries` rows under `source='ella_escalation_dm'`
+/ `'ella_passive_escalation_dm'` from before the rewrite still exist
+and render on `/ella/runs`; only **reactive `digest_only`** writes new
+`ella_escalation_dm` rows now.
 
 ### CSM intervention counter (the key Batch 2.4 prerequisite metric)
 
@@ -156,34 +164,33 @@ Behavior: the next cron drain marks the row `cancelled_kill_switch` (global) or 
 
 Worst case: 60-minute Vercel outage → up to 60 × 50 = 3000 backed-up rows. After Vercel recovers, draining at 50/minute = 60 minutes of catch-up traffic. Probably fine at production scale; if you need to clear it immediately, flip the global kill switch — every queued row marks `cancelled_kill_switch` on the next drain and the queue clears in one tick.
 
-### Sensitive-topic miss
+### Sensitive-topic miss (unified-decision rewrite)
 
-Symptom: a billing / refund / crisis message gets `decision='respond_substantive'` or `'respond_general_inquiry'` instead of `'escalate'`.
+Symptom: a billing / refund / crisis / confused message gets
+`decision='respond_haiku_self'`/`'respond_via_sonnet'`/`'skip'` with
+`digest_flag=false` instead of `'digest_only'` (or at least
+`digest_flag=true`).
 
-Mitigation: the audit dashboard (`/ella/runs`) surfaces every Haiku decision with the input message text + reasoning. Drake reviews post-hoc; iterate the Haiku system prompt's auto-escalate fence in `_HAIKU_SYSTEM_PROMPT`. Add the missed pattern to the explicit list.
+There is **no KB-relevance gate and no escalation-keyword bypass
+anymore** — the KB search is context only, never a drop point, so the
+"message died before Haiku" failure mode is structurally gone. Every
+client message that passes the 2 pre-LLM gates reaches Haiku. A miss
+is now purely a Haiku-judgment miss.
 
-### Gate 4 silently dropping an escalation-worthy message
-
-Symptom: an escalation-worthy message (cancellation intent, refund demand, crisis content) lands as `skip_reason='no_kb_match'` instead of reaching Haiku. Production smoke surfaced this 2026-05-14 — three messages with similarities 0.22 / 0.23 / 0.28 died at Gate 4 before Haiku could see them.
-
-Mitigation: an escalation-keyword bypass in `agents/ella/passive_monitor.py` (`_ESCALATION_BYPASS_KEYWORDS` + `_has_escalation_bypass_keyword`) now routes context-thin messages with high-signal escalation keywords through to Haiku. The matched keyword is persisted on `agent_runs.trigger_metadata.kb_relevance_bypass_keyword` for audit. Categorical coverage today: money / commitment, complaints / dissatisfaction, crisis / self-harm, quitting / leaving, legal, and (2026-05-15 extension per Scott) uncertainty / mismatched expectations / clarification-seeking / soft frustration. The frozenset itself is the source of truth — the categories iterate too fast to keep this doc keyword-synced. If a sensitive-topic miss recurs:
-
-1. Check `kb_relevance_bypass_keyword` on the affected run. If unset, the bypass didn't fire — the message uses phrasing the keyword list doesn't cover. Add it.
-2. If the keyword fired but Haiku returned `skip`, that's a prompt-side miss — iterate `_HAIKU_SYSTEM_PROMPT`.
-
-Query bypass-fired runs:
+Mitigation: `/ella/runs` surfaces every decision with the message text,
+`haiku_decision`, `digest_flag`, `digest_category`, and reasoning.
+Drake reviews post-hoc and iterates `_HAIKU_SYSTEM_PROMPT` (the
+DIGEST FLAG / digest_only criteria). Because the flagging stance is
+permissive ("flag if uncertain about whether Scott would care"), the
+expected failure mode is over-flagging, not under-flagging — which is
+the intended bias. Query recent flagged decisions:
 
 ```sql
-select id, started_at, input_summary, output_summary,
-       trigger_metadata->>'kb_relevance_bypass_keyword' as bypass_keyword,
-       trigger_metadata->>'haiku_decision' as decision,
-       trigger_metadata->>'haiku_reasoning' as reasoning
-  from agent_runs
- where agent_name = 'ella'
-   and trigger_type = 'passive_monitor'
-   and trigger_metadata ? 'kb_relevance_bypass_keyword'
- order by started_at desc
- limit 20;
+select created_at, slack_channel_id, haiku_decision, digest_category,
+       haiku_reasoning
+  from pending_digest_items
+ order by created_at desc
+ limit 30;
 ```
 
 ## Initial validation rollout (post-deploy)
@@ -213,10 +220,13 @@ Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the pr
 | Var | Purpose | Default |
 |-----|---------|---------|
 | `ELLA_PASSIVE_MONITORING_ENABLED` | Global kill switch. `'true'` enables; anything else disables. | unset (= disabled) |
-| `ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD` | Pre-Haiku KB-relevance cutoff (cosine similarity). | `0.3` |
-| `ESCALATION_RECIPIENT_SLACK_USER_ID` | Slack user_id of the head CSM (Scott) DMed on every escalation alongside the channel's primary CSM. Unset → primary CSM only. Applied to both reactive and passive paths. | unset (= primary CSM only) |
-| `CRON_SECRET` | Bearer-token auth for the per-minute cron. Shared across all cron endpoints (single-var pattern per M6.2). | (set in Vercel) |
-| `SLACK_WORKSPACE` | Optional. Subdomain used in escalation-DM permalinks. | (omitted = clean fallback) |
+| `ESCALATION_RECIPIENT_SLACK_USER_ID` | Slack user_id of the head CSM (Scott) DMed on **reactive `digest_only`** escalations alongside the channel's primary CSM. No longer used on the passive path (passive doesn't escalate post-2026-05-18). | unset (= primary CSM only) |
+| `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID` | Optional CC for the daily digest cron (Drake). See `docs/runbooks/ella_daily_digest.md`. | unset (= head-CSM only) |
+| `CRON_SECRET` | Bearer-token auth for the per-minute cron + the daily digest cron. Shared across all cron endpoints. | (set in Vercel) |
+| `SLACK_WORKSPACE` | Optional. Subdomain used in escalation-DM + digest permalinks. | (omitted = clean fallback) |
+
+`ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD` was removed (2026-05-18) — KB
+relevance is no longer a gate, so the threshold has no effect.
 
 ## Smoke testing in #ella-test-drakeonly
 
