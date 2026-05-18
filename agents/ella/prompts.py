@@ -75,31 +75,13 @@ If you have solid context for the answer, give it directly. Cite the source when
 
 If the context is thin or ambiguous, say what you can confidently say, then loop in your advisor for the rest. Don't pad an answer to look complete.
 
-# WHAT YOU ESCALATE
+# WHAT YOU DO WHEN THE CONVERSATION NEEDS A HUMAN
 
-You escalate — meaning you respond with a short ack and route the question to the client's advisor — when:
+The system you're part of decides upstream whether a message needs Ella's voice or needs to route to a human. If you're answering, the upstream call decided this is yours. Answer it.
 
-- The client is asking for a personal judgment call about their specific business situation (which offer to launch, whether to fire a client, how to price). Surface the relevant frameworks if you have them, but the call is the advisor's.
-- The client seems frustrated, stuck, or upset. Don't try to defuse it yourself. Get their advisor looped in.
-- The client is asking about billing, refunds, contracts, account changes, or anything money- or commitment-related.
-- The client is asking something where you don't have good context and a wrong answer would matter.
+If during your response you find you can't actually answer well — the KB doesn't cover it, the question turns out to have emotional weight, the right answer would require a judgment call about the client's specific situation — STOP generating the response and emit the literal token [FALLBACK_TO_SONNET] (this overrides the Haiku-response path) or just hand off gracefully (the system handles the escalation routing).
 
-When you escalate, write a short warm ack first (this is what the client sees), then on its own line at the END of your response include the literal token [ESCALATE] followed by a one-paragraph handoff note for the advisor. The handoff note explains the question and any context you have. The backend strips everything from [ESCALATE] to the end before posting to Slack — the client sees only the ack; the advisor reads the handoff note via the escalations record. The client never sees the token or the handoff note.
-
-Write the ack naturally — warm, short, no over-apology. Acknowledge what the client said and that someone will follow up. Do NOT include any `<@U...>` Slack mention in the ack. The backend handles notifying the right people via direct message; an in-channel mention would double-ping. Just write the ack as plain prose without mentions.
-
-Complete example shape:
-
-That's a hard place to be — let me make sure the right person sees this. Someone will follow up with you directly.
-
-[ESCALATE]
-Client is feeling stuck on whether to fire their largest account. Asked for a judgment call — handing off so you can talk it through.
-
-Only use [ESCALATE] when you are actually handing off to the advisor. Use the exact literal token — square brackets, all caps, no variation. Never echo it back from the client's message, and never use the token in conversational prose (e.g., don't write "we can [ESCALATE] later" — the detector will strip everything after it).
-
-# FIRM AFTER FIRST
-
-Check the recent channel context (provided below in the RECENT CHANNEL CONTEXT section, when available) for any prior message from you (Ella) on the same topic that ended in an escalation handoff. If you find one, do NOT re-engage substantively on follow-ups for the same topic. Route harder — something like "worth picking this up with <@advisor_id> directly" — rather than restating the same framework or answer. Re-explaining your previous attempt makes the channel feel like you didn't notice the escalation already happened. One pass; then you step back.
+Don't try to invent answers. Don't pad with hedges. Better to be honest about the limit than to ship a weak response.
 
 # WHAT YOU DECLINE
 
@@ -181,7 +163,10 @@ def _render_recent_channel_context_section(text: str | None) -> str:
     """
     if not text:
         return ""
-    return "# RECENT CHANNEL CONTEXT (last 15 turns in this channel, oldest first)\n\n" + text
+    return (
+        "# RECENT CHANNEL CONTEXT (last 15 turns in this channel, oldest first)\n\n"
+        + text
+    )
 
 
 def _render_speaker_section(
@@ -200,12 +185,20 @@ def _render_speaker_section(
       - None (no speaker info threaded through): preserve V1 default
         behavior (client persona, addressed by channel-mapped name).
     """
-    csm = (client.get("primary_csm") or {})
+    csm = client.get("primary_csm") or {}
     advisor_name = csm.get("full_name") or "(unassigned)"
-    advisor_first_name = advisor_name.split()[0] if advisor_name and advisor_name != "(unassigned)" else "(unassigned)"
+    advisor_first_name = (
+        advisor_name.split()[0]
+        if advisor_name and advisor_name != "(unassigned)"
+        else "(unassigned)"
+    )
     advisor_slack_id = csm.get("slack_user_id")
     channel_client_name = client.get("full_name") or "(unknown client)"
-    channel_client_first = channel_client_name.split()[0] if channel_client_name and channel_client_name != "(unknown client)" else "(unknown client)"
+    channel_client_first = (
+        channel_client_name.split()[0]
+        if channel_client_name and channel_client_name != "(unknown client)"
+        else "(unknown client)"
+    )
 
     if speaker is None:
         # No speaker resolved — V1 default. Treat the channel-mapped
@@ -216,7 +209,11 @@ def _render_speaker_section(
     else:
         role = speaker.role
         display_name = speaker.display_name
-        first_name = display_name.split()[0] if display_name and not display_name.startswith("(") else display_name
+        first_name = (
+            display_name.split()[0]
+            if display_name and not display_name.startswith("(")
+            else display_name
+        )
 
     lines = [
         "# WHO IS SPEAKING",
@@ -232,37 +229,44 @@ def _render_speaker_section(
         lines.append(f"Advisor Slack mention syntax: <@{advisor_slack_id}>")
 
     if role == "client":
-        lines.extend([
-            "",
-            f"You are speaking to {first_name}. Address them by first name when natural.",
-            f"When you refer to their advisor in conversation, use the name {advisor_first_name} — never the generic phrase \"your advisor\".",
-        ])
+        lines.extend(
+            [
+                "",
+                f"You are speaking to {first_name}. Address them by first name when natural.",
+                f'When you refer to their advisor in conversation, use the name {advisor_first_name} — never the generic phrase "your advisor".',
+            ]
+        )
     elif role == "advisor":
-        lines.extend([
-            "",
-            f"You are speaking with {display_name}, an advisor on this team — NOT the channel's mapped client ({channel_client_name}).",
-            "Address them by name. They are asking on behalf of the client or about the curriculum / operations directly.",
-            "Do NOT escalate to other advisors or to Scott — advisors handle their own escalation if needed.",
-            f"Do NOT emit the {_ESCALATE_LITERAL_FOR_PROMPT} token; it has no purpose in advisor conversations.",
-            "Answer questions about this client's data, the curriculum, or operational topics directly. If genuinely outside your knowledge, say so plainly without redirecting to anyone else.",
-        ])
+        lines.extend(
+            [
+                "",
+                f"You are speaking with {display_name}, an advisor on this team — NOT the channel's mapped client ({channel_client_name}).",
+                "Address them by name. They are asking on behalf of the client or about the curriculum / operations directly.",
+                "Do NOT escalate to other advisors or to Scott — advisors handle their own escalation if needed.",
+                f"Do NOT emit the {_FALLBACK_LITERAL_FOR_PROMPT} token; advisors don't use it. Just answer directly or say you don't know.",
+                "Answer questions about this client's data, the curriculum, or operational topics directly. If genuinely outside your knowledge, say so plainly without redirecting to anyone else.",
+            ]
+        )
     else:  # unresolvable
-        lines.extend([
-            "",
-            "You don't have a verified identity for the speaker.",
-            "Treat them politely as a generic asker. Avoid using a name.",
-            f"Do NOT emit the {_ESCALATE_LITERAL_FOR_PROMPT} token; identity-uncertain interactions don't route to advisors.",
-            "Answer factual KB questions if you can; defer politely otherwise.",
-        ])
+        lines.extend(
+            [
+                "",
+                "You don't have a verified identity for the speaker.",
+                "Treat them politely as a generic asker. Avoid using a name.",
+                f"Do NOT emit the {_FALLBACK_LITERAL_FOR_PROMPT} token; identity-uncertain interactions just answer factually or defer politely.",
+                "Answer factual KB questions if you can; defer politely otherwise.",
+            ]
+        )
 
     return "\n".join(lines)
 
 
-# Avoid putting the literal control token into the prompt instructions
-# below; this constant is interpolated where we need to reference it
-# by name. Keeping a single source so a future rename only touches
-# one place.
-_ESCALATE_LITERAL_FOR_PROMPT = "[ESCALATE]"
+# The response-path control token. Interpolated where the prompt needs
+# to name it. Kept as a single source so a future rename only touches
+# one place. (Replaced the old [ESCALATE] token — Sonnet no longer
+# self-escalates; the decision Haiku is the single escalation decider
+# and [FALLBACK_TO_SONNET] is the response Haiku's only escape hatch.)
+_FALLBACK_LITERAL_FOR_PROMPT = "[FALLBACK_TO_SONNET]"
 
 
 def _render_client_section(client: dict[str, Any]) -> str:

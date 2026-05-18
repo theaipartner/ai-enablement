@@ -127,7 +127,9 @@ def _unwrap_event(payload: dict[str, Any]) -> dict[str, Any]:
     `{"type": "event_callback", "event": {...}}`. Some upstream
     layers (n8n nodes, test fixtures) hand us the inner dict
     directly. Accept both."""
-    if payload.get("type") == "event_callback" and isinstance(payload.get("event"), dict):
+    if payload.get("type") == "event_callback" and isinstance(
+        payload.get("event"), dict
+    ):
         return payload["event"]
     return payload
 

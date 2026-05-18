@@ -1,28 +1,32 @@
 """Ella (Slack Bot V1) — entry point.
 
 `respond_to_mention(event_data)` is the function the Slack interface
-layer calls when Ella is @mentioned. The flow:
+layer calls when Ella is @mentioned. The flow (unified-decision
+architecture — the reactive path now runs through the same decision
+Haiku as the passive path; Sonnet no longer self-escalates mid-
+generation):
 
-  1. Start an `agent_runs` row via `shared.logging.start_agent_run`
-     with the real speaker's identity stamped into `trigger_metadata`
-     (Task 1 of Batch 1.5 — V1 collapsed the speaker into the
-     channel-mapped client; V2 keeps them distinct).
-  2. Resolve the speaker (real @-mention author) via
-     `agents.ella.identity` and the channel-mapped client (for
-     retrieval scoping) separately.
-  3. Retrieve context via `agents.ella.retrieval` using the channel-
-     mapped client's id.
-  4. Build the system prompt via `agents.ella.prompts` with both the
-     speaker and the channel-mapped client passed in.
-  5. Call Claude via `_call_claude`.
-  6. Detect the [ESCALATE] marker and route accordingly.
-  7. End the agent_run with terminal status and return `EllaResponse`.
+  1. Start an `agent_runs` row with the real speaker's identity.
+  2. Resolve the speaker and the channel-mapped client separately.
+  3. Retrieve KB context + recent channel context.
+  4. Call the decision Haiku (`passive_monitor.decide_passive_response`).
+  5. Route on the decision:
+       skip               -> generic "this one's for your advisor" ack
+       respond_haiku_self -> response Haiku (fallback -> Sonnet)
+       respond_via_sonnet -> Sonnet generation
+       digest_only        -> polite ack + escalations row + CSM DMs
+                             (the ONLY real-time CSM-DM path in the new
+                             architecture — @-mentions create a client
+                             expectation passive observation does not)
+  6. Independent of the decision: if digest_flag, write a
+     pending_digest_items row so Scott + Drake's daily digest sees it.
 """
 
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from agents.ella.escalation import escalate
@@ -31,6 +35,8 @@ from agents.ella.escalation_routing import (
     resolve_escalation_recipients,
 )
 from agents.ella.identity import SpeakerIdentity, resolve_speaker_identity
+from agents.ella.passive_dispatch import insert_digest_item
+from agents.ella.passive_monitor import decide_passive_response
 from agents.ella.prompts import build_system_prompt
 from agents.ella.retrieval import (
     ContextBundle,
@@ -41,20 +47,9 @@ from shared.claude_client import complete
 from shared.db import get_client
 from shared.logging import end_agent_run, logger, start_agent_run
 
-# Literal token Ella is instructed (in the system prompt) to prefix
-# every escalation response with. Detection is start-of-response,
-# case-sensitive, exact bracket form — see prompts.py § WHAT YOU
-# ESCALATE. The marker is stripped before the response text is stored
-# on the agent_runs row, written to escalations.context, or returned
-# to the handler.
-_ESCALATION_MARKER = "[ESCALATE]"
-
 # Bare-mention threshold. After mention-stripping, anything shorter
 # than this (in trimmed chars) is treated as a bare @-mention — we
-# skip the LLM call and return a canned warm opener. The threshold
-# is liberal: "@Ella hi" (2 chars after strip) and "@Ella" (0 chars)
-# both go through this path; "@Ella how" (3 chars) does too;
-# "@Ella what's up" (8 chars) doesn't and gets a full response.
+# skip the LLM call and return a canned warm opener.
 _BARE_MENTION_MAX_CHARS = 5
 
 # Warm openers used when Ella is @-mentioned with no substantive
@@ -72,10 +67,10 @@ _BARE_OPENERS_NO_NAME = (
     "Fire away.",
 )
 
-# Passive general-inquiry openers (Batch 2.3). Used when the Haiku
-# decision is `respond_general_inquiry` — the client looks like
-# they're asking for help in a general way but no KB chunks address
-# their specific question. Warm + short, no answer attempt.
+# Passive general-inquiry openers — retained for the unchanged
+# per-minute cron's `respond_general_inquiry` dispatch path (the new
+# decision tree never emits this decision, but the cron + handler
+# stay in place per spec § What's NOT in this spec).
 _PASSIVE_GENERAL_OPENERS_WITH_NAME = (
     "Hey {name} — I'm around. What's going on?",
     "Hi {name}, here if you need me. What do you need?",
@@ -107,10 +102,7 @@ def respond_to_mention(event_data: dict[str, Any]) -> EllaResponse:
     speaker = resolve_speaker_identity(event_data.get("user"))
     stripped_text = (event_data.get("text") or "").strip()
 
-    # Task 6 of Batch 1.5: bare @-mentions skip the LLM and return a
-    # canned warm opener. Passing an empty user message to the LLM was
-    # an error path in V1 (audit run 88556dea raised
-    # `messages.0: user messages must have non-empty content`).
+    # Bare @-mentions skip the LLM and return a canned warm opener.
     if len(stripped_text) < _BARE_MENTION_MAX_CHARS:
         return _handle_bare_mention(event_data, speaker, stripped_text)
 
@@ -133,12 +125,7 @@ def _handle_bare_mention(
     speaker: SpeakerIdentity,
     stripped_text: str,
 ) -> EllaResponse:
-    """Return a canned warm response without an LLM call.
-
-    Logged as `agent_runs` with `trigger_type='bare_mention'` and
-    minimal token usage so the per-run telemetry stays clean and the
-    cost reporter sees these for free.
-    """
+    """Return a canned warm response without an LLM call."""
     run_id = start_agent_run(
         agent_name="ella",
         trigger_type="bare_mention",
@@ -163,8 +150,7 @@ def _handle_bare_mention(
 def _pick_bare_response(speaker: SpeakerIdentity) -> str:
     """Random warm opener — uses the speaker's first name when known,
     falls back to no-name variants when role is unresolvable or the
-    display name is a placeholder (e.g., '(unverified)').
-    """
+    display name is a placeholder."""
     if (
         speaker.role in ("client", "advisor")
         and speaker.display_name
@@ -175,13 +161,12 @@ def _pick_bare_response(speaker: SpeakerIdentity) -> str:
     return random.choice(_BARE_OPENERS_NO_NAME)
 
 
-def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> EllaResponse:
+def _run(
+    event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str
+) -> EllaResponse:
     channel_id = event_data.get("channel")
     channel_client = _resolve_channel_client(channel_id)
     if channel_client is None:
-        # Pilot channels should always have a resolvable client —
-        # `slack_channels.client_id` is set per channel. If we see
-        # one anyway, log and skip rather than crash.
         reason = f"no_client_for_channel:{channel_id}"
         logger.warning("Ella: %s", reason)
         end_agent_run(run_id, status="skipped", output_summary=reason)
@@ -194,89 +179,172 @@ def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> E
 
     query_text = event_data.get("text") or ""
     context = _retrieve_context(channel_client["id"], query_text)
-
-    # Stitch the primary CSM dict onto the client dict so prompts.py
-    # has a single bag of profile data to render from. ContextBundle
-    # stays the canonical retrieval shape; the prompt just needs the
-    # flat view.
-    client_for_prompt = dict(channel_client)
-    client_for_prompt["primary_csm"] = context.primary_csm
-
     recent_channel_context = _fetch_recent_context_for_event(event_data)
-    system_prompt = build_system_prompt(
-        client_for_prompt,
-        context.chunks,
-        speaker=speaker,
-        recent_channel_context=recent_channel_context,
-    )
-    response_text, confidence = _call_claude(
-        system_prompt, query_text, context, run_id=run_id
+
+    # Decision Haiku — the single escalation/answer decider for both
+    # the reactive and passive paths.
+    decision = decide_passive_response(
+        triggering_message=query_text,
+        recent_context=recent_channel_context,
+        kb_results=context.chunks,
     )
 
-    client_text, handoff_context = _detect_and_strip_escalation(response_text)
-    if handoff_context is not None:
-        # Marker found anywhere in the response. `client_text` is what
-        # the client sees; `handoff_context` is the advisor-facing
-        # paragraph Ella wrote after [ESCALATE]. Stored on
-        # escalations.context.handoff_reasoning so a reviewing CSM
-        # sees Ella's framing of the handoff (V1 lost this).
-        escalation_id = escalate(
-            reason="ella_escalated",
-            context={
-                "query_text": query_text,
-                "ella_response": client_text,
-                "handoff_reasoning": handoff_context,
-                "client_id": channel_client["id"],
-                "speaker": _speaker_to_dict(speaker),
-                "event": _redact_event(event_data, speaker),
-            },
-            client_id=channel_client["id"],
-            agent_run_id=run_id,
-        )
-        # Fan DMs out to Scott + primary CSM. Reactive path keeps its
-        # in-channel client-facing ack (without the <@advisor> mention
-        # per the 2026-05-14 prompt edit) — the backend DMs are the
-        # reliable notification channel and the in-channel mention
-        # would double-ping.
-        recipients = resolve_escalation_recipients(context.primary_csm)
-        dm_results = fire_escalation_dms(
-            recipients=recipients,
+    first_name = _speaker_first_name(speaker, channel_client)
+    advisor_first = _advisor_first_name(context.primary_csm)
+
+    # Decision-independent digest flagging (digest_only always flags;
+    # the others flag when Haiku set digest_flag).
+    def _flag_digest(ella_responded: bool) -> None:
+        if not decision.digest_flag:
+            return
+        insert_digest_item(
+            run_id=run_id,
             slack_channel_id=channel_client.get("slack_channel_id")
             or event_data.get("channel"),
             triggering_message_ts=event_data.get("ts")
             or event_data.get("event_ts")
             or "",
-            reasoning=handoff_context,
-            path="reactive",
-            channel_client_id=channel_client["id"],
+            triggering_message_slack_user_id=event_data.get("user"),
+            client_id=channel_client["id"],
+            message_text=query_text,
+            haiku_decision=decision.decision,
+            haiku_reasoning=decision.reasoning,
+            digest_category=decision.digest_category,
+            ella_responded=ella_responded,
         )
+
+    if decision.decision == "skip":
+        ack = (
+            f"Hey {first_name}, I think this one's for {advisor_first} — "
+            f"they'll pick it up."
+        )
+        _post(channel_client, event_data, ack)
+        _flag_digest(ella_responded=False)
         end_agent_run(
             run_id,
-            status="escalated",
-            output_summary=_format_reactive_escalation_summary(
-                escalation_id, dm_results
-            ),
-            confidence_score=confidence,
+            status="success",
+            output_summary=f"reactive skip: {decision.reasoning[:160]}",
+            confidence_score=1.0,
         )
         return EllaResponse(
-            response_text=client_text,
-            confidence=confidence,
-            escalated=True,
-            escalation_reason="ella_escalated",
-            escalation_id=escalation_id,
+            response_text=ack,
+            confidence=1.0,
+            escalated=False,
             agent_run_id=run_id,
         )
 
+    if decision.decision == "respond_haiku_self":
+        from agents.ella.digest_response import generate_response
+
+        resp = generate_response(
+            payload=SimpleNamespace(triggering_message_text=query_text),
+            kb_chunks=context.chunks,
+            recent_context=recent_channel_context,
+            primary_csm=context.primary_csm,
+            channel_client=channel_client,
+        )
+        if not resp.fallback_to_sonnet:
+            _post(channel_client, event_data, resp.response_text)
+            _flag_digest(ella_responded=True)
+            end_agent_run(
+                run_id,
+                status="success",
+                output_summary=resp.response_text[:200],
+                confidence_score=1.0,
+            )
+            return EllaResponse(
+                response_text=resp.response_text,
+                confidence=1.0,
+                escalated=False,
+                agent_run_id=run_id,
+            )
+        # fallthrough to Sonnet generation below
+
+    if decision.decision in ("respond_via_sonnet", "respond_haiku_self"):
+        # respond_haiku_self only reaches here when the response Haiku
+        # asked to fall back. Either way: Sonnet generates the reply.
+        client_for_prompt = dict(channel_client)
+        client_for_prompt["primary_csm"] = context.primary_csm
+        system_prompt = build_system_prompt(
+            client_for_prompt,
+            context.chunks,
+            speaker=speaker,
+            recent_channel_context=recent_channel_context,
+        )
+        response_text, confidence = _call_claude(
+            system_prompt, query_text, context, run_id=run_id
+        )
+        _post(channel_client, event_data, response_text)
+        _flag_digest(ella_responded=True)
+        end_agent_run(
+            run_id,
+            status="success",
+            output_summary=response_text[:200],
+            confidence_score=confidence,
+        )
+        return EllaResponse(
+            response_text=response_text,
+            confidence=confidence,
+            escalated=False,
+            agent_run_id=run_id,
+        )
+
+    # decision.decision == 'digest_only' — the only reactive path that
+    # fires a real-time CSM DM. @-mention creates a client expectation
+    # of response that passive observation does not.
+    ack = "Let me grab someone for this one — your advisor will take care " "of you."
+    _post(channel_client, event_data, ack)
+    escalation_id = escalate(
+        reason="ella_escalated",
+        context={
+            "query_text": query_text,
+            "ella_response": ack,
+            "handoff_reasoning": decision.reasoning,
+            "client_id": channel_client["id"],
+            "speaker": _speaker_to_dict(speaker),
+            "event": _redact_event(event_data, speaker),
+            "haiku_decision": "digest_only",
+        },
+        client_id=channel_client["id"],
+        agent_run_id=run_id,
+    )
+    recipients = resolve_escalation_recipients(context.primary_csm)
+    dm_results = fire_escalation_dms(
+        recipients=recipients,
+        slack_channel_id=channel_client.get("slack_channel_id")
+        or event_data.get("channel"),
+        triggering_message_ts=event_data.get("ts") or event_data.get("event_ts") or "",
+        reasoning=decision.reasoning,
+        path="reactive",
+        channel_client_id=channel_client["id"],
+    )
+    # digest_only always flags — Scott + Drake's digest also sees
+    # @-mention escalations.
+    insert_digest_item(
+        run_id=run_id,
+        slack_channel_id=channel_client.get("slack_channel_id")
+        or event_data.get("channel"),
+        triggering_message_ts=event_data.get("ts") or event_data.get("event_ts") or "",
+        triggering_message_slack_user_id=event_data.get("user"),
+        client_id=channel_client["id"],
+        message_text=query_text,
+        haiku_decision="digest_only",
+        haiku_reasoning=decision.reasoning,
+        digest_category=decision.digest_category or "other",
+        ella_responded=False,
+    )
     end_agent_run(
         run_id,
-        status="success",
-        output_summary=response_text[:200],
-        confidence_score=confidence,
+        status="escalated",
+        output_summary=_format_reactive_escalation_summary(escalation_id, dm_results),
+        confidence_score=0.0,
     )
     return EllaResponse(
-        response_text=response_text,
-        confidence=confidence,
-        escalated=False,
+        response_text=ack,
+        confidence=0.0,
+        escalated=True,
+        escalation_reason="ella_escalated",
+        escalation_id=escalation_id,
         agent_run_id=run_id,
     )
 
@@ -288,8 +356,7 @@ def _run(event_data: dict[str, Any], speaker: SpeakerIdentity, run_id: str) -> E
 
 def _retrieve_context(client_id: str, query_text: str) -> ContextBundle:
     """Thin wrapper over `retrieve_context_for_client`. Kept as an
-    internal helper so the agent's test seam is stable when we tune
-    retrieval parameters (k, include_global, filters)."""
+    internal helper so the agent's test seam is stable."""
     return retrieve_context_for_client(client_id, query_text)
 
 
@@ -300,56 +367,52 @@ def _call_claude(
     *,
     run_id: str | None = None,
 ) -> tuple[str, float]:
-    """Call Claude with Ella's system prompt and the user's question.
+    """Call Sonnet with Ella's system prompt and the user's question.
 
-    Returns `(response_text, confidence)`. The response text is
-    returned raw — including the [ESCALATE] marker if Ella emitted
-    one — so `_run` can route on the marker and strip it before the
-    text flows further. Confidence is a coarse telemetry signal, not
-    the gate: 1.0 for direct answers, 0.0 when the marker is present.
-
-    `run_id` is passed through so token counts and cost land on the
-    correct `agent_runs` row.
+    Returns `(response_text, confidence)`. Sonnet is now pure response
+    generation — the decision Haiku already made the escalate / answer
+    call upstream, so there is no `[ESCALATE]` token to detect or
+    strip. Confidence is a coarse telemetry signal (1.0 for a
+    generated answer).
     """
     result = complete(
         system=system_prompt,
         messages=[{"role": "user", "content": user_text}],
         run_id=run_id,
     )
-    text = result.text.strip()
-    confidence = 0.0 if _ESCALATION_MARKER in text else 1.0
-    return text, confidence
-
-
-def _detect_and_strip_escalation(response_text: str) -> tuple[str, str | None]:
-    """Find the first `[ESCALATE]` anywhere in the response and split.
-
-    Returns `(client_text, handoff_context)`. If the marker is found,
-    `client_text` is everything before the marker (rstripped of
-    trailing whitespace) and `handoff_context` is everything after
-    (lstripped). If the marker is absent, returns `(response_text, None)`.
-
-    Batch 1.5 change: V1 only matched the marker at the start of the
-    response (after `.lstrip()`). The audit surfaced 2 production
-    runs where Ella generated client-facing text + `\\n[ESCALATE]\\n` +
-    handoff text, and the leaked handoff text reached the client.
-    The looser detector catches both shapes — start-of-response and
-    mid-response — at the cost of also stripping conversational
-    references to the literal token in Ella's own text. That's an
-    accepted trade-off; the marker is a control token and the prompt
-    instructs Ella not to use it in prose anyway.
-    """
-    idx = response_text.find(_ESCALATION_MARKER)
-    if idx < 0:
-        return response_text, None
-    before = response_text[:idx].rstrip()
-    after = response_text[idx + len(_ESCALATION_MARKER):].lstrip()
-    return before, after
+    return result.text.strip(), 1.0
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _post(
+    channel_client: dict[str, Any],
+    event_data: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    """Post a client-facing message to the channel (main channel, no
+    thread). Fire-and-forget per shared.slack_post contract."""
+    from shared.slack_post import post_message
+
+    channel = channel_client.get("slack_channel_id") or event_data.get("channel")
+    return post_message(channel, text)
+
+
+def _speaker_first_name(
+    speaker: SpeakerIdentity, channel_client: dict[str, Any]
+) -> str:
+    if speaker.display_name and not speaker.display_name.startswith("("):
+        return speaker.display_name.split()[0]
+    full = channel_client.get("full_name") or ""
+    return full.split()[0] if full else "there"
+
+
+def _advisor_first_name(primary_csm: dict[str, Any] | None) -> str:
+    full = (primary_csm or {}).get("full_name") or ""
+    return full.split()[0] if full else "your advisor"
 
 
 def _fetch_recent_context_for_event(event_data: dict[str, Any]) -> str:
@@ -363,14 +426,7 @@ def _fetch_recent_context_for_event(event_data: dict[str, Any]) -> str:
 
 
 def _resolve_channel_client(slack_channel_id: str | None) -> dict[str, Any] | None:
-    """Look up the active client mapped to this Slack channel.
-
-    Retrieval scope is the channel's client regardless of who's
-    speaking — Ella answers questions about THIS client's curriculum
-    + calls, even when a team_member is the one asking. The speaker
-    identity is resolved separately (see `agents.ella.identity`) for
-    prompt addressing.
-    """
+    """Look up the active client mapped to this Slack channel."""
     if not slack_channel_id:
         return None
     db = get_client()
@@ -406,7 +462,7 @@ def _speaker_to_dict(speaker: SpeakerIdentity) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class PassiveResponseResult:
-    """What `respond_to_passive_trigger` / `_handle_passive_general_inquiry`
+    """What `respond_to_passive_trigger` / `handle_passive_general_inquiry`
     return for the cron to log and write back to pending_ella_responses."""
 
     response_text: str
@@ -418,25 +474,24 @@ class PassiveResponseResult:
 def respond_to_passive_trigger(
     pending_row: dict[str, Any],
 ) -> PassiveResponseResult:
-    """Substantive passive response. Reuses speaker resolution + KB
-    retrieval + Sonnet generation from the reactive path so behavior
-    stays consistent across @-mention and passive-trigger paths.
+    """Substantive passive response (Sonnet). Reuses speaker resolution
+    + KB retrieval + Sonnet generation from the reactive path.
 
-    `pending_row` is the row from `pending_ella_responses` (from the
-    cron). We reconstruct the synthetic event the reactive path
-    expects: channel + ts + user.
+    The decision Haiku already decided this message warrants a Sonnet
+    answer (decision `respond_via_sonnet`, written into the pending
+    row as `respond_substantive` for the unchanged cron). Sonnet is
+    now pure generation — no mid-generation escalation.
 
     Posts via `shared.slack_post.post_message` (main-channel-only,
     no thread). Returns a result dataclass for the cron to write back.
     """
-    from shared.slack_post import post_message  # local import to keep top tight
+    from shared.slack_post import post_message
 
     synthetic_event = {
         "channel": pending_row["slack_channel_id"],
         "ts": pending_row["triggering_message_ts"],
         "user": pending_row["triggering_message_slack_user_id"],
-        "text": "",  # not used by the prompt path; KB retrieval reads
-                    # context instead. See note below.
+        "text": "",
     }
     speaker = resolve_speaker_identity(synthetic_event["user"])
     channel_client = _resolve_channel_client(synthetic_event["channel"])
@@ -458,9 +513,6 @@ def respond_to_passive_trigger(
             slack_error="no_client_for_channel",
         )
 
-    # The triggering message itself is what we want Ella to respond to.
-    # Pull the text from slack_messages (the ingest layer wrote it
-    # there before the queue insert).
     triggering_text = _fetch_message_text(
         synthetic_event["channel"], synthetic_event["ts"]
     )
@@ -498,52 +550,6 @@ def respond_to_passive_trigger(
         response_text, confidence = _call_claude(
             system_prompt, query_text, context, run_id=run_id
         )
-        client_text, handoff_context = _detect_and_strip_escalation(response_text)
-        if handoff_context is not None:
-            # Sonnet decided to escalate inside its generation even
-            # though the Haiku gate already routed substantive. Honor
-            # the escalation: write the escalations row, do NOT post
-            # client-facing on the passive path (the spec is explicit
-            # — passive escalations are backend-only). Fan DMs out to
-            # Scott + primary CSM via the shared helper so this branch
-            # routes identically to the Haiku-side escalate decision.
-            escalation_id = escalate(
-                reason="ella_escalated_from_passive_substantive",
-                context={
-                    "query_text": query_text,
-                    "ella_response": client_text,
-                    "handoff_reasoning": handoff_context,
-                    "client_id": channel_client["id"],
-                    "speaker": _speaker_to_dict(speaker),
-                    "pending_id": pending_row.get("id"),
-                },
-                client_id=channel_client["id"],
-                agent_run_id=run_id,
-            )
-            recipients = resolve_escalation_recipients(context.primary_csm)
-            dm_results = fire_escalation_dms(
-                recipients=recipients,
-                slack_channel_id=synthetic_event["channel"],
-                triggering_message_ts=synthetic_event["ts"],
-                reasoning=handoff_context,
-                path="passive",
-                channel_client_id=channel_client["id"],
-            )
-            end_agent_run(
-                run_id,
-                status="escalated",
-                output_summary=_format_reactive_escalation_summary(
-                    escalation_id, dm_results
-                ),
-                confidence_score=confidence,
-            )
-            return PassiveResponseResult(
-                response_text="",
-                agent_run_id=run_id,
-                posted=False,
-                slack_error="sonnet_side_escalation",
-            )
-
         post_result = post_message(synthetic_event["channel"], response_text)
         end_agent_run(
             run_id,
@@ -558,9 +564,7 @@ def respond_to_passive_trigger(
             slack_error=post_result.get("slack_error"),
         )
     except Exception as exc:
-        logger.exception(
-            "respond_to_passive_trigger failed: %s", exc
-        )
+        logger.exception("respond_to_passive_trigger failed: %s", exc)
         end_agent_run(run_id, status="error", error_message=str(exc))
         raise
 
@@ -568,11 +572,10 @@ def respond_to_passive_trigger(
 def handle_passive_general_inquiry(
     pending_row: dict[str, Any],
 ) -> PassiveResponseResult:
-    """Canned warm response for the `respond_general_inquiry` decision.
-    Zero LLM cost. Posts a randomized opener to the channel and writes
-    an agent_runs row with trigger_type='passive_general_inquiry'.
-    """
-    from shared.slack_post import post_message  # local import
+    """Canned warm response for the legacy `respond_general_inquiry`
+    decision. Retained for the unchanged per-minute cron's dispatch
+    table; the new decision tree never emits this decision."""
+    from shared.slack_post import post_message
 
     channel_id = pending_row["slack_channel_id"]
     user_id = pending_row["triggering_message_slack_user_id"]
@@ -609,30 +612,18 @@ def handle_passive_general_inquiry(
 
 
 def _pick_passive_general_opener(speaker: SpeakerIdentity) -> str:
-    """First-name'd warm opener for resolved speakers, generic fallback
-    for unresolvable / placeholder display names. Mirrors the
-    `_pick_bare_response` decision shape from the @-mention path."""
     if (
         speaker.role in ("client", "advisor")
         and speaker.display_name
         and not speaker.display_name.startswith("(")
     ):
         first_name = speaker.display_name.split()[0]
-        return random.choice(_PASSIVE_GENERAL_OPENERS_WITH_NAME).format(
-            name=first_name
-        )
+        return random.choice(_PASSIVE_GENERAL_OPENERS_WITH_NAME).format(name=first_name)
     return random.choice(_PASSIVE_GENERAL_OPENERS_NO_NAME)
 
 
 def _fetch_message_text(slack_channel_id: str, slack_ts: str) -> str:
-    """Resolve the triggering message's text from `slack_messages`.
-
-    The cron is the only caller. The realtime ingest layer wrote the
-    row before the queue insert, so the row exists by the time the
-    cron drains. Returns empty string on miss (network blip, ingest
-    failure, etc.) — the substantive path tolerates empty queries
-    via KB retrieval over an empty embedding.
-    """
+    """Resolve the triggering message's text from `slack_messages`."""
     db = get_client()
     resp = (
         db.table("slack_messages")
@@ -651,40 +642,22 @@ def _fetch_message_text(slack_channel_id: str, slack_ts: str) -> str:
 def _format_reactive_escalation_summary(
     escalation_id: str, dm_results: list[dict[str, Any]]
 ) -> str:
-    """Build the `agent_runs.output_summary` line for a reactive (or
-    Sonnet-side passive) escalation. Format mirrors the passive
-    Haiku-decided branch so the audit dashboard's Output column
-    renders the same way across all three escalation entry points.
-    """
+    """Build the `agent_runs.output_summary` line for a reactive
+    digest_only escalation."""
     if not dm_results:
-        return (
-            f"escalated via DM; no_recipients; escalation_id={escalation_id}"
-        )
-    parts = [
-        f"{r['label']}={'ok' if r['dm_ok'] else 'fail'}" for r in dm_results
-    ]
-    return (
-        f"escalated via DM; {', '.join(parts)}; "
-        f"escalation_id={escalation_id}"
-    )
+        return f"escalated via DM; no_recipients; escalation_id={escalation_id}"
+    parts = [f"{r['label']}={'ok' if r['dm_ok'] else 'fail'}" for r in dm_results]
+    return f"escalated via DM; {', '.join(parts)}; " f"escalation_id={escalation_id}"
 
 
 def _redact_event(
     event_data: dict[str, Any], speaker: SpeakerIdentity | None = None
 ) -> dict[str, Any]:
-    """Keep only fields useful for logging; drop Slack payload bulk.
-
-    `is_team_test` is included when the Slack handler stamps it onto
-    the event so we can later filter team-test runs out of client
-    interaction metrics.
-
-    Batch 1.5: also adds `real_author_role`, `real_author_name`,
-    `real_author_id` so future analytics on `agent_runs.trigger_metadata`
-    can see the real @-mention author rather than the V1 impersonated
-    channel-client.
-    """
+    """Keep only fields useful for logging; drop Slack payload bulk."""
     keys = ("user", "channel", "ts", "thread_ts", "event_ts", "is_team_test")
-    out: dict[str, Any] = {k: event_data.get(k) for k in keys if event_data.get(k) is not None}
+    out: dict[str, Any] = {
+        k: event_data.get(k) for k in keys if event_data.get(k) is not None
+    }
     if speaker is not None and speaker.slack_user_id:
         out["real_author_role"] = speaker.role
         out["real_author_name"] = speaker.display_name

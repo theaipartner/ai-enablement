@@ -65,13 +65,13 @@ class _Chain:
             return SimpleNamespace(data=[row] if row else [])
         if self._mode == "insert" and self.table == "webhook_deliveries":
             self.fake.webhook_inserts.append(self._payload)
-            return SimpleNamespace(data=[{"id": f"wd-{len(self.fake.webhook_inserts)}"}])
+            return SimpleNamespace(
+                data=[{"id": f"wd-{len(self.fake.webhook_inserts)}"}]
+            )
         if self._mode == "update" and self.table == "webhook_deliveries":
             self.fake.webhook_updates.append((self._filters, self._payload))
             return SimpleNamespace(data=[{}])
-        raise AssertionError(
-            f"unexpected execute table={self.table} mode={self._mode}"
-        )
+        raise AssertionError(f"unexpected execute table={self.table} mode={self._mode}")
 
 
 class _FakeDb:
@@ -200,9 +200,7 @@ def test_fire_escalation_dms_two_recipients_both_succeed(fake_db, monkeypatch):
         sent.append({"channel_id": channel_id, "text": text})
         return {"ok": True, "slack_error": None}
 
-    monkeypatch.setattr(
-        "agents.ella.escalation_routing.post_message", _capture
-    )
+    monkeypatch.setattr("agents.ella.escalation_routing.post_message", _capture)
 
     recipients = [
         {
@@ -246,9 +244,7 @@ def test_fire_escalation_dms_two_recipients_both_succeed(fake_db, monkeypatch):
         assert update["processing_status"] == "processed"
 
 
-def test_fire_escalation_dms_one_recipient_fails_other_succeeds(
-    fake_db, monkeypatch
-):
+def test_fire_escalation_dms_one_recipient_fails_other_succeeds(fake_db, monkeypatch):
     """A Slack-side ok=False on one recipient never short-circuits the
     other. Both audit rows still land; failed one marked accordingly."""
     call_count = {"n": 0}
@@ -259,9 +255,7 @@ def test_fire_escalation_dms_one_recipient_fails_other_succeeds(
             return {"ok": False, "slack_error": "cannot_dm_bot"}
         return {"ok": True, "slack_error": None}
 
-    monkeypatch.setattr(
-        "agents.ella.escalation_routing.post_message", _capture
-    )
+    monkeypatch.setattr("agents.ella.escalation_routing.post_message", _capture)
 
     recipients = [
         {"slack_user_id": _SCOTT_ID, "label": "Scott", "source": "scott"},
@@ -321,15 +315,11 @@ def test_fire_escalation_dms_reasoning_truncates_at_200_chars(fake_db, monkeypat
         sent.append({"channel_id": channel_id, "text": text})
         return {"ok": True, "slack_error": None}
 
-    monkeypatch.setattr(
-        "agents.ella.escalation_routing.post_message", _capture
-    )
+    monkeypatch.setattr("agents.ella.escalation_routing.post_message", _capture)
 
     long_reasoning = "x" * 300
     er.fire_escalation_dms(
-        recipients=[
-            {"slack_user_id": _SCOTT_ID, "label": "Scott", "source": "scott"}
-        ],
+        recipients=[{"slack_user_id": _SCOTT_ID, "label": "Scott", "source": "scott"}],
         slack_channel_id="C123",
         triggering_message_ts="1745500100.000100",
         reasoning=long_reasoning,
@@ -349,16 +339,13 @@ def test_fire_escalation_dms_permalink_includes_workspace_when_env_set(
     monkeypatch.setattr(
         "agents.ella.escalation_routing.post_message",
         lambda channel_id, text, **_kw: (
-            sent.append({"text": text})
-            or {"ok": True, "slack_error": None}
+            sent.append({"text": text}) or {"ok": True, "slack_error": None}
         ),
     )
     monkeypatch.setenv("SLACK_WORKSPACE", "theaipartner")
 
     er.fire_escalation_dms(
-        recipients=[
-            {"slack_user_id": _SCOTT_ID, "label": "Scott", "source": "scott"}
-        ],
+        recipients=[{"slack_user_id": _SCOTT_ID, "label": "Scott", "source": "scott"}],
         slack_channel_id="C123",
         triggering_message_ts="1745500100.000100",
         reasoning="r",
