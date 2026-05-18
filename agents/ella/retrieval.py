@@ -9,10 +9,26 @@ by name and route escalations correctly.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from shared.db import get_client
 from shared.kb_query import Chunk, search_for_client
+
+# All human-facing timestamps render in ET per ADR 0003 (store UTC,
+# render ET). DST-safe via zoneinfo.
+_ET = ZoneInfo("America/New_York")
+
+# author_type → speaker role label for the recent-context block. The
+# decision Haiku's mental model uses "advisor" everywhere (never
+# "CSM"), so team_member collapses to advisor here too.
+_ROLE_LABELS = {
+    "client": "client",
+    "team_member": "advisor",
+    "ella": "ella",
+    "bot": "bot",
+}
 
 
 @dataclass(frozen=True)
@@ -58,34 +74,26 @@ def _fetch_client(db, client_id: str) -> dict[str, Any]:
     return rows[0] if rows else {}
 
 
-def fetch_recent_channel_context(
+def fetch_recent_channel_messages(
     slack_channel_id: str,
     *,
     before_ts: str,
     n_turns: int = 15,
-    max_chars: int = 8000,
-) -> str:
-    """Last N messages in `slack_channel_id` before `before_ts`,
-    formatted as a single string for the prompt's recent-channel-context
-    section (Task 5 of Batch 1.5).
+) -> list[dict[str, Any]]:
+    """Raw `slack_messages` rows for the last `n_turns` messages in
+    `slack_channel_id` before `before_ts`, oldest → newest.
 
-    Per line: `[HH:MM] <author_type> <resolved_name>: <text>`.
+    Ella's own posts are INCLUDED (no author_type filter) so follow-up
+    threading works. `before_ts` compares against `slack_messages.slack_ts`
+    lexicographically (Slack ts strings sort chronologically — zero-padded
+    seconds.microseconds). Returns `[]` when the window is empty.
 
-    `before_ts` is a Slack ts string (e.g. "1745000000.000100"). We
-    compare against `slack_messages.slack_ts` lexicographically (Slack
-    ts strings sort chronologically because they're zero-padded
-    seconds.microseconds).
-
-    `max_chars` (default 8000 ≈ 2000 tokens at ~4 chars/token) is the
-    cap. If the assembled context exceeds it, the oldest messages are
-    truncated and a `[...earlier messages truncated...]` line is
-    prepended.
-
-    Returns empty string when there are no messages in the window.
+    This is the row-level primitive. `fetch_recent_channel_context`
+    formats these for the prompt; `build_kb_query_from_conversation`
+    builds the embedding query from them.
     """
     if not slack_channel_id or not before_ts:
-        return ""
-
+        return []
     db = get_client()
     msgs_resp = (
         db.table("slack_messages")
@@ -97,37 +105,68 @@ def fetch_recent_channel_context(
         .execute()
     )
     rows = list(msgs_resp.data or [])
+    rows.reverse()  # desc fetch → chronological
+    return rows
+
+
+def _et_stamp(sent_at: Any) -> str:
+    """`YYYY-MM-DD HH:MM ET` from a UTC `sent_at` string. Falls back to
+    a literal `?` stamp on any parse failure (never raises)."""
+    if not isinstance(sent_at, str) or not sent_at:
+        return "????-??-?? ??:?? ET"
+    try:
+        dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_ET).strftime("%Y-%m-%d %H:%M ET")
+    except (ValueError, TypeError):
+        return "????-??-?? ??:?? ET"
+
+
+def fetch_recent_channel_context(
+    slack_channel_id: str,
+    *,
+    before_ts: str,
+    n_turns: int = 15,
+    max_chars: int = 8000,
+) -> str:
+    """Last N messages before `before_ts`, formatted for the prompt's
+    recent-channel-context section.
+
+    Per line: `[YYYY-MM-DD HH:MM ET] <role> (<name>): <text>` where role
+    is `client` / `advisor` / `ella` / `bot` / `unknown` (author_type
+    `team_member` renders as `advisor` for mental-model consistency
+    with the decision Haiku). Ella's own posts are included.
+
+    `max_chars` (default 8000 ≈ 2000 tokens) caps the block; the oldest
+    lines are dropped and a `[...earlier messages truncated...]` marker
+    is prepended. Returns empty string when the window is empty.
+    """
+    rows = fetch_recent_channel_messages(
+        slack_channel_id, before_ts=before_ts, n_turns=n_turns
+    )
     if not rows:
         return ""
 
-    # Resolve user_ids to display names in batch — single round-trip
-    # to clients + team_members rather than per-message lookups.
+    db = get_client()
     user_ids = sorted({r["slack_user_id"] for r in rows if r.get("slack_user_id")})
     name_map = _batch_resolve_names(db, user_ids)
 
-    # Build oldest → newest by reversing the desc fetch.
-    rows.reverse()
     lines: list[str] = []
     for r in rows:
-        try:
-            ts = r["sent_at"]
-            hhmm = ts[11:16] if isinstance(ts, str) and len(ts) >= 16 else "??:??"
-        except (KeyError, TypeError):
-            hhmm = "??:??"
+        stamp = _et_stamp(r.get("sent_at"))
         author_type = r.get("author_type") or "unknown"
+        role = _ROLE_LABELS.get(author_type, "unknown")
         uid = r.get("slack_user_id") or "?"
         display = name_map.get(uid, uid)
         text = (r.get("text") or "").replace("\n", " ").strip()
-        lines.append(f"[{hhmm}] {author_type} {display}: {text}")
+        lines.append(f"[{stamp}] {role} ({display}): {text}")
 
-    # Char-budget trim from the oldest end.
     rendered = "\n".join(lines)
     if len(rendered) <= max_chars:
         return rendered
     truncated_lines: list[str] = []
     running = 0
-    # Walk newest → oldest, accumulating until we hit the cap, then
-    # reverse back to chronological.
     for line in reversed(lines):
         if running + len(line) + 1 > max_chars:
             break
@@ -135,6 +174,34 @@ def fetch_recent_channel_context(
         running += len(line) + 1
     truncated_lines.reverse()
     return "[...earlier messages truncated...]\n" + "\n".join(truncated_lines)
+
+
+def build_kb_query_from_conversation(
+    triggering_message: str,
+    recent_messages: list[dict[str, Any]],
+    *,
+    triggering_weight: int = 2,
+) -> str:
+    """Construct an embedding query from the triggering message plus
+    the last N messages. Triggering message weighted `triggering_weight`x
+    by repetition so a fresh-topic trigger isn't drowned by stale
+    context, while a bare/short trigger still pulls the conversation's
+    anchors.
+
+    `recent_messages` is the raw rows from
+    `fetch_recent_channel_messages` (or compatible dicts with a `text`
+    key), oldest → newest. Returns a single concatenated string ready
+    to embed. Empty recent context → just the triggering message ×weight.
+    """
+    parts: list[str] = []
+    for m in recent_messages or []:
+        t = (m.get("text") or "").replace("\n", " ").strip()
+        if t:
+            parts.append(t)
+    trig = (triggering_message or "").replace("\n", " ").strip()
+    if trig:
+        parts.extend([trig] * max(1, triggering_weight))
+    return "\n".join(parts)
 
 
 def _batch_resolve_names(db, slack_user_ids: list[str]) -> dict[str, str]:

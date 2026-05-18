@@ -76,9 +76,7 @@ class _Chain:
             return SimpleNamespace(data=self.fake.channel_rows)
         if self._mode == "select" and self.table == "slack_messages":
             return SimpleNamespace(data=self.fake.intervention_rows)
-        raise AssertionError(
-            f"unexpected execute table={self.table} mode={self._mode}"
-        )
+        raise AssertionError(f"unexpected execute table={self.table} mode={self._mode}")
 
 
 class _FakeDb:
@@ -147,9 +145,7 @@ def test_global_kill_switch_off_cancels_all_rows(fake_db, monkeypatch):
         "cancelled": 2,
         "errored": 0,
     }
-    statuses = [
-        upd[1]["status"] for upd in fake_db.pending_updates
-    ]
+    statuses = [upd[1]["status"] for upd in fake_db.pending_updates]
     assert statuses == ["cancelled_kill_switch", "cancelled_kill_switch"]
 
 
@@ -225,6 +221,7 @@ def test_intervention_check_excludes_ella_own_post(fake_db):
 
     # Stub respond_to_passive_trigger so we don't actually call Sonnet.
     import agents.ella.agent as ella_agent
+
     ella_agent._stub_called = False
 
     def _stub(pending):
@@ -237,9 +234,11 @@ def test_intervention_check_excludes_ella_own_post(fake_db):
         )
 
     import api.passive_ella_cron as cron_mod
+
     # The cron imports lazily inside _process_row — patch the agent
     # module's function directly.
     import agents.ella.agent as agent_mod
+
     original = agent_mod.respond_to_passive_trigger
     agent_mod.respond_to_passive_trigger = _stub
     try:
@@ -284,28 +283,21 @@ def test_respond_substantive_happy_path(fake_db, monkeypatch):
     assert "responded_at" in fake_db.pending_updates[0][1]
 
 
-def test_respond_general_inquiry_happy_path(fake_db, monkeypatch):
+def test_legacy_general_inquiry_row_is_isolated_as_error(fake_db):
+    """`respond_general_inquiry` is a retired decision (the handler was
+    removed in the 2026-05-18 PM refactor; the new tree never emits it).
+    A stray legacy row hits the cron's now-dead elif → caught per-row →
+    errored, never crashing the drain."""
     fake_db.due_rows = [_pending_row(decision="respond_general_inquiry")]
     fake_db.channel_rows = [
         {"slack_channel_id": "C123", "passive_monitoring_enabled": True}
     ]
     fake_db.intervention_rows = []
 
-    import agents.ella.agent as agent_mod
-
-    def _stub(pending):
-        return PassiveResponseResult(
-            response_text="opener",
-            agent_run_id="run-2",
-            posted=True,
-            slack_error=None,
-        )
-
-    monkeypatch.setattr(agent_mod, "handle_passive_general_inquiry", _stub)
-
     result = cron.run_passive_ella_cron()
 
-    assert result["responded"] == 1
+    assert result["errored"] == 1
+    assert result["responded"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +308,7 @@ def test_respond_general_inquiry_happy_path(fake_db, monkeypatch):
 def test_per_row_exception_isolated(fake_db, monkeypatch):
     fake_db.due_rows = [
         _pending_row("p-1", decision="respond_substantive"),
-        _pending_row("p-2", decision="respond_general_inquiry"),
+        _pending_row("p-2", decision="respond_substantive"),
     ]
     fake_db.channel_rows = [
         {"slack_channel_id": "C123", "passive_monitoring_enabled": True}
@@ -325,19 +317,20 @@ def test_per_row_exception_isolated(fake_db, monkeypatch):
 
     import agents.ella.agent as agent_mod
 
-    def _raise(pending):
-        raise RuntimeError("sonnet api 500")
+    calls = {"n": 0}
 
-    def _stub(pending):
+    def _flaky(pending):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("sonnet api 500")
         return PassiveResponseResult(
-            response_text="opener",
+            response_text="ok",
             agent_run_id="run-3",
             posted=True,
             slack_error=None,
         )
 
-    monkeypatch.setattr(agent_mod, "respond_to_passive_trigger", _raise)
-    monkeypatch.setattr(agent_mod, "handle_passive_general_inquiry", _stub)
+    monkeypatch.setattr(agent_mod, "respond_to_passive_trigger", _flaky)
 
     result = cron.run_passive_ella_cron()
 

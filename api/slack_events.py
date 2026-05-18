@@ -54,9 +54,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 from typing import Any
 
-from agents.ella.slack_handler import handle_slack_event
 from ingestion.slack.realtime_ingest import ingest_message_event
-from shared.slack_identity import get_user_id_for_token
 from shared.slack_post import call_chat_post_message
 
 # Vercel's Python runtime pre-configures the root logger at WARNING
@@ -126,40 +124,27 @@ class handler(BaseHTTPRequestHandler):
         if payload.get("type") == "event_callback":
             event = payload.get("event") or {}
             if event.get("type") == "app_mention":
+                # Unified-path refactor (2026-05-18 PM): the reactive
+                # path is GONE. Slack fires a parallel `message` event
+                # alongside every `app_mention` (the app is subscribed
+                # to message.groups for all client channels), and that
+                # `message` event flows through realtime ingest →
+                # passive monitor → the decision Haiku, which weighs
+                # the @-mention as a signal. Handling app_mention here
+                # too would double-fire. So this is a logged no-op.
                 logger.info(
-                    "slack_webhook: processing app_mention channel=%s user=%s",
+                    "slack_webhook: app_mention deduped — handled via the "
+                    "passive path (message event) channel=%s user=%s",
                     event.get("channel"),
                     event.get("user"),
                 )
-                # Synchronous so the work actually happens. Vercel's
-                # Python runtime kills background threads the moment
-                # the response is written, so a fire-and-forget
-                # threaded post never lands. See module docstring for
-                # why this is acceptable: Slack retries fast on our
-                # missed ack, and the retry branch above catches them.
-                _process_mention(payload)
             elif event.get("type") == "message":
-                # Ella V2 Batch 1 — cloud Slack ingestion. Every
-                # message in a client channel lands in
-                # `slack_messages`; non-client channels are skipped
-                # with an audit row. Fail-soft: any exception is
-                # caught inside ingest_message_event so Slack's 200
-                # ack still fires below.
+                # Every message in a client channel lands in
+                # `slack_messages` and forks into the unified passive
+                # monitor (the ONLY evaluation path now — @-mentions
+                # included). Fail-soft: any exception is caught inside
+                # ingest_message_event so Slack's 200 ack still fires.
                 _ingest_message_event(payload)
-
-                # Ella V2 Batch 1.5 (Task 7) — dual-trigger detection.
-                # If this message @-mentions Ella's human user_id AND
-                # not the bot user_id, also treat it as an app_mention.
-                # (Messages that contain BOTH mentions are handled by
-                # the natural app_mention event Slack fires alongside;
-                # we de-dupe to avoid double-response.)
-                if _should_dual_trigger(event):
-                    logger.info(
-                        "slack_webhook: dual-trigger on message channel=%s user=%s",
-                        event.get("channel"),
-                        event.get("user"),
-                    )
-                    _process_mention(_build_app_mention_from_message(payload))
 
         # Ack regardless of inner event type. Anything non-200 tells
         # Slack to retry, which we don't want for events we didn't
@@ -211,11 +196,14 @@ class handler(BaseHTTPRequestHandler):
             return False
 
         basestring = b"v0:" + timestamp.encode("utf-8") + b":" + body
-        expected = "v0=" + hmac.new(
-            secret.encode("utf-8"),
-            basestring,
-            hashlib.sha256,
-        ).hexdigest()
+        expected = (
+            "v0="
+            + hmac.new(
+                secret.encode("utf-8"),
+                basestring,
+                hashlib.sha256,
+            ).hexdigest()
+        )
 
         return hmac.compare_digest(expected, signature)
 
@@ -239,52 +227,6 @@ class handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 
-def _should_dual_trigger(event: dict[str, Any]) -> bool:
-    """Decide whether a `message` event should also fire Ella's
-    app_mention response path (Task 7 of Batch 1.5).
-
-    Returns True when:
-      - The message text contains `<@<human_ella_user_id>>` (resolved
-        from `SLACK_USER_TOKEN` via auth.test, cached per-process).
-      - The message text does NOT contain `<@<bot_user_id>>` — those
-        get handled by the parallel `app_mention` event Slack fires.
-      - The message author is neither the bot nor the human Ella
-        account (don't trigger on self-responses or response loops).
-
-    Any exception or missing token resolves to False (fail-soft —
-    don't trigger if anything is ambiguous).
-    """
-    try:
-        text = event.get("text") or ""
-        human_uid = get_user_id_for_token(os.environ.get("SLACK_USER_TOKEN"))
-        if not human_uid:
-            return False
-        if f"<@{human_uid}>" not in text:
-            return False
-        bot_uid = get_user_id_for_token(os.environ.get("SLACK_BOT_TOKEN"))
-        if bot_uid and f"<@{bot_uid}>" in text:
-            # Will be handled by the parallel app_mention event.
-            return False
-        author = event.get("user")
-        if author and author in (bot_uid, human_uid):
-            return False
-        return True
-    except Exception as exc:
-        logger.warning("slack_webhook: dual-trigger check raised: %s", exc)
-        return False
-
-
-def _build_app_mention_from_message(payload: dict[str, Any]) -> dict[str, Any]:
-    """Reshape a `message`-event payload so the existing app_mention
-    path can process it. Just flips `event.type` to `app_mention` and
-    leaves everything else verbatim — channel, user, text (with the
-    `<@U...>` mention syntax already in place), ts, thread_ts.
-    """
-    inner = dict(payload.get("event") or {})
-    inner["type"] = "app_mention"
-    return {**payload, "event": inner}
-
-
 def _ingest_message_event(payload: dict[str, Any]) -> None:
     """Forward a `message` event into the realtime ingestion pipeline.
 
@@ -297,39 +239,7 @@ def _ingest_message_event(payload: dict[str, Any]) -> None:
     try:
         ingest_message_event(payload)
     except Exception as exc:
-        logger.exception(
-            "slack_webhook: ingest_message_event raised: %s", exc
-        )
-
-
-def _process_mention(payload: dict[str, Any]) -> None:
-    """Run Ella on the event and post her response back to Slack.
-
-    Any exception is caught and logged: a single bad mention must not
-    take the function down for the next one, and an unhandled
-    exception in a background thread would otherwise be swallowed by
-    Vercel with no diagnostic trail.
-    """
-    try:
-        result = handle_slack_event(payload)
-    except Exception as exc:
-        logger.exception("slack_webhook: handle_slack_event raised: %s", exc)
-        return
-
-    if not result.get("responded") or not result.get("text"):
-        logger.info(
-            "slack_webhook: agent returned no response (reason=%s)",
-            result.get("reason") or "responded=False",
-        )
-        return
-
-    channel = result.get("channel_id")
-    text = result["text"]
-
-    try:
-        _post_to_slack(channel=channel, text=text)
-    except Exception as exc:
-        logger.exception("slack_webhook: chat.postMessage raised: %s", exc)
+        logger.exception("slack_webhook: ingest_message_event raised: %s", exc)
 
 
 def _post_to_slack(*, channel: str, text: str) -> None:

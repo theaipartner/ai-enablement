@@ -90,11 +90,12 @@ def test_fetch_recent_renders_lines_oldest_first(mocker):
     )
 
     out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
-    # Oldest first
+    # Oldest first; ET timestamps (14:23 UTC on 2026-05-08 = 10:23 EDT);
+    # team_member renders as 'advisor', name in parens, Ella included.
     lines = out.split("\n")
     assert len(lines) == 2
-    assert lines[0] == "[14:23] team_member Drake: first message"
-    assert lines[1] == "[14:24] ella Ella: second message"
+    assert lines[0] == "[2026-05-08 10:23 ET] advisor (Drake): first message"
+    assert lines[1] == "[2026-05-08 10:24 ET] ella (Ella): second message"
 
 
 def test_fetch_recent_renders_unknown_users_with_raw_id(mocker):
@@ -116,7 +117,7 @@ def test_fetch_recent_renders_unknown_users_with_raw_id(mocker):
     )
 
     out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
-    assert out == "[14:23] bot U_UNKNOWN: hi"
+    assert out == "[2026-05-08 10:23 ET] bot (U_UNKNOWN): hi"
 
 
 def test_fetch_recent_truncates_at_max_chars(mocker):
@@ -145,5 +146,53 @@ def test_fetch_recent_truncates_at_max_chars(mocker):
     # max_chars=500 will fit ~2 lines.
     out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0", max_chars=500)
     assert out.startswith("[...earlier messages truncated...]")
-    # At least one full message line preserved.
-    assert "Drake: " in out
+    # At least one full message line preserved (new format).
+    assert "(Drake): " in out
+
+
+def test_build_kb_query_weights_triggering_2x():
+    q = retrieval.build_kb_query_from_conversation(
+        "the actual question",
+        [{"text": "prior one"}, {"text": "prior two"}],
+    )
+    assert q == "prior one\nprior two\nthe actual question\nthe actual question"
+
+
+def test_build_kb_query_empty_context_just_trigger_2x():
+    q = retrieval.build_kb_query_from_conversation("solo", [])
+    assert q == "solo\nsolo"
+
+
+def test_build_kb_query_skips_blank_messages():
+    q = retrieval.build_kb_query_from_conversation(
+        "Q", [{"text": ""}, {"text": "  "}, {"text": "real"}]
+    )
+    assert q == "real\nQ\nQ"
+
+
+def test_fetch_recent_messages_returns_rows_oldest_first(mocker):
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": [
+                {
+                    "slack_ts": "100.2",
+                    "slack_user_id": "U2",
+                    "author_type": "ella",
+                    "text": "newer",
+                    "sent_at": "2026-05-08T14:24:00+00:00",
+                },
+                {
+                    "slack_ts": "100.1",
+                    "slack_user_id": "U1",
+                    "author_type": "client",
+                    "text": "older",
+                    "sent_at": "2026-05-08T14:23:00+00:00",
+                },
+            ],
+        },
+    )
+    rows = retrieval.fetch_recent_channel_messages("C1", before_ts="200.0")
+    assert [r["text"] for r in rows] == ["older", "newer"]
+    # Ella's own post is included (no author_type filter).
+    assert any(r["author_type"] == "ella" for r in rows)

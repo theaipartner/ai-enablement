@@ -79,9 +79,7 @@ class _Chain:
 
     def execute(self):
         if self._mode == "select" and self._table == "slack_channels":
-            return SimpleNamespace(
-                data=self._fake.slack_channels_response or []
-            )
+            return SimpleNamespace(data=self._fake.slack_channels_response or [])
         if self._mode == "select" and self._table == "clients":
             return SimpleNamespace(data=self._fake.clients_response)
         if self._mode == "select" and self._table == "team_members":
@@ -92,9 +90,7 @@ class _Chain:
                 raise self._fake.raise_on_upsert
             return SimpleNamespace(data=[{"id": "msg-id"}])
         if self._mode == "insert" and self._table == "webhook_deliveries":
-            self._fake.webhook_deliveries_inserts.append(
-                self._pending_payload
-            )
+            self._fake.webhook_deliveries_inserts.append(self._pending_payload)
             return SimpleNamespace(data=[{"id": "wd-id"}])
         raise AssertionError(
             f"unexpected execute(): table={self._table!r} mode={self._mode!r}"
@@ -166,13 +162,15 @@ def test_happy_path_client_channel_regular_message(fake_db):
     fake_db.team_members_response = [{"slack_user_id": "UTEAM1"}]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "channel": "C100",
-            "user": "UCLIENT1",
-            "text": "Hi team",
-            "ts": "1745500000.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "channel": "C100",
+                "user": "UCLIENT1",
+                "text": "Hi team",
+                "ts": "1745500000.000100",
+            }
+        )
     )
 
     assert result["ingested"] is True
@@ -211,13 +209,15 @@ def test_skip_non_client_channel(fake_db):
     ]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "channel": "C200",
-            "user": "UTEAM1",
-            "text": "internal chatter",
-            "ts": "1745500001.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "channel": "C200",
+                "user": "UTEAM1",
+                "text": "internal chatter",
+                "ts": "1745500001.000100",
+            }
+        )
     )
 
     assert result["ingested"] is False
@@ -236,13 +236,15 @@ def test_skip_channel_not_in_slack_channels_table(fake_db):
     fake_db.slack_channels_response = []  # zero rows
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "channel": "CUNKNOWN",
-            "user": "U1",
-            "text": "ghost channel",
-            "ts": "1745500002.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "channel": "CUNKNOWN",
+                "user": "U1",
+                "text": "ghost channel",
+                "ts": "1745500002.000100",
+            }
+        )
     )
 
     assert result["skipped_reason"] == "non_client_channel"
@@ -265,14 +267,16 @@ def test_skip_ignorable_subtype(fake_db):
     ]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "subtype": "channel_join",
-            "channel": "C300",
-            "user": "UCLIENT1",
-            "text": "<@UCLIENT1> has joined the channel",
-            "ts": "1745500003.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "subtype": "channel_join",
+                "channel": "C300",
+                "user": "UCLIENT1",
+                "text": "<@UCLIENT1> has joined the channel",
+                "ts": "1745500003.000100",
+            }
+        )
     )
 
     assert result["skipped_reason"] == "ignorable_subtype"
@@ -311,13 +315,15 @@ def test_ella_self_recognition(fake_db, monkeypatch):
     )
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "channel": "C400",
-            "user": "UELLA",
-            "text": "Hi from Ella",
-            "ts": "1745500004.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "channel": "C400",
+                "user": "UELLA",
+                "text": "Hi from Ella",
+                "ts": "1745500004.000100",
+            }
+        )
     )
 
     assert result["ingested"] is True
@@ -342,14 +348,16 @@ def test_bot_message_resolves_to_bot_author_type(fake_db):
     ]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "subtype": "bot_message",
-            "channel": "C500",
-            "bot_id": "B1",
-            "text": "🤖 channel reminder",
-            "ts": "1745500005.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "subtype": "bot_message",
+                "channel": "C500",
+                "bot_id": "B1",
+                "text": "🤖 channel reminder",
+                "ts": "1745500005.000100",
+            }
+        )
     )
 
     assert result["ingested"] is True
@@ -374,14 +382,16 @@ def test_workflow_submission_resolves_to_workflow(fake_db):
     ]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "subtype": "workflow_step",
-            "channel": "C600",
-            "bot_id": "BWORKFLOW",
-            "text": "Form submission: weekly accountability — done",
-            "ts": "1745500006.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "subtype": "workflow_step",
+                "channel": "C600",
+                "bot_id": "BWORKFLOW",
+                "text": "Form submission: weekly accountability — done",
+                "ts": "1745500006.000100",
+            }
+        )
     )
 
     assert result["ingested"] is True
@@ -449,13 +459,15 @@ def test_fail_soft_on_db_error_audits_failed(fake_db):
 
     # Must NOT raise — the function is fail-soft by contract.
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "channel": "C800",
-            "user": "UCLIENT1",
-            "text": "boom",
-            "ts": "1745500008.000100",
-        })
+        _envelope(
+            {
+                "type": "message",
+                "channel": "C800",
+                "user": "UCLIENT1",
+                "text": "boom",
+                "ts": "1745500008.000100",
+            }
+        )
     )
 
     assert result["ingested"] is False
@@ -464,13 +476,9 @@ def test_fail_soft_on_db_error_audits_failed(fake_db):
     # Failure audit row exists.
     audits = fake_db.webhook_deliveries_inserts
     assert len(audits) >= 1
-    failure_audits = [
-        a for a in audits if a.get("processing_status") == "failed"
-    ]
+    failure_audits = [a for a in audits if a.get("processing_status") == "failed"]
     assert len(failure_audits) == 1
-    assert "simulated DB outage" in (
-        failure_audits[0].get("processing_error") or ""
-    )
+    assert "simulated DB outage" in (failure_audits[0].get("processing_error") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -492,24 +500,26 @@ def test_message_changed_unwraps_inner_message_and_upserts(fake_db):
     fake_db.clients_response = [{"slack_user_id": "UCLIENT1"}]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "subtype": "message_changed",
-            "channel": "C900",
-            "ts": "1745500009.222000",  # outer (edit-event ts)
-            "message": {
+        _envelope(
+            {
                 "type": "message",
-                "user": "UCLIENT1",
-                "text": "edited text",
-                "ts": "1745500009.000100",  # inner (original message ts)
-            },
-            "previous_message": {
-                "type": "message",
-                "user": "UCLIENT1",
-                "text": "original text",
-                "ts": "1745500009.000100",
-            },
-        })
+                "subtype": "message_changed",
+                "channel": "C900",
+                "ts": "1745500009.222000",  # outer (edit-event ts)
+                "message": {
+                    "type": "message",
+                    "user": "UCLIENT1",
+                    "text": "edited text",
+                    "ts": "1745500009.000100",  # inner (original message ts)
+                },
+                "previous_message": {
+                    "type": "message",
+                    "user": "UCLIENT1",
+                    "text": "original text",
+                    "ts": "1745500009.000100",
+                },
+            }
+        )
     )
 
     assert result["ingested"] is True
@@ -533,14 +543,16 @@ def test_message_deleted_is_skipped_as_ignorable(fake_db):
     ]
 
     result = ri.ingest_message_event(
-        _envelope({
-            "type": "message",
-            "subtype": "message_deleted",
-            "channel": "C910",
-            "ts": "1745500010.000100",
-            "deleted_ts": "1745500009.000100",
-            "previous_message": {"text": "original"},
-        })
+        _envelope(
+            {
+                "type": "message",
+                "subtype": "message_deleted",
+                "channel": "C910",
+                "ts": "1745500010.000100",
+                "deleted_ts": "1745500009.000100",
+                "previous_message": {"text": "original"},
+            }
+        )
     )
 
     assert result["skipped_reason"] == "ignorable_subtype"
@@ -554,28 +566,21 @@ def test_message_deleted_is_skipped_as_ignorable(fake_db):
 # ---------------------------------------------------------------------------
 
 
-def test_app_mention_path_does_not_call_message_ingest(monkeypatch):
-    """The new `_ingest_message_event` branch must not interfere with
-    the existing app_mention handling. When the inner event type is
-    `app_mention`, `_ingest_message_event` is NOT called."""
+def test_app_mention_event_is_noop(monkeypatch):
+    """Unified-path: `app_mention` no longer dispatches anywhere — the
+    parallel `message` event handles the same @-mention via the
+    passive path. `_ingest_message_event` is NOT called for an
+    app_mention event."""
     from api import slack_events as se
 
-    called = {"ingest": 0, "mention": 0}
+    called = {"ingest": 0}
 
     monkeypatch.setattr(
-        se, "_ingest_message_event", lambda payload: called.__setitem__(
-            "ingest", called["ingest"] + 1
-        )
-    )
-    monkeypatch.setattr(
-        se, "_process_mention", lambda payload: called.__setitem__(
-            "mention", called["mention"] + 1
-        )
+        se,
+        "_ingest_message_event",
+        lambda payload: called.__setitem__("ingest", called["ingest"] + 1),
     )
 
-    # Build a minimal app_mention event_callback envelope and dispatch
-    # via the same code path do_POST takes. We can't easily construct
-    # an HTTP request here, so simulate the dispatcher logic inline:
     payload = {
         "type": "event_callback",
         "event": {
@@ -586,34 +591,27 @@ def test_app_mention_path_does_not_call_message_ingest(monkeypatch):
             "ts": "1.1",
         },
     }
-
     event = payload.get("event") or {}
     if payload.get("type") == "event_callback":
         if event.get("type") == "app_mention":
-            se._process_mention(payload)
+            pass  # logged no-op in the real handler
         elif event.get("type") == "message":
             se._ingest_message_event(payload)
 
-    assert called["mention"] == 1
     assert called["ingest"] == 0
 
 
 def test_message_event_dispatches_to_ingest(monkeypatch):
-    """Symmetric test: a `message` event dispatches to ingest, not
-    to the mention handler."""
+    """A `message` event (the only evaluation path now) dispatches to
+    `_ingest_message_event` exactly once."""
     from api import slack_events as se
 
-    called = {"ingest": 0, "mention": 0}
+    called = {"ingest": 0}
 
     monkeypatch.setattr(
-        se, "_ingest_message_event", lambda payload: called.__setitem__(
-            "ingest", called["ingest"] + 1
-        )
-    )
-    monkeypatch.setattr(
-        se, "_process_mention", lambda payload: called.__setitem__(
-            "mention", called["mention"] + 1
-        )
+        se,
+        "_ingest_message_event",
+        lambda payload: called.__setitem__("ingest", called["ingest"] + 1),
     )
 
     payload = {
@@ -626,13 +624,11 @@ def test_message_event_dispatches_to_ingest(monkeypatch):
             "ts": "1.1",
         },
     }
-
     event = payload.get("event") or {}
     if payload.get("type") == "event_callback":
         if event.get("type") == "app_mention":
-            se._process_mention(payload)
+            pass
         elif event.get("type") == "message":
             se._ingest_message_event(payload)
 
     assert called["ingest"] == 1
-    assert called["mention"] == 0

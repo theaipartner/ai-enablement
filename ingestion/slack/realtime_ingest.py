@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -326,16 +327,9 @@ def _load_resolvers(db) -> tuple[set[str], set[str]]:
       - Caching would require TTL invalidation logic that adds bugs
         for marginal latency gains.
     """
-    c = (
-        db.table("clients")
-        .select("slack_user_id")
-        .is_("archived_at", "null")
-        .execute()
-    )
+    c = db.table("clients").select("slack_user_id").is_("archived_at", "null").execute()
     clients = {
-        row["slack_user_id"]
-        for row in (c.data or [])
-        if row.get("slack_user_id")
+        row["slack_user_id"] for row in (c.data or []) if row.get("slack_user_id")
     }
     t = (
         db.table("team_members")
@@ -343,11 +337,7 @@ def _load_resolvers(db) -> tuple[set[str], set[str]]:
         .is_("archived_at", "null")
         .execute()
     )
-    teams = {
-        row["slack_user_id"]
-        for row in (t.data or [])
-        if row.get("slack_user_id")
-    }
+    teams = {row["slack_user_id"] for row in (t.data or []) if row.get("slack_user_id")}
     return clients, teams
 
 
@@ -403,6 +393,34 @@ def _insert_audit(
 # ---------------------------------------------------------------------------
 
 
+_SLACK_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
+
+
+def _detect_ella_mention(text: str) -> bool:
+    """True when the message text @-mentions Ella — either her bot
+    user_id (`SLACK_BOT_TOKEN`) or her human user_id (`SLACK_USER_TOKEN`).
+
+    The decision Haiku weighs this as the strongest signal in the
+    system (it replaces the old reactive routing path). Fail-soft: any
+    token-resolution error → False (a missed mention degrades to
+    normal passive evaluation, never a crash)."""
+    try:
+        if not text:
+            return False
+        mentioned = set(_SLACK_MENTION_RE.findall(text))
+        if not mentioned:
+            return False
+        ella_ids = set()
+        for tok in ("SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"):
+            uid = get_user_id_for_token(os.environ.get(tok))
+            if uid:
+                ella_ids.add(uid)
+        return bool(mentioned & ella_ids)
+    except Exception as exc:
+        logger.warning("slack_message_ingest: ella-mention detection raised: %s", exc)
+        return False
+
+
 def _maybe_dispatch_passive_monitor(
     db,
     *,
@@ -443,6 +461,7 @@ def _maybe_dispatch_passive_monitor(
             triggering_message_text=record.text or "",
             author_type=record.author_type,
             channel_client_id=channel_client_id,
+            is_ella_mentioned=_detect_ella_mention(record.text or ""),
             test_mode=bool(channel_row.get("test_mode")),
         )
         evaluation = evaluate_passive_trigger(payload)

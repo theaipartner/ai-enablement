@@ -50,9 +50,10 @@ def test_prompt_advisor_branch_says_dont_escalate():
     out = build_system_prompt(dict(_CLIENT), retrieved_chunks=[], speaker=advisor)
     assert "Role: advisor" in out
     assert "Speaker: Drake" in out
-    # Explicit DON'T escalate
+    # Explicit DON'T escalate; the fallback-token line was removed
+    # entirely (no token mechanism anymore).
     assert "Do NOT escalate" in out
-    assert "Do NOT emit the [FALLBACK_TO_SONNET] token" in out
+    assert "[FALLBACK_TO_SONNET]" not in out
     # NOT the channel-mapped client
     assert "NOT the channel's mapped client (Javi Pena)" in out
 
@@ -67,7 +68,7 @@ def test_prompt_unresolvable_branch_safer_fallback():
     assert "Role: unresolvable" in out
     assert "don't have a verified identity" in out
     assert "Avoid using a name" in out
-    assert "Do NOT emit the [FALLBACK_TO_SONNET] token" in out
+    assert "[FALLBACK_TO_SONNET]" not in out
 
 
 def test_prompt_no_speaker_kwarg_defaults_to_client_persona():
@@ -78,15 +79,16 @@ def test_prompt_no_speaker_kwarg_defaults_to_client_persona():
     assert "Speaker: Javi Pena" in out
 
 
-def test_base_prompt_drops_escalate_token_and_firm_after_first():
-    """The [ESCALATE] token + FIRM AFTER FIRST section are gone; the
-    new 'needs a human' section + [FALLBACK_TO_SONNET] are present."""
+def test_base_prompt_no_control_tokens_and_has_nav_rule():
+    """Both control tokens are gone. The KB-content-vs-navigation rule
+    is present in WHAT YOU CAN HELP WITH."""
     out = build_system_prompt(dict(_CLIENT), retrieved_chunks=[])
     assert "[ESCALATE]" not in out
+    assert "[FALLBACK_TO_SONNET]" not in out
     assert "# WHAT YOU ESCALATE" not in out
     assert "# FIRM AFTER FIRST" not in out
     assert "# WHAT YOU DO WHEN THE CONVERSATION NEEDS A HUMAN" in out
-    assert "[FALLBACK_TO_SONNET]" in out
+    assert "navigation metadata" in out
 
 
 def test_prompt_unassigned_advisor_renders_cleanly():

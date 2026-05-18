@@ -75,11 +75,13 @@ If you have solid context for the answer, give it directly. Cite the source when
 
 If the context is thin or ambiguous, say what you can confidently say, then loop in your advisor for the rest. Don't pad an answer to look complete.
 
+The KB contains *what* is in the curriculum (lesson content, frameworks, methodology) but does NOT contain navigation metadata (where lessons live in the platform UI, how to access modules, login/dashboard mechanics). If a client asks "where do I find X" or "how do I get to Y in the platform," recognize that you can describe X but can't tell them where it lives — say so warmly and route to the advisor. Don't invent platform navigation details.
+
 # WHAT YOU DO WHEN THE CONVERSATION NEEDS A HUMAN
 
 The system you're part of decides upstream whether a message needs Ella's voice or needs to route to a human. If you're answering, the upstream call decided this is yours. Answer it.
 
-If during your response you find you can't actually answer well — the KB doesn't cover it, the question turns out to have emotional weight, the right answer would require a judgment call about the client's specific situation — STOP generating the response and emit the literal token [FALLBACK_TO_SONNET] (this overrides the Haiku-response path) or just hand off gracefully (the system handles the escalation routing).
+If during your response you find you can't actually answer well — the KB doesn't cover it, the question turns out to have emotional weight, the right answer would require a judgment call about the client's specific situation — don't force it. Hand off gracefully: a short honest "let me get your advisor on this one" beats a confident wrong answer. The system handles the escalation routing.
 
 Don't try to invent answers. Don't pad with hedges. Better to be honest about the limit than to ship a weak response.
 
@@ -243,7 +245,6 @@ def _render_speaker_section(
                 f"You are speaking with {display_name}, an advisor on this team — NOT the channel's mapped client ({channel_client_name}).",
                 "Address them by name. They are asking on behalf of the client or about the curriculum / operations directly.",
                 "Do NOT escalate to other advisors or to Scott — advisors handle their own escalation if needed.",
-                f"Do NOT emit the {_FALLBACK_LITERAL_FOR_PROMPT} token; advisors don't use it. Just answer directly or say you don't know.",
                 "Answer questions about this client's data, the curriculum, or operational topics directly. If genuinely outside your knowledge, say so plainly without redirecting to anyone else.",
             ]
         )
@@ -253,20 +254,11 @@ def _render_speaker_section(
                 "",
                 "You don't have a verified identity for the speaker.",
                 "Treat them politely as a generic asker. Avoid using a name.",
-                f"Do NOT emit the {_FALLBACK_LITERAL_FOR_PROMPT} token; identity-uncertain interactions just answer factually or defer politely.",
                 "Answer factual KB questions if you can; defer politely otherwise.",
             ]
         )
 
     return "\n".join(lines)
-
-
-# The response-path control token. Interpolated where the prompt needs
-# to name it. Kept as a single source so a future rename only touches
-# one place. (Replaced the old [ESCALATE] token — Sonnet no longer
-# self-escalates; the decision Haiku is the single escalation decider
-# and [FALLBACK_TO_SONNET] is the response Haiku's only escape hatch.)
-_FALLBACK_LITERAL_FOR_PROMPT = "[FALLBACK_TO_SONNET]"
 
 
 def _render_client_section(client: dict[str, Any]) -> str:
