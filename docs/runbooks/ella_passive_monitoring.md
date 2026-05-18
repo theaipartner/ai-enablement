@@ -8,15 +8,14 @@ Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) t
 
 Pipeline (one entry per client-authored message):
 
-1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py:ingest_message_event`) — every Slack `message` event lands here; passive fork attaches after the existing client-channel + subtype gates and the message upsert.
-2. **Passive decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **unified-decision rewrite (2026-05-18)**: only **two pre-LLM gates** (global kill switch → author-type), then a KB vector search (context, *not* a gate) + recent-channel-context fetch, then a single decision Haiku call. Returns `skip` / `respond_haiku_self` / `respond_via_sonnet` / `digest_only` plus an independent `digest_flag` + `digest_category`. The old CSM-directed, KB-relevance (+escalation-keyword bypass), and firm-after-first gates were removed — Haiku decides all of it now.
+1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op; the parallel `message` event is the ONE evaluation path — @-mentions included). The fork detects `is_ella_mentioned` (`_detect_ella_mention`, bot OR human uid) and passes it through `PassiveTriggerPayload`.
+2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **unified-path rewrite (2026-05-18 PM)**: two pre-LLM gates only — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row). Then KB vector search using a **combined-conversation query** (`build_kb_query_from_conversation`: last 6 msgs incl. Ella's own + triggering ×2) + recent-context fetch (ET-timestamped) + speaker resolve, then one decision Haiku call returning `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus independent `digest_flag`/`digest_category`. CSM-directed / KB-relevance / firm-after-first / bare-mention are soft prompt rules now, not gates.
 3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`):
-   - `skip_reason='kill_switch'` → **no `agent_runs` row at all** (Gate 1 optimization — saves writes + audit noise when Ella is globally off).
-   - otherwise an `agent_runs` row always writes, plus per decision:
-     - `respond_haiku_self` → response Haiku posts a reply directly; on `[FALLBACK_TO_SONNET]` it falls through to the Sonnet queue path.
-     - `respond_via_sonnet` (or Haiku-fallback) → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, `respond_after_ts = now() + 1 min`) drained by the unchanged per-minute cron.
-     - `digest_only` → **no client post, no `escalations` row, no CSM DM**; a `pending_digest_items` row only.
-     - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
+   - `skip_reason='kill_switch'` → **no `agent_runs` row at all**. `skip_reason='non_human_author'` → audit row written (skip, no side effects).
+   - `respond` + `response_model='haiku'` → response Haiku posts directly (no fallback).
+   - `respond` + `response_model='sonnet'` → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, +1 min) drained by the unchanged per-minute cron.
+   - `acknowledge_and_escalate` → posts the Haiku `ack_text` in-channel, writes the `escalations` row, fans DMs to Scott + primary advisor, writes a `pending_digest_items` row. Same on @-mention and passive.
+   - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
    - Independent of decision: any `digest_flag=true` writes a `pending_digest_items` row for the daily digest (`docs/runbooks/ella_daily_digest.md`).
 4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute, picks due rows, re-checks the kill switches + per-channel toggle + CSM-intervention, dispatches the response or cancels the row.
 
@@ -230,9 +229,7 @@ relevance is no longer a gate, so the threshold has no effect.
 
 ## Smoke testing in #ella-test-drakeonly
 
-Per-channel `slack_channels.test_mode=true` allows team_member messages (e.g. Drake) to trigger passive monitor in that one channel. The bypass is conditional on the channel-level flag — no other channel is affected. Used for validating the four Haiku decision outcomes before expanding passive monitoring to production client channels.
-
-Production-only behavior is preserved everywhere: the bypass accepts `client` AND `team_member` under test_mode. `ella`, `bot`, `workflow`, `unknown` continue to skip regardless of mode (Ella responding to her own posts or to system messages is undesirable in every mode).
+**As of the 2026-05-18 PM unified-path rewrite, `team_member` messages are ALWAYS evaluated** (CSMs @Ella too), so `test_mode` is no longer the gate that admits Drake-as-team_member — it's retained on the payload for compat but inert. `#ella-test-drakeonly` is still the smoke channel (it has `passive_monitoring_enabled=true`); use it to validate the three decisions (`respond` haiku/sonnet, `acknowledge_and_escalate`, `skip`) + the double-fire check before broader rollout. `ella`/`bot`/`workflow`/`unknown` still skip (with an audit row).
 
 ### To validate
 

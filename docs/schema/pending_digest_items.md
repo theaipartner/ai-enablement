@@ -27,7 +27,7 @@ false positives are explicitly acceptable. Added by migration
 | `triggering_message_slack_user_id` | `text` | Author of the triggering message |
 | `client_id` | `uuid` FK → `clients(id)` ON DELETE SET NULL | Digest survives a client deletion (audit-shaped) |
 | `message_text` | `text` | Snapshot of the triggering message text |
-| `haiku_decision` | `text` NOT NULL | The decision Haiku's decision (`skip` / `respond_haiku_self` / `respond_via_sonnet` / `digest_only`) |
+| `haiku_decision` | `text` NOT NULL | The decision Haiku's decision. Free-text; current vocabulary `respond` / `acknowledge_and_escalate` / `skip` (the 2026-05-18-AM `respond_haiku_self` / `respond_via_sonnet` / `digest_only` values were superseded by the PM unified-path refactor; historical rows may carry the old values) |
 | `haiku_reasoning` | `text` | Haiku's 1-2 sentence reasoning |
 | `digest_category` | `text` | `question_program` / `emotional_human_needed` / `confusion` / `money_commitment` / `complaint` / `other`. Free-text (no enum CHECK) so categories can be added without a migration |
 | `ella_responded` | `boolean` NOT NULL DEFAULT false | True when Ella is answering this message (Haiku self-answer or queued Sonnet) — the digest reads it as "Ella is handling this" |
