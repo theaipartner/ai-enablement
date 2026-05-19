@@ -33,11 +33,15 @@ false positives are explicitly acceptable. Added by migration
 | `ella_responded` | `boolean` NOT NULL DEFAULT false | True when Ella is answering this message (Haiku self-answer or queued Sonnet) — the digest reads it as "Ella is handling this" |
 | `sent_in_digest_at` | `timestamptz` | NULL until the cron sends it; set in one batch UPDATE post-send |
 | `created_at` | `timestamptz` NOT NULL DEFAULT `now()` | Insert time; the digest window + display ordering key |
+| `unanswered_posted_at` | `timestamptz` | Added by `0041`. Dedup key for the unanswered-message flagger. NULL = still eligible for the 2h check. Set when the flagger cron either posts the item OR marks it resolved-before-post. Independent of `sent_in_digest_at` |
+| `unanswered_post_slack_channel_id` | `text` | Added by `0041`. Channel the unanswered post landed in. NULL together with a non-NULL `unanswered_posted_at` means "resolved before post" (a human responded inside the 2h window) |
+| `unanswered_post_slack_ts` | `text` | Added by `0041`. Slack `ts` of the unanswered post (audit trail / future post-edit feature). NULL on resolved-before-post |
 
 ## Indexes
 
 - `pending_digest_items_dedup_idx` — UNIQUE `(slack_channel_id, triggering_message_ts)`. The dedup key (same shape as `pending_ella_responses`): a re-processed message (Slack event redelivery, `message_changed`) doesn't double-flag. The insert helper swallows the unique-violation and continues.
 - `pending_digest_items_unsent_idx` — partial index on `(created_at) WHERE sent_in_digest_at IS NULL`. The cron's drain query hits this; the partial predicate keeps it small as historical rows accumulate.
+- `pending_digest_items_unanswered_scan_idx` — partial index on `(created_at) WHERE unanswered_posted_at IS NULL` (added by `0041`). The unanswered-flagger cron's 15-minute scan query hits this; the partial predicate keeps it small as posted/resolved rows accumulate.
 
 ## Relationships
 
@@ -52,6 +56,7 @@ false positives are explicitly acceptable. Added by migration
 ## What reads from it
 
 - `api/ella_daily_digest_cron.py` — drains unsent rows, formats + sends the digest, marks them sent.
+- `api/ella_unanswered_flagger_cron.py` — every 15 min, scans for rows aged past 2h with `unanswered_posted_at IS NULL` and no `team_member` message in the source channel since `created_at`; posts them to `#unanswered-channels` and stamps the `unanswered_*` columns. Independent of the daily digest's `sent_in_digest_at` state — the two surfaces don't conflict.
 
 ## Example queries
 
