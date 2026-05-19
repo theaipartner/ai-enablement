@@ -52,8 +52,9 @@ def _block_real_slack_posts(monkeypatch):
     patches AFTER autouse, so they take precedence for the wrapped
     scope.
     """
+
     def _noop(*args, **kwargs):
-        return {"ok": True, "slack_error": None}
+        return {"ok": True, "slack_error": None, "ts": None}
 
     # Canonical safety net for any caller that does
     # `shared.slack_post.post_message(...)` directly via the source
@@ -61,14 +62,15 @@ def _block_real_slack_posts(monkeypatch):
     monkeypatch.setattr("shared.slack_post.post_message", _noop)
     # Live local re-export bound at import time inside cs_call_summary_post.
     # See the module docstring above for the import-time-binding rationale.
-    monkeypatch.setattr(
-        "agents.gregory.cs_call_summary_post.post_message", _noop
-    )
+    monkeypatch.setattr("agents.gregory.cs_call_summary_post.post_message", _noop)
     # Live local re-export bound at import time inside the unified
     # escalation-routing fan-out (2026-05-14 ella-escalation-unify spec).
     # Reactive + passive escalation paths both route their DM sends
     # through this module; tests that flow through either path must
     # not hit real Slack DMs.
-    monkeypatch.setattr(
-        "agents.ella.escalation_routing.post_message", _noop
-    )
+    monkeypatch.setattr("agents.ella.escalation_routing.post_message", _noop)
+    # Live local re-export bound at import time inside the unanswered-
+    # message flagger cron (ella-unanswered-message-flagger spec). The
+    # cron's test patches this locally too; this is the belt-and-
+    # suspenders safety net per the convention above.
+    monkeypatch.setattr("api.ella_unanswered_flagger_cron.post_message", _noop)

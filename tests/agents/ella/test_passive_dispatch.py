@@ -109,8 +109,9 @@ def _slack(monkeypatch):
     posts = []
     monkeypatch.setattr(
         "shared.slack_post.post_message",
-        lambda ch, txt, **kw: posts.append((ch, txt))
-        or {"ok": True, "slack_error": None},
+        lambda ch, txt, **kw: (
+            posts.append((ch, txt)) or {"ok": True, "slack_error": None}
+        ),
     )
     return posts
 
@@ -186,6 +187,20 @@ def test_skip_flag_writes_digest(fake_db):
     )
     assert len(fake_db.digest) == 1
     assert fake_db.digest[0]["ella_responded"] is False
+
+
+def test_digest_insert_unaffected_by_unanswered_columns(fake_db):
+    """Migration 0041 adds unanswered_* columns (NULL-defaulted). The
+    insert path is unchanged — it must NOT write those columns; the DB
+    defaults them. Guards against a future edit coupling the flagger's
+    schema to the insert site."""
+    pd.persist_passive_evaluation(
+        _ev("skip", digest_flag=True, digest_category="confusion")
+    )
+    row = fake_db.digest[0]
+    assert "unanswered_posted_at" not in row
+    assert "unanswered_post_slack_channel_id" not in row
+    assert "unanswered_post_slack_ts" not in row
 
 
 def test_respond_haiku_posts(fake_db, _slack, monkeypatch):
