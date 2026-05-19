@@ -10,7 +10,7 @@ Crons are scheduled in **UTC** (Vercel's scheduler is UTC-native). ET
 column shows both DST states: **EDT = UTC−4** (≈ mid-March → early
 November) and **EST = UTC−5** (rest of year).
 
-## Current crons (as of 2026-05-18)
+## Current crons (as of 2026-05-19)
 
 | Path | UTC schedule | ET equivalent | What it does |
 |---|---|---|---|
@@ -21,12 +21,14 @@ November) and **EST = UTC−5** (rest of year).
 | `/api/teams_calendar_sync_cron` | `*/30 * * * *` | every 30 min (TZ-independent) | Google Calendar → `calendar_events` sync |
 | `/api/faq_digest_cron` | `0 19 * * 5` | Fridays 15:00 EDT / 14:00 EST | Weekly FAQ digest DM to Scott |
 | `/api/ella_daily_digest_cron` | `30 20 * * *` | daily 16:30 EDT / 15:30 EST | Daily Ella-flags digest DM to Scott + Drake |
+| `/api/ella_unanswered_flagger_cron` | `*/15 * * * *` | every 15 min (TZ-independent) | Posts flagged messages unanswered >2h to #unanswered-channels |
 
-The two interval crons (`* * * * *`, `*/30 * * * *`) have no meaningful
-ET translation — they fire on a fixed cadence regardless of wall-clock
-date. The four fixed-time crons shift by one clock hour across the DST
-boundary because the UTC instant is fixed (a deliberate, accepted
-trade-off — see ADR 0003 and the FAQ-digest runbook's DST note).
+The three interval crons (`* * * * *`, `*/30 * * * *`, `*/15 * * * *`)
+have no meaningful ET translation — they fire on a fixed cadence
+regardless of wall-clock date. The four fixed-time crons shift by one
+clock hour across the DST boundary because the UTC instant is fixed (a
+deliberate, accepted trade-off — see ADR 0003 and the FAQ-digest
+runbook's DST note).
 
 ## Adding or rescheduling a cron
 

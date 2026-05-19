@@ -151,6 +151,14 @@ Env var: `ESCALATION_RECIPIENT_SLACK_USER_ID` (gate (d) — Drake sets in Vercel
 
 Every message the decision Haiku flags (`digest_flag=true`, on either the passive or reactive path) writes a `pending_digest_items` row (`docs/schema/pending_digest_items.md`). The cron at `api/ella_daily_digest_cron.py` (`/api/ella_daily_digest_cron`, daily 16:30 EDT / 30 20 * * * UTC — `docs/runbooks/cron_schedule.md`) drains every unsent row in the trailing 24h, groups by client, formats a skim-friendly body, and DMs it to the head CSM (Scott, resolved from `team_members.access_tier='head_csm'`) + an optional CC (`ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`, Drake). Empty days still fire ("No flags today."). Manual `?since=<iso>` overrides the window for backfill. Full runbook: `docs/runbooks/ella_daily_digest.md`. The digest is a curated daily skim of "things worth Scott's eyes" — false positives are explicitly fine.
 
+## Unanswered Message Flagger (2026-05-19)
+
+A real-time safety net **layered on top of** the daily digest, not a replacement. The digest is a once-a-day skim; it can't catch a Saturday booking-link question that needed a Saturday answer. This cron does.
+
+The cron at `api/ella_unanswered_flagger_cron.py` (`/api/ella_unanswered_flagger_cron`, every 15 min, `*/15 * * * *`, 24/7 — `docs/runbooks/cron_schedule.md`) scans `pending_digest_items` for rows that aged past **2 hours** with `unanswered_posted_at IS NULL` and **no `team_member` message in the source channel since `created_at`**. Each such row is posted to `#unanswered-channels` (`ELLA_UNANSWERED_CHANNEL_SLACK_ID`) with @-mentions of Scott (`team_members.access_tier='head_csm'`) + the client's primary advisor (`client_team_assignments` `role='primary_csm'`), de-duplicated if they're the same person. The row is then stamped (`unanswered_posted_at` + the post's channel/`ts`) so it never re-posts.
+
+Behavioral rules: human intervention = **any** `team_member` message after the flag landed (topic-agnostic — an active advisor means it's handled); Ella's own posts (`author_type='ella'`) do **not** count; `acknowledge_and_escalate` rows are subject to the 2h timer too (escalation DMs get missed — the channel post is the second wave); runs through weekends / after-hours with no pause. A human responding inside the 2h window marks the row resolved-before-post (`unanswered_posted_at` set, channel/`ts` NULL — no Slack post). State is fully independent of the digest's `sent_in_digest_at`; the two surfaces never conflict. Kill switch: `ELLA_UNANSWERED_FLAGGER_ENABLED` (defaults `true`). Schema columns added by migration `0041`. Full runbook: `docs/runbooks/ella_unanswered_flagger.md`.
+
 ## Data Flow
 
 ### Inputs (per request)
@@ -297,6 +305,18 @@ Batches 2/3.
   strongest decision signal. Bare-mention short-circuit + general-
   inquiry helpers removed. No migrations/env/crons. Spec:
   `docs/specs/ella-unified-path-intelligence-refactor.md`.
+- unanswered-message flagger (2026-05-19): real-time safety net
+  layered on the daily digest. New cron
+  (`/api/ella_unanswered_flagger_cron`, `*/15 * * * *`) posts flagged
+  `pending_digest_items` rows unanswered >2h (no `team_member` message
+  in-channel) to `#unanswered-channels` with Scott + primary-advisor
+  @-mentions; one post per row. Migration `0041` adds `unanswered_*`
+  columns + a partial scan index. New env vars
+  `ELLA_UNANSWERED_FLAGGER_ENABLED` (kill switch, default `true`) +
+  `ELLA_UNANSWERED_CHANNEL_SLACK_ID`. `shared.slack_post` extended to
+  return the posted message `ts`. No changes to the decision Haiku,
+  dispatch, or the daily digest. Spec:
+  `docs/specs/ella-unanswered-message-flagger.md`.
 
 ## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
 
