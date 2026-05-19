@@ -58,6 +58,13 @@ def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
     if evaluation.skip_reason == "kill_switch":
         return {"decision": "skip", "skip_reason": "kill_switch", "agent_run_id": None}
 
+    # @-mention structural override: when the classifier handled this
+    # message (decision Haiku bypassed), branch to _dispatch_mention.
+    # The classifier's output enum has no `skip`, so this path always
+    # produces a response of some shape.
+    if evaluation.mention_classification is not None:
+        return _dispatch_mention(evaluation)
+
     trigger_metadata: dict[str, Any] = {
         "triggering_slack_channel_id": payload.slack_channel_id,
         "triggering_message_ts": payload.triggering_message_ts,
@@ -274,6 +281,269 @@ def _format_ack_escalate_summary(
     return (
         f"ack_and_escalate; ack_post={posted}; {', '.join(parts)}; "
         f"escalation_id={escalation_id or 'none'}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# @-mention structural path (classifier-handled — never skip)
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_mention(evaluation: PassiveEvaluation) -> dict[str, Any]:
+    """Dispatch a classifier-handled @-mention message. Bypasses the
+    decision Haiku entirely; the classifier's enum has no `skip`, so
+    this function never returns silence. Four shapes routed:
+
+      - respond_haiku → response Haiku writes + posts.
+      - respond_sonnet → queue pending_ella_responses (shim:
+        haiku_decision='respond_substantive' for the unchanged cron).
+      - acknowledge_and_escalate → post ack_text, write escalations row,
+        fan DMs to Scott + primary advisor.
+      - warm_opener → response Haiku writes a 1-sentence friendly
+        opener + posts.
+
+    Independently: if classification.digest_flag, write a
+    pending_digest_items row.
+    """
+    payload = evaluation.payload
+    classification = evaluation.mention_classification
+
+    trigger_metadata: dict[str, Any] = {
+        "triggering_slack_channel_id": payload.slack_channel_id,
+        "triggering_message_ts": payload.triggering_message_ts,
+        "triggering_message_slack_user_id": payload.triggering_message_slack_user_id,
+        "channel_client_id": payload.channel_client_id,
+        "author_type": payload.author_type,
+        "is_ella_mentioned": True,
+        # Mention-path-specific fields (distinguish from haiku_decision
+        # on the non-mention path — /ella/runs reads either):
+        "mention_classifier_shape": classification.shape,
+        "mention_classifier_reasoning": classification.reasoning,
+        "ack_text": classification.ack_text,
+        "digest_flag": classification.digest_flag,
+        "digest_category": classification.digest_category,
+        "skip_reason": None,  # never skipped on the mention path
+    }
+
+    run_id = start_agent_run(
+        agent_name="ella",
+        trigger_type="passive_monitor",
+        trigger_metadata=trigger_metadata,
+        input_summary=(payload.triggering_message_text or "")[:200],
+    )
+
+    classifier_cost = {
+        "input_tokens": classification.haiku_input_tokens,
+        "output_tokens": classification.haiku_output_tokens,
+        "cost_usd": classification.haiku_cost_usd,
+    }
+
+    shape = classification.shape
+
+    if shape == "respond_haiku":
+        from agents.ella.digest_response import generate_response
+
+        resp = generate_response(
+            payload=payload,
+            kb_chunks=evaluation.kb_chunks,
+            recent_context=evaluation.recent_channel_context,
+            primary_csm=evaluation.primary_csm,
+            channel_client=None,
+        )
+        combined = {
+            "input_tokens": classifier_cost["input_tokens"] + resp.input_tokens,
+            "output_tokens": classifier_cost["output_tokens"] + resp.output_tokens,
+            "cost_usd": classifier_cost["cost_usd"] + resp.cost_usd,
+        }
+        post_result = _post_haiku_response(payload, resp.response_text)
+        _write_cost(run_id, combined)
+        if classification.digest_flag:
+            _insert_mention_digest_item(
+                run_id=run_id, evaluation=evaluation, ella_responded=True
+            )
+        end_agent_run(
+            run_id,
+            status="success",
+            output_summary=f"mention/respond_haiku: {resp.response_text[:160]}",
+            confidence_score=1.0,
+        )
+        return {
+            "agent_run_id": run_id,
+            "decision": "mention/respond_haiku",
+            "posted": bool(post_result["ok"]),
+            "slack_error": post_result.get("slack_error"),
+        }
+
+    if shape == "respond_sonnet":
+        _write_cost(run_id, classifier_cost)
+        # Sonnet drain goes through the unchanged per-minute cron's
+        # `respond_substantive` branch (same compat shim as the
+        # non-mention path).
+        pending_id = _insert_pending_for_mention_sonnet(
+            run_id=run_id, payload=payload, classification=classification
+        )
+        if classification.digest_flag:
+            _insert_mention_digest_item(
+                run_id=run_id, evaluation=evaluation, ella_responded=True
+            )
+        end_agent_run(
+            run_id,
+            status="success",
+            output_summary=f"mention/respond_sonnet; pending_id={pending_id}",
+        )
+        return {
+            "agent_run_id": run_id,
+            "decision": "mention/respond_sonnet",
+            "pending_id": pending_id,
+        }
+
+    if shape == "acknowledge_and_escalate":
+        ack_text = classification.ack_text or (
+            "Let me get your advisor on this one — they'll follow up shortly."
+        )
+        post_result = _post_haiku_response(payload, ack_text)
+
+        escalation_id = None
+        if payload.channel_client_id:
+            try:
+                escalation_id = ella_escalate(
+                    reason="ella_acknowledged_and_escalated",
+                    context={
+                        "query_text": payload.triggering_message_text,
+                        "ella_response": ack_text,
+                        "handoff_reasoning": classification.reasoning,
+                        "client_id": payload.channel_client_id,
+                        "haiku_decision": "acknowledge_and_escalate",
+                        "is_ella_mentioned": True,
+                        "mention_classifier_shape": shape,
+                    },
+                    client_id=payload.channel_client_id,
+                    agent_run_id=run_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "passive_dispatch: escalations row write failed run_id=%s: %s",
+                    run_id,
+                    exc,
+                )
+
+        recipients = resolve_escalation_recipients(evaluation.primary_csm)
+        dm_results = fire_escalation_dms(
+            recipients=recipients,
+            slack_channel_id=payload.slack_channel_id,
+            triggering_message_ts=payload.triggering_message_ts,
+            reasoning=classification.reasoning,
+            path="reactive",  # mention path = reactive in audit terms
+            channel_client_id=payload.channel_client_id,
+        )
+
+        _write_cost(run_id, classifier_cost)
+        digest_id = _insert_mention_digest_item(
+            run_id=run_id, evaluation=evaluation, ella_responded=False
+        )
+        end_agent_run(
+            run_id,
+            status="escalated",
+            output_summary=_format_ack_escalate_summary(
+                escalation_id, dm_results, post_result
+            ),
+            confidence_score=0.0,
+        )
+        return {
+            "agent_run_id": run_id,
+            "decision": "mention/acknowledge_and_escalate",
+            "escalation_id": escalation_id,
+            "posted": bool(post_result["ok"]),
+            "dm_results": dm_results,
+            "digest_item_id": digest_id,
+        }
+
+    # shape == "warm_opener" (or any unexpected value — the parser
+    # guarantees `shape in _SHAPES`, but be defensive)
+    from agents.ella.digest_response import generate_response
+
+    resp = generate_response(
+        payload=payload,
+        kb_chunks=evaluation.kb_chunks,
+        recent_context=evaluation.recent_channel_context,
+        primary_csm=evaluation.primary_csm,
+        channel_client=None,
+        mode="warm_opener",
+    )
+    combined = {
+        "input_tokens": classifier_cost["input_tokens"] + resp.input_tokens,
+        "output_tokens": classifier_cost["output_tokens"] + resp.output_tokens,
+        "cost_usd": classifier_cost["cost_usd"] + resp.cost_usd,
+    }
+    post_result = _post_haiku_response(payload, resp.response_text)
+    _write_cost(run_id, combined)
+    if classification.digest_flag:
+        _insert_mention_digest_item(
+            run_id=run_id, evaluation=evaluation, ella_responded=True
+        )
+    end_agent_run(
+        run_id,
+        status="success",
+        output_summary=f"mention/warm_opener: {resp.response_text[:160]}",
+        confidence_score=1.0,
+    )
+    return {
+        "agent_run_id": run_id,
+        "decision": "mention/warm_opener",
+        "posted": bool(post_result["ok"]),
+        "slack_error": post_result.get("slack_error"),
+    }
+
+
+def _insert_pending_for_mention_sonnet(
+    *, run_id: str, payload, classification
+) -> str | None:
+    """Insert one pending_ella_responses row for the mention/sonnet
+    shape. Writes `haiku_decision='respond_substantive'` so the
+    unchanged per-minute cron drains it via the Sonnet path."""
+    respond_after = (datetime.now(timezone.utc) + _RESPOND_AFTER_DELAY).isoformat()
+    row = {
+        "agent_run_id": run_id,
+        "slack_channel_id": payload.slack_channel_id,
+        "triggering_message_ts": payload.triggering_message_ts,
+        "triggering_message_slack_user_id": payload.triggering_message_slack_user_id,
+        "haiku_decision": _PENDING_SONNET_DECISION,
+        "haiku_reasoning": classification.reasoning,
+        "respond_after_ts": respond_after,
+    }
+    try:
+        result = get_client().table("pending_ella_responses").insert(row).execute()
+        rows = result.data or []
+        return rows[0]["id"] if rows else None
+    except Exception as exc:
+        logger.warning(
+            "passive_dispatch: mention pending insert failed channel=%s ts=%s: %s",
+            payload.slack_channel_id,
+            payload.triggering_message_ts,
+            exc,
+        )
+        return None
+
+
+def _insert_mention_digest_item(
+    *, run_id: str, evaluation: PassiveEvaluation, ella_responded: bool
+) -> str | None:
+    """Mention-path adapter over `insert_digest_item`. The
+    `haiku_decision` column carries the classifier shape so the digest
+    can attribute the entry."""
+    payload = evaluation.payload
+    classification = evaluation.mention_classification
+    return insert_digest_item(
+        run_id=run_id,
+        slack_channel_id=payload.slack_channel_id,
+        triggering_message_ts=payload.triggering_message_ts,
+        triggering_message_slack_user_id=payload.triggering_message_slack_user_id,
+        client_id=payload.channel_client_id or None,
+        message_text=payload.triggering_message_text,
+        haiku_decision=f"mention/{classification.shape}",
+        haiku_reasoning=classification.reasoning,
+        digest_category=classification.digest_category,
+        ella_responded=ella_responded,
     )
 
 

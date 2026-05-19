@@ -341,3 +341,113 @@ def test_skip_zero_token_decision_no_cost_write(fake_db):
     pd.persist_passive_evaluation(ev)
     cost_writes = [u for u in fake_db.run_updates if "llm_input_tokens" in u]
     assert cost_writes == []
+
+
+# --- @-mention structural-override path ---------------------------------
+
+from agents.ella.mention_classifier import MentionClassification  # noqa: E402
+
+
+def _mention_ev(shape, **kw):
+    """Build a PassiveEvaluation routed through the mention path: the
+    classifier produced a MentionClassification, the dispatch should
+    branch to _dispatch_mention regardless of the decision placeholder."""
+    cls = MentionClassification(
+        shape=shape,
+        ack_text=kw.get("ack_text"),
+        digest_flag=kw.get("digest_flag", False),
+        digest_category=kw.get("digest_category"),
+        reasoning=kw.get("reasoning", f"classifier picked {shape}"),
+        haiku_cost_usd=Decimal("0.00002"),
+        haiku_input_tokens=50,
+        haiku_output_tokens=25,
+    )
+    return PassiveEvaluation(
+        payload=_payload(mentioned=True),
+        # Placeholder decision — the dispatch should branch on
+        # mention_classification before reading this.
+        decision=PassiveDecision(decision="mention_classifier_handled", reasoning="x"),
+        mention_classification=cls,
+    )
+
+
+def test_mention_path_branches_to_dispatch_mention(fake_db, monkeypatch):
+    """When mention_classification is set, the kb-decision-Haiku
+    `decide_passive_response` routing is bypassed entirely."""
+    _stub_resp_haiku(monkeypatch, "Module 3 covers framing.")
+    result = pd.persist_passive_evaluation(_mention_ev("respond_haiku"))
+    assert result["decision"] == "mention/respond_haiku"
+    # trigger_metadata carries the classifier shape, not haiku_decision.
+    meta = fake_db.runs[0]["trigger_metadata"]
+    assert meta["mention_classifier_shape"] == "respond_haiku"
+    assert meta["is_ella_mentioned"] is True
+
+
+def test_mention_respond_haiku_posts_and_combines_cost(fake_db, _slack, monkeypatch):
+    _stub_resp_haiku(monkeypatch, "Here you go!")
+    pd.persist_passive_evaluation(_mention_ev("respond_haiku"))
+    assert _slack and _slack[-1][1] == "Here you go!"
+    upd = [u for u in fake_db.run_updates if "llm_input_tokens" in u]
+    # classifier (50/25) + response Haiku (40/80) = 90/105
+    assert upd[0]["llm_input_tokens"] == 90
+    assert upd[0]["llm_output_tokens"] == 105
+
+
+def test_mention_respond_sonnet_queues_pending(fake_db):
+    r = pd.persist_passive_evaluation(_mention_ev("respond_sonnet"))
+    assert r["decision"] == "mention/respond_sonnet"
+    assert len(fake_db.pending) == 1
+    # Compat shim: written as respond_substantive for the unchanged cron.
+    assert fake_db.pending[0]["haiku_decision"] == "respond_substantive"
+
+
+def test_mention_acknowledge_and_escalate_full_fanout(fake_db, _slack):
+    r = pd.persist_passive_evaluation(
+        _mention_ev(
+            "acknowledge_and_escalate",
+            ack_text="Hey Drake — getting Scott on this.",
+            digest_flag=True,
+            digest_category="emotional_human_needed",
+        )
+    )
+    assert r["decision"] == "mention/acknowledge_and_escalate"
+    assert _slack and _slack[-1][1] == "Hey Drake — getting Scott on this."
+    assert len(fake_db.escalations) == 1
+    assert len(fake_db.digest) == 1
+    assert fake_db.digest[0]["ella_responded"] is False
+
+
+def test_mention_warm_opener_posts(fake_db, _slack, monkeypatch):
+    _stub_resp_haiku(monkeypatch, "Hey Drake — what can I help with?")
+    r = pd.persist_passive_evaluation(_mention_ev("warm_opener"))
+    assert r["decision"] == "mention/warm_opener"
+    assert _slack and "what can I help with" in _slack[-1][1]
+
+
+def test_mention_digest_flag_writes_digest_item(fake_db, monkeypatch):
+    _stub_resp_haiku(monkeypatch, "answer")
+    pd.persist_passive_evaluation(
+        _mention_ev(
+            "respond_haiku", digest_flag=True, digest_category="question_program"
+        )
+    )
+    assert len(fake_db.digest) == 1
+    # The digest entry's haiku_decision carries the classifier shape so
+    # /ella/runs can attribute it.
+    assert fake_db.digest[0]["haiku_decision"].startswith("mention/")
+    assert fake_db.digest[0]["ella_responded"] is True
+
+
+def test_mention_path_no_decide_passive_response_call(fake_db, monkeypatch):
+    """Verify the dispatch does NOT touch the decision Haiku for
+    mention messages — paranoia against the original double-decider
+    bug."""
+    called = {"decide": 0}
+
+    def _spy(*a, **kw):
+        called["decide"] += 1
+
+    monkeypatch.setattr("agents.ella.passive_monitor.decide_passive_response", _spy)
+    _stub_resp_haiku(monkeypatch, "ok")
+    pd.persist_passive_evaluation(_mention_ev("warm_opener"))
+    assert called["decide"] == 0

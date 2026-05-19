@@ -95,3 +95,88 @@ def test_cost_accounting(monkeypatch):
     assert res.input_tokens == 111
     assert res.output_tokens == 22
     assert res.cost_usd == Decimal("0.00009")
+
+
+# --- @-mention-structural-override: warm_opener mode --------------------
+
+
+def test_warm_opener_mode_uses_dedicated_template(monkeypatch):
+    """warm_opener mode produces a short friendly invite; the user
+    prompt template differs from substantive (no KB block, explicit
+    'do not paraphrase the KB' instruction)."""
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        captured["max_tokens"] = kw["max_tokens"]
+        return SimpleNamespace(
+            text="Hey Drake — what can I help with?",
+            input_tokens=20,
+            output_tokens=10,
+            cost_usd=Decimal("0.00001"),
+            model="haiku",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.digest_response.complete", _cap)
+    res = generate_response(
+        payload=_payload(text="<@U…>"),
+        kb_chunks=[_chunk()],
+        recent_context="",
+        primary_csm={"full_name": "Scott Wilson"},
+        channel_client={"full_name": "Drake"},
+        mode="warm_opener",
+    )
+    assert res.response_text == "Hey Drake — what can I help with?"
+    # warm_opener template instructs no substantive answer
+    assert "1 sentence" in captured["user"]
+    assert "purely an invitation" in captured["user"]
+    # KB block intentionally absent on the warm_opener path
+    assert "# KB CHUNKS" not in captured["user"]
+    # Lower token cap to discourage drift into a substantive answer
+    assert captured["max_tokens"] == 120
+
+
+def test_substantive_mode_is_default_and_unchanged(monkeypatch):
+    """Default mode renders the existing substantive template with the
+    KB block; the spec only adds warm_opener — substantive must not
+    regress."""
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        captured["max_tokens"] = kw["max_tokens"]
+        return SimpleNamespace(
+            text="Module 3 covers it.",
+            input_tokens=80,
+            output_tokens=40,
+            cost_usd=Decimal("0.00002"),
+            model="haiku",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.digest_response.complete", _cap)
+    res = generate_response(
+        payload=_payload(),
+        kb_chunks=[_chunk()],
+        recent_context="prev turn",
+    )
+    assert res.response_text == "Module 3 covers it."
+    assert "# KB CHUNKS" in captured["user"]
+    # Substantive cap (_MAX_TOKENS = 800)
+    assert captured["max_tokens"] == 800
+
+
+def test_warm_opener_exception_returns_canned_opener(monkeypatch):
+    """On API failure, warm_opener mode returns a canned opener
+    (mode-appropriate), not a substantive handoff line."""
+
+    def _boom(**kw):
+        raise RuntimeError("anthropic down")
+
+    monkeypatch.setattr("agents.ella.digest_response.complete", _boom)
+    res = generate_response(
+        payload=_payload(), kb_chunks=[], recent_context="", mode="warm_opener"
+    )
+    assert res.fallback_to_sonnet is False
+    assert "what can I help with" in res.response_text

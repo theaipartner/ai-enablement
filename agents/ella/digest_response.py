@@ -117,6 +117,33 @@ class DigestResponseResult:
     output_tokens: int
 
 
+# Warm-opener variant: invoked by the mention classifier's
+# `warm_opener` shape (and any other caller that wants a 1-sentence
+# friendly invite rather than a substantive KB answer). The system
+# prompt's voice rules still apply; only the "YOUR REPLY" instruction
+# changes.
+_WARM_OPENER_USER_PROMPT_TEMPLATE = """{triggering_message}
+
+# CONTEXT
+
+Client: {channel_client_name}
+Their advisor: {advisor_first_name}
+
+# RECENT CHANNEL TURNS (oldest first; may be empty)
+
+{recent_context}
+
+# YOUR REPLY
+
+The user @-mentioned Ella but did not ask a specific question yet. Write a brief friendly opener (1 sentence, ~10 words max) inviting them to ask. Address the user by first name when natural. Use Slack mrkdwn. Do NOT paraphrase the KB or attempt a substantive answer — this is purely an invitation. Examples of the right shape:
+
+  - "Hey Drake — what can I help with?"
+  - "Hi Catrina, fire away."
+  - "What do you need?"
+
+Vary the phrasing. Never repeat a template verbatim."""
+
+
 def generate_response(
     *,
     payload,
@@ -124,46 +151,70 @@ def generate_response(
     recent_context: str,
     primary_csm: dict | None = None,
     channel_client: dict | None = None,
+    mode: str = "substantive",
 ) -> DigestResponseResult:
     """Call the response Haiku and return its result.
 
-    On any exception the safer-fallback is to return
-    `fallback_to_sonnet=True` with empty text — the dispatch layer
-    then routes the question to Sonnet so the client still gets an
-    answer.
+    `mode='substantive'` (default) renders the standard KB-grounded
+    response prompt. `mode='warm_opener'` renders a tighter prompt that
+    instructs the model to write a 1-sentence friendly invitation —
+    used by the mention classifier's `warm_opener` shape so the voice
+    stays consistent across response shapes.
+
+    On any API exception the safer-fallback is a short canned message
+    (mode-appropriate) so the dispatch layer never posts empty text.
     """
     channel_client_name = (channel_client or {}).get("full_name") or "the client"
     advisor_full = (primary_csm or {}).get("full_name") or ""
     advisor_first_name = advisor_full.split()[0] if advisor_full else "their advisor"
 
-    user_prompt = _USER_PROMPT_TEMPLATE.format(
-        triggering_message=getattr(payload, "triggering_message_text", "") or "(empty)",
-        channel_client_name=channel_client_name,
-        advisor_first_name=advisor_first_name,
-        recent_context=recent_context or "(no recent context)",
-        kb_block=_render_kb_block(kb_chunks),
+    template = (
+        _WARM_OPENER_USER_PROMPT_TEMPLATE
+        if mode == "warm_opener"
+        else _USER_PROMPT_TEMPLATE
     )
+    fmt: dict[str, str] = {
+        "triggering_message": getattr(payload, "triggering_message_text", "")
+        or "(empty)",
+        "channel_client_name": channel_client_name,
+        "advisor_first_name": advisor_first_name,
+        "recent_context": recent_context or "(no recent context)",
+    }
+    if mode != "warm_opener":
+        # Substantive prompt also wants the KB block; the warm-opener
+        # template intentionally doesn't include it (a KB anchor would
+        # invite a substantive answer).
+        fmt["kb_block"] = _render_kb_block(kb_chunks)
+    user_prompt = template.format(**fmt)
+
+    # Warm openers are short by design; cap tokens lower to discourage
+    # the model from drifting into a substantive answer.
+    max_tokens = 120 if mode == "warm_opener" else _MAX_TOKENS
 
     try:
         result = complete(
             system=_RESPONSE_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
             model=_HAIKU_MODEL,
-            max_tokens=_MAX_TOKENS,
+            max_tokens=max_tokens,
         )
     except Exception as exc:
         # No fallback mechanism anymore. On an API failure return a
-        # short graceful handoff so the client never sees an empty
+        # short graceful canned line so the client never sees an empty
         # post (the dispatch layer posts response_text verbatim).
         logger.warning(
-            "digest_response: response Haiku call failed (%s); "
-            "returning graceful handoff",
+            "digest_response: response Haiku call failed (%s, mode=%s); "
+            "returning graceful canned line",
             exc,
+            mode,
+        )
+        canned = (
+            "Hey — what can I help with?"
+            if mode == "warm_opener"
+            else "Let me get your advisor on this one — they'll follow up shortly."
         )
         return DigestResponseResult(
-            response_text=(
-                "Let me get your advisor on this one — they'll follow up " "shortly."
-            ),
+            response_text=canned,
             fallback_to_sonnet=False,
             cost_usd=Decimal("0"),
             input_tokens=0,

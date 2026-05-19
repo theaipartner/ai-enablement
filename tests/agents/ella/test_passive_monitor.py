@@ -167,11 +167,16 @@ def test_respond_with_haiku_model(fake_db, monkeypatch):
             "reasoning": "clean factual",
         },
     )
-    ev = evaluate_passive_trigger(_payload(mentioned=True))
+    # Non-mention path → exercises the decision Haiku (which still
+    # produces respond/haiku). The @-mention path is tested in
+    # test_mention_classifier; here we only validate the decision-Haiku
+    # branch still routes respond correctly post-prompt-surgery.
+    ev = evaluate_passive_trigger(_payload(mentioned=False))
     assert ev.decision.decision == "respond"
     assert ev.decision.response_model == "haiku"
     assert ev.decision.ack_text is None
     assert ev.skip_reason is None
+    assert ev.mention_classification is None
 
 
 def test_respond_missing_model_defaults_sonnet(fake_db, monkeypatch):
@@ -328,35 +333,6 @@ def test_exception_fail_soft(fake_db, monkeypatch):
     assert ev.skip_reason == "exception"
 
 
-def test_mention_flag_threads_into_prompt(fake_db, monkeypatch):
-    captured = {}
-
-    def _cap(**kw):
-        captured["user"] = kw["messages"][0]["content"]
-        return SimpleNamespace(
-            text=json.dumps(
-                {
-                    "decision": "respond",
-                    "response_model": "haiku",
-                    "ack_text": None,
-                    "digest_flag": False,
-                    "digest_category": None,
-                    "reasoning": "ok",
-                }
-            ),
-            input_tokens=1,
-            output_tokens=1,
-            cost_usd=Decimal("0"),
-            model="h",
-            raw=None,
-        )
-
-    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
-    evaluate_passive_trigger(_payload(mentioned=True))
-    assert "IS THIS AN @-MENTION OF ELLA?" in captured["user"]
-    assert "true" in captured["user"].split("@-MENTION OF ELLA?")[1][:40]
-
-
 def test_not_mentioned_renders_false(fake_db, monkeypatch):
     captured = {}
 
@@ -509,122 +485,38 @@ def test_kb_block_renders_chunks(fake_db, monkeypatch):
 # --- prompt-sharpening spec: prompt structure ---------------------------
 
 
-def test_prompt_mention_override_section_before_three_decisions():
-    p = _HAIKU_SYSTEM_PROMPT
-    i_override = p.index("# THE @-MENTION OVERRIDE (READ THIS FIRST)")
-    i_three = p.index("# THE THREE DECISIONS")
-    assert i_override < i_three, "override section must precede THE THREE DECISIONS"
-
-
-def test_prompt_mention_override_is_absolute_not_weighted():
-    p = _HAIKU_SYSTEM_PROMPT
-    assert "absolute structural override" in p
-    assert "Skip is FORBIDDEN" in p
-    assert "Advisor speakers do not bypass this." in p
-    # The old soft language is gone.
-    assert "Strongly lean toward respond" not in p
-
-
 def test_prompt_time_decay_bands_present():
+    # The time-decay section survives the structural-override surgery
+    # (it's still useful for non-@-mention judgment). The
+    # @-mention-specific sentence that v1/v2 added was removed —
+    # asserted absent in test_prompt_has_no_mention_residue.
     p = _HAIKU_SYSTEM_PROMPT
     assert "# READING TIME-STAMPED CONTEXT" in p
     assert "0-4 hours ago" in p
     assert "4-24 hours ago" in p
     assert "24+ hours ago" in p
     assert "7+ days ago" in p
-    assert "do not skip a current @-mention because of a stale prior escalation" in p
 
 
-def test_prompt_bare_mention_threading_non_negotiable():
-    # v2 superseded the v1 bullet wording; sub-case (a) still makes
-    # threading to a prior unanswered question non-negotiable.
+# --- structural-override spec: @-mention sections stripped from prompt --
+
+
+def test_prompt_has_no_at_mention_overlay():
+    """Per `ella-at-mention-structural-override`: the v1 + v2 @-mention
+    sections were moved to the classifier. Decision Haiku only runs for
+    non-@-mention messages now; those overlay sections must be absent
+    from this prompt (no rationalization surface)."""
     p = _HAIKU_SYSTEM_PROMPT
-    assert "are NEVER skip when is_ella_mentioned=true" in p
-    assert "UNANSWERED question → thread to that question and answer it" in p
-
-
-def test_prompt_skip_gated_on_not_mentioned():
-    p = _HAIKU_SYSTEM_PROMPT
-    assert "AND only when `is_ella_mentioned: false`" in p
-    assert "Every other rule is conditional on `is_ella_mentioned: false`." in p
-
-
-def test_mentioned_true_plumbs_and_parses_respond(fake_db, monkeypatch):
-    """Behavioral: @-mention true + mocked Haiku 'respond' → the
-    evaluation surfaces respond (dispatch-shape sanity for the path the
-    spec hardens)."""
-    _stub_haiku(
-        monkeypatch,
-        {
-            "decision": "respond",
-            "response_model": "haiku",
-            "ack_text": None,
-            "digest_flag": False,
-            "digest_category": None,
-            "reasoning": "user @-mentioned Ella — override applies",
-        },
-    )
-    ev = evaluate_passive_trigger(
-        _payload(text="<@U0B03PTJD3P>", author_type="team_member", mentioned=True)
-    )
-    assert ev.decision.decision == "respond"
-    assert ev.skip_reason is None
-
-
-# --- prompt-sharpening v2: resolved-thread loophole closure --------------
-
-
-def test_prompt_v2_bare_mention_never_skip_copy():
-    p = _HAIKU_SYSTEM_PROMPT
-    assert (
-        "Bare @-mentions (no text after the mention) are NEVER skip when "
-        "is_ella_mentioned=true" in p
-    )
-    # The three sub-cases + the explicit anti-loophole STOP line.
-    assert (
-        "(a) Most recent client or advisor message above the bare @-mention is an UNANSWERED question"
-        in p
-    )
-    assert "(b) Most recent prior message is a RESOLVED or STALE thread" in p
-    assert "(c) No prior context at all (quiet channel)" in p
-    assert "A bare @-mention is NEVER 'nothing to do.'" in p
-    assert "there's no open question so I'll skip' — STOP. That's the loophole." in p
-    # The old (superseded) phrasing is gone.
-    assert "are not chitchat when prior context contains a question" not in p
-
-
-def test_prompt_v2_worked_example_present():
-    p = _HAIKU_SYSTEM_PROMPT
-    assert "# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION" in p
-    assert "WRONG reasoning:" in p
-    assert "CORRECT reasoning:" in p
-    assert "Decision: respond, response_model=haiku, ack_text=null." in p
-    # The worked example sits inside the override section, before THE
-    # THREE DECISIONS.
-    assert p.index("# WORKED EXAMPLE") < p.index("# THE THREE DECISIONS")
-    # The referential carve-out is preserved (only the resolved-thread
-    # path was closed).
-    assert "the @-mention is referential, skip is allowed" in p
-
-
-def test_v2_bare_mention_resolved_thread_plumbs_respond(fake_db, monkeypatch):
-    """Behavioral plumbing: is_ella_mentioned=true bare mention + a
-    mocked Haiku 'respond/haiku' decision (the v2-correct outcome for a
-    resolved-thread bare mention) surfaces respond, not skip."""
-    _stub_haiku(
-        monkeypatch,
-        {
-            "decision": "respond",
-            "response_model": "haiku",
-            "ack_text": None,
-            "digest_flag": False,
-            "digest_category": None,
-            "reasoning": "is_ella_mentioned=true, bare mention, prior thread resolved/stale — warm opener",
-        },
-    )
-    ev = evaluate_passive_trigger(
-        _payload(text="<@U0B03PTJD3P>", author_type="team_member", mentioned=True)
-    )
-    assert ev.decision.decision == "respond"
-    assert ev.decision.response_model == "haiku"
-    assert ev.skip_reason is None
+    # Removed sections / headers
+    assert "# THE @-MENTION OVERRIDE" not in p
+    assert "# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION" not in p
+    # v1/v2 overlay language is gone
+    assert "Skip is FORBIDDEN" not in p
+    assert "absolute structural override" not in p
+    assert "are NEVER skip when is_ella_mentioned=true" not in p
+    assert "Strongly lean toward respond" not in p
+    # Skip bullet is unconditional (no more "AND only when is_ella_mentioned: false")
+    assert "AND only when" not in p
+    # New preamble scopes the prompt to passive observation
+    assert p.startswith("You are Ella's decision brain for PASSIVE OBSERVATION")
+    assert "@-mention messages are routed separately" in p

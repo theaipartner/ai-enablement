@@ -1,13 +1,23 @@
-"""Ella's unified decision module (unified-path rewrite, 2026-05-18 PM).
+"""Ella's decision module (structural-override architecture, 2026-05-19 PM).
 
 Public entry point: `evaluate_passive_trigger(payload)`. Called by the
-realtime-ingest fork (`ingestion/slack/realtime_ingest.py`) for EVERY
-human message in a passive-monitoring-enabled channel — there is no
-separate reactive @-mention path anymore. The @-mention is a signal
-the decision Haiku weighs (`payload.is_ella_mentioned`), not a routing
-fork.
+realtime-ingest fork (`ingestion/slack/realtime_ingest.py`) for every
+human message in a passive-monitoring-enabled channel.
 
-Pipeline (two gates, then one Haiku call with full context):
+**Two-path dispatch** (the structural fix after three failed
+prompt-engineering attempts at "@-mention trumps all"):
+
+  - **`is_ella_mentioned=true`** → bypass the decision Haiku entirely
+    and call `mention_classifier.classify_mention_response`. That
+    module's output enum has NO `skip` — the model literally cannot
+    fill `skip` in the schema. Result lands on
+    `PassiveEvaluation.mention_classification`; the dispatch layer
+    branches on it to `_dispatch_mention`.
+  - **`is_ella_mentioned=false`** → the decision Haiku in this module
+    (`_HAIKU_SYSTEM_PROMPT` + `decide_passive_response`) does the
+    "should Ella interject" judgment. Output: `respond` / `acknowledge_and_escalate` / `skip`.
+
+Pipeline (gates run once for both paths, then we branch on the LLM):
 
   1. Gate 1 — Global kill switch. `ELLA_PASSIVE_MONITORING_ENABLED`
      must be 'true'. Else silent skip, NO `agent_runs` row.
@@ -19,13 +29,15 @@ Pipeline (two gates, then one Haiku call with full context):
      (recent messages + triggering message ×2).
   5. KB vector search using that combined query (context, not a gate).
   6. Resolve channel client + primary CSM + speaker identity.
-  7. Decision Haiku — one call, full context, returns one of three
-     decisions plus the independent digest flag.
+  7. **Branch:** mentioned → classifier Haiku; not mentioned →
+     decision Haiku.
 
-Three decisions: `respond` (with `response_model` haiku|sonnet),
-`acknowledge_and_escalate` (with Haiku-written `ack_text`), `skip`.
-The old gates (CSM-directed, KB-relevance, firm-after-first,
-bare-mention) are soft rules in the prompt now, not hardcoded.
+The decision Haiku prompt was pruned of all @-mention overlay sections
+on 2026-05-19 PM (the override section, the worked example, the
+conditional qualifiers) — no @-mention message reaches this prompt
+anymore, so those sections were just rationalization surface. See
+`docs/specs/ella-at-mention-structural-override.md` for the
+diagnosis + design.
 """
 
 from __future__ import annotations
@@ -143,6 +155,19 @@ class PassiveEvaluation:
     kb_chunks: list[Chunk] = field(default_factory=list)
     recent_channel_context: str = ""
     primary_csm: dict[str, Any] | None = None
+    # When `payload.is_ella_mentioned` is True, the decision Haiku is
+    # bypassed entirely and the classifier Haiku in
+    # `agents.ella.mention_classifier` produces a `MentionClassification`
+    # carrying the response shape (`respond_haiku` / `respond_sonnet` /
+    # `acknowledge_and_escalate` / `warm_opener` — never `skip`). The
+    # `decision` field on this evaluation carries a sentinel value in
+    # that case; `passive_dispatch.persist_passive_evaluation` checks
+    # `mention_classification is not None` and branches to
+    # `_dispatch_mention` instead of the existing routing. None on the
+    # decision-Haiku-handled (non-mention) path.
+    mention_classification: Any = (
+        None  # MentionClassification | None — avoid import cycle by typing as Any
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +250,38 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         else "unknown"
     )
 
+    # @-mention messages bypass the decision Haiku entirely and go
+    # through the classifier (which has NO `skip` in its output enum —
+    # the structural fix). Non-@-mention messages take the existing
+    # decision-Haiku path.
+    if payload.is_ella_mentioned:
+        from agents.ella.mention_classifier import classify_mention_response
+
+        classification = classify_mention_response(
+            payload=payload,
+            kb_chunks=kb_chunks,
+            recent_context=recent_context,
+            primary_csm=primary_csm,
+            channel_client=None,
+            speaker_role=speaker_role,
+            speaker_name=speaker_name,
+        )
+        # Placeholder `decision` so the dataclass invariant holds; the
+        # dispatch layer branches on `mention_classification is not
+        # None` and never reads `decision` on this path.
+        return PassiveEvaluation(
+            payload=payload,
+            decision=PassiveDecision(
+                decision="mention_classifier_handled",
+                reasoning=classification.reasoning,
+            ),
+            skip_reason=None,
+            kb_chunks=kb_chunks,
+            recent_channel_context=recent_context,
+            primary_csm=primary_csm,
+            mention_classification=classification,
+        )
+
     decision = decide_passive_response(
         triggering_message=payload.triggering_message_text,
         recent_context=recent_context,
@@ -270,7 +327,7 @@ def _kb_search(query: str, client_id: str) -> list[Chunk]:
 # ---------------------------------------------------------------------------
 
 
-_HAIKU_SYSTEM_PROMPT = """You are Ella's decision brain. Every message that lands in a monitored Slack channel passes through you. You decide what Ella does: respond, acknowledge and route to a human, or stay silent.
+_HAIKU_SYSTEM_PROMPT = """You are Ella's decision brain for PASSIVE OBSERVATION messages — messages where the user did NOT @-mention Ella. @-mention messages are routed separately. Your job is to decide what Ella does with this overheard message: respond, acknowledge_and_escalate, or skip.
 
 Your output is structured JSON. You do NOT write the response itself when decision='respond' — a separate model handles that. When decision='acknowledge_and_escalate' you DO write the short warm ack the client will see.
 
@@ -279,41 +336,6 @@ Your output is structured JSON. You do NOT write the response itself when decisi
 Ella is the AI assistant for clients of The AI Partner, a coaching agency that helps founders build AI-native businesses. Each client has a dedicated Slack channel containing the client, their assigned advisor (called "advisor" with clients, never "CSM"), and Ella. Clients can also include their team members.
 
 Ella's job: be the first line of support. Answer program/curriculum/process questions she can answer well. Acknowledge and route to a human anything that needs human judgment. Stay silent when she'd be interjecting on someone else's conversation.
-
-# THE @-MENTION OVERRIDE (READ THIS FIRST)
-
-The triggering message may contain an explicit @-mention of Ella (`<@U0B03PTJD3P>` or similar in the message text, OR the boolean `is_ella_mentioned: true` in the input).
-
-**An @-mention is an absolute structural override**, not a weighted signal:
-
-- **When `is_ella_mentioned: true`, the decision MUST be `respond` or `acknowledge_and_escalate`.** Skip is FORBIDDEN unless the @-mention text is clearly directed at a different person (e.g. "Hey Scott, ask @Ella for the framework" — Scott is the addressee, the @-mention is referential, skip is allowed).
-- **Advisor speakers do not bypass this.** If Nico (advisor) @-mentions Ella with a question, Ella responds. The default-skip-advisor rule from the THREE DECISIONS section is overridden.
-- **Bare @-mentions (no text after the mention) are NEVER skip when is_ella_mentioned=true. Three sub-cases, all of which produce a response (never skip):**
-
-  (a) Most recent client or advisor message above the bare @-mention is an UNANSWERED question → thread to that question and answer it (respond, or acknowledge_and_escalate if its content warrants).
-
-  (b) Most recent prior message is a RESOLVED or STALE thread (already escalated, already answered, or >24h old) → treat the bare @-mention as a fresh 'I want to ask something' signal. Respond with a warm short opener inviting the user to ask their question. Use respond with response_model=haiku.
-
-  (c) No prior context at all (quiet channel) → same as (b). Warm short opener via respond/haiku.
-
-  A bare @-mention is NEVER 'nothing to do.' If you find yourself reasoning 'there's no open question so I'll skip' — STOP. That's the loophole. The @-mention itself IS the signal that the user wants Ella's attention. Default to the warm opener.
-- **@-mention + emotional/money/judgment content** = `acknowledge_and_escalate`. The @-mention escalates priority but doesn't change what kind of message it is.
-
-Internalize this section before reading the rest of the prompt. Every other rule is conditional on `is_ella_mentioned: false`.
-
-# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION
-
-  Recent context shows:
-    [yesterday 15:30 ET — 22h ago] client (Catrina): I want a refund
-    [yesterday 15:32 ET — 22h ago] ella: Hey Catrina, totally hear that — I'll have Scott jump in on this one shortly.
-
-  Triggering message: <@U0B03PTJD3P> from advisor Drake. is_ella_mentioned=true. No new text.
-
-  WRONG reasoning: 'The prior escalation was already acknowledged and Scott was notified ~22h ago. There's no open question. Skip.'
-
-  CORRECT reasoning: 'is_ella_mentioned=true, bare @-mention, prior thread is 22h-old AND already resolved. Per the @-mention override and the 24h+ stale rule, this is a NEW conversation. Drake @-mentioned me — that IS the signal. Warm opener via respond/haiku.'
-
-  Decision: respond, response_model=haiku, ack_text=null. Response Haiku writes the warm opener.
 
 # THE THREE DECISIONS
 
@@ -347,7 +369,7 @@ You return exactly one decision:
 
   Vary the phrasing. Don't repeat the same template.
 
-- **skip** — Ella stays silent. No in-channel post, no DM. Use when (AND only when `is_ella_mentioned: false`):
+- **skip** — Ella stays silent. No in-channel post, no DM. Use when:
   - The message is clearly between the client and their advisor, mid-conversation. Don't interject in active dialogue.
   - The message is from a team member (advisor or CSM). Don't interject in advisor-led work.
   - The message is chitchat: greetings, acknowledgments, emoji reactions, "thanks", "ok cool".
@@ -362,25 +384,21 @@ Every recent-context message has both an ET timestamp AND a pre-computed "time a
 
 **Conversation-state bands based on the most recent advisor/client message in context (excluding Ella's own posts and bots):**
 
-- **0-4 hours ago** → ACTIVE conversation. If an advisor was recently engaged, default to staying out (unless @-mention overrides).
+- **0-4 hours ago** → ACTIVE conversation. If an advisor was recently engaged, default to staying out.
 - **4-24 hours ago** → RECENT but not active. A new question from the client likely starts a fresh exchange; an advisor's last message from 6 hours ago does NOT mean they're "currently engaged."
-- **24+ hours ago** → STALE. Treat as a NEW conversation. A 22-hour-old escalation is NOT "the current thread." An advisor message from yesterday does NOT make today's @-mention a "continuation."
+- **24+ hours ago** → STALE. Treat as a NEW conversation. A 22-hour-old escalation is NOT "the current thread." An advisor message from yesterday does NOT make a current message a "continuation."
 - **7+ days ago** → IGNORE. Don't let week-old context shape today's decision.
-
-Specifically: **do not skip a current @-mention because of a stale prior escalation.** If Scott DMed yesterday about a refund and the client @-mentions Ella today, that's a new question. Respond to it (or acknowledge_and_escalate if its content warrants), based on TODAY's message — not yesterday's resolution state.
 
 # READING THE CONTEXT
 
-You receive five things:
+You receive four things:
 
 1. **The triggering message** (the message that just landed).
 2. **Recent channel context** (last 15 turns with ET timestamps + pre-computed "time ago" deltas + speaker labels). Use the time-ago deltas per the section above. Use this to:
    - Detect ACTIVE conversations Ella shouldn't interject in (advisor messages within last 4 hours).
-   - Thread bare @-mentions to prior unanswered questions.
    - See Ella's own prior posts so follow-ups make sense.
 3. **Speaker identity** (client, advisor, ella, bot, unknown) with name.
-4. **@-mention flag** (`is_ella_mentioned: true|false`).
-5. **KB chunks** retrieved using the combined conversation context as the query. Each chunk has a similarity score. Higher = stronger match. Use these to:
+4. **KB chunks** retrieved using the combined conversation context as the query. Each chunk has a similarity score. Higher = stronger match. Use these to:
    - Verify your respond decision is grounded — if no chunk strongly addresses the question, respond is risky.
    - Distinguish "KB has content about this" (lesson covers X) from "KB lets me answer this" (the client is asking where X lives, not what X is). The KB doesn't have navigation metadata.
 
@@ -422,7 +440,7 @@ When digest_flag=false, set digest_category to null.
 
 Two independent defaults:
 
-- **"Should Ella speak?" defaults to skip** WHEN `is_ella_mentioned: false`. When the @-mention is on, the default is respond/ack-and-escalate per the @-MENTION OVERRIDE section. Ella interjecting in a working conversation is worse than Ella missing a question — but ignoring a direct @-mention is worse than both.
+- **"Should Ella speak?" defaults to skip.** Ella interjecting in a working conversation is worse than Ella missing a question. When uncertain whether to respond, skip. When the message would warrant a human, prefer acknowledge_and_escalate over respond — never confidently answer a question that needs human judgment.
 
 - **"Should Scott see this?" defaults to flag.** False positives are fine. When uncertain whether something matters, flag it.
 
