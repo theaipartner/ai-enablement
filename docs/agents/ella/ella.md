@@ -132,6 +132,7 @@ The full system prompt will include:
 10. Decision/response split (unified-path rewrite, 2026-05-18 PM): the **decision Haiku prompt** (`passive_monitor._HAIKU_SYSTEM_PROMPT`, verbatim from the spec) is the load-bearing artifact — it carries the soft rules (CSM-dialogue → skip, @-mention as strong override, KB-content-vs-navigation, recurrence → re-ack) that used to be hardcoded gates. The Sonnet prompt (`_BASE_PROMPT`) and the response-Haiku prompt are now **pure generation**: no `[ESCALATE]`, no `[FALLBACK_TO_SONNET]` (both fully removed). `_BASE_PROMPT` gained the KB-content-vs-navigation rule in WHAT YOU CAN HELP WITH; the response-Haiku prompt has the same. The WHO IS SPEAKING advisor/unresolvable variants no longer reference any control token.
 11. (Firm-after-first prompt instruction removed — see § Confidence-Based Routing.)
 12. Decision Haiku prompt sharpening (2026-05-19, `ella-decision-haiku-prompt-sharpening`): corrects a production over-skip regression where Haiku skipped @-mentions because the speaker was an advisor and a 22h-old escalation was still in the context window. Four targeted prompt changes (prompt copied verbatim from the spec): (a) the @-mention rule is promoted to a **`# THE @-MENTION OVERRIDE (READ THIS FIRST)`** section *before* THE THREE DECISIONS; (b) it's an **absolute structural override** — when `is_ella_mentioned: true` the decision MUST be `respond` or `acknowledge_and_escalate`, skip FORBIDDEN unless the @-mention is referential ("ask @Ella…"); advisor speakers do not bypass it; (c) bare @-mentions are non-negotiably threaded to the most recent prior question; (d) a new **`# READING TIME-STAMPED CONTEXT`** section with explicit decay bands — 0-4h ACTIVE, 4-24h RECENT-but-fresh, 24h+ STALE (treat as new conversation; do not skip a current @-mention because of a stale prior escalation), 7d+ IGNORE. `skip` is now explicitly gated on `is_ella_mentioned: false`.
+13. Decision Haiku prompt sharpening **v2** (2026-05-19 evening): v1's smoke (`docs/reports/ella-decision-haiku-prompt-sharpening-smoke-diagnostic.md`) showed a bare `<@Ella>` from an advisor with a 22h-old *resolved* escalation in context STILL got `skip` — Haiku rationalized "no open question to thread to ⇒ nothing to do ⇒ skip," a path v1's override didn't close. v2 (prompt-only, no other diff in `passive_monitor.py`): the bare-@-mention bullet is rewritten so a bare @-mention with `is_ella_mentioned=true` is **NEVER skip** — three sub-cases ((a) unanswered prior question → thread+answer; (b) resolved/stale/>24h prior thread → fresh warm opener via `respond/haiku`; (c) no prior context → same opener), with an explicit "if you're reasoning 'no open question so skip' — STOP, that's the loophole" instruction. Plus a `# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION` section anchoring exactly the failing case. The referential carve-out ("Hey Scott, ask @Ella…" → skip allowed) is preserved unchanged.
 
 ### Recent Context Format
 
@@ -335,6 +336,16 @@ Batches 2/3.
   send time. Prompt-only + one rendering change — no architecture, no
   migrations, no env vars. Spec:
   `docs/specs/ella-decision-haiku-prompt-sharpening.md`.
+- decision Haiku prompt sharpening v2 (2026-05-19 evening): closes the
+  loophole v1's smoke surfaced — a bare `<@Ella>` with a resolved/stale
+  prior thread still got `skip` ("no open question ⇒ nothing to do").
+  v2 makes a bare @-mention with `is_ella_mentioned=true` NEVER skip
+  (three sub-cases incl. resolved/stale → warm `respond/haiku` opener)
+  + an explicit anti-loophole STOP instruction + a `# WORKED EXAMPLE`
+  anchoring the failing case. Referential carve-out preserved.
+  Prompt-only; the sole diff in `passive_monitor.py` is the
+  `_HAIKU_SYSTEM_PROMPT` string. Diagnostic:
+  `docs/reports/ella-decision-haiku-prompt-sharpening-smoke-diagnostic.md`.
 
 ## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
 

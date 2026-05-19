@@ -34,6 +34,15 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-19 — PM (evening): Ella decision-Haiku prompt sharpening v2
+
+Closes the loophole v1's gate-(c) smoke surfaced (`docs/reports/ella-decision-haiku-prompt-sharpening-smoke-diagnostic.md`): a bare `<@Ella>` from an advisor with a 22h-old **resolved** escalation in context still got `skip` post-v1-deploy — Haiku rationalized "no open question to thread to ⇒ nothing to do ⇒ skip," a third path v1's absolute-override didn't close. **Prompt-only**, two changes to `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py` (verified the sole diff in that file is the prompt string — no code/structural lines changed):
+
+1. The bare-@-mention bullet in `# THE @-MENTION OVERRIDE` rewritten: a bare @-mention with `is_ella_mentioned=true` is **NEVER skip** — three sub-cases ((a) unanswered prior question → thread + answer; (b) resolved / answered / >24h-stale prior thread → fresh warm opener via `respond`/`response_model=haiku`; (c) no prior context → same opener), plus an explicit "if you're reasoning 'no open question so I'll skip' — STOP, that's the loophole; the @-mention itself IS the signal" instruction.
+2. New `# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION` section inside the override (before THE THREE DECISIONS) anchoring exactly the failing 22h-resolved-escalation case with WRONG vs CORRECT reasoning.
+
+The referential carve-out ("Hey Scott, ask @Ella…" → skip allowed) is preserved unchanged. Post-state: **41 migrations, 13 Python serverless functions, 638 pytest passing** (baseline 635 — +3 v2 prompt-copy/behavioral tests; one stale v1 wording-assertion test updated to the v2 sub-case (a) string). `ruff check` clean on touched files (`ruff format` applied); `tsc --noEmit` + `next lint` clean (no TS). Docs: `ella.md` (System Prompt Direction point 13 + changelog), this entry. **Drake gates: (a) none; (d) none; (c) re-run the smoke battery in `#ella-test-drakeonly` post-deploy, validating the bare-mention regression case specifically** — spec stays `in-flight` and the report `(PARTIAL)` until then. `ella-passive-monitoring-default-on` remains correctly blocked behind this and was left untouched. The pre-existing out-of-scope `ruff` item in `tests/agents/ella/test_agent.py` (documented in the v1 entry) is still untouched.
+
 ### 2026-05-19 — Ella decision-Haiku prompt sharpening
 
 `docs/specs/ella-decision-haiku-prompt-sharpening.md`. Surgical fix for a production over-skip regression from the unified-path refactor: the decision Haiku was skipping @-mentions because the speaker resolved as `advisor` (matching default-skip-advisor) and a 22-hour-old escalation was still in the context window (read as "the active conversation"). Prompt-only + one rendering change — no architecture, no tables, no crons, no migrations, no env vars.
