@@ -34,6 +34,16 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-19 — Ella decision-Haiku prompt sharpening
+
+`docs/specs/ella-decision-haiku-prompt-sharpening.md`. Surgical fix for a production over-skip regression from the unified-path refactor: the decision Haiku was skipping @-mentions because the speaker resolved as `advisor` (matching default-skip-advisor) and a 22-hour-old escalation was still in the context window (read as "the active conversation"). Prompt-only + one rendering change — no architecture, no tables, no crons, no migrations, no env vars.
+
+**`agents/ella/passive_monitor.py`:** `_HAIKU_SYSTEM_PROMPT` rewritten **verbatim from the spec** (hard stop #4 — verified byte-equal). Four changes: (1) the @-mention rule promoted to a `# THE @-MENTION OVERRIDE (READ THIS FIRST)` section placed *before* `# THE THREE DECISIONS`; (2) hardened from "strongly lean" to an **absolute structural override** — `is_ella_mentioned: true` ⇒ decision MUST be `respond`/`acknowledge_and_escalate`, `skip` FORBIDDEN unless the @-mention is referential, advisor speakers explicitly do not bypass; (3) bare-mention threading made non-negotiable (answer the most recent prior question); (4) new `# READING TIME-STAMPED CONTEXT` section with explicit decay bands — 0-4h ACTIVE / 4-24h RECENT-but-fresh / 24h+ STALE / 7d+ IGNORE, with "do not skip a current @-mention because of a stale prior escalation." `skip` now explicitly gated on `is_ella_mentioned: false`.
+
+**`agents/ella/retrieval.py`:** new `_format_time_ago(seconds)` helper; `fetch_recent_channel_context` line format gains a pre-computed delta → `[YYYY-MM-DD HH:MM ET — <delta>] <role> (<name>): <text>`, with a new `relative_to: datetime | None` param (defaults to `now(UTC)`). `passive_monitor._evaluate` passes `relative_to` derived from the Slack trigger ts (which *is* the message's unix timestamp — no `slack_messages` lookup needed; spec assumed a lookup, simpler+always-available judgment call). `fetch_recent_channel_messages` unchanged.
+
+Post-state: **41 migrations, 13 Python serverless functions, 635 pytest passing** (baseline 626 — +9 net for the new prompt-structure / time-ago / behavioral tests). `ruff check` clean on all touched files; `ruff format` applied; `tsc --noEmit` + `next lint` clean (no TS touched). Docs: `ella.md` (System Prompt Direction point 12 + new Recent Context Format subsection + changelog), this entry. **Drake gates: (a) none; (d) none; (c) 5-case smoke in `#ella-test-drakeonly` post-deploy** — until smoke passes the spec stays `in-flight` and the report is `(PARTIAL)`. One pre-existing out-of-scope `ruff` item (`unused import pytest` in `tests/agents/ella/test_agent.py`, untouched by this spec) is left as-is per the documented prior-baseline precedent.
+
 ### 2026-05-18 — PM: Ella unified-path intelligence refactor
 
 `docs/specs/ella-unified-path-intelligence-refactor.md`. Corrective follow-up to the morning's spec — Drake smoke-tested in `#ella-test-drakeonly`, found three real problems (double-fire on @-mention, Haiku answering "where do I find X" as if it were "what is X", conversation context not load-bearing), and Director wrote this.

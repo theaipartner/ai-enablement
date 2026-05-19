@@ -131,6 +131,11 @@ The full system prompt will include:
 9. Hedge on transcript quotes: Fathom's speaker diarization is imperfect and occasionally misattributes quotes. When summarizing or referencing something said on a prior call, Ella should paraphrase or frame it as "based on the notes from your call on [date]" rather than quoting verbatim with a specific speaker attribution. See the "LLM post-processing for Fathom speaker misattribution" entry in `docs/future-ideas.md` for the upstream fix path.
 10. Decision/response split (unified-path rewrite, 2026-05-18 PM): the **decision Haiku prompt** (`passive_monitor._HAIKU_SYSTEM_PROMPT`, verbatim from the spec) is the load-bearing artifact — it carries the soft rules (CSM-dialogue → skip, @-mention as strong override, KB-content-vs-navigation, recurrence → re-ack) that used to be hardcoded gates. The Sonnet prompt (`_BASE_PROMPT`) and the response-Haiku prompt are now **pure generation**: no `[ESCALATE]`, no `[FALLBACK_TO_SONNET]` (both fully removed). `_BASE_PROMPT` gained the KB-content-vs-navigation rule in WHAT YOU CAN HELP WITH; the response-Haiku prompt has the same. The WHO IS SPEAKING advisor/unresolvable variants no longer reference any control token.
 11. (Firm-after-first prompt instruction removed — see § Confidence-Based Routing.)
+12. Decision Haiku prompt sharpening (2026-05-19, `ella-decision-haiku-prompt-sharpening`): corrects a production over-skip regression where Haiku skipped @-mentions because the speaker was an advisor and a 22h-old escalation was still in the context window. Four targeted prompt changes (prompt copied verbatim from the spec): (a) the @-mention rule is promoted to a **`# THE @-MENTION OVERRIDE (READ THIS FIRST)`** section *before* THE THREE DECISIONS; (b) it's an **absolute structural override** — when `is_ella_mentioned: true` the decision MUST be `respond` or `acknowledge_and_escalate`, skip FORBIDDEN unless the @-mention is referential ("ask @Ella…"); advisor speakers do not bypass it; (c) bare @-mentions are non-negotiably threaded to the most recent prior question; (d) a new **`# READING TIME-STAMPED CONTEXT`** section with explicit decay bands — 0-4h ACTIVE, 4-24h RECENT-but-fresh, 24h+ STALE (treat as new conversation; do not skip a current @-mention because of a stale prior escalation), 7d+ IGNORE. `skip` is now explicitly gated on `is_ella_mentioned: false`.
+
+### Recent Context Format
+
+`fetch_recent_channel_context` renders each line as `[YYYY-MM-DD HH:MM ET — <delta>] <role> (<name>): <text>`, where `<delta>` is a pre-computed "time ago" string (`<1 minute ago` / `<N> minutes ago` / `<N>h <M>m ago` / `<N>h ago` / `<N>d ago`) so the decision Haiku judges continuity without timestamp math. The delta is computed against the **triggering message's send time** (`relative_to`), not wall-clock — passed from `passive_monitor._evaluate` via the Slack `ts` (which *is* the message's unix timestamp; no `slack_messages` lookup needed). Absent a `relative_to` it defaults to `now(UTC)` (deltas go slightly stale, never broken). `fetch_recent_channel_messages` (the row primitive) is unchanged — the delta lives only in the rendered block.
 
 Actual prompt text to be written during implementation, reviewed by Drake before going live.
 
@@ -317,6 +322,19 @@ Batches 2/3.
   return the posted message `ts`. No changes to the decision Haiku,
   dispatch, or the daily digest. Spec:
   `docs/specs/ella-unanswered-message-flagger.md`.
+- decision Haiku prompt sharpening (2026-05-19): fixes a production
+  over-skip regression (Haiku skipped @-mentions because the speaker
+  was an advisor + a 22h-old escalation was still in context). Prompt
+  rewritten verbatim from spec: @-mention promoted to an absolute
+  structural override section *before* THE THREE DECISIONS (skip
+  FORBIDDEN when mentioned unless referential; advisor speakers don't
+  bypass), bare-mention threading non-negotiable, and a new time-decay
+  bands section (0-4h ACTIVE / 4-24h RECENT / 24h+ STALE / 7d+ IGNORE).
+  `retrieval.fetch_recent_channel_context` now renders a pre-computed
+  "time ago" delta per line, measured against the triggering message's
+  send time. Prompt-only + one rendering change — no architecture, no
+  migrations, no env vars. Spec:
+  `docs/specs/ella-decision-haiku-prompt-sharpening.md`.
 
 ## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
 
