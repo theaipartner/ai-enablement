@@ -271,7 +271,7 @@ def _post_to_slack(*, channel: str, text: str) -> None:
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if user_token:
         try:
-            ok, slack_error = _call_chat_post_message(user_token, body)
+            ok, slack_error, _ = _call_chat_post_message(user_token, body)
             if ok:
                 logger.info(
                     "slack.postMessage ok via user-token: channel=%s",
@@ -302,7 +302,7 @@ def _post_to_slack(*, channel: str, text: str) -> None:
     if not bot_token:
         raise RuntimeError("SLACK_BOT_TOKEN not set")
     try:
-        ok, slack_error = _call_chat_post_message(bot_token, body)
+        ok, slack_error, _ = _call_chat_post_message(bot_token, body)
         if ok:
             logger.info(
                 "slack.postMessage ok via bot-token: channel=%s",
