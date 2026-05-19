@@ -34,6 +34,22 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-19 — PM (late evening): Ella @-mention structural override
+
+`docs/specs/ella-at-mention-structural-override.md`. v2's smoke at 22:20 UTC still produced `skip` on a bare `<@Ella>` from Drake despite the "skip is FORBIDDEN" + "NEVER skip" + worked-example layers — Haiku found yet another rationalization ("Drake was already escalated to Scott yesterday in an ACTIVE conversation"). The pattern after three iterations was clear: as long as `skip` is in the schema the model fills, prompt copy isn't reliably going to keep it from getting picked. **The fix is structural, not linguistic.**
+
+**New module** `agents/ella/mention_classifier.py` (~80 lines) — verbatim spec prompt, output enum `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener` (NO `skip`). Parser collapses malformed JSON / out-of-enum (including a model attempting to output "skip") to `warm_opener` safer-fallback.
+
+**`agents/ella/passive_monitor.py`** — `evaluate_passive_trigger` now branches on `payload.is_ella_mentioned`: true → `classify_mention_response` + result lands on the new `PassiveEvaluation.mention_classification` field; false → existing `decide_passive_response`. `_HAIKU_SYSTEM_PROMPT` was pruned of every @-mention overlay (the `# THE @-MENTION OVERRIDE` section, the `# WORKED EXAMPLE`, the conditional qualifiers in `# THE THREE DECISIONS` / `# DEFAULT STANCES`, item 4 of `# READING THE CONTEXT`) — no @-mention message reaches this prompt anymore, so those sections were just rationalization surface. New preamble explicitly scopes the prompt to PASSIVE OBSERVATION. Coherence re-read passed (hard stop #5).
+
+**`agents/ella/passive_dispatch.py`** — new `_dispatch_mention` routes the 4 shapes: `respond_haiku` (response Haiku posts), `respond_sonnet` (queue `pending_ella_responses` with the `respond_substantive` shim), `acknowledge_and_escalate` (post ack + escalations row + DM fan-out + digest item), `warm_opener` (response Haiku in `warm_opener` mode). Mention runs carry `trigger_metadata.mention_classifier_shape` for `/ella/runs` attribution.
+
+**`agents/ella/digest_response.py`** — `generate_response` gained `mode='warm_opener'` (default `'substantive'` keeps existing behavior unchanged). Warm-opener path uses a tighter user-prompt template (no KB block, ≤120 tokens, "1-sentence invitation" instruction) so the model can't drift into a substantive answer.
+
+**Trade explicitly accepted:** v2's referential carve-out is gone. "Hey Scott, ask @Ella about X" now triggers `warm_opener` (brief opener). Rare misfire, acceptable vs the v1/v2 failure where every advisor @-mention got skipped.
+
+Post-state: **41 migrations, 13 Python serverless functions, 653 pytest passing** (baseline 635 — +18 net: new `test_mention_classifier.py` (14), extended `test_passive_dispatch.py` (+7) and `test_digest_response.py` (+3), 9 obsolete @-mention-overlay tests removed from `test_passive_monitor.py`, 1 consolidated absence test added). `ruff check` clean on touched files; `tsc --noEmit` + `next lint` clean (no TS). Docs: `ella.md` (new "@-Mention Handling (Structural)" section + Trigger rewrite + changelog), `ella_passive_monitoring.md` (two-path dispatch), this entry. **Drake gates: (a) none; (d) none; (c) 6-case smoke in `#ella-test-drakeonly` — cases 1-3 are the critical regression validation** (verify `mention_classifier_shape` populated, NOT `haiku_decision='skip'`). Until smoke passes, spec stays `in-flight` and report `(PARTIAL)`. The pre-existing out-of-scope `unused import pytest` in `test_agent.py` is still untouched.
+
 ### 2026-05-19 — PM (evening): Ella decision-Haiku prompt sharpening v2
 
 Closes the loophole v1's gate-(c) smoke surfaced (`docs/reports/ella-decision-haiku-prompt-sharpening-smoke-diagnostic.md`): a bare `<@Ella>` from an advisor with a 22h-old **resolved** escalation in context still got `skip` post-v1-deploy — Haiku rationalized "no open question to thread to ⇒ nothing to do ⇒ skip," a third path v1's absolute-override didn't close. **Prompt-only**, two changes to `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py` (verified the sole diff in that file is the prompt string — no code/structural lines changed):

@@ -9,14 +9,24 @@ Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) t
 Pipeline (one entry per client-authored message):
 
 1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op; the parallel `message` event is the ONE evaluation path — @-mentions included). The fork detects `is_ella_mentioned` (`_detect_ella_mention`, bot OR human uid) and passes it through `PassiveTriggerPayload`.
-2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **unified-path rewrite (2026-05-18 PM)**: two pre-LLM gates only — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row). Then KB vector search using a **combined-conversation query** (`build_kb_query_from_conversation`: last 6 msgs incl. Ella's own + triggering ×2) + recent-context fetch (ET-timestamped) + speaker resolve, then one decision Haiku call returning `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus independent `digest_flag`/`digest_category`. CSM-directed / KB-relevance / firm-after-first / bare-mention are soft prompt rules now, not gates.
-3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`):
-   - `skip_reason='kill_switch'` → **no `agent_runs` row at all**. `skip_reason='non_human_author'` → audit row written (skip, no side effects).
-   - `respond` + `response_model='haiku'` → response Haiku posts directly (no fallback).
-   - `respond` + `response_model='sonnet'` → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, +1 min) drained by the unchanged per-minute cron.
-   - `acknowledge_and_escalate` → posts the Haiku `ack_text` in-channel, writes the `escalations` row, fans DMs to Scott + primary advisor, writes a `pending_digest_items` row. Same on @-mention and passive.
-   - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
-   - Independent of decision: any `digest_flag=true` writes a `pending_digest_items` row for the daily digest (`docs/runbooks/ella_daily_digest.md`).
+2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **two-path dispatch (structural override, 2026-05-19 PM):** two pre-LLM gates run once — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row). Then KB vector search + recent-context fetch + speaker resolve, then **branch on `payload.is_ella_mentioned`:**
+   - **`true` → CLASSIFIER PATH.** `agents.ella.mention_classifier.classify_mention_response` picks one of four shapes: `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener`. **`skip` is structurally absent from the enum** (the structural fix after three failed prompt iterations — `docs/specs/ella-at-mention-structural-override.md`). Result lands on `PassiveEvaluation.mention_classification`.
+   - **`false` → DECISION HAIKU PATH.** `decide_passive_response` returns `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus independent `digest_flag`/`digest_category`. CSM-directed / KB-relevance / firm-after-first are soft prompt rules, not gates.
+3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — branches on `evaluation.mention_classification`:
+   - `skip_reason='kill_switch'` → **no `agent_runs` row at all**. `skip_reason='non_human_author'` → audit row written.
+   - **Mention path** (`_dispatch_mention`, classifier handled):
+     - `respond_haiku` → response Haiku posts directly.
+     - `respond_sonnet` → `pending_ella_responses` row with the `respond_substantive` shim for the unchanged cron.
+     - `acknowledge_and_escalate` → post `ack_text`, write `escalations` row, fan DMs to Scott + primary advisor, write `pending_digest_items`. `status='escalated'`.
+     - `warm_opener` → `digest_response.generate_response(mode='warm_opener')` writes a 1-sentence invite + posts.
+     - `trigger_metadata.mention_classifier_shape` is set (not `haiku_decision`).
+   - **Decision Haiku path** (non-mention):
+     - `respond` + `response_model='haiku'` → response Haiku posts directly.
+     - `respond` + `response_model='sonnet'` → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, +1 min).
+     - `acknowledge_and_escalate` → posts ack, writes `escalations` row, fans DMs, writes digest item. `status='escalated'`.
+     - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
+     - `trigger_metadata.haiku_decision` is set (not `mention_classifier_shape`).
+   - Independent of path: any `digest_flag=true` writes a `pending_digest_items` row for the daily digest (`docs/runbooks/ella_daily_digest.md`).
 4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute, picks due rows, re-checks the kill switches + per-channel toggle + CSM-intervention, dispatches the response or cancels the row.
 
 Real-world perceived latency is **1-2 minutes** end-to-end: the 1-minute insert-time delay plus up to 60 seconds of cron-tick lag. Per-minute is the floor on Vercel Cron (Pro plan); going lower would require a different scheduling primitive.

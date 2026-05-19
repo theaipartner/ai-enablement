@@ -32,21 +32,42 @@ Ella answers client questions in their private Slack channels at near-CSM qualit
 
 ## Behavior Specification
 
-### Trigger (ONE path — unified-path rewrite, 2026-05-18 PM)
+### Trigger (one webhook path, two LLM paths — structural override, 2026-05-19 PM)
 
-There is no longer a separate reactive @-mention path. **Every message** in a channel mapped to a `clients` row with `passive_monitoring_enabled = true` (and global `ELLA_PASSIVE_MONITORING_ENABLED=true`) flows through exactly one pipeline:
+**Every message** in a channel mapped to a `clients` row with `passive_monitoring_enabled = true` (and global `ELLA_PASSIVE_MONITORING_ENABLED=true`) flows through one webhook ingest:
 
 `api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
 
 - The `app_mention` event is a **logged no-op**. Slack fires a parallel `message` event alongside every `app_mention` (the app subscribes to `message.groups` on all client channels); handling app_mention too would double-fire. The reactive machinery (`_should_dual_trigger`, `_build_app_mention_from_message`, `_process_mention`) is removed.
-- The @-mention is detected in realtime_ingest (`_detect_ella_mention` — Ella's bot OR human user_id in the text) and threaded through `PassiveTriggerPayload.is_ella_mentioned` as the **strongest signal** the decision Haiku weighs. It is not a routing fork.
-- `agent.respond_to_mention` survives only as a thin adapter over this same one path (kept so `slack_handler` / tests still resolve); it forces `is_ella_mentioned=True` and returns an `EllaResponse` summary. `api/slack_events.py` does not call it.
+- The @-mention is detected in realtime_ingest (`_detect_ella_mention` — Ella's bot OR human user_id in the text) and threaded through `PassiveTriggerPayload.is_ella_mentioned`.
+- `agent.respond_to_mention` survives only as a thin adapter over the same pipeline (kept so `slack_handler` / tests still resolve); it forces `is_ella_mentioned=True` and returns an `EllaResponse` summary. `api/slack_events.py` does not call it.
 
-**Two gates only:** (1) global kill switch (no `agent_runs` row when off), (2) author type — `client` and `team_member` are always evaluated (CSMs @Ella too; the old test_mode carve-out is now the default); `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row. KB search runs as context, never a gate. CSM-directed / KB-relevance / firm-after-first are soft rules in the decision prompt now, not hardcoded.
+**Two gates only** (run once, both paths): (1) global kill switch (no `agent_runs` row when off), (2) author type — `client` and `team_member` are always evaluated (CSMs @Ella too); `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row.
 
-**Three decisions** (decision Haiku, one call, full context): `respond` (+`response_model: haiku|sonnet`), `acknowledge_and_escalate` (+Haiku-written `ack_text`), `skip` — plus the independent `digest_flag`/`digest_category`. See § Confidence-Based Routing.
+**Two-path LLM dispatch** (the 2026-05-19 PM structural override, after three failed prompt-engineering attempts at "@-mention trumps all" — `docs/specs/ella-at-mention-structural-override.md`):
+
+- **`is_ella_mentioned=true` → CLASSIFIER PATH.** Bypass the decision Haiku entirely. `agents.ella.mention_classifier.classify_mention_response` picks one of four shapes: `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener`. **`skip` is structurally impossible** — it is not in the enum the model fills, and the parser collapses any attempted "skip" to `warm_opener`. See § @-Mention Handling (Structural).
+- **`is_ella_mentioned=false` → DECISION HAIKU PATH.** `decide_passive_response` runs the pruned decision prompt for genuine passive-observation judgment. Output: `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+Haiku-written `ack_text`) / `skip`, plus the independent `digest_flag`/`digest_category`. See § Confidence-Based Routing.
 
 **Team member testing mode:** `slack_channels.test_mode` is retained on the payload for compat but inert — team_member is always evaluated regardless.
+
+### @-Mention Handling (Structural)
+
+After three prompt-engineering iterations failed in production ("lean toward respond" → "skip is FORBIDDEN" → "bare-mention NEVER skip + worked example"), the smoke at 22:20 UTC on 2026-05-19 still produced `skip` on a bare `<@Ella>` from Drake — Haiku rationalized around every absolute. The pattern was clear: with `skip` available in the schema, no amount of prompt copy was reliably going to keep the model from finding a path to it. The fix is structural, not linguistic: when `is_ella_mentioned=true`, route to a small classifier whose output enum **does not contain `skip`**.
+
+**Module:** `agents/ella/mention_classifier.py` — ~80-line module owning the classifier Haiku call. Same model (`claude-haiku-4-5-20251001`), same client, ~600-token cap. Output enum: `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener`. Parser collapses any malformed JSON / out-of-enum value (including a model attempting `skip`) to the safer-fallback `warm_opener` — never silent.
+
+**Dispatch** (`passive_dispatch._dispatch_mention`):
+- `respond_haiku` → `digest_response.generate_response` (substantive mode) writes + posts. Cost = classifier + response Haiku.
+- `respond_sonnet` → `pending_ella_responses` queue (`haiku_decision='respond_substantive'` shim so the unchanged per-minute cron drains it via the Sonnet path).
+- `acknowledge_and_escalate` → post Haiku-written `ack_text` in-channel, write `escalations` row, fan DMs to Scott + primary advisor, write `pending_digest_items`. `status='escalated'`.
+- `warm_opener` → `digest_response.generate_response(mode='warm_opener')` produces a 1-sentence friendly invite + posts.
+
+**Independently:** if `classification.digest_flag=true`, `_dispatch_mention` writes a `pending_digest_items` row (the digest column carries the classifier shape so `/ella/runs` can attribute the entry).
+
+**trigger_metadata** on mention-path runs carries `mention_classifier_shape` + `mention_classifier_reasoning` (instead of `haiku_decision`); `/ella/runs` reads either depending on the path.
+
+**What this preserves vs sacrifices.** Preserves: every existing response behavior (Haiku self-answers, Sonnet, ack-and-escalate fan-out, digest flag). Sacrifices: the v2 referential carve-out ("Hey Scott, ask @Ella about X" → skip). That message now triggers `warm_opener` (Ella posts a brief opener). Rare misfire, accepted trade vs the v1/v2 failure where every advisor @-mention was being skipped.
 
 ### Response Location
 
@@ -346,6 +367,22 @@ Batches 2/3.
   Prompt-only; the sole diff in `passive_monitor.py` is the
   `_HAIKU_SYSTEM_PROMPT` string. Diagnostic:
   `docs/reports/ella-decision-haiku-prompt-sharpening-smoke-diagnostic.md`.
+- @-mention structural override (2026-05-19 PM, post-v2-smoke-failure):
+  v2 still got `skip` on a bare `<@Ella>` from Drake at 22:20 UTC —
+  Haiku rationalized around the absolute. The structural fix:
+  `is_ella_mentioned=true` bypasses the decision Haiku entirely. New
+  `agents/ella/mention_classifier.py` owns a tiny classifier Haiku
+  whose output enum is `respond_haiku` / `respond_sonnet` /
+  `acknowledge_and_escalate` / `warm_opener` — **`skip` is not in the
+  schema** the model fills, and the parser collapses any attempted
+  "skip" to `warm_opener`. The decision Haiku prompt was pruned of all
+  @-mention overlay sections (no @-mention message reaches it now —
+  those sections were just rationalization surface). `digest_response`
+  gained a `mode='warm_opener'` variant for the new shape. Trade:
+  v2's referential carve-out is gone; "Hey Scott, ask @Ella about X"
+  now triggers a brief warm opener instead of silence. No
+  architecture/migration/env beyond the new module. Spec:
+  `docs/specs/ella-at-mention-structural-override.md`.
 
 ## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
 
