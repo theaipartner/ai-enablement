@@ -536,9 +536,11 @@ def test_prompt_time_decay_bands_present():
 
 
 def test_prompt_bare_mention_threading_non_negotiable():
+    # v2 superseded the v1 bullet wording; sub-case (a) still makes
+    # threading to a prior unanswered question non-negotiable.
     p = _HAIKU_SYSTEM_PROMPT
-    assert "not chitchat when prior context contains a question" in p
-    assert "answer THAT question" in p
+    assert "are NEVER skip when is_ella_mentioned=true" in p
+    assert "UNANSWERED question → thread to that question and answer it" in p
 
 
 def test_prompt_skip_gated_on_not_mentioned():
@@ -566,4 +568,63 @@ def test_mentioned_true_plumbs_and_parses_respond(fake_db, monkeypatch):
         _payload(text="<@U0B03PTJD3P>", author_type="team_member", mentioned=True)
     )
     assert ev.decision.decision == "respond"
+    assert ev.skip_reason is None
+
+
+# --- prompt-sharpening v2: resolved-thread loophole closure --------------
+
+
+def test_prompt_v2_bare_mention_never_skip_copy():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert (
+        "Bare @-mentions (no text after the mention) are NEVER skip when "
+        "is_ella_mentioned=true" in p
+    )
+    # The three sub-cases + the explicit anti-loophole STOP line.
+    assert (
+        "(a) Most recent client or advisor message above the bare @-mention is an UNANSWERED question"
+        in p
+    )
+    assert "(b) Most recent prior message is a RESOLVED or STALE thread" in p
+    assert "(c) No prior context at all (quiet channel)" in p
+    assert "A bare @-mention is NEVER 'nothing to do.'" in p
+    assert "there's no open question so I'll skip' — STOP. That's the loophole." in p
+    # The old (superseded) phrasing is gone.
+    assert "are not chitchat when prior context contains a question" not in p
+
+
+def test_prompt_v2_worked_example_present():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert "# WORKED EXAMPLE — RESOLVED-THREAD BARE MENTION" in p
+    assert "WRONG reasoning:" in p
+    assert "CORRECT reasoning:" in p
+    assert "Decision: respond, response_model=haiku, ack_text=null." in p
+    # The worked example sits inside the override section, before THE
+    # THREE DECISIONS.
+    assert p.index("# WORKED EXAMPLE") < p.index("# THE THREE DECISIONS")
+    # The referential carve-out is preserved (only the resolved-thread
+    # path was closed).
+    assert "the @-mention is referential, skip is allowed" in p
+
+
+def test_v2_bare_mention_resolved_thread_plumbs_respond(fake_db, monkeypatch):
+    """Behavioral plumbing: is_ella_mentioned=true bare mention + a
+    mocked Haiku 'respond/haiku' decision (the v2-correct outcome for a
+    resolved-thread bare mention) surfaces respond, not skip."""
+    _stub_haiku(
+        monkeypatch,
+        {
+            "decision": "respond",
+            "response_model": "haiku",
+            "ack_text": None,
+            "digest_flag": False,
+            "digest_category": None,
+            "reasoning": "is_ella_mentioned=true, bare mention, prior thread resolved/stale — warm opener",
+        },
+    )
+    ev = evaluate_passive_trigger(
+        _payload(text="<@U0B03PTJD3P>", author_type="team_member", mentioned=True)
+    )
+    assert ev.decision.decision == "respond"
+    assert ev.decision.response_model == "haiku"
     assert ev.skip_reason is None
