@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.ella.passive_monitor import (
+    _HAIKU_SYSTEM_PROMPT,
     PassiveTriggerPayload,
     evaluate_passive_trigger,
 )
@@ -503,3 +504,66 @@ def test_kb_block_renders_chunks(fake_db, monkeypatch):
     evaluate_passive_trigger(_payload())
     assert "Discovery" in captured["u"]
     assert "sim=0.81" in captured["u"]
+
+
+# --- prompt-sharpening spec: prompt structure ---------------------------
+
+
+def test_prompt_mention_override_section_before_three_decisions():
+    p = _HAIKU_SYSTEM_PROMPT
+    i_override = p.index("# THE @-MENTION OVERRIDE (READ THIS FIRST)")
+    i_three = p.index("# THE THREE DECISIONS")
+    assert i_override < i_three, "override section must precede THE THREE DECISIONS"
+
+
+def test_prompt_mention_override_is_absolute_not_weighted():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert "absolute structural override" in p
+    assert "Skip is FORBIDDEN" in p
+    assert "Advisor speakers do not bypass this." in p
+    # The old soft language is gone.
+    assert "Strongly lean toward respond" not in p
+
+
+def test_prompt_time_decay_bands_present():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert "# READING TIME-STAMPED CONTEXT" in p
+    assert "0-4 hours ago" in p
+    assert "4-24 hours ago" in p
+    assert "24+ hours ago" in p
+    assert "7+ days ago" in p
+    assert "do not skip a current @-mention because of a stale prior escalation" in p
+
+
+def test_prompt_bare_mention_threading_non_negotiable():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert "not chitchat when prior context contains a question" in p
+    assert "answer THAT question" in p
+
+
+def test_prompt_skip_gated_on_not_mentioned():
+    p = _HAIKU_SYSTEM_PROMPT
+    assert "AND only when `is_ella_mentioned: false`" in p
+    assert "Every other rule is conditional on `is_ella_mentioned: false`." in p
+
+
+def test_mentioned_true_plumbs_and_parses_respond(fake_db, monkeypatch):
+    """Behavioral: @-mention true + mocked Haiku 'respond' → the
+    evaluation surfaces respond (dispatch-shape sanity for the path the
+    spec hardens)."""
+    _stub_haiku(
+        monkeypatch,
+        {
+            "decision": "respond",
+            "response_model": "haiku",
+            "ack_text": None,
+            "digest_flag": False,
+            "digest_category": None,
+            "reasoning": "user @-mentioned Ella — override applies",
+        },
+    )
+    ev = evaluate_passive_trigger(
+        _payload(text="<@U0B03PTJD3P>", author_type="team_member", mentioned=True)
+    )
+    assert ev.decision.decision == "respond"
+    assert ev.skip_reason is None

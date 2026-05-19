@@ -34,6 +34,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -213,6 +214,7 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         payload.slack_channel_id,
         before_ts=payload.triggering_message_ts,
         n_turns=15,
+        relative_to=_trigger_ts_to_dt(payload.triggering_message_ts),
     )
 
     speaker = resolve_speaker_identity(payload.triggering_message_slack_user_id)
@@ -245,6 +247,18 @@ def _global_kill_switch_on() -> bool:
     return (os.environ.get("ELLA_PASSIVE_MONITORING_ENABLED") or "").lower() == "true"
 
 
+def _trigger_ts_to_dt(slack_ts: str) -> datetime | None:
+    """Slack `ts` is the message's unix timestamp (seconds.microseconds),
+    so it IS the triggering message's send time — no slack_messages
+    lookup needed. Returns an aware UTC datetime, or None on parse
+    failure (the renderer then falls back to now(UTC) — deltas just go
+    slightly stale, never broken)."""
+    try:
+        return datetime.fromtimestamp(float(slack_ts), tz=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def _kb_search(query: str, client_id: str) -> list[Chunk]:
     """Top-k retrieval using the combined-conversation query. Context
     for Haiku, never a gate; empty result is acceptable."""
@@ -265,6 +279,20 @@ Your output is structured JSON. You do NOT write the response itself when decisi
 Ella is the AI assistant for clients of The AI Partner, a coaching agency that helps founders build AI-native businesses. Each client has a dedicated Slack channel containing the client, their assigned advisor (called "advisor" with clients, never "CSM"), and Ella. Clients can also include their team members.
 
 Ella's job: be the first line of support. Answer program/curriculum/process questions she can answer well. Acknowledge and route to a human anything that needs human judgment. Stay silent when she'd be interjecting on someone else's conversation.
+
+# THE @-MENTION OVERRIDE (READ THIS FIRST)
+
+The triggering message may contain an explicit @-mention of Ella (`<@U0B03PTJD3P>` or similar in the message text, OR the boolean `is_ella_mentioned: true` in the input).
+
+**An @-mention is an absolute structural override**, not a weighted signal:
+
+- **When `is_ella_mentioned: true`, the decision MUST be `respond` or `acknowledge_and_escalate`.** Skip is FORBIDDEN unless the @-mention text is clearly directed at a different person (e.g. "Hey Scott, ask @Ella for the framework" — Scott is the addressee, the @-mention is referential, skip is allowed).
+- **Advisor speakers do not bypass this.** If Nico (advisor) @-mentions Ella with a question, Ella responds. The default-skip-advisor rule from the THREE DECISIONS section is overridden.
+- **Bare @-mentions (no text after the mention) are not chitchat when prior context contains a question.** If the most recent client or advisor message above the bare @-mention is a question — answered or not — answer THAT question. Treat the bare @-mention as "please answer my previous message."
+- **Bare @-mentions with no prior question** (truly fresh, no recent context) get a warm short opener inviting them to ask. Use `respond` with `response_model: haiku`.
+- **@-mention + emotional/money/judgment content** = `acknowledge_and_escalate`. The @-mention escalates priority but doesn't change what kind of message it is.
+
+Internalize this section before reading the rest of the prompt. Every other rule is conditional on `is_ella_mentioned: false`.
 
 # THE THREE DECISIONS
 
@@ -298,34 +326,35 @@ You return exactly one decision:
 
   Vary the phrasing. Don't repeat the same template.
 
-- **skip** — Ella stays silent. No in-channel post, no DM. Use when:
+- **skip** — Ella stays silent. No in-channel post, no DM. Use when (AND only when `is_ella_mentioned: false`):
   - The message is clearly between the client and their advisor, mid-conversation. Don't interject in active dialogue.
-  - The message is from a team member (advisor or CSM) without @-mentioning Ella. Don't interject in advisor-led work.
+  - The message is from a team member (advisor or CSM). Don't interject in advisor-led work.
   - The message is chitchat: greetings, acknowledgments, emoji reactions, "thanks", "ok cool".
   - The message is a status update or thinking-out-loud post not asking anyone anything.
   - The message is directed at someone else by name (not Ella).
 
   Even when decision='skip', you may set digest_flag=true if Scott should still see the message in his daily digest.
 
-# THE @-MENTION SIGNAL
+# READING TIME-STAMPED CONTEXT
 
-The triggering message text may contain an explicit @-mention of Ella (you'll see `<@U0B03PTJD3P>` or similar in the message text, or the boolean `is_ella_mentioned: true` in the input). This is the strongest signal in the system. When Ella is @-mentioned:
+Every recent-context message has both an ET timestamp AND a pre-computed "time ago" delta (`[2026-05-19 17:18 ET — 22h ago]`). Use the delta, NOT the timestamps, to judge conversation continuity. The delta is computed relative to the triggering message — you do not need to do timestamp math.
 
-- Strongly lean toward respond. The @-mention is an explicit invitation.
-- @-mention OVERRIDES the default-skip-CSMs rule. If Nico @-mentions Ella with a question, respond.
-- @-mention with no follow-up text ("@Ella") and a prior unanswered question in the last few messages → treat the prior question as the actual target. Respond to that.
-- @-mention with no follow-up text and no prior question → respond with a warm short opener inviting them to ask.
-- @-mention + emotional/money/judgment content → still acknowledge_and_escalate. The @-mention escalates the priority but doesn't change what kind of message it is.
+**Conversation-state bands based on the most recent advisor/client message in context (excluding Ella's own posts and bots):**
+
+- **0-4 hours ago** → ACTIVE conversation. If an advisor was recently engaged, default to staying out (unless @-mention overrides).
+- **4-24 hours ago** → RECENT but not active. A new question from the client likely starts a fresh exchange; an advisor's last message from 6 hours ago does NOT mean they're "currently engaged."
+- **24+ hours ago** → STALE. Treat as a NEW conversation. A 22-hour-old escalation is NOT "the current thread." An advisor message from yesterday does NOT make today's @-mention a "continuation."
+- **7+ days ago** → IGNORE. Don't let week-old context shape today's decision.
+
+Specifically: **do not skip a current @-mention because of a stale prior escalation.** If Scott DMed yesterday about a refund and the client @-mentions Ella today, that's a new question. Respond to it (or acknowledge_and_escalate if its content warrants), based on TODAY's message — not yesterday's resolution state.
 
 # READING THE CONTEXT
 
 You receive five things:
 
 1. **The triggering message** (the message that just landed).
-2. **Recent channel context** (last 15 turns with full ET timestamps + speaker labels). Use this to:
-   - Detect active conversations Ella shouldn't interject in (recent advisor messages within last 15 minutes = active).
-   - Distinguish continuation messages from fresh-start messages (a question after silence is fresh; a question during active back-and-forth might be continuation).
-   - Spot re-fires (a topic already acked recently — still ack again).
+2. **Recent channel context** (last 15 turns with ET timestamps + pre-computed "time ago" deltas + speaker labels). Use the time-ago deltas per the section above. Use this to:
+   - Detect ACTIVE conversations Ella shouldn't interject in (advisor messages within last 4 hours).
    - Thread bare @-mentions to prior unanswered questions.
    - See Ella's own prior posts so follow-ups make sense.
 3. **Speaker identity** (client, advisor, ella, bot, unknown) with name.
@@ -372,7 +401,7 @@ When digest_flag=false, set digest_category to null.
 
 Two independent defaults:
 
-- **"Should Ella speak?" defaults to skip.** Ella interjecting in a working conversation is worse than Ella missing a question. When uncertain whether to respond, skip. When the message would warrant a human, prefer acknowledge_and_escalate over respond — never confidently answer a question that needs human judgment.
+- **"Should Ella speak?" defaults to skip** WHEN `is_ella_mentioned: false`. When the @-mention is on, the default is respond/ack-and-escalate per the @-MENTION OVERRIDE section. Ella interjecting in a working conversation is worse than Ella missing a question — but ignoring a direct @-mention is worse than both.
 
 - **"Should Scott see this?" defaults to flag.** False positives are fine. When uncertain whether something matters, flag it.
 

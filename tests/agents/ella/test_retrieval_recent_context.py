@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from agents.ella import retrieval
@@ -89,13 +90,24 @@ def test_fetch_recent_renders_lines_oldest_first(mocker):
         },
     )
 
-    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
-    # Oldest first; ET timestamps (14:23 UTC on 2026-05-08 = 10:23 EDT);
-    # team_member renders as 'advisor', name in parens, Ella included.
+    # Fixed relative_to so the time-ago deltas are deterministic:
+    # 14:25 UTC → first(14:23)=120s="2 minutes ago", second(14:24)=60s.
+    rel = datetime(2026, 5, 8, 14, 25, 0, tzinfo=timezone.utc)
+    out = retrieval.fetch_recent_channel_context(
+        "C1", before_ts="200.0", relative_to=rel
+    )
+    # Oldest first; ET timestamps (14:23 UTC on 2026-05-08 = 10:23 EDT)
+    # + pre-computed time-ago delta; team_member → 'advisor', name in
+    # parens, Ella included.
     lines = out.split("\n")
     assert len(lines) == 2
-    assert lines[0] == "[2026-05-08 10:23 ET] advisor (Drake): first message"
-    assert lines[1] == "[2026-05-08 10:24 ET] ella (Ella): second message"
+    assert (
+        lines[0]
+        == "[2026-05-08 10:23 ET — 2 minutes ago] advisor (Drake): first message"
+    )
+    assert (
+        lines[1] == "[2026-05-08 10:24 ET — 1 minutes ago] ella (Ella): second message"
+    )
 
 
 def test_fetch_recent_renders_unknown_users_with_raw_id(mocker):
@@ -116,8 +128,11 @@ def test_fetch_recent_renders_unknown_users_with_raw_id(mocker):
         },
     )
 
-    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
-    assert out == "[2026-05-08 10:23 ET] bot (U_UNKNOWN): hi"
+    rel = datetime(2026, 5, 8, 14, 23, 0, tzinfo=timezone.utc)  # same instant → <1 min
+    out = retrieval.fetch_recent_channel_context(
+        "C1", before_ts="200.0", relative_to=rel
+    )
+    assert out == "[2026-05-08 10:23 ET — <1 minute ago] bot (U_UNKNOWN): hi"
 
 
 def test_fetch_recent_truncates_at_max_chars(mocker):
@@ -196,3 +211,70 @@ def test_fetch_recent_messages_returns_rows_oldest_first(mocker):
     assert [r["text"] for r in rows] == ["older", "newer"]
     # Ella's own post is included (no author_type filter).
     assert any(r["author_type"] == "ella" for r in rows)
+
+
+# --- prompt-sharpening spec: time-ago delta -----------------------------
+
+
+def test_format_time_ago_bands():
+    f = retrieval._format_time_ago
+    assert f(0) == "<1 minute ago"
+    assert f(45) == "<1 minute ago"
+    assert f(60) == "1 minutes ago"
+    assert f(59 * 60) == "59 minutes ago"
+    assert f(3600) == "1h ago"  # exact hour, no minutes
+    assert f(2 * 3600 + 15 * 60) == "2h 15m ago"
+    assert f(23 * 3600) == "23h ago"
+    assert f(86400) == "1d ago"
+    assert f(86400 * 9) == "9d ago"
+    # negative (defensive clamp)
+    assert f(-100) == "<1 minute ago"
+
+
+def test_delta_is_relative_to_param_not_wall_clock(mocker):
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": [
+                {
+                    "slack_ts": "100.1",
+                    "slack_user_id": "U1",
+                    "author_type": "client",
+                    "text": "q",
+                    "sent_at": "2026-05-08T14:00:00+00:00",
+                },
+            ],
+            "clients": [],
+            "team_members": [],
+        },
+    )
+    # relative_to 22h after the message → "22h ago", regardless of now.
+    rel = datetime(2026, 5, 9, 12, 0, 0, tzinfo=timezone.utc)
+    out = retrieval.fetch_recent_channel_context(
+        "C1", before_ts="200.0", relative_to=rel
+    )
+    assert "— 22h ago]" in out
+
+
+def test_default_relative_to_falls_back_to_now(mocker):
+    """No relative_to → measured against now(UTC); a very old message
+    renders a large day-delta (proves the fallback path runs, not the
+    exact value)."""
+    _patch_db(
+        mocker,
+        {
+            "slack_messages": [
+                {
+                    "slack_ts": "100.1",
+                    "slack_user_id": "U1",
+                    "author_type": "client",
+                    "text": "ancient",
+                    "sent_at": "2020-01-01T00:00:00+00:00",
+                },
+            ],
+            "clients": [],
+            "team_members": [],
+        },
+    )
+    out = retrieval.fetch_recent_channel_context("C1", before_ts="200.0")
+    assert "d ago]" in out  # years old → "<N>d ago"

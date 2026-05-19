@@ -109,18 +109,51 @@ def fetch_recent_channel_messages(
     return rows
 
 
+def _parse_utc(sent_at: Any) -> datetime | None:
+    """Parse a UTC `sent_at` string into an aware datetime, or None on
+    any failure (never raises)."""
+    if not isinstance(sent_at, str) or not sent_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def _et_stamp(sent_at: Any) -> str:
     """`YYYY-MM-DD HH:MM ET` from a UTC `sent_at` string. Falls back to
     a literal `?` stamp on any parse failure (never raises)."""
-    if not isinstance(sent_at, str) or not sent_at:
+    dt = _parse_utc(sent_at)
+    if dt is None:
         return "????-??-?? ??:?? ET"
-    try:
-        dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(_ET).strftime("%Y-%m-%d %H:%M ET")
-    except (ValueError, TypeError):
-        return "????-??-?? ??:?? ET"
+    return dt.astimezone(_ET).strftime("%Y-%m-%d %H:%M ET")
+
+
+def _format_time_ago(seconds: int) -> str:
+    """Render an elapsed-seconds delta into the decision Haiku's
+    "time ago" vocabulary. Bands per the prompt-sharpening spec:
+
+      <60s            → "<1 minute ago"
+      1-59 min        → "<N> minutes ago"
+      1-23 h, mins>0  → "<N>h <M>m ago"
+      1-23 h, mins=0  → "<N>h ago"
+      24 h+           → "<N>d ago"
+
+    Negative deltas (a context row newer than the trigger — shouldn't
+    happen since rows are pre-trigger, but defensive) clamp to 0.
+    """
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return "<1 minute ago"
+    if seconds < 3600:
+        return f"{seconds // 60} minutes ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        mins = (seconds % 3600) // 60
+        return f"{hours}h ago" if mins == 0 else f"{hours}h {mins}m ago"
+    return f"{seconds // 86400}d ago"
 
 
 def fetch_recent_channel_context(
@@ -129,14 +162,25 @@ def fetch_recent_channel_context(
     before_ts: str,
     n_turns: int = 15,
     max_chars: int = 8000,
+    relative_to: datetime | None = None,
 ) -> str:
     """Last N messages before `before_ts`, formatted for the prompt's
     recent-channel-context section.
 
-    Per line: `[YYYY-MM-DD HH:MM ET] <role> (<name>): <text>` where role
-    is `client` / `advisor` / `ella` / `bot` / `unknown` (author_type
-    `team_member` renders as `advisor` for mental-model consistency
-    with the decision Haiku). Ella's own posts are included.
+    Per line: `[YYYY-MM-DD HH:MM ET — <delta>] <role> (<name>): <text>`
+    where role is `client` / `advisor` / `ella` / `bot` / `unknown`
+    (author_type `team_member` renders as `advisor` for mental-model
+    consistency with the decision Haiku) and `<delta>` is a pre-computed
+    "time ago" string (see `_format_time_ago`) so the decision Haiku
+    judges conversation continuity without doing timestamp math. Ella's
+    own posts are included.
+
+    `relative_to` is the instant the deltas are measured against —
+    pass the triggering message's send time so the deltas are stable
+    regardless of when the decision Haiku actually runs (the cron-drain
+    path can fire minutes after the message landed). Defaults to
+    `now(UTC)` when not supplied (test paths / edge cases — deltas just
+    become slightly stale, never broken).
 
     `max_chars` (default 8000 ≈ 2000 tokens) caps the block; the oldest
     lines are dropped and a `[...earlier messages truncated...]` marker
@@ -148,6 +192,9 @@ def fetch_recent_channel_context(
     if not rows:
         return ""
 
+    if relative_to is None:
+        relative_to = datetime.now(timezone.utc)
+
     db = get_client()
     user_ids = sorted({r["slack_user_id"] for r in rows if r.get("slack_user_id")})
     name_map = _batch_resolve_names(db, user_ids)
@@ -155,6 +202,10 @@ def fetch_recent_channel_context(
     lines: list[str] = []
     for r in rows:
         stamp = _et_stamp(r.get("sent_at"))
+        sent_dt = _parse_utc(r.get("sent_at"))
+        if sent_dt is not None:
+            delta = _format_time_ago(int((relative_to - sent_dt).total_seconds()))
+            stamp = f"{stamp} — {delta}"
         author_type = r.get("author_type") or "unknown"
         role = _ROLE_LABELS.get(author_type, "unknown")
         uid = r.get("slack_user_id") or "?"
