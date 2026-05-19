@@ -1,7 +1,7 @@
 # Ella @-Mention Structural Override
 
 **Slug:** ella-at-mention-structural-override
-**Status:** in-flight
+**Status:** shipped
 
 ## Context
 
