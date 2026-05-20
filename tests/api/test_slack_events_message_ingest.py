@@ -89,6 +89,27 @@ class _Chain:
             if self._fake.raise_on_upsert is not None:
                 raise self._fake.raise_on_upsert
             return SimpleNamespace(data=[{"id": "msg-id"}])
+        if self._mode == "upsert" and self._table == "webhook_deliveries":
+            # The dedup-gate UPSERT (post-2026-05-20 ella-realtime-ingest-
+            # idempotency). Tracks the (channel, ts) keys we've seen so a
+            # repeated call returns the empty-data shape that signals a
+            # duplicate (matches the live PostgREST behavior under
+            # `ignore_duplicates=True`).
+            self._fake.webhook_deliveries_upserts.append(self._pending_payload)
+            webhook_id = self._pending_payload.get("webhook_id")
+            if webhook_id in self._fake._upsert_seen_webhook_ids:
+                return SimpleNamespace(data=[])
+            self._fake._upsert_seen_webhook_ids.add(webhook_id)
+            return SimpleNamespace(data=[{"id": "wd-id", "webhook_id": webhook_id}])
+        if self._mode == "update" and self._table == "webhook_deliveries":
+            # Audit-row lifecycle UPDATE (received → processed/failed/...).
+            # Capture along with the filter so tests can assert which row
+            # was updated.
+            filters = dict(self._filters) if self._filters else {}
+            self._fake.webhook_deliveries_updates.append(
+                {"payload": self._pending_payload, "filters": filters}
+            )
+            return SimpleNamespace(data=[{}])
         if self._mode == "insert" and self._table == "webhook_deliveries":
             self._fake.webhook_deliveries_inserts.append(self._pending_payload)
             return SimpleNamespace(data=[{"id": "wd-id"}])
@@ -105,7 +126,18 @@ class _FakeDb:
         self.raise_on_upsert: Exception | None = None
 
         self.slack_messages_upserts: list[Any] = []
+        # Three sinks for webhook_deliveries operations under the
+        # post-2026-05-20 dedup architecture:
+        #   - upserts: the dedup gate at step 0 (one per ingest call,
+        #     even on duplicate)
+        #   - updates: the _insert_audit lifecycle UPDATE (one per
+        #     non-duplicate ingest call)
+        #   - inserts: the duplicate-audit forensic row + legacy
+        #     passive-monitor-error rows (rare paths)
+        self.webhook_deliveries_upserts: list[Any] = []
+        self.webhook_deliveries_updates: list[dict] = []
         self.webhook_deliveries_inserts: list[Any] = []
+        self._upsert_seen_webhook_ids: set[str] = set()
 
     def table(self, name: str):
         return _Chain(name, self)
@@ -182,9 +214,12 @@ def test_happy_path_client_channel_regular_message(fake_db):
     assert upsert["author_type"] == "client"
     assert upsert["text"] == "Hi team"
 
-    assert len(fake_db.webhook_deliveries_inserts) == 1
-    audit = fake_db.webhook_deliveries_inserts[0]
-    assert audit["source"] == "slack_message_ingest"
+    # Step 0 wrote the `received` row (UPSERT); _insert_audit
+    # UPDATEd it to `processed` in the happy path.
+    assert len(fake_db.webhook_deliveries_upserts) == 1
+    assert fake_db.webhook_deliveries_upserts[0]["processing_status"] == "received"
+    assert len(fake_db.webhook_deliveries_updates) == 1
+    audit = fake_db.webhook_deliveries_updates[0]["payload"]
     assert audit["processing_status"] == "processed"
     assert "processing_error" not in audit
     assert audit["payload"]["content_source"] == "ingested"
@@ -223,8 +258,9 @@ def test_skip_non_client_channel(fake_db):
     assert result["ingested"] is False
     assert result["skipped_reason"] == "non_client_channel"
     assert fake_db.slack_messages_upserts == []
-    assert len(fake_db.webhook_deliveries_inserts) == 1
-    audit = fake_db.webhook_deliveries_inserts[0]
+    assert len(fake_db.webhook_deliveries_upserts) == 1  # step 0 fired
+    assert len(fake_db.webhook_deliveries_updates) == 1  # skip-branch audit
+    audit = fake_db.webhook_deliveries_updates[0]["payload"]
     assert audit["processing_status"] == "processed"
     assert audit["processing_error"] == "skipped_non_client_channel"
     assert audit["payload"]["skip_reason"] == "non_client_channel"
@@ -281,7 +317,7 @@ def test_skip_ignorable_subtype(fake_db):
 
     assert result["skipped_reason"] == "ignorable_subtype"
     assert fake_db.slack_messages_upserts == []
-    audit = fake_db.webhook_deliveries_inserts[0]
+    audit = fake_db.webhook_deliveries_updates[0]["payload"]
     assert audit["processing_status"] == "processed"
     assert audit["processing_error"] == "skipped_ignorable_subtype"
     assert audit["payload"]["skip_reason"] == "ignorable_subtype"
@@ -406,11 +442,14 @@ def test_workflow_submission_resolves_to_workflow(fake_db):
 # ---------------------------------------------------------------------------
 
 
-def test_idempotency_same_event_twice_two_audits_two_upserts(fake_db):
-    """Slack retries can deliver the same event twice. The
-    `slack_messages` ON CONFLICT (channel, ts) clause makes the second
-    upsert a no-op at the row level, but the function still records an
-    audit row each time so the audit ledger reflects every delivery."""
+def test_idempotency_same_event_twice_dedup_gate_blocks_second(fake_db):
+    """Post-2026-05-20 (ella-realtime-ingest-idempotency): the dedup
+    gate at step 0 catches Slack redeliveries via
+    `webhook_deliveries.webhook_id` PK collision. The second delivery
+    short-circuits BEFORE `_upsert_message` runs, so the second
+    `slack_messages` upsert and any downstream side effects don't
+    fire. A forensic duplicate-audit row gets written with a UUID-
+    suffixed webhook_id."""
     fake_db.slack_channels_response = [
         {
             "slack_channel_id": "C700",
@@ -431,14 +470,41 @@ def test_idempotency_same_event_twice_two_audits_two_upserts(fake_db):
     r1 = ri.ingest_message_event(_envelope(event))
     r2 = ri.ingest_message_event(_envelope(event))
 
+    # First delivery: normal happy path.
     assert r1["ingested"] is True
-    assert r2["ingested"] is True
-    assert len(fake_db.slack_messages_upserts) == 2
-    assert len(fake_db.webhook_deliveries_inserts) == 2
-    # Distinct audit delivery ids — each delivery produces its own
-    # audit row even when the underlying message row is unchanged.
-    ids = {row["webhook_id"] for row in fake_db.webhook_deliveries_inserts}
-    assert len(ids) == 2
+    assert r1["skipped_reason"] is None
+    # Second delivery: dedup gate fired.
+    assert r2["ingested"] is False
+    assert r2["skipped_reason"] == "duplicate"
+
+    # slack_messages upserted only once — the second delivery never
+    # reached the upsert.
+    assert len(fake_db.slack_messages_upserts) == 1
+
+    # webhook_deliveries:
+    #   - 2 UPSERTs (step 0 on both deliveries; second returned empty
+    #     data, signaling duplicate)
+    #   - 1 UPDATE (first delivery's lifecycle: received → processed)
+    #   - 1 INSERT (the duplicate-audit row for the second delivery)
+    assert len(fake_db.webhook_deliveries_upserts) == 2
+    assert len(fake_db.webhook_deliveries_updates) == 1
+    assert len(fake_db.webhook_deliveries_inserts) == 1
+
+    # Both step-0 upserts use the same deterministic webhook_id.
+    upsert_ids = {row["webhook_id"] for row in fake_db.webhook_deliveries_upserts}
+    assert upsert_ids == {"slack_msg_ingest_C700_1745500007.000100"}
+
+    # The duplicate-audit row has a different webhook_id (UUID-
+    # suffixed) so it doesn't itself collide, and carries the forensic
+    # link back to the original.
+    dup_audit = fake_db.webhook_deliveries_inserts[0]
+    assert dup_audit["webhook_id"].startswith("slack_msg_ingest_dup_")
+    assert dup_audit["processing_status"] == "duplicate"
+    assert (
+        dup_audit["payload"]["original_delivery_id"]
+        == "slack_msg_ingest_C700_1745500007.000100"
+    )
+    assert dup_audit["payload"]["skip_reason"] == "duplicate_delivery"
 
 
 # ---------------------------------------------------------------------------
@@ -473,12 +539,18 @@ def test_fail_soft_on_db_error_audits_failed(fake_db):
     assert result["ingested"] is False
     assert result["skipped_reason"] == "exception"
     assert "simulated DB outage" in (result["error"] or "")
-    # Failure audit row exists.
-    audits = fake_db.webhook_deliveries_inserts
-    assert len(audits) >= 1
-    failure_audits = [a for a in audits if a.get("processing_status") == "failed"]
-    assert len(failure_audits) == 1
-    assert "simulated DB outage" in (failure_audits[0].get("processing_error") or "")
+    # Step 0 wrote the `received` row; the slack_messages upsert
+    # raised, the exception handler UPDATEd the existing row to
+    # `failed` with the error string. One UPDATE captures the
+    # failure transition.
+    failure_updates = [
+        u for u in fake_db.webhook_deliveries_updates
+        if u["payload"].get("processing_status") == "failed"
+    ]
+    assert len(failure_updates) == 1
+    assert "simulated DB outage" in (
+        failure_updates[0]["payload"].get("processing_error") or ""
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +629,7 @@ def test_message_deleted_is_skipped_as_ignorable(fake_db):
 
     assert result["skipped_reason"] == "ignorable_subtype"
     assert fake_db.slack_messages_upserts == []
-    audit = fake_db.webhook_deliveries_inserts[0]
+    audit = fake_db.webhook_deliveries_updates[0]["payload"]
     assert audit["payload"]["subtype"] == "message_deleted"
 
 

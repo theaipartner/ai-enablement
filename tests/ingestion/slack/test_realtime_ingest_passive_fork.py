@@ -50,6 +50,11 @@ class _Chain:
         self._payload = payload
         return self
 
+    def update(self, payload):
+        self._mode = "update"
+        self._payload = payload
+        return self
+
     def eq(self, k, v):
         self._filters.append((k, v))
         return self
@@ -71,6 +76,19 @@ class _Chain:
         if self._mode == "upsert" and self.table == "slack_messages":
             self.fake.upserts.append(self._payload)
             return SimpleNamespace(data=[{"id": "m-1"}])
+        if self._mode == "upsert" and self.table == "webhook_deliveries":
+            # Post-2026-05-20 dedup-gate step 0. Returns the row on
+            # first call per webhook_id; empty on retry to signal
+            # the duplicate.
+            self.fake.webhook_upserts.append(self._payload)
+            wid = self._payload.get("webhook_id")
+            if wid in self.fake._upsert_seen_ids:
+                return SimpleNamespace(data=[])
+            self.fake._upsert_seen_ids.add(wid)
+            return SimpleNamespace(data=[{"id": "wd-1", "webhook_id": wid}])
+        if self._mode == "update" and self.table == "webhook_deliveries":
+            self.fake.webhook_updates.append(self._payload)
+            return SimpleNamespace(data=[{}])
         if self._mode == "insert" and self.table == "webhook_deliveries":
             self.fake.webhook_inserts.append(self._payload)
             return SimpleNamespace(data=[{"id": "wd-1"}])
@@ -86,6 +104,9 @@ class _FakeDb:
         self.team_members: list[dict] = []
         self.upserts: list[Any] = []
         self.webhook_inserts: list[Any] = []
+        self.webhook_upserts: list[Any] = []
+        self.webhook_updates: list[Any] = []
+        self._upsert_seen_ids: set[str] = set()
 
     def table(self, name):
         return _Chain(name, self)
@@ -239,10 +260,14 @@ def test_passive_fork_exception_audited_but_ingest_succeeds(fake_db, monkeypatch
 
     # Ingest succeeds despite the fork exception.
     assert result["ingested"] is True
-    # Audit ledger has BOTH the success ingest row AND the passive-error row.
-    sources = [w["source"] for w in fake_db.webhook_inserts]
-    assert "slack_message_ingest" in sources
-    assert "ella_passive_monitor_error" in sources
+    # Audit ledger post-2026-05-20:
+    #   - slack_message_ingest source appears in the step-0 UPSERT
+    #     (received) and the lifecycle UPDATE (processed).
+    #   - ella_passive_monitor_error remains a plain INSERT.
+    upsert_sources = [w["source"] for w in fake_db.webhook_upserts]
+    assert "slack_message_ingest" in upsert_sources
+    insert_sources = [w["source"] for w in fake_db.webhook_inserts]
+    assert "ella_passive_monitor_error" in insert_sources
     error_row = next(
         w for w in fake_db.webhook_inserts
         if w["source"] == "ella_passive_monitor_error"

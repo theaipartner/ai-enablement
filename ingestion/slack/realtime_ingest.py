@@ -85,11 +85,19 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
           "slack_ts": str | None,
         }
     """
-    delivery_id = f"slack_msg_ingest_{uuid.uuid4()}"
     event = payload.get("event") or {}
     slack_channel_id = event.get("channel")
     slack_ts = event.get("ts")
     subtype = event.get("subtype")
+    # Deterministic-per-logical-message webhook_id. Slack re-deliveries
+    # of the same `(channel, ts)` hit the `webhook_deliveries.webhook_id`
+    # PK and step 0 below short-circuits. Malformed events with no
+    # channel or ts fall back to a UUID — effectively no-op dedup so
+    # two distinct malformed deliveries don't collide on a fixed key.
+    if slack_channel_id and slack_ts:
+        delivery_id = f"slack_msg_ingest_{slack_channel_id}_{slack_ts}"
+    else:
+        delivery_id = f"slack_msg_ingest_malformed_{uuid.uuid4()}"
 
     result: dict[str, Any] = {
         "ingested": False,
@@ -104,6 +112,28 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
         from shared.db import get_client
 
         db = get_client()
+
+        # ----- Step 0: Dedup gate --------------------------------------
+        # Atomic register against the webhook_deliveries PK. On
+        # duplicate, return early before any side effect (slack_messages
+        # upsert, passive-monitor dispatch, escalation fan-out) fires.
+        # Closes the 2026-05-19 EOD misfire's Problem A —
+        # `docs/known-issues.md` § "Passive dispatch has no idempotency
+        # check against duplicate Slack message delivery."
+        if not _try_register_delivery(
+            db,
+            delivery_id=delivery_id,
+            slack_channel_id=slack_channel_id,
+            slack_ts=slack_ts,
+        ):
+            logger.info(
+                "slack_message_ingest: duplicate delivery_id=%s channel=%s ts=%s",
+                delivery_id,
+                slack_channel_id,
+                slack_ts,
+            )
+            result["skipped_reason"] = "duplicate"
+            return result
 
         # ----- Channel-allowlist gate ----------------------------------
         channel_row = _lookup_channel(db, slack_channel_id)
@@ -367,22 +397,32 @@ def _insert_audit(
     error: str | None,
     payload: dict[str, Any],
 ) -> None:
-    row: dict[str, Any] = {
-        "webhook_id": delivery_id,
-        "source": _DELIVERY_SOURCE,
+    """Update the `received` row written by `_try_register_delivery` to
+    its terminal state (`processed`, `failed`, `malformed`). Was an
+    INSERT pre-2026-05-20; now an UPDATE so the lifecycle matches the
+    migration 0011 contract (`received → processed/failed/malformed`,
+    one row per delivery). The legacy name is kept so callers don't
+    care that the underlying op switched.
+
+    Best-effort: a failure here is logged + swallowed. The dedup
+    decision has already happened upstream; this row is for
+    observability."""
+    update_fields: dict[str, Any] = {
         "processing_status": status,
         "payload": payload,
         "headers": {},
     }
     if error is not None:
-        row["processing_error"] = error[:2000]
+        update_fields["processing_error"] = error[:2000]
     if status != "received":
-        row["processed_at"] = datetime.now(timezone.utc).isoformat()
+        update_fields["processed_at"] = datetime.now(timezone.utc).isoformat()
     try:
-        db.table("webhook_deliveries").insert(row).execute()
+        db.table("webhook_deliveries").update(update_fields).eq(
+            "webhook_id", delivery_id
+        ).execute()
     except Exception as exc:
         logger.warning(
-            "slack_message_ingest: audit row insert failed delivery_id=%s: %s",
+            "slack_message_ingest: audit row update failed delivery_id=%s: %s",
             delivery_id,
             exc,
         )
