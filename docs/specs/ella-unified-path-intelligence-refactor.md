@@ -1,7 +1,7 @@
 # Ella Unified-Path Intelligence Refactor
 
 **Slug:** ella-unified-path-intelligence-refactor
-**Status:** in-flight
+**Status:** superseded
 
 ## Context
 

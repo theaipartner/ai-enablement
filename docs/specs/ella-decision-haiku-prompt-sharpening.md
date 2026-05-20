@@ -1,7 +1,7 @@
 # Ella Decision Haiku Prompt Sharpening
 
 **Slug:** ella-decision-haiku-prompt-sharpening
-**Status:** in-flight
+**Status:** superseded
 
 ## Context
 

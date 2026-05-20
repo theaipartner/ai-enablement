@@ -1,7 +1,7 @@
 # Ella Architecture Refactor + Daily Digest
 
 **Slug:** ella-architecture-refactor-and-daily-digest
-**Status:** in-flight
+**Status:** superseded
 
 ## Context
 
