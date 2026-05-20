@@ -389,6 +389,122 @@ def _insert_audit(
 
 
 # ---------------------------------------------------------------------------
+# Dedup gate (step 0 in `ingest_message_event`)
+# ---------------------------------------------------------------------------
+
+
+def _try_register_delivery(
+    db,
+    *,
+    delivery_id: str,
+    slack_channel_id: str | None,
+    slack_ts: str | None,
+) -> bool:
+    """Atomically register a delivery in `webhook_deliveries`. Returns
+    True on first-time delivery, False on duplicate.
+
+    Uses the `webhook_deliveries.webhook_id` PK as the dedup primitive
+    via UPSERT-with-`ignore_duplicates=True` — the same pattern proven
+    in production by `api/fathom_events.py` (F2.4 smoke confirmed
+    `data=[]` shape against PostgREST when the PK already exists).
+    Two concurrent INSERTs serialize at the storage layer; exactly one
+    wins. No exception-string matching required for PK collision
+    detection — the empty-data return is the unambiguous signal.
+
+    Duplicate-path side effect: a second audit row gets written via
+    `_write_duplicate_audit_row` with a UUID-suffixed `webhook_id` so
+    it doesn't itself PK-collide. Gives operational visibility into
+    how often Slack actually redelivers (a non-zero count over a week
+    of traffic confirms the gate is working).
+
+    Fail-open on unexpected exceptions (DB outage etc.): log + return
+    True. Better to process a possible-duplicate than to drop a
+    legitimate client message on a transient DB blip.
+    """
+    row = {
+        "webhook_id": delivery_id,
+        "source": _DELIVERY_SOURCE,
+        "processing_status": "received",
+        "payload": {
+            "slack_channel_id": slack_channel_id,
+            "slack_ts": slack_ts,
+        },
+        "headers": {},
+    }
+    try:
+        resp = (
+            db.table("webhook_deliveries")
+            .upsert(
+                row,
+                on_conflict="webhook_id",
+                ignore_duplicates=True,
+                returning="representation",
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(
+            "slack_message_ingest: _try_register_delivery failed "
+            "delivery_id=%s: %s (failing open — treating as not-duplicate)",
+            delivery_id,
+            exc,
+        )
+        return True
+
+    data = getattr(resp, "data", None)
+    if data:
+        return True
+
+    # Empty data → PK already existed → duplicate delivery.
+    _write_duplicate_audit_row(
+        db,
+        original_delivery_id=delivery_id,
+        slack_channel_id=slack_channel_id,
+        slack_ts=slack_ts,
+    )
+    return False
+
+
+def _write_duplicate_audit_row(
+    db,
+    *,
+    original_delivery_id: str,
+    slack_channel_id: str | None,
+    slack_ts: str | None,
+) -> None:
+    """Write the forensic audit row recording that a duplicate was
+    caught. UUID-suffixed `webhook_id` avoids re-colliding with the
+    original delivery's PK. Payload references `original_delivery_id`
+    so operators can trace the duplicate back to its first delivery.
+
+    Best-effort: if this insert also fails, swallow + log. The dedup
+    decision has already happened (the caller treats this row's
+    absence as fine); the row exists for observability."""
+    row: dict[str, Any] = {
+        "webhook_id": f"slack_msg_ingest_dup_{uuid.uuid4()}",
+        "source": _DELIVERY_SOURCE,
+        "processing_status": "duplicate",
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "slack_channel_id": slack_channel_id,
+            "slack_ts": slack_ts,
+            "skip_reason": "duplicate_delivery",
+            "original_delivery_id": original_delivery_id,
+        },
+        "headers": {},
+    }
+    try:
+        db.table("webhook_deliveries").insert(row).execute()
+    except Exception as exc:
+        logger.warning(
+            "slack_message_ingest: duplicate-audit row insert failed "
+            "original=%s: %s",
+            original_delivery_id,
+            exc,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Passive-monitor dispatch
 # ---------------------------------------------------------------------------
 
