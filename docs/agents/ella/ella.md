@@ -36,7 +36,7 @@ Ella answers client questions in their private Slack channels at near-CSM qualit
 
 **Every message** in a channel mapped to a `clients` row with `passive_monitoring_enabled = true` (and global `ELLA_PASSIVE_MONITORING_ENABLED=true`) flows through one webhook ingest:
 
-`api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
+`api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:ingest_message_event` (step 0: dedup gate via `webhook_deliveries.webhook_id` PK on `(channel, ts)` — duplicates short-circuit before any side effect) → `_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
 
 - The `app_mention` event is a **logged no-op**. Slack fires a parallel `message` event alongside every `app_mention` (the app subscribes to `message.groups` on all client channels); handling app_mention too would double-fire. The reactive machinery (`_should_dual_trigger`, `_build_app_mention_from_message`, `_process_mention`) is removed.
 - The @-mention is detected in realtime_ingest (`detect_at_mentions` — parses every `<@U...>` mention, returns `mentions / is_ella_mentioned / is_routed_to_others`) and the three booleans are threaded through `PassiveTriggerPayload.is_ella_mentioned` + `.is_routed_to_others`.
@@ -391,6 +391,24 @@ Batches 2/3.
   now triggers a brief warm opener instead of silence. No
   architecture/migration/env beyond the new module. Spec:
   `docs/specs/ella-at-mention-structural-override.md`.
+- realtime-ingest idempotency gate (2026-05-20): closes the third
+  structural gap from the 2026-05-19 EOD misfire. `webhook_id` in
+  `ingestion/slack/realtime_ingest.py` is now deterministic per
+  `(slack_channel_id, slack_ts)` (was a per-delivery UUID), and a
+  new step-0 gate runs an UPSERT-with-`ignore_duplicates=True`
+  against the `webhook_deliveries` PK before any side effect.
+  Duplicate Slack deliveries (retry semantics, `message_changed`
+  redelivery, manual replay) short-circuit with
+  `skipped_reason='duplicate'` before `_upsert_message` or the
+  passive-monitor fork run — no second ack, no second escalation
+  DM. Forensic audit row with `processing_status='duplicate'` +
+  `payload.original_delivery_id` is written for observability.
+  `_insert_audit` refactored INSERT → UPDATE so the lifecycle
+  matches migration 0011's contract (`received → processed/failed`,
+  one row per delivery). No migration, no env-var changes. Production
+  resume on the 136 paused channels is now unblocked pending Drake's
+  gate (c) smoke validation. Spec:
+  `docs/specs/ella-realtime-ingest-idempotency.md`.
 - @-mention routing gate + assigned advisor context (2026-05-20):
   Closes two of the three gaps surfaced by the 2026-05-19 EOD misfire.
   New `ingestion/slack/realtime_ingest.detect_at_mentions` returns

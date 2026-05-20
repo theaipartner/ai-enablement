@@ -34,6 +34,24 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-20 — Ella realtime-ingest idempotency gate (production resume unblocked)
+
+`docs/specs/ella-realtime-ingest-idempotency.md`. Closes Problem A — the third and final structural gap from the 2026-05-19 EOD misfire. With this spec shipped, production passive monitoring can be re-enabled on the 136 paused channels (operationally a single `UPDATE slack_channels SET passive_monitoring_enabled = true WHERE test_mode = false` — Drake's call when ready; not in this spec's scope).
+
+**The dedup architecture.** A step-0 gate in `ingestion/slack/realtime_ingest.py:ingest_message_event` runs before any side effect (slack_messages upsert, passive-monitor fork, escalation fan-out). The gate uses `webhook_deliveries.webhook_id` (PK) as the dedup primitive via `upsert(..., on_conflict="webhook_id", ignore_duplicates=True)` — the same pattern proven in production by `api/fathom_events.py` (F2.4 smoke confirmed the `data=[]` shape against PostgREST when the PK already exists). The `webhook_id` is now **deterministic per logical message**: `slack_msg_ingest_{slack_channel_id}_{slack_ts}` (was a per-delivery UUID). Two concurrent Slack re-deliveries of the same `(channel, ts)` serialize at the Postgres storage layer — exactly one INSERT succeeds, the other returns empty data → `ingest_message_event` returns early with `skipped_reason='duplicate'` before downstream side effects can fire. A forensic audit row is written with a UUID-suffixed `webhook_id`, `processing_status='duplicate'`, and `payload.original_delivery_id` linking back to the first delivery.
+
+**Audit-row lifecycle refactored.** `_insert_audit` switched from INSERT to UPDATE so the row written by step 0 transitions `received → processed/failed/malformed` (matching the migration 0011 documented contract — one row per delivery). The legacy function name is retained so callers don't care about the underlying op switch. Malformed events with no channel or ts fall back to `slack_msg_ingest_malformed_{uuid}` so two distinct malformed deliveries don't false-dedup against each other.
+
+**Fail-open on non-PK exceptions.** When step 0 raises an unexpected exception (DB outage, network timeout — anything other than the documented empty-data signal), the gate fails-OPEN and lets the pipeline run. Better to risk processing one possible-duplicate during a transient DB blip than to drop a legitimate client message. The downstream exception handler captures any subsequent failures normally.
+
+**Implementation chose UPSERT-ignore-duplicates over INSERT-with-PK-collision-catch.** The spec's pseudocode showed an INSERT-catch pattern that depends on supabase-py exception-string matching (hard stop #2's stated risk: the library's PK-collision exception format has varied across versions). The Fathom precedent uses UPSERT-ignore-duplicates which has an unambiguous empty-data return signal — semantically identical, mechanically more robust. Documented as a judgment call in the report.
+
+**Doc updates riding along.** `docs/runbooks/slack_message_ingest.md` (new "Dedup gate" section with format, behavior, fail-open semantics, and observability query); `docs/agents/ella/ella.md` (trigger description + changelog entry); `docs/known-issues.md` (Problem A struck through with resolution pointer).
+
+**Test suite expanded by 9 dedicated tests.** New `tests/ingestion/slack/test_realtime_ingest_dedup.py` covers deterministic delivery_id format, malformed-event UUID fallback, short-circuit behavior on duplicate, forensic payload shape, fail-open on DB outage, message_changed dedup semantics, and result-dict propagation. The existing `test_idempotency_same_event_twice_two_audits_two_upserts` was rewritten to pin the new dedup-gate behavior; the fake DB harnesses in `test_slack_events_message_ingest.py` and `test_realtime_ingest_passive_fork.py` extended to handle the new `upsert` + `update` modes on `webhook_deliveries`. Full suite: **694 passing** (up from 685).
+
+Post-state: **42 migrations, 13 Python serverless functions, 694 pytest passing, 6 TopNav tabs**. No migration in this spec; no env-var changes. **Production resume on the 136 paused channels is now unblocked**, pending Drake's gate (c) smoke validation of three test cases in `#ella-test-drakeonly`. The resume itself is a separate operational step Drake controls.
+
 ### 2026-05-20 — Ella @-mention routing gate + assigned advisor context
 
 `docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`. Closes two of the three known-issues entries surfaced by the 2026-05-19 EOD misfire (Problem B and Problem C; Problem A — passive-dispatch idempotency — stays open as a separate spec). One unified change addressing the misfire root cause from three angles.

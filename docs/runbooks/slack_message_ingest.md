@@ -60,6 +60,62 @@ Sequence at first deploy:
    after sending a test message in a pilot channel. Drake's gate
    (post-deploy testing on real surface).
 
+## Dedup gate (step 0, added 2026-05-20)
+
+Every realtime delivery passes through a dedup gate BEFORE any side
+effect fires. The gate uses `webhook_deliveries.webhook_id` (PK) as
+the dedup primitive via UPSERT-with-`ignore_duplicates=True` — same
+pattern proven in production by the Fathom webhook handler.
+
+**Deterministic webhook_id format:**
+
+```
+slack_msg_ingest_{slack_channel_id}_{slack_ts}
+```
+
+Example: `slack_msg_ingest_C0AFEC456JG_1745500000.000100`.
+
+Malformed events with no channel or no ts fall back to
+`slack_msg_ingest_malformed_{uuid}` — a one-off UUID so two distinct
+malformed deliveries don't false-dedup against each other on a fixed
+key.
+
+**Behavior on duplicate.** When Slack re-delivers the same logical
+message (retry semantics, `message_changed` redelivery, manual replay)
+the second UPSERT returns empty data (the PK already exists) and
+`ingest_message_event` short-circuits with `skipped_reason='duplicate'`
+before any downstream side effect — no `slack_messages` upsert, no
+passive-monitor dispatch, no ack post, no DM fan-out. A forensic audit
+row is written with a UUID-suffixed `webhook_id`, `processing_status='duplicate'`,
+and `payload.original_delivery_id` linking back to the first delivery
+for trace-ability.
+
+**Fail-open on DB outage.** If the step-0 UPSERT raises an unexpected
+exception (non-PK-collision: DB unavailable, network timeout), the
+gate treats the delivery as not-duplicate and lets the rest of the
+pipeline run. Better to risk processing one possible-duplicate during
+a DB blip than to drop a legitimate client message. The downstream
+code's exception handler captures any further issues.
+
+**Closes** the 2026-05-19 EOD `docs/known-issues.md` entry
+"Passive dispatch has no idempotency check against duplicate Slack
+message delivery" — the misfire that produced two ack posts + four DMs
+from a single Slack delivery would no longer fire.
+
+**Audit observability.** To monitor how often Slack actually
+redelivers, query:
+
+```sql
+select count(*) from webhook_deliveries
+ where source = 'slack_message_ingest'
+   and processing_status = 'duplicate'
+   and received_at >= now() - interval '7 days';
+```
+
+A non-zero count over a week of traffic confirms the gate is firing.
+Zero rows over a week of meaningful traffic = probably broken
+(Slack does retry occasionally).
+
 ## Audit ledger contract
 
 Every realtime delivery writes one row to `webhook_deliveries` with
@@ -69,12 +125,21 @@ allows `{'received','processed','failed','duplicate','malformed'}` — a
 literal `processing_status='skipped_*'` value would violate the
 constraint. Same precedent as `agents/gregory/cs_call_summary_post.py`.
 
+**Lifecycle (post-2026-05-20):** one row per delivery, status
+transitions `received → processed/failed/malformed`. The row is
+INSERTed at step 0 via the dedup UPSERT, then UPDATEd by `_insert_audit`
+to its terminal state. A duplicate delivery writes a SECOND row (with
+UUID-suffixed `webhook_id` and `processing_status='duplicate'`) for
+forensic observability — that row is the only one tied to the
+duplicate event; the original delivery's row remains unchanged.
+
 | Outcome | `processing_status` | `processing_error` | `payload.skip_reason` | `payload.content_source` |
 |---------|---------------------|---------------------|------------------------|---------------------------|
 | Ingested | `processed` | absent | absent | `ingested` |
 | Skipped — non-client channel | `processed` | `skipped_non_client_channel` | `non_client_channel` | absent |
 | Skipped — ignorable subtype | `processed` | `skipped_ignorable_subtype` | `ignorable_subtype` (+ `payload.subtype`) | absent |
 | Exception during processing | `failed` | `<str(exc)[:2000]>` | absent | absent |
+| Duplicate delivery (forensic row) | `duplicate` | absent | `duplicate_delivery` (+ `payload.original_delivery_id`) | absent |
 
 To tell apart "ingested" from "skipped, non-client channel" — both have
 `processing_status='processed'` — query
