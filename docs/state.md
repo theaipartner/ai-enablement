@@ -34,6 +34,28 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-19 — PM (late evening): Ella passive monitoring default-on
+
+`docs/specs/ella-passive-monitoring-default-on.md`. Codifies Drake's invariant — *any channel Ella is added to should be passively monitored* — as the system default. Migration 0042 (three parts, one transactional file):
+
+1. `ALTER COLUMN slack_channels.passive_monitoring_enabled SET DEFAULT true` (was `false`).
+2. Bulk `UPDATE` flipping non-archived, client-mapped channels currently `false` → `true`.
+3. `CREATE OR REPLACE` of `create_or_update_client_from_onboarding` — full body verbatim from 0029's reissue (pre-apply diff confirmed byte-equal vs `pg_get_functiondef`; no drift), with one single-character delta in Branch C's `INSERT INTO slack_channels` (`passive_monitoring_enabled` value `false` → `true`; `is_private` and `is_archived` stay `false`) + a `0042 update: …` audit-comment suffix mirroring the 0029 pattern.
+
+**Apply (after gate (a) approval) hit one transient hiccup:** the first apply failed at the COMMENT ON FUNCTION statement on an unescaped apostrophe in "Drake's invariant" (single-quoted SQL string literal — needs `''` to escape; the rest of the 0029 comment already uses doubled quotes for the same reason). Transaction rolled back cleanly (verified: ledger empty, default still `false`, data unchanged, RPC body untouched). Fixed with the standard SQL escape (`Drake's` → `Drake''s`) — zero semantic change vs the approved version — and re-applied. The doubled quotes resolve to a single apostrophe in the stored comment text (verified post-apply via `obj_description`).
+
+**Dual-verify post-apply (all green):**
+- Schema reality: `column_default = true` ✓
+- Data state: 137 non-archived client-mapped rows, **all `True`**; 0 `False` rows. Pre-apply: 129 `False` + 8 `True` (the 7 Batch-1 cohort + `#ella-test-drakeonly`). Post-apply: 129 flipped + 8 unchanged = 137 all-on. ✓
+- RPC reality: Branch C VALUES `false / false / true` (`is_private / is_archived / passive_monitoring_enabled`) per `pg_get_functiondef`; `0042 update` audit suffix present in `obj_description`. ✓
+- Ledger: `schema_migrations.version='0042'` registered with non-null statements ✓
+
+**Phase 1 smoke (Builder's two count queries):** distribution = `(137, True)` only; column default = `'true'`. ✓
+
+**Volume note (spec § What could go wrong #1):** 7 → 137 channels = **19.6×** increase in passive-monitor traffic, within the 15-20× band the spec predicted. Ella's run-rate baseline is ~$1.25/month; a 20× spike → ~$25/month — still well under the $200/month watchpoint.
+
+Post-state: **42 migrations, 13 Python serverless functions, 653 pytest passing** (no code/test touched — schema + data + RPC only). `tsc/lint` clean by definition. No env-var changes. **Drake gates:** (a) SQL review cleared; (c) **Phase 2 behavioral validation is Drake's** (`/ella/runs` traffic over next few hours + `#unanswered-channels` for backlog noise per spec § What could go wrong #2) — explicitly non-blocking for spec completion. Spec flipped to `shipped`. The pre-existing out-of-scope `unused import pytest` ruff item in `test_agent.py` is still untouched.
+
 ### 2026-05-19 — PM (late evening): Ella @-mention structural override
 
 `docs/specs/ella-at-mention-structural-override.md`. v2's smoke at 22:20 UTC still produced `skip` on a bare `<@Ella>` from Drake despite the "skip is FORBIDDEN" + "NEVER skip" + worked-example layers — Haiku found yet another rationalization ("Drake was already escalated to Scott yesterday in an ACTIVE conversation"). The pattern after three iterations was clear: as long as `skip` is in the schema the model fills, prompt copy isn't reliably going to keep it from getting picked. **The fix is structural, not linguistic.**

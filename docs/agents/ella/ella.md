@@ -383,6 +383,21 @@ Batches 2/3.
   now triggers a brief warm opener instead of silence. No
   architecture/migration/env beyond the new module. Spec:
   `docs/specs/ella-at-mention-structural-override.md`.
+- passive monitoring default-on (2026-05-19 PM, migration 0042):
+  codifies Drake's invariant — *any channel Ella is added to should
+  be passively monitored* — as the system default.
+  `slack_channels.passive_monitoring_enabled` column default flips
+  `false → true`; bulk UPDATE flips 129 pre-existing non-archived
+  client-mapped channels (the 7 Batch-1 cohort + `#ella-test-drakeonly`
+  were already on); the onboarding RPC's Branch C INSERT writes
+  `passive_monitoring_enabled = true` explicitly so new clients
+  onboard with monitoring on. The toggle still exists for explicit
+  opt-out on a channel where Ella shouldn't observe (see
+  `docs/runbooks/ella_passive_monitoring.md` § Per-channel). Volume
+  spike: 7 → 137 monitored channels (~19.6×, within the predicted
+  band; ~$25/month projected on Ella's Haiku spend, well under the
+  $200/month watchpoint). Spec:
+  `docs/specs/ella-passive-monitoring-default-on.md`.
 
 ## Current state snapshot (extracted from CLAUDE.md, 2026-05-11)
 

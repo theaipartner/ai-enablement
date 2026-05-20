@@ -55,21 +55,21 @@ Set in Vercel project env vars (Drake's gate (d)).
 
 ### 2. Per-channel: `slack_channels.passive_monitoring_enabled`
 
-UPDATE the boolean in Postgres. Default is `false` on every channel (existing + new).
+UPDATE the boolean in Postgres. **Default is `true` on every new channel** as of migration 0042 (2026-05-19 PM) — Drake's invariant: any channel Ella is added to should be monitored. Pre-0042 the default was `false` (opt-in per channel); the 2026-05-19 bulk-flip set 129 existing non-archived client-mapped channels from `false` → `true`, bringing the total to 137 monitored. The Path-3 onboarding RPC (`create_or_update_client_from_onboarding` Branch C) also writes `true` explicitly at row creation, so new clients onboard with monitoring on. The toggle still exists for **explicit opt-out** on a specific channel where Ella shouldn't observe — keep this UPDATE in the toolkit for that exception case.
 
-**Enable a specific channel:**
-
-```sql
-update slack_channels
-   set passive_monitoring_enabled = true
- where slack_channel_id = 'C09JYRAENPJ';  -- or whatever
-```
-
-**Disable a specific channel:**
+**Opt-out a specific channel:**
 
 ```sql
 update slack_channels
    set passive_monitoring_enabled = false
+ where slack_channel_id = 'C09JYRAENPJ';  -- or whatever
+```
+
+**Re-enable a previously opted-out channel:**
+
+```sql
+update slack_channels
+   set passive_monitoring_enabled = true
  where slack_channel_id = 'C09JYRAENPJ';
 ```
 

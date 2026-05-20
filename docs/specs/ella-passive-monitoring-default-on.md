@@ -1,7 +1,7 @@
 # Ella Passive Monitoring Default-On
 
 **Slug:** ella-passive-monitoring-default-on
-**Status:** in-flight
+**Status:** shipped
 
 ## Context
 
