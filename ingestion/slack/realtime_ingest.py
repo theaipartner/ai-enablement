@@ -396,29 +396,67 @@ def _insert_audit(
 _SLACK_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
 
 
-def _detect_ella_mention(text: str) -> bool:
-    """True when the message text @-mentions Ella — either her bot
-    user_id (`SLACK_BOT_TOKEN`) or her human user_id (`SLACK_USER_TOKEN`).
+def detect_at_mentions(
+    message_text: str,
+    ella_bot_user_id: str | None,
+    ella_human_user_id: str | None,
+) -> dict[str, Any]:
+    """Parse all `<@U...>` mentions from a Slack message and classify
+    the routing intent.
 
-    The decision Haiku weighs this as the strongest signal in the
-    system (it replaces the old reactive routing path). Fail-soft: any
-    token-resolution error → False (a missed mention degrades to
-    normal passive evaluation, never a crash)."""
+    Returns:
+        {
+          "mentions":            list[str] — distinct user IDs in order,
+          "is_ella_mentioned":   bool — True if any of the IDs is Ella's
+                                  bot OR human user_id,
+          "is_routed_to_others": bool — True if mentions is non-empty
+                                  AND is_ella_mentioned is False.
+        }
+
+    The three states (`no mentions`, `is_ella_mentioned`,
+    `is_routed_to_others`) are mutually exclusive on the routing
+    decision: when Ella appears in the mention list the classifier path
+    wins; when only non-Ella mentions appear the pre-LLM routing gate
+    fires; otherwise the decision Haiku runs.
+
+    Defensive on missing IDs: when `ella_bot_user_id` and
+    `ella_human_user_id` are both falsy, every `<@U...>` mention is
+    treated as non-Ella — Ella is presumed not configured, so any
+    routing-to-someone is routed to non-Ella by definition.
+    """
+    pattern = _SLACK_MENTION_RE
+    raw = pattern.findall(message_text or "")
+    mentions = list(dict.fromkeys(raw))  # dedup, preserve order
+    ella_ids = {uid for uid in (ella_bot_user_id, ella_human_user_id) if uid}
+    is_ella_mentioned = any(uid in ella_ids for uid in mentions)
+    is_routed_to_others = bool(mentions) and not is_ella_mentioned
+    return {
+        "mentions": mentions,
+        "is_ella_mentioned": is_ella_mentioned,
+        "is_routed_to_others": is_routed_to_others,
+    }
+
+
+def _at_mentions_for_record(text: str) -> dict[str, Any]:
+    """Wrap `detect_at_mentions` with the env-var-based Ella ID
+    resolution + fail-soft semantics that the live ingest path needs.
+
+    Token-resolution errors collapse the result to "no detection" —
+    `is_ella_mentioned=False` and `is_routed_to_others=False` —
+    matching the prior `_detect_ella_mention` behavior on the same
+    error class. A missed routing signal here degrades to the decision
+    Haiku path (which has its own skip default), never a crash."""
     try:
-        if not text:
-            return False
-        mentioned = set(_SLACK_MENTION_RE.findall(text))
-        if not mentioned:
-            return False
-        ella_ids = set()
-        for tok in ("SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"):
-            uid = get_user_id_for_token(os.environ.get(tok))
-            if uid:
-                ella_ids.add(uid)
-        return bool(mentioned & ella_ids)
+        ella_bot_id = get_user_id_for_token(os.environ.get("SLACK_BOT_TOKEN"))
+        ella_human_id = get_user_id_for_token(os.environ.get("SLACK_USER_TOKEN"))
+        return detect_at_mentions(text or "", ella_bot_id, ella_human_id)
     except Exception as exc:
-        logger.warning("slack_message_ingest: ella-mention detection raised: %s", exc)
-        return False
+        logger.warning("slack_message_ingest: at-mention detection raised: %s", exc)
+        return {
+            "mentions": [],
+            "is_ella_mentioned": False,
+            "is_routed_to_others": False,
+        }
 
 
 def _maybe_dispatch_passive_monitor(
@@ -454,6 +492,7 @@ def _maybe_dispatch_passive_monitor(
         )
         from agents.ella.passive_dispatch import persist_passive_evaluation
 
+        mention_result = _at_mentions_for_record(record.text or "")
         payload = PassiveTriggerPayload(
             slack_channel_id=record.slack_channel_id,
             triggering_message_ts=record.slack_ts,
@@ -461,7 +500,8 @@ def _maybe_dispatch_passive_monitor(
             triggering_message_text=record.text or "",
             author_type=record.author_type,
             channel_client_id=channel_client_id,
-            is_ella_mentioned=_detect_ella_mention(record.text or ""),
+            is_ella_mentioned=mention_result["is_ella_mentioned"],
+            is_routed_to_others=mention_result["is_routed_to_others"],
             test_mode=bool(channel_row.get("test_mode")),
         )
         evaluation = evaluate_passive_trigger(payload)

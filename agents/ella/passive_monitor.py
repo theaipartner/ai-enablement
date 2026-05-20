@@ -114,6 +114,12 @@ class PassiveTriggerPayload:
     bot OR human user_id appears in the triggering message text) and is
     the strongest signal the decision Haiku weighs.
 
+    `is_routed_to_others` is the routing-gate signal: the triggering
+    message contains at least one `<@U...>` mention AND none of those
+    mentions is Ella. Gate 3 in `_evaluate` consumes this for a pre-LLM
+    skip. Mutually exclusive with `is_ella_mentioned` by construction
+    of `ingestion.slack.realtime_ingest.detect_at_mentions`.
+
     `test_mode` is kept for backward compatibility but is now inert —
     `team_member` messages are always evaluated regardless of it.
     """
@@ -125,6 +131,7 @@ class PassiveTriggerPayload:
     author_type: str
     channel_client_id: str
     is_ella_mentioned: bool = False
+    is_routed_to_others: bool = False
     test_mode: bool = False
 
 
