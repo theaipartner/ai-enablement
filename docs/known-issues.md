@@ -48,6 +48,27 @@ Note: `output_summary LIKE 'skipped%'` is the cost-rollup split documented in th
 
 ---
 
+## Passive dispatch has no idempotency check against duplicate Slack message delivery
+
+- **What:** Realtime ingest forks to `passive_monitor.evaluate_passive_trigger` on every `slack_message_ingest` event. When Slack delivers the same message event twice (retry semantics, `message_changed` events, webhook redelivery during outages), the full pipeline fires twice including the LLM decision and any client-facing dispatch action. `pending_digest_items` has a unique index on `(slack_channel_id, triggering_message_ts)` that prevents double-flagging, but the upstream `acknowledge_and_escalate` dispatch (ack post + `escalations` row + DM fan-out via `fire_escalation_dms`) consults no such guard.
+- **Why it matters:** Caused 2 of the 3 acks in the 2026-05-19 evening misfire — Dhamen's single message at 16:58:14 ET in C0AFEC456JG fired ack #1 and ack #2 from the same `slack_messages` row. Six DMs to Scott + Lou (3× each) when one would have been correct. Production blocker for re-enabling passive monitoring on the 136 channels currently gated off.
+- **Next action:** Add an idempotency check at the dispatch layer reading `(slack_channel_id, triggering_message_ts)` against prior `agent_runs` rows OR a small dedicated dedup table — before the LLM call (cheaper) or before the dispatch action (more conservative). Spec required before production resume.
+- **Logged:** 2026-05-19 (EOD; surfaced from the C0AFEC456JG misfire diagnostic).
+
+## No firm-after-first / rate-limit on acknowledge_and_escalate path
+
+- **What:** The unified-path refactor (2026-05-18 PM) removed the firm-after-first gate the original architecture had, with no replacement on the `acknowledge_and_escalate` decision path. When a stuck client posts multiple messages in quick succession (even seconds apart), each one independently triggers an ack + DM round to Scott + primary advisor. From the system's POV each decision is correct (separate message, separate evaluation, both warrant escalation); from client and advisor POV the thread feels acked-to-death and the DMs duplicate.
+- **Why it matters:** Caused ack #3 in the 2026-05-19 evening misfire — Dhamen's second message at 16:58:59 ET (bare `<@U0AR5684W0Y>` adding another teammate, 45 seconds after the first message) triggered a 3rd independent ack + 3rd DM round. Production blocker for re-enabling passive monitoring at the 137-channel scale; without it, any stuck client posting a multi-message question burst produces the same fan-out.
+- **Next action:** Per-channel rate-limit on `acknowledge_and_escalate` (e.g., one ack per channel per 5 minutes, with the digest item still writing each time so Scott's daily skim isn't impoverished). Implementation can be in-memory cache, DB-backed check against recent `agent_runs`, or Redis if introduced. Spec required before production resume.
+- **Logged:** 2026-05-19 (EOD; surfaced from the C0AFEC456JG misfire diagnostic).
+
+## Decision Haiku has no rule for "client @-mentioned specific humans → Ella stays silent"
+
+- **What:** When a client explicitly @-mentions one or more team_member users (advisors, Scott, anyone other than Ella) the message is a clear "I'm routing this to these specific humans" signal — Ella should defer. The decision Haiku prompt has no rule covering this case. The only @-mention-related rules in the current prompt covered @-mentions of Ella herself, and even those overlays were removed during the 2026-05-19 evening structural-override surgery (the decision Haiku no longer sees any @-mention overlay because @-mention routing is handled by the structural pre-LLM branch).
+- **Why it matters:** Caused all 3 acks in the 2026-05-19 evening misfire — Dhamen's `<@Scott> <@Lou>` should have read as routing-to-humans → skip, but the decision Haiku saw a generic stuck-client question and chose `acknowledge_and_escalate` based on content alone. This is the part of the misfire that the team's "Ella responded to a message not directed at her" framing zeroes in on; the other two gaps would still fire on a message the client hadn't routed.
+- **Next action:** Add a soft rule to the decision Haiku prompt that detects @-mentions of team_member users in the triggering message and defaults to skip unless the message also has other strong "Ella needed" signals. The detection can be structural (parse `<@U…>` mentions, check against `team_members.slack_user_id`) and pass as a boolean field to Haiku in the user prompt, mirroring how `is_ella_mentioned` is already plumbed. Spec required before production resume.
+- **Logged:** 2026-05-19 (EOD; surfaced from the C0AFEC456JG misfire diagnostic).
+
 ## `getClientsList` open_action_items_count column has the same broken predicate
 
 - **What:** `lib/db/clients.ts:183` embeds `call_action_items!call_action_items_owner_client_id_fkey(...)` in the list-page select. That FK relation only matches action items where the *client* is the assigned doer (`owner_client_id = clients.id`). Items owned by CSMs (most action items extracted from coaching calls) get dropped — same logical bug the 2026-05-13 detail-page fix (`gregory-action-items-transfer-fix`) addressed via a `calls!inner(primary_client_id)` JOIN. As a result, the `OPEN AI` column in the Clients table consistently under-counts open items per client.
