@@ -1,7 +1,7 @@
 # EOD 2026-05-19 Doc Update
 
 **Slug:** eod-2026-05-19-doc-update
-**Status:** in-flight
+**Status:** shipped
 
 ## Context
 
