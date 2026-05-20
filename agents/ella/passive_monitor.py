@@ -157,7 +157,7 @@ class PassiveEvaluation:
     payload: PassiveTriggerPayload
     decision: PassiveDecision
     skip_reason: str | None = (
-        None  # 'kill_switch' | 'non_human_author' | 'haiku_skip' | 'exception' | None
+        None  # 'kill_switch' | 'non_human_author' | 'routed_to_humans' | 'haiku_skip' | 'exception' | None
     )
     kb_chunks: list[Chunk] = field(default_factory=list)
     recent_channel_context: str = ""
@@ -226,6 +226,31 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
                 reasoning=f"non-human author_type={payload.author_type}",
             ),
             skip_reason="non_human_author",
+        )
+
+    # Gate 3: routed-to-humans. The triggering message @-mentions one
+    # or more specific humans (not Ella). Stay out — the client routed
+    # the message to those people themselves. Pre-LLM skip; the
+    # dispatch layer reads `skip_reason='routed_to_humans'` +
+    # `digest_flag=True` and writes the digest item without firing the
+    # in-channel ack, the DM fan-out, or the escalations row. No DB
+    # fetches done on this path either — primary_csm / KB are irrelevant
+    # for a routing-deferral skip.
+    #
+    # By construction in `ingestion.slack.realtime_ingest.detect_at_mentions`
+    # this branch and the `is_ella_mentioned` branch below are mutually
+    # exclusive — if Ella is in the mention list, `is_routed_to_others`
+    # is False and the classifier path takes precedence.
+    if payload.is_routed_to_others:
+        return PassiveEvaluation(
+            payload=payload,
+            decision=PassiveDecision(
+                decision=_SAFER_FALLBACK_DECISION,
+                reasoning="routed to humans (non-Ella @-mention detected); pre-LLM skip",
+                digest_flag=True,
+                digest_category="other",
+            ),
+            skip_reason="routed_to_humans",
         )
 
     db = get_client()

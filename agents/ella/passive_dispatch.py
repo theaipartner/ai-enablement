@@ -9,7 +9,14 @@ Side effects per decision:
   - skip                      -> agent_runs row (status='success').
                                  `kill_switch` writes NO row at all.
                                  `digest_flag=true` also writes a
-                                 pending_digest_items row.
+                                 pending_digest_items row. The
+                                 `routed_to_humans` pre-LLM skip rides
+                                 this path: `skip_reason` carries the
+                                 routing signal, `digest_flag=True` +
+                                 `digest_category='other'` ensure the
+                                 message surfaces in Scott's daily
+                                 digest, and no Haiku cost is recorded
+                                 because no Haiku call was made.
   - respond / haiku           -> response Haiku posts directly; cost =
                                  decision + response Haiku. No fallback.
   - respond / sonnet          -> pending_ella_responses row written as
@@ -72,6 +79,7 @@ def persist_passive_evaluation(evaluation: PassiveEvaluation) -> dict[str, Any]:
         "channel_client_id": payload.channel_client_id,
         "author_type": payload.author_type,
         "is_ella_mentioned": payload.is_ella_mentioned,
+        "is_routed_to_others": payload.is_routed_to_others,
         "haiku_decision": decision.decision,
         "response_model": decision.response_model,
         "ack_text": decision.ack_text,
@@ -315,6 +323,7 @@ def _dispatch_mention(evaluation: PassiveEvaluation) -> dict[str, Any]:
         "channel_client_id": payload.channel_client_id,
         "author_type": payload.author_type,
         "is_ella_mentioned": True,
+        "is_routed_to_others": False,
         # Mention-path-specific fields (distinguish from haiku_decision
         # on the non-mention path — /ella/runs reads either):
         "mention_classifier_shape": classification.shape,
