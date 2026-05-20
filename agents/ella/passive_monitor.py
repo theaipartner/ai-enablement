@@ -314,6 +314,8 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
             mention_classification=classification,
         )
 
+    primary_advisor_name = _primary_advisor_name(primary_csm)
+
     decision = decide_passive_response(
         triggering_message=payload.triggering_message_text,
         recent_context=recent_context,
@@ -321,6 +323,7 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         speaker_role=speaker_role,
         speaker_name=speaker_name,
         is_ella_mentioned=payload.is_ella_mentioned,
+        primary_advisor_name=primary_advisor_name,
     )
     return PassiveEvaluation(
         payload=payload,
@@ -393,7 +396,7 @@ You return exactly one decision:
   - The message is confused about the program, expectations, or instructions in a way that suggests the client is stuck and needs a human to unstick them.
   - The message is a re-fire of something Ella already acknowledged recently — still ack, still DM, because the recurrence tells the advisor "this is still open."
 
-  When decision='acknowledge_and_escalate', write the ack_text yourself. Make it warm, short (1-2 sentences), in Ella's voice. Acknowledge what the client said. Tell them their advisor will follow up. Address the client by first name when natural. Do NOT include an @-mention of the advisor — the backend handles notifying. Examples:
+  When decision='acknowledge_and_escalate', write the ack_text yourself. Make it warm, short (1-2 sentences), in Ella's voice. Acknowledge what the client said. Tell them their advisor will follow up. Address the client by first name when natural. Do NOT include an @-mention of the advisor — the backend handles notifying. When naming the advisor in ack_text, use the name from the ASSIGNED ADVISOR FOR THIS CLIENT section above. Do not name a different advisor even if a different advisor's name appears in the recent channel context. Examples:
 
   - "Hey Catrina, totally hear that — I'll have Scott jump in on this one shortly."
   - "That's a real question — let me get your advisor's eyes on this. They'll follow up directly."
@@ -504,6 +507,10 @@ _USER_PROMPT_TEMPLATE = """# TRIGGERING MESSAGE
 
 {speaker_role} ({speaker_name})
 
+# ASSIGNED ADVISOR FOR THIS CLIENT
+
+{primary_advisor_name}
+
 # IS THIS AN @-MENTION OF ELLA?
 
 {is_ella_mentioned}
@@ -521,6 +528,9 @@ _USER_PROMPT_TEMPLATE = """# TRIGGERING MESSAGE
 Return JSON with `decision`, `response_model`, `ack_text`, `digest_flag`, `digest_category`, and `reasoning`."""
 
 
+_NO_PRIMARY_ADVISOR = "(no primary advisor assigned)"
+
+
 def decide_passive_response(
     *,
     triggering_message: str,
@@ -529,13 +539,22 @@ def decide_passive_response(
     speaker_role: str = "client",
     speaker_name: str = "unknown",
     is_ella_mentioned: bool = False,
+    primary_advisor_name: str = _NO_PRIMARY_ADVISOR,
 ) -> PassiveDecision:
     """Call the decision Haiku and parse the structured output.
-    Unparseable / out-of-enum → safe default (skip)."""
+    Unparseable / out-of-enum → safe default (skip).
+
+    `primary_advisor_name` lands in the `# ASSIGNED ADVISOR FOR THIS
+    CLIENT` section of the user prompt so Haiku's ack_text on
+    `acknowledge_and_escalate` decisions names the client's actual
+    assigned advisor instead of picking from whoever's salient in
+    recent channel context. Falls back to `_NO_PRIMARY_ADVISOR` when
+    the client has no active primary_csm row."""
     user_prompt = _USER_PROMPT_TEMPLATE.format(
         message=triggering_message or "(empty)",
         speaker_role=speaker_role,
         speaker_name=speaker_name,
+        primary_advisor_name=primary_advisor_name or _NO_PRIMARY_ADVISOR,
         is_ella_mentioned="true" if is_ella_mentioned else "false",
         recent_context=recent_context or "(no recent context)",
         kb_block=_render_kb_block(kb_results),
@@ -687,3 +706,18 @@ def _fetch_primary_csm(db, client_id: str) -> dict[str, Any] | None:
     tm_resp = db.table("team_members").select("*").eq("id", tm_id).execute()
     rows = tm_resp.data or []
     return rows[0] if rows else None
+
+
+def _primary_advisor_name(primary_csm: dict[str, Any] | None) -> str:
+    """Resolve a team_members row to a display name for the
+    `# ASSIGNED ADVISOR FOR THIS CLIENT` prompt section. Null-safe:
+    returns the documented fallback string when there's no row or no
+    usable name field."""
+    if not primary_csm:
+        return _NO_PRIMARY_ADVISOR
+    name = primary_csm.get("full_name") or primary_csm.get("display_name")
+    if isinstance(name, str):
+        stripped = name.strip()
+        if stripped:
+            return stripped
+    return _NO_PRIMARY_ADVISOR
