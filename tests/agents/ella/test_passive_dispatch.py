@@ -116,7 +116,7 @@ def _slack(monkeypatch):
     return posts
 
 
-def _payload(mentioned=False):
+def _payload(mentioned=False, routed_to_others=False):
     return PassiveTriggerPayload(
         slack_channel_id="C1",
         triggering_message_ts="1745500100.000100",
@@ -125,6 +125,7 @@ def _payload(mentioned=False):
         author_type="client",
         channel_client_id="cli-1",
         is_ella_mentioned=mentioned,
+        is_routed_to_others=routed_to_others,
     )
 
 
@@ -451,3 +452,85 @@ def test_mention_path_no_decide_passive_response_call(fake_db, monkeypatch):
     _stub_resp_haiku(monkeypatch, "ok")
     pd.persist_passive_evaluation(_mention_ev("warm_opener"))
     assert called["decide"] == 0
+
+
+# --- Gate 3 routed-to-humans dispatch -----------------------------------
+
+
+def _routed_to_humans_ev():
+    """Build a PassiveEvaluation matching what Gate 3 in
+    passive_monitor._evaluate emits: skip decision, digest_flag=True,
+    digest_category='other', skip_reason='routed_to_humans', zero
+    Haiku cost (no Haiku call was made)."""
+    return PassiveEvaluation(
+        payload=PassiveTriggerPayload(
+            slack_channel_id="C1",
+            triggering_message_ts="1745500100.000100",
+            triggering_message_slack_user_id="U1",
+            triggering_message_text="<@U0DRAKE> can you help?",
+            author_type="client",
+            channel_client_id="cli-1",
+            is_ella_mentioned=False,
+            is_routed_to_others=True,
+        ),
+        decision=PassiveDecision(
+            decision="skip",
+            reasoning="routed to humans (non-Ella @-mention detected); pre-LLM skip",
+            digest_flag=True,
+            digest_category="other",
+            haiku_cost_usd=Decimal("0"),
+            haiku_input_tokens=0,
+            haiku_output_tokens=0,
+        ),
+        skip_reason="routed_to_humans",
+    )
+
+
+def test_routed_to_humans_writes_audit_and_digest_no_post(fake_db, _slack):
+    """Gate 3 outcome: one agent_runs row + one pending_digest_items
+    row. No Slack post, no escalations row."""
+    r = pd.persist_passive_evaluation(_routed_to_humans_ev())
+    assert r["decision"] == "skip"
+    assert r["skip_reason"] == "routed_to_humans"
+    # Audit row written.
+    assert len(fake_db.runs) == 1
+    # Digest item written.
+    assert len(fake_db.digest) == 1
+    # No in-channel ack.
+    assert _slack == []
+    # No escalations row.
+    assert fake_db.escalations == []
+    # No pending Sonnet queue write.
+    assert fake_db.pending == []
+
+
+def test_routed_to_humans_trigger_metadata_carries_flag(fake_db):
+    """Trigger metadata must surface `is_routed_to_others=True` and
+    `skip_reason='routed_to_humans'` so /ella/runs can filter on
+    either field."""
+    pd.persist_passive_evaluation(_routed_to_humans_ev())
+    meta = fake_db.runs[0]["trigger_metadata"]
+    assert meta["is_routed_to_others"] is True
+    assert meta["is_ella_mentioned"] is False
+    assert meta["skip_reason"] == "routed_to_humans"
+    assert meta["digest_flag"] is True
+    assert meta["digest_category"] == "other"
+
+
+def test_routed_to_humans_zero_haiku_cost_no_cost_write(fake_db):
+    """Because Gate 3 fires before any Haiku call, no llm_* update
+    fires on the agent_runs row."""
+    pd.persist_passive_evaluation(_routed_to_humans_ev())
+    cost_writes = [u for u in fake_db.run_updates if "llm_input_tokens" in u]
+    assert cost_writes == []
+
+
+def test_routed_to_humans_digest_item_attributes_skip(fake_db):
+    """Digest item carries decision='skip' + haiku_reasoning string so
+    Scott's daily digest can render the routing context."""
+    pd.persist_passive_evaluation(_routed_to_humans_ev())
+    item = fake_db.digest[0]
+    assert item["haiku_decision"] == "skip"
+    assert item["digest_category"] == "other"
+    assert "routed to humans" in item["haiku_reasoning"]
+    assert item["ella_responded"] is False

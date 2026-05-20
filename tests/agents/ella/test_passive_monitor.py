@@ -94,7 +94,12 @@ def _stub_retrieval_and_speaker(monkeypatch):
     )
 
 
-def _payload(text="hello", author_type="client", mentioned=False):
+def _payload(
+    text="hello",
+    author_type="client",
+    mentioned=False,
+    routed_to_others=False,
+):
     return PassiveTriggerPayload(
         slack_channel_id="C1",
         triggering_message_ts="1745500100.000100",
@@ -103,6 +108,7 @@ def _payload(text="hello", author_type="client", mentioned=False):
         author_type=author_type,
         channel_client_id="client-uuid-1",
         is_ella_mentioned=mentioned,
+        is_routed_to_others=routed_to_others,
     )
 
 
@@ -520,3 +526,279 @@ def test_prompt_has_no_at_mention_overlay():
     # New preamble scopes the prompt to passive observation
     assert p.startswith("You are Ella's decision brain for PASSIVE OBSERVATION")
     assert "@-mention messages are routed separately" in p
+
+
+# --- Gate 3: routed-to-humans pre-LLM skip ------------------------------
+
+
+def test_routed_to_humans_skip_no_haiku_call(fake_db, monkeypatch):
+    """When `is_routed_to_others=True`, Gate 3 fires BEFORE any Haiku
+    call. The skip carries digest_flag=True so the dispatch layer
+    writes the digest item, and skip_reason='routed_to_humans' so
+    /ella/runs can filter on it."""
+    called = {"haiku": 0}
+
+    def _spy(**kw):
+        called["haiku"] += 1
+        return SimpleNamespace(
+            text="{}",
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _spy)
+    ev = evaluate_passive_trigger(_payload(routed_to_others=True))
+    assert ev.skip_reason == "routed_to_humans"
+    assert ev.decision.decision == "skip"
+    assert ev.decision.digest_flag is True
+    assert ev.decision.digest_category == "other"
+    assert called["haiku"] == 0  # Pre-LLM skip — no Haiku call made.
+
+
+def test_routed_to_humans_skip_no_db_fetch(monkeypatch):
+    """The routing gate must not touch the DB — primary_csm fetch /
+    KB search are wasted work for a routing-deferral skip. Verifies
+    that no DB call is made by failing the db fetcher hard if hit."""
+    monkeypatch.setenv("ELLA_PASSIVE_MONITORING_ENABLED", "true")
+
+    def _explode(*a, **kw):
+        raise AssertionError("Gate 3 must not call get_client()")
+
+    monkeypatch.setattr("shared.db.get_client", _explode)
+    monkeypatch.setattr("agents.ella.passive_monitor.get_client", _explode)
+
+    ev = evaluate_passive_trigger(_payload(routed_to_others=True))
+    # Got here without the assertion firing — gate 3 truly bypassed the DB.
+    assert ev.skip_reason == "routed_to_humans"
+
+
+def test_mention_path_wins_over_routed_flag(fake_db, monkeypatch):
+    """Defensive precedence: even if a malformed payload arrived with
+    BOTH `is_ella_mentioned=True` AND `is_routed_to_others=True` (a
+    shape detect_at_mentions never produces), the classifier path must
+    take precedence — Gate 3 only fires when is_routed_to_others alone
+    is set. This pins the ordering in `_evaluate`."""
+
+    from agents.ella import mention_classifier as mc
+
+    captured = {"classifier_called": False}
+
+    def _stub_classify(**kwargs):
+        captured["classifier_called"] = True
+        return mc.MentionClassification(
+            shape="warm_opener",
+            ack_text=None,
+            digest_flag=False,
+            digest_category=None,
+            reasoning="bare",
+            haiku_cost_usd=Decimal("0"),
+            haiku_input_tokens=0,
+            haiku_output_tokens=0,
+        )
+
+    monkeypatch.setattr(
+        "agents.ella.mention_classifier.classify_mention_response", _stub_classify
+    )
+
+    # Stub `complete` for any decision-Haiku surface that might be reached.
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.complete",
+        lambda **kw: SimpleNamespace(
+            text="{}",
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        ),
+    )
+
+    ev = evaluate_passive_trigger(
+        _payload(mentioned=False, routed_to_others=True)
+    )
+    # Gate 3 fires because routed_to_others is set and mentioned is False.
+    assert ev.skip_reason == "routed_to_humans"
+    assert captured["classifier_called"] is False
+
+
+def test_regular_path_still_works_when_no_flags_set(fake_db, monkeypatch):
+    """The vanilla decision-Haiku path is unaffected by Gate 3 plumbing."""
+    _stub_haiku(
+        monkeypatch,
+        {
+            "decision": "respond",
+            "response_model": "sonnet",
+            "digest_flag": False,
+            "digest_category": None,
+            "reasoning": "ok",
+        },
+    )
+    ev = evaluate_passive_trigger(_payload())
+    assert ev.skip_reason is None
+    assert ev.decision.decision == "respond"
+
+
+# --- # ASSIGNED ADVISOR FOR THIS CLIENT prompt section ------------------
+
+
+def test_assigned_advisor_section_renders_full_name(fake_db, monkeypatch):
+    """When the client has a primary_csm row with full_name, that name
+    lands in the # ASSIGNED ADVISOR FOR THIS CLIENT section of the
+    prompt."""
+    fake_db.assignments = [{"team_member_id": "tm-1"}]
+    fake_db.team_members = [
+        {"id": "tm-1", "full_name": "Lou Perez", "display_name": None}
+    ]
+
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "decision": "skip",
+                    "digest_flag": False,
+                    "digest_category": None,
+                    "reasoning": "ok",
+                }
+            ),
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
+    evaluate_passive_trigger(_payload())
+    assert "# ASSIGNED ADVISOR FOR THIS CLIENT" in captured["user"]
+    assert "Lou Perez" in captured["user"]
+
+
+def test_assigned_advisor_section_falls_back_when_no_primary_csm(
+    fake_db, monkeypatch
+):
+    """When there's no primary_csm row, the section renders the
+    documented fallback string."""
+    # assignments + team_members already empty by default.
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "decision": "skip",
+                    "digest_flag": False,
+                    "digest_category": None,
+                    "reasoning": "ok",
+                }
+            ),
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
+    evaluate_passive_trigger(_payload())
+    assert "# ASSIGNED ADVISOR FOR THIS CLIENT" in captured["user"]
+    assert "(no primary advisor assigned)" in captured["user"]
+
+
+def test_assigned_advisor_section_uses_display_name_when_full_name_missing(
+    fake_db, monkeypatch
+):
+    """display_name is the documented fallback when full_name is null."""
+    fake_db.assignments = [{"team_member_id": "tm-1"}]
+    fake_db.team_members = [
+        {"id": "tm-1", "full_name": None, "display_name": "Nico"}
+    ]
+
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "decision": "skip",
+                    "digest_flag": False,
+                    "digest_category": None,
+                    "reasoning": "ok",
+                }
+            ),
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
+    evaluate_passive_trigger(_payload())
+    assert "Nico" in captured["user"]
+
+
+def test_decide_passive_response_accepts_primary_advisor_name_kwarg(monkeypatch):
+    """The standalone callable accepts the kwarg and threads it into
+    the prompt — pins the public-API surface so dispatch / agent-side
+    callers can pass it explicitly."""
+    from agents.ella.passive_monitor import decide_passive_response
+
+    captured = {}
+
+    def _cap(**kw):
+        captured["user"] = kw["messages"][0]["content"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "decision": "skip",
+                    "digest_flag": False,
+                    "digest_category": None,
+                    "reasoning": "ok",
+                }
+            ),
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=Decimal("0"),
+            model="h",
+            raw=None,
+        )
+
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
+    decide_passive_response(
+        triggering_message="hello",
+        recent_context="",
+        kb_results=[],
+        speaker_role="client",
+        speaker_name="Test Client",
+        is_ella_mentioned=False,
+        primary_advisor_name="Scott Wilson",
+    )
+    assert "# ASSIGNED ADVISOR FOR THIS CLIENT" in captured["user"]
+    assert "Scott Wilson" in captured["user"]
+
+
+def test_haiku_system_prompt_includes_advisor_grounding_line():
+    """The advisor-grounding instruction lives in the
+    acknowledge_and_escalate section so Haiku names the assigned
+    advisor instead of a random coach pulled from channel context."""
+    p = _HAIKU_SYSTEM_PROMPT
+    assert (
+        "use the name from the ASSIGNED ADVISOR FOR THIS CLIENT section" in p
+    )
+    # The advisor-grounding rule must sit AFTER the existing no-@-mention
+    # rule so it modifies the same paragraph rather than a different one.
+    no_mention_idx = p.find(
+        "Do NOT include an @-mention of the advisor — the backend handles notifying."
+    )
+    grounding_idx = p.find(
+        "use the name from the ASSIGNED ADVISOR FOR THIS CLIENT section"
+    )
+    assert no_mention_idx > 0 and grounding_idx > no_mention_idx

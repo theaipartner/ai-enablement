@@ -249,3 +249,102 @@ def test_passive_fork_exception_audited_but_ingest_succeeds(fake_db, monkeypatch
     )
     assert error_row["processing_status"] == "failed"
     assert "unexpected passive bug" in error_row["processing_error"]
+
+
+# --- is_routed_to_others plumbing ---------------------------------------
+
+
+def test_passive_fork_plumbs_is_routed_to_others(fake_db, monkeypatch):
+    """Non-Ella @-mention in the message text → payload.is_routed_to_others
+    is True when reaching the passive fork."""
+    fake_db.channel_rows = [
+        {
+            "id": "ch-1",
+            "slack_channel_id": "C100",
+            "client_id": "client-uuid-1",
+            "is_archived": False,
+            "passive_monitoring_enabled": True,
+        }
+    ]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+
+    captured: dict[str, Any] = {}
+
+    def _stub_evaluate(payload):
+        captured["payload"] = payload
+        return SimpleNamespace(
+            payload=payload,
+            decision=SimpleNamespace(decision="skip", reasoning="r"),
+            skip_reason="routed_to_humans",
+        )
+
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.evaluate_passive_trigger", _stub_evaluate
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_dispatch.persist_passive_evaluation",
+        lambda ev: {"decision": "skip"},
+    )
+
+    # No SLACK_*_TOKEN set in this test, so Ella IDs resolve to None;
+    # any <@U...> mention becomes routed-to-others by construction.
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C100",
+            "user": "UCLIENT1",
+            "text": "<@U0DRAKE> can you take a look",
+            "ts": "1745500003.000100",
+        })
+    )
+
+    payload = captured["payload"]
+    assert payload.is_routed_to_others is True
+    assert payload.is_ella_mentioned is False
+
+
+def test_passive_fork_no_mention_no_routing_flag(fake_db, monkeypatch):
+    """Plain message with no @-mentions → both flags are False;
+    decision-Haiku path runs as before."""
+    fake_db.channel_rows = [
+        {
+            "id": "ch-1",
+            "slack_channel_id": "C100",
+            "client_id": "client-uuid-1",
+            "is_archived": False,
+            "passive_monitoring_enabled": True,
+        }
+    ]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+
+    captured: dict[str, Any] = {}
+
+    def _stub_evaluate(payload):
+        captured["payload"] = payload
+        return SimpleNamespace(
+            payload=payload,
+            decision=SimpleNamespace(decision="skip", reasoning="r"),
+            skip_reason="haiku_skip",
+        )
+
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.evaluate_passive_trigger", _stub_evaluate
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_dispatch.persist_passive_evaluation",
+        lambda ev: {"decision": "skip"},
+    )
+
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C100",
+            "user": "UCLIENT1",
+            "text": "just thinking out loud here",
+            "ts": "1745500004.000100",
+        })
+    )
+
+    payload = captured["payload"]
+    assert payload.is_routed_to_others is False
+    assert payload.is_ella_mentioned is False
