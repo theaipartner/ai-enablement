@@ -39,10 +39,10 @@ Ella answers client questions in their private Slack channels at near-CSM qualit
 `api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
 
 - The `app_mention` event is a **logged no-op**. Slack fires a parallel `message` event alongside every `app_mention` (the app subscribes to `message.groups` on all client channels); handling app_mention too would double-fire. The reactive machinery (`_should_dual_trigger`, `_build_app_mention_from_message`, `_process_mention`) is removed.
-- The @-mention is detected in realtime_ingest (`_detect_ella_mention` — Ella's bot OR human user_id in the text) and threaded through `PassiveTriggerPayload.is_ella_mentioned`.
+- The @-mention is detected in realtime_ingest (`detect_at_mentions` — parses every `<@U...>` mention, returns `mentions / is_ella_mentioned / is_routed_to_others`) and the three booleans are threaded through `PassiveTriggerPayload.is_ella_mentioned` + `.is_routed_to_others`.
 - `agent.respond_to_mention` survives only as a thin adapter over the same pipeline (kept so `slack_handler` / tests still resolve); it forces `is_ella_mentioned=True` and returns an `EllaResponse` summary. `api/slack_events.py` does not call it.
 
-**Two gates only** (run once, both paths): (1) global kill switch (no `agent_runs` row when off), (2) author type — `client` and `team_member` are always evaluated (CSMs @Ella too); `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row.
+**Three gates** (run once, all paths): (1) global kill switch (no `agent_runs` row when off), (2) author type — `client` and `team_member` are always evaluated (CSMs @Ella too); `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row, (3) routed-to-humans — when the message contains at least one `<@U...>` mention AND none is Ella, pre-LLM skip with `skip_reason='routed_to_humans'` + `digest_flag=True` + `digest_category='other'`. The dispatch writes the audit row + the digest item; no Haiku call, no in-channel ack, no DM fan-out. See § @-Mention Handling (Structural).
 
 **Two-path LLM dispatch** (the 2026-05-19 PM structural override, after three failed prompt-engineering attempts at "@-mention trumps all" — `docs/specs/ella-at-mention-structural-override.md`):
 
@@ -68,6 +68,14 @@ After three prompt-engineering iterations failed in production ("lean toward res
 **trigger_metadata** on mention-path runs carries `mention_classifier_shape` + `mention_classifier_reasoning` (instead of `haiku_decision`); `/ella/runs` reads either depending on the path.
 
 **What this preserves vs sacrifices.** Preserves: every existing response behavior (Haiku self-answers, Sonnet, ack-and-escalate fan-out, digest flag). Sacrifices: the v2 referential carve-out ("Hey Scott, ask @Ella about X" → skip). That message now triggers `warm_opener` (Ella posts a brief opener). Rare misfire, accepted trade vs the v1/v2 failure where every advisor @-mention was being skipped.
+
+**The routed-to-humans gate (Gate 3, 2026-05-20).** A second structural fix layered on the classifier. Built after the 2026-05-19 EOD misfire, where a client message `<@Scott> <@Lou> Who controls my sub account?` reached the decision Haiku (because Ella was NOT mentioned) and Haiku rationalized `acknowledge_and_escalate` based on the money/commitment content despite the explicit routing to two specific humans.
+
+Same shape of fix as the @-mention classifier surgery — bypass the LLM entirely for a class of message where the right outcome is enumerable structurally. `ingestion/slack/realtime_ingest.py:detect_at_mentions` parses every `<@U...>` mention and returns `is_routed_to_others=True` when the mention list is non-empty AND Ella isn't in it. `passive_monitor._evaluate` Gate 3 reads that flag (before any DB fetch or KB call) and returns a synthetic skip with `digest_flag=True` + `digest_category='other'`. The existing skip-with-digest path in `passive_dispatch` writes the audit row + digest item and stops. The decision Haiku never sees the message, so `acknowledge_and_escalate` is literally unreachable for routed-to-humans messages.
+
+**Detection is "any @-mention that isn't Ella"**, NOT "any @-mention of a known team_member." Future-proof against new team members not yet in `team_members`, third-party guests, deactivated members whose IDs still appear in old messages. Pure string parsing — no DB query at the gate.
+
+**Assigned advisor in the decision-Haiku context (also 2026-05-20).** Independent structural fix riding alongside the routing gate. `_USER_PROMPT_TEMPLATE` gains a `# ASSIGNED ADVISOR FOR THIS CLIENT` section populated from `_fetch_primary_csm`, and the system prompt's `acknowledge_and_escalate` paragraph instructs Haiku to name THAT advisor in `ack_text` rather than whoever's salient in recent channel context. Closes the "Ella named Nico in the ack despite Lou being the assigned CSM" finding from the 2026-05-19 misfire re-read. Soft prompt rule grounded on a structured field; if Haiku drifts after this lands, the next escalation is the placeholder-token approach (Haiku writes `{ADVISOR_FIRST_NAME}`, code substitutes pre-post).
 
 ### Response Location
 
@@ -383,6 +391,22 @@ Batches 2/3.
   now triggers a brief warm opener instead of silence. No
   architecture/migration/env beyond the new module. Spec:
   `docs/specs/ella-at-mention-structural-override.md`.
+- @-mention routing gate + assigned advisor context (2026-05-20):
+  Closes two of the three gaps surfaced by the 2026-05-19 EOD misfire.
+  New `ingestion/slack/realtime_ingest.detect_at_mentions` returns
+  `mentions / is_ella_mentioned / is_routed_to_others`; the third
+  field is plumbed through `PassiveTriggerPayload` and consumed by
+  the new Gate 3 in `passive_monitor._evaluate` (between Gate 2 and
+  the DB fetches). Routed-to-humans messages skip pre-LLM with a
+  digest item written so Scott's daily digest still surfaces the
+  routing signal. Independent fourth fix: `_USER_PROMPT_TEMPLATE`
+  gains a `# ASSIGNED ADVISOR FOR THIS CLIENT` section populated
+  from `_fetch_primary_csm` so Haiku names the actual assigned
+  advisor in `acknowledge_and_escalate` ack_text instead of picking
+  from recent channel context. No migration, no env-var changes.
+  Problem A (passive-dispatch idempotency) remains open — separate
+  spec. Spec:
+  `docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`.
 - passive monitoring default-on (2026-05-19 PM, migration 0042):
   codifies Drake's invariant — *any channel Ella is added to should
   be passively monitored* — as the system default.

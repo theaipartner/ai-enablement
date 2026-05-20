@@ -34,6 +34,24 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-20 — Ella @-mention routing gate + assigned advisor context
+
+`docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`. Closes two of the three known-issues entries surfaced by the 2026-05-19 EOD misfire (Problem B and Problem C; Problem A — passive-dispatch idempotency — stays open as a separate spec). One unified change addressing the misfire root cause from three angles.
+
+**(1) Pre-LLM routing gate.** New `detect_at_mentions(message_text, ella_bot_user_id, ella_human_user_id)` in `ingestion/slack/realtime_ingest.py` parses `<@U...>` mentions from message text and returns `{mentions, is_ella_mentioned, is_routed_to_others}`. The third bool is True when the message contains at least one mention AND none is Ella; mutually exclusive with `is_ella_mentioned`. Replaces the prior `_detect_ella_mention` boolean helper. The realtime fork now plumbs `is_routed_to_others` through `PassiveTriggerPayload`.
+
+**(2) Gate 3 in `passive_monitor._evaluate`.** Sits between Gate 2 (author type) and the DB fetches — no primary_csm query, no KB search, no Haiku call. When `payload.is_routed_to_others` fires, returns `PassiveEvaluation(skip_reason='routed_to_humans', digest_flag=True, digest_category='other')`. By construction in `detect_at_mentions` this is mutually exclusive with the `is_ella_mentioned` classifier branch — defensive precedence pinned in tests.
+
+**(3) Dispatch metadata.** `passive_dispatch.persist_passive_evaluation` reuses the existing skip-with-digest path for the routed-to-humans case: writes the agent_runs row + `pending_digest_items` row, suppresses the in-channel ack, escalations row, and DM fan-out. New `is_routed_to_others` field lands in `trigger_metadata` on both the mention and non-mention paths so `/ella/runs` can filter on it.
+
+**(4) Assigned advisor in Haiku context (Issue 4).** `agents/ella/passive_monitor.py:_USER_PROMPT_TEMPLATE` gains a new `# ASSIGNED ADVISOR FOR THIS CLIENT` section between SPEAKER and the IS-MENTION-OF-ELLA bool, populated from `_fetch_primary_csm` via new `_primary_advisor_name` resolver (full_name preferred, display_name fallback, `(no primary advisor assigned)` when both null). `_HAIKU_SYSTEM_PROMPT` gains a line in the `acknowledge_and_escalate` section instructing Haiku to use the named advisor instead of picking from recent channel context (closes the "Ella named Nico in the ack despite Lou being the assigned CSM" finding from the 2026-05-19 misfire re-read).
+
+**Doc updates riding along.** `docs/agents/ella/ella.md` (@-Mention Handling Structural section extension + changelog); `docs/runbooks/ella_passive_monitoring.md` (Gate 3 + troubleshooting); `docs/known-issues.md` (Problems B and C struck through with resolution pointer).
+
+**Test suite expanded by ~30 tests.** New `tests/ingestion/slack/test_at_mention_detection.py` (17 cases pinning the helper). Extended `tests/agents/ella/test_passive_monitor.py` (Gate 3 no-Haiku/no-DB behavior, classifier precedence, assigned-advisor section rendering across full_name / display_name / fallback), `tests/agents/ella/test_passive_dispatch.py` (routed_to_humans branch — audit + digest row, no Slack, no escalations, no Sonnet queue, zero Haiku cost), and `tests/ingestion/slack/test_realtime_ingest_passive_fork.py` (is_routed_to_others plumbing). Full suite: **685 passing**, up from 653.
+
+Post-state: **42 migrations, 13 Python serverless functions, 685 pytest passing, 6 TopNav tabs**. No migration in this spec; no env-var changes. Production resume on the 136 paused channels still gated on Problem A (idempotency) closing in a separate spec.
+
 ### 2026-05-19 — EOD: Production misfire + emergency kill switch + paused-pending-investigation
 
 The default-on ship (entry below) brought Ella's passive monitor live across 137 channels. **Within hours, a production misfire surfaced three distinct structural gaps that combined into Ella posting 3 responses to a single client message that wasn't directed at her.**

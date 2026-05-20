@@ -8,8 +8,8 @@ Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) t
 
 Pipeline (one entry per client-authored message):
 
-1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op; the parallel `message` event is the ONE evaluation path — @-mentions included). The fork detects `is_ella_mentioned` (`_detect_ella_mention`, bot OR human uid) and passes it through `PassiveTriggerPayload`.
-2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **two-path dispatch (structural override, 2026-05-19 PM):** two pre-LLM gates run once — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row). Then KB vector search + recent-context fetch + speaker resolve, then **branch on `payload.is_ella_mentioned`:**
+1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op; the parallel `message` event is the ONE evaluation path — @-mentions included). The fork calls `detect_at_mentions` (parses every `<@U...>` mention, returns `is_ella_mentioned` + `is_routed_to_others`) and threads both booleans through `PassiveTriggerPayload`.
+2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **two-path dispatch (structural override, 2026-05-19 PM):** three pre-LLM gates run once — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row), (3) routed-to-humans (added 2026-05-20: when `is_routed_to_others=True`, skip pre-LLM with `skip_reason='routed_to_humans'` + `digest_flag=True` + `digest_category='other'` — the dispatch writes the audit row + the digest item; no DB fetch, no Haiku call, no in-channel ack, no DM fan-out). Then KB vector search + recent-context fetch + speaker resolve, then **branch on `payload.is_ella_mentioned`:**
    - **`true` → CLASSIFIER PATH.** `agents.ella.mention_classifier.classify_mention_response` picks one of four shapes: `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener`. **`skip` is structurally absent from the enum** (the structural fix after three failed prompt iterations — `docs/specs/ella-at-mention-structural-override.md`). Result lands on `PassiveEvaluation.mention_classification`.
    - **`false` → DECISION HAIKU PATH.** `decide_passive_response` returns `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus independent `digest_flag`/`digest_category`. CSM-directed / KB-relevance / firm-after-first are soft prompt rules, not gates.
 3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — branches on `evaluation.mention_classification`:
@@ -201,6 +201,43 @@ select created_at, slack_channel_id, haiku_decision, digest_category,
  order by created_at desc
  limit 30;
 ```
+
+### Client message with non-Ella @-mentions was silently skipped — is that right?
+
+Yes, by design as of 2026-05-20. When a client posts a message containing
+one or more `<@U...>` mentions and none of those mentions is Ella, Gate 3
+in `passive_monitor._evaluate` fires a pre-LLM skip. The reasoning is "the
+client is routing this to specific humans themselves; Ella shouldn't
+interject." The behavior is:
+
+- `agent_runs` row written, `status='success'`, `trigger_metadata` carries
+  `is_routed_to_others=true` + `skip_reason='routed_to_humans'`.
+- `pending_digest_items` row written (`digest_category='other'`,
+  `haiku_decision='skip'`, `haiku_reasoning` contains "routed to humans")
+  so Scott's daily digest still surfaces awareness of the message.
+- No in-channel ack from Ella.
+- No DM to Scott or the primary advisor.
+- No `escalations` row.
+- No Haiku cost (Gate 3 fires before any LLM call).
+
+This is the structural fix for the 2026-05-19 EOD misfire where Dhamen
+Hothi posted `<@Scott> <@Lou> Who controls my sub account?` and the
+decision Haiku rationalized `acknowledge_and_escalate` despite the
+explicit human-routing. See `docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`.
+
+To audit how often Gate 3 fires, query `/ella/runs` filtered by
+`skip_reason='routed_to_humans'`, or directly:
+
+```sql
+select count(*) from agent_runs
+ where trigger_metadata->>'skip_reason' = 'routed_to_humans'
+   and started_at >= now() - interval '7 days';
+```
+
+If a legitimate "client wants Ella to weigh in on this thread too" gets
+silently swallowed, the client (or an advisor) can re-trigger explicitly
+by @-mentioning Ella — the classifier path takes precedence over the
+routing gate.
 
 ## Initial validation rollout (post-deploy)
 
