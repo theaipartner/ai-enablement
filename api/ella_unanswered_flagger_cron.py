@@ -100,7 +100,6 @@ _ENABLED_ENV_VAR = "ELLA_UNANSWERED_FLAGGER_ENABLED"
 _CHANNEL_ENV_VAR = "ELLA_UNANSWERED_CHANNEL_SLACK_ID"
 
 _SNIPPET_MAX = 200
-_REASONING_MAX = 200
 
 
 # ---------------------------------------------------------------------------
@@ -536,28 +535,32 @@ def _format_channel_post(
     client_name: str | None,
     mention_ids: list[str],
 ) -> str:
+    """Build the channel post for an unanswered flagged message.
+
+    Format (terse — 2026-05-21 simplification):
+        <@U001> <@U002> unanswered in {client_name}'s channel ({time_ago}): {permalink}
+
+    The mention is the primary action signal; client_name disambiguates;
+    time_ago lets the CSM see at a glance whether it just hit 2h or
+    has been sitting all day; the permalink is the action. The full
+    message text, Ella's category read, and Haiku's reasoning are NOT
+    included — CSMs see them in the source channel after clicking
+    through. Was a six-line block pre-2026-05-21 (`docs/specs/ella-
+    unanswered-flagger-client-only-and-terse-post.md`).
+
+    Backstop on missing data: no mentions falls back to a bare line
+    without the leading mention; missing client_name renders
+    "(unknown client)"; missing permalink renders empty trailing."""
     name = client_name or "(unknown client)"
     mentions = " ".join(f"<@{m}>" for m in mention_ids)
-    snippet = _truncate((row.get("message_text") or "").strip(), _SNIPPET_MAX)
-    category = row.get("digest_category") or "other"
-    reasoning = _truncate((row.get("haiku_reasoning") or "").strip(), _REASONING_MAX)
     time_ago = _format_time_ago(row.get("created_at"))
     permalink = _build_message_permalink(
         row.get("slack_channel_id") or "",
         row.get("triggering_message_ts") or "",
     )
-    mention_line = (
-        f"{mentions} — this message has been sitting without an advisor response."
-        if mentions
-        else "This message has been sitting without an advisor response."
-    )
+    prefix = f"{mentions} " if mentions else ""
     return (
-        f":bell: Unanswered for 2h — {name}\n"
-        f"{mention_line}\n\n"
-        f"> {snippet}\n\n"
-        f"Ella's read: {category} — {reasoning}\n"
-        f"Posted: {time_ago} by {name}\n"
-        f"{permalink}"
+        f"{prefix}unanswered in {name}'s channel ({time_ago}): {permalink}"
     )
 
 
