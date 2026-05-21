@@ -1,7 +1,7 @@
 # Ella Duplicate Webhook-Delivery Diagnostic
 
 **Slug:** ella-duplicate-webhook-delivery-diagnostic
-**Status:** in-flight
+**Status:** shipped
 **Type:** Diagnostic (READ-ONLY investigation; produces a follow-up fix spec, not a fix)
 
 ## Context
