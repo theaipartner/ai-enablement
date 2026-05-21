@@ -1,7 +1,7 @@
 # Ella Doc Hygiene Sweep + Dead-Code Inventory
 
 **Slug:** ella-doc-hygiene-sweep-2026-05-21
-**Status:** in-flight
+**Status:** shipped
 **Type:** Documentation reconciliation (code-touching forbidden)
 
 ## Context

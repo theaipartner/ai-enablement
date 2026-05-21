@@ -34,6 +34,14 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-21 — Ella doc hygiene sweep + dead-code inventory
+
+`docs/specs/ella-doc-hygiene-sweep-2026-05-21.md`. Pure documentation reconciliation closing out the four-ship Ella arc that started 2026-05-19 EOD. Four forward-pointer annotation blocks added to the prior-spec docs that read confidently about a fix the production data later contradicted (idempotency spec + report + runbook Dedup-gate section + state.md 2026-05-20 entry). Annotations use a consistent "UPDATED 2026-05-21:" format so future scans for stale claims are trivial. **Original content unchanged** — annotations prefix the affected sections, never rewrite history. The known-issues Problem A entry was checked but not modified — its existing resolution note already referenced both ships explicitly.
+
+Dead-code inventory added to `docs/known-issues.md` under a new "Code hygiene — deferred cleanup" section. Three entries (cosmetic malformed-fallback in `realtime_ingest.py`, `_insert_audit_terminal` prefix parameterization, confirmed-not-dead `_SNIPPET_MAX` + `_truncate` post-format-rewrite) catalog the code-hygiene decisions made consciously during the arc so the next person doesn't have to re-discover them by reading every report.
+
+Zero code touched. No migration, no env-var changes, no production traffic. Test suite stays at 706 (unchanged). tsc + next lint clean.
+
 ### 2026-05-21 — Ella unanswered flagger: client-only filter + terse post format
 
 `docs/specs/ella-unanswered-flagger-client-only-and-terse-post.md`. Two operational adjustments to `api/ella_unanswered_flagger_cron.py` driven by observed production behavior since the 2026-05-14 ship.
