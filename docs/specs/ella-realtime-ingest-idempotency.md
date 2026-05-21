@@ -3,6 +3,9 @@
 **Slug:** ella-realtime-ingest-idempotency
 **Status:** in-flight
 
+> **UPDATED 2026-05-21:** The dedup gate this spec ships uses `event.get('ts')` as the key, which is the OUTER event ts. Slack `message_changed` events have a different outer ts than the original `message` event for the same logical message, so the gate did not prevent edit-driven duplicate dispatches in production (11 documented over 36 hours of post-resume traffic; zero forensic-duplicate rows ever written by the original gate). The corrective ship moves the dedup-key construction post-parse so it uses the inner/stable message ts.
+> See: `docs/specs/ella-realtime-ingest-dedup-message-changed.md` (the fix) and `docs/specs/ella-duplicate-webhook-delivery-diagnostic.md` (the diagnostic that surfaced the bug).
+
 ## Context
 
 The third structural gap from yesterday's 2026-05-19 EOD production misfire. The `docs/known-issues.md` entry titled "Passive dispatch has no idempotency check against duplicate Slack message delivery" is the source-of-truth issue this spec closes. Problems B and C from that same EOD shipped today via `ella-at-mention-routing-gate-and-advisor-context`; this is the last of the three before production passive monitoring can be re-enabled on the 136 channels currently gated off.
@@ -297,6 +300,9 @@ All three must pass before Builder flips the spec to `shipped`. If any fail, Bui
 **After this gate passes, Drake can re-enable passive monitoring on the 136 paused channels.** That's a separate operational step — a single SQL `UPDATE slack_channels SET passive_monitoring_enabled = true WHERE test_mode = false` — not in this spec's scope. The resume is Drake's call to execute when ready.
 
 ## What could go wrong
+
+> **UPDATED 2026-05-21:** Subsection #6 below ("`message_changed` events with edited content shouldn't necessarily dedup") was framed as "acceptable for v1" with the reasoning that "Slack edits are rare in client channels." Production observation contradicted that — 11 documented duplicate dispatches across 8 channels in 36 hours of post-resume traffic. The corrective spec re-keys the dedup gate on the inner/stable message ts so edits collide correctly with their originals.
+> See: `docs/specs/ella-realtime-ingest-dedup-message-changed.md`.
 
 1. **PK collision exception detection misses an unusual variant.** Mitigation: hard stop #2 forces empirical verification. If the supabase-py library updates and changes the exception format, this code breaks silently (every duplicate becomes a "non-PK exception" fail-open → processes the duplicate). Detection: post-deploy, monitor `webhook_deliveries` for rows with `processing_status='duplicate'` over the first week. Zero rows over a week of production traffic = probably broken (Slack does retry occasionally). A handful of rows = working.
 

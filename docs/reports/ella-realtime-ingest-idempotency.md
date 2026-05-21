@@ -2,6 +2,9 @@
 **Slug:** ella-realtime-ingest-idempotency
 **Spec:** docs/specs/ella-realtime-ingest-idempotency.md
 
+> **UPDATED 2026-05-21:** This report's claim that the dedup gate's behavior was verified is technically accurate (the unit tests pinned the implemented behavior) but the implemented behavior was wrong for the dominant production failure mode — Slack `message_changed` edits don't dedup against the original message because the gate keyed on the OUTER event ts. The 2026-05-21 diagnostic established this empirically (11 dupes / 8 channels / 36 hours; zero forensic-duplicate rows ever fired). The fix moves the key construction post-parse.
+> See: `docs/reports/ella-duplicate-webhook-delivery-diagnostic.md` (diagnosis) and `docs/reports/ella-realtime-ingest-dedup-message-changed.md` (corrective ship).
+
 ## Files touched
 
 **Created:**

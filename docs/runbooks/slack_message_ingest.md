@@ -62,6 +62,9 @@ Sequence at first deploy:
 
 ## Dedup gate (step 0, restructured 2026-05-21)
 
+> **UPDATED 2026-05-21:** The section below reflects the current (post-fix) behavior. The original gate landed 2026-05-20 (`docs/specs/ella-realtime-ingest-idempotency.md`) keyed on the OUTER event ts and did not catch Slack `message_changed` edit duplicates. The current shape — post-parse key construction using the inner/stable message ts — was the 2026-05-21 corrective.
+> See: `docs/specs/ella-realtime-ingest-dedup-message-changed.md`.
+
 Every realtime delivery passes through a dedup gate before any
 downstream side effect (slack_messages upsert, passive-monitor fork,
 escalation fan-out) fires. The gate uses `webhook_deliveries.webhook_id`
