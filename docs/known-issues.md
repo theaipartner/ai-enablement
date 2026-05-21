@@ -141,6 +141,37 @@ Resolved structurally via `ella-at-mention-routing-gate-and-advisor-context` (20
 - **Detection if it ever does land in git:** run the diagnostic queries above. Any non-empty output means a `git add .` slipped past discipline and tracked something pip-shaped. Recovery: `git rm -r <offending paths>` + commit.
 - **Logged:** 2026-04-29 (M3.3 era — original surface); previous sweep 2026-05-08 (Phase 3b — disk cleanup of 55 untracked pkg dirs); re-confirmed disk-only 2026-05-11 (this spec, only `hi` deleted from git).
 
+## Code hygiene — deferred cleanup (catalog, flagged 2026-05-21)
+
+Catalog of dead / cosmetic / verified-not-dead code paths surfaced across the four 2026-05-20 / 2026-05-21 Ella ships. These entries are NOT bug reports — they're a single canonical location for code-hygiene decisions that were made consciously during the arc so the next person doesn't have to re-discover them by reading every report.
+
+### Code hygiene: cosmetic malformed-fallback in `realtime_ingest.py`
+
+The pre-2026-05-21 dedup-key construction had a fallback `slack_msg_ingest_malformed_{uuid.uuid4()}` for events with null `channel` or `ts`. After the 2026-05-21 dedup-message-changed fix moved the key construction post-parse, this path is unreachable — null channel hits the non-client gate first, null ts causes the parser to return None. The fallback is still computed early in the function for the result-dict's `delivery_id` field; removing it would require a result-dict-shape refactor and is widerscope than the bug warranted.
+
+- **Location:** `ingestion/slack/realtime_ingest.py` — the malformed-fallback branch of the early `delivery_id` construction in `ingest_message_event` (visible immediately before the try-block; the spec's diff for `ella-realtime-ingest-dedup-message-changed.md` shows the surrounding context).
+- **Surfaced by:** `docs/reports/ella-realtime-ingest-dedup-message-changed.md` § Surprises and judgment calls ("Removed the malformed-fallback only cosmetically, not from the code").
+- **Cost of cleanup:** small (requires a result-dict-shape refactor, ~10-line change).
+- **Trigger to address:** when a future spec touches `ingest_message_event` for other reasons. Not urgent on its own — the fallback is cheap and never executes.
+
+### Code hygiene: `_insert_audit_terminal` prefix parameterization
+
+The helper takes a `delivery_id_prefix` parameter but is only ever called with `_PRE_DEDUP_PREFIX`. Kept parameterized as a deliberate choice for future flexibility if another terminal-row shape ever needs a different prefix (e.g., a separate "step-0 fail-open with audit" path).
+
+- **Location:** `ingestion/slack/realtime_ingest.py:_insert_audit_terminal` — defined around the audit-helper block, called from the three early-exit branches (non-client channel, ignorable subtype, parser-returned-None) and the exception handler's `step_0_succeeded == False` branch.
+- **Surfaced by:** `docs/reports/ella-realtime-ingest-dedup-message-changed.md` § Surprises and judgment calls ("The `_insert_audit_terminal` helper's prefix is parameterized but only ever called with `_PRE_DEDUP_PREFIX`").
+- **Cost of cleanup:** trivial (inline the prefix; one less function parameter).
+- **Trigger to address:** never urgent. If anyone touches this helper for other reasons, the inline-vs-parameter decision is reviewable at that moment.
+
+### Code hygiene: confirmed-not-dead — `_SNIPPET_MAX` + `_truncate` post unanswered-flagger format rewrite
+
+After the 2026-05-21 unanswered-flagger format rewrite, `_REASONING_MAX` was removed (only used in the rewritten `_format_channel_post`). `_SNIPPET_MAX` and `_truncate` LOOK like dead code at first glance because the new one-line format doesn't reference them — but they're still used at two other call sites in `run_ella_unanswered_flagger_cron` (the `message_text_snippet` field in audit-row payloads, both on the success and failure branches). Documented here so a future reader doesn't repeat the investigation.
+
+- **Location:** `api/ella_unanswered_flagger_cron.py` — `_SNIPPET_MAX` constant + `_truncate` helper, called from `run_ella_unanswered_flagger_cron`'s audit-row construction (both the slack-post-failed and slack-post-succeeded branches).
+- **Surfaced by:** `docs/reports/ella-unanswered-flagger-client-only-and-terse-post.md` § Verification (hard stop #1 — "verified `_SNIPPET_MAX` and `_truncate` are still used in audit-row payloads, kept").
+- **Status:** NOT dead. Verified 2026-05-21.
+- **Trigger to address:** none — entry exists for documentation, no cleanup action.
+
 ---
 
 Delivered. `ingestion/fathom/pipeline.py:_ensure_call_review_document` fires automatically after each successful `_ensure_summary_document` for client-category calls with a non-null `primary_client_id`. Three-layer idempotency (existence guard inside the helper + persistence-layer upsert + pipeline-layer non-atomic-but-idempotent invariant) means Fathom retries / dup deliveries / the documented F2.2 re-fire case cost zero LLM tokens. Fail-soft via try/except wrapper mirroring the M6.1 CS Slack post hook — review-generation failure never breaks Fathom delivery; failures land on `IngestOutcome.errors[]` for diagnostic visibility. `review_call` gained an optional `trigger_type` kwarg so pipeline-fired runs tag `agent_runs.trigger_type='fathom_pipeline'` distinct from `'manual_backfill'`.
