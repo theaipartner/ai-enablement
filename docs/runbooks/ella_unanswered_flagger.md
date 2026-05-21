@@ -90,23 +90,56 @@ primary advisor assigned (edge case) → only Scott is @-mentioned.
 **Dedup.** If the client's primary advisor IS Scott, the @-mentions
 are de-duplicated so Scott isn't pinged twice.
 
+## Candidate filter — client-only (post-2026-05-21)
+
+`_fetch_candidates` returns `pending_digest_items` rows aged into the
+[2h, 7d] window, then runs `_filter_to_client_authored` which joins
+JS-side against `slack_messages` to keep only `author_type='client'`
+rows. Team_member / bot / ella / workflow / unknown candidates are
+filtered out — the flagger's intent is *"client needs a human,"* not
+*"team_member's question didn't get a team_member follow-up."*
+
+Two-query pattern: one SELECT for candidates, then one SELECT per
+distinct channel against `slack_messages` (eq `slack_channel_id` +
+in_ `slack_ts`). Per-channel failure is isolated — a transient DB
+blip on one channel's lookup skips that channel's candidates this
+tick (retry next), but other channels in the same tick still process.
+
+The daily digest (`api/ella_daily_digest_cron.py`) is NOT affected
+by this filter — it deliberately surfaces ALL author types because
+it's a wider-net awareness surface ("here's everything Ella flagged
+in the last 24h").
+
+**Side benefit:** the open `author_type='bot'` known issue (Ella's
+posts misclassifying as `bot` — see `docs/known-issues.md`) is
+handled implicitly by this filter. Bot-tagged rows fail the
+`== 'client'` check, so Ella's own posts can't accidentally surface
+here as "unanswered" while the parser bug stays open.
+
 ## Channel post format
 
+Terse one-line shape (2026-05-21 simplification):
+
 ```
-🔔 Unanswered for 2h — {Client Name}
-<@U_SCOTT_ID> <@U_ADVISOR_ID> — this message has been sitting without an advisor response.
-
-> {triggering message snippet, max 200 chars}
-
-Ella's read: {digest_category} — {haiku_reasoning, max 200 chars}
-Posted: {time_ago} by {client name}
-{slack_permalink}
+<@U_SCOTT_ID> <@U_ADVISOR_ID> unanswered in {Client Name}'s channel ({time_ago}): {slack_permalink}
 ```
 
-The `<@U…>` tokens are real Slack mentions and ping the recipients. The
-permalink builder mirrors `ella_daily_digest_cron`'s
-(`SLACK_WORKSPACE` optional subdomain) so the link renders identically
-to the digest's.
+The mention is the primary action signal; `client_name` disambiguates
+which channel; `time_ago` lets the CSM see at a glance whether it
+just hit 2h or has been sitting all day; the permalink is the action.
+The CSM clicks through to read the full message, Ella's category, and
+Haiku's reasoning at the source channel — that context is on screen
+the moment they land, so duplicating it in the alert post created
+scroll-heavy noise without adding triage value.
+
+Backstops: no mentions → bare line without leading prefix; missing
+`client_name` → `(unknown client)`; missing permalink inputs →
+degenerate permalink trailing.
+
+The `<@U…>` tokens are real Slack mentions and ping the recipients.
+The permalink builder mirrors `ella_daily_digest_cron`'s
+(`SLACK_WORKSPACE` optional subdomain) so the link renders
+identically to the digest's.
 
 ## Schedule
 

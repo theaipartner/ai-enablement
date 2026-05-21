@@ -34,6 +34,30 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-21 — Ella unanswered flagger: client-only filter + terse post format
+
+`docs/specs/ella-unanswered-flagger-client-only-and-terse-post.md`. Two operational adjustments to `api/ella_unanswered_flagger_cron.py` driven by observed production behavior since the 2026-05-14 ship.
+
+**(1) Client-only filter.** `_fetch_candidates` previously returned every `pending_digest_items` row aged into the [2h, 7d] window — regardless of who authored the triggering message. Team_member questions in client channels that didn't get a team_member follow-up within 2h were being surfaced to `#unanswered-channels`, mentioning the primary advisor + Scott. Wrong audience for that signal. New `_filter_to_client_authored` runs after the candidate fetch, groups candidates by channel, runs one SELECT per distinct channel against `slack_messages` (eq channel + in_ slack_ts), and JS-side filters to `author_type='client'` only. Two-query pattern (candidate fetch + per-channel author lookup) keeps the join simple and the round-trip count bounded at the distinct-channel count. Defensive on missing backing row (filter out — better than flagging unverified author) and lookup failure (skip that channel this tick, retry next).
+
+**Side benefit:** the still-open `author_type='bot'` known issue (Ella's posts misclassifying as `bot` in `slack_messages`, logged 2026-05-21 during the duplicate-webhook diagnostic) is also handled implicitly. Bot-tagged rows fail the `== 'client'` check, so the flagger won't accidentally surface Ella's own posts as "unanswered" while the parser bug stays open.
+
+**(2) Terse one-line post format.** The six-line block format (alert header / mention line / message quote / Ella's read + reasoning / posted-by / permalink) collapses to one line:
+
+```
+<@scott> <@advisor> unanswered in {client}'s channel ({time_ago}): {permalink}
+```
+
+The mention is the primary action signal; `client_name` disambiguates; `time_ago` lets the CSM see at a glance whether it just hit 2h or has been sitting all day; the permalink is the action. Full message text, Ella's category, and Haiku's reasoning are NOT included — CSMs see them in the source channel after clicking through. Removes `_REASONING_MAX` (now dead); `_SNIPPET_MAX` and `_truncate` stay (still used in audit-row payloads).
+
+**Daily digest cron unchanged.** `api/ella_daily_digest_cron.py` reads `pending_digest_items` separately and surfaces ALL author types (intended wider-net awareness). The two surfaces are co-located in the same table but logically distinct in audience — the digest is the daily skim, the flagger is the narrow "client needs eyes right now" signal.
+
+**Doc updates riding along.** `docs/runbooks/ella_unanswered_flagger.md` (post format rewritten, client-only filter documented).
+
+**Test suite expansion.** 9 new tests pin the new behavior: filter drops team_member / bot / missing-backing / per-channel-lookup-failure cases; format covers happy path / legacy-field removal / no-mentions / missing-client-name / degenerate-permalink. Full suite: **706 passing** (was 697; +9 new). Existing 15 tests updated to seed `_backing_message(item)` so candidates survive the new filter; fake DB extended to handle the new query shape (no `eq` on `author_type`, `in_` on `slack_ts`).
+
+Post-state: **42 migrations, 13 Python serverless functions, 706 pytest passing, 6 TopNav tabs**. No migration; no env-var changes. **Two smoke cases gate (c)** — Drake observes organically over the next few hours: (1) a real client message goes 2h+ without team_member response → flagged with the new terse format; (2) a real team_member message goes 2h+ → NOT flagged (verifiable via SQL on `pending_digest_items` showing the digest row present but `unanswered_posted_at` NULL).
+
 ### 2026-05-21 — Ella realtime-ingest dedup `message_changed` fix
 
 `docs/specs/ella-realtime-ingest-dedup-message-changed.md`. Follow-up to the 2026-05-21 morning diagnostic that confirmed the prior 2026-05-20 dedup gate was firing zero true-duplicate audit rows in production despite 11 documented duplicate dispatches across 8 channels in ~36 hours of post-resume traffic. Root cause: the gate keyed on `event.get("ts")` (outer event ts), which differs between an original `message` event and its follow-on `message_changed` edit event — so the PK collision the gate relies on never fired.
