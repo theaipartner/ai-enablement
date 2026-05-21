@@ -389,7 +389,177 @@ def test_step0_fail_open_on_db_outage(fake_db):
 # BROKEN pre-2026-05-21 behavior — see `docs/reports/ella-duplicate-
 # webhook-delivery-diagnostic.md` § Surprises. It was deleted as part
 # of `ella-realtime-ingest-dedup-message-changed`. The new correct-
-# behavior tests live below in the "message_changed dedup" block.
+# behavior tests live below.
+
+
+def test_message_changed_dedups_against_original_message_ts(fake_db):
+    """The fix for the 2026-05-21 message_changed duplicate bug: a
+    user edits their message, Slack delivers a `message_changed` event
+    with `event.ts != original message.ts` but
+    `event.message.ts == original message.ts`. The dedup gate now keys
+    on `record.slack_ts` (which the parser pulls from the inner event),
+    so the second delivery dedups correctly and the passive-monitor
+    fork does NOT fire twice. This is the test the production misfire
+    documented in
+    `docs/reports/ella-duplicate-webhook-delivery-diagnostic.md`
+    would have caught."""
+    fake_db.channels = [_client_channel("C500")]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+
+    # First delivery: the original message event.
+    original = {
+        "type": "message",
+        "channel": "C500",
+        "ts": "1745500300.111000",
+        "user": "UCLIENT1",
+        "text": "Original message",
+    }
+    result1 = ri.ingest_message_event(_envelope(original))
+
+    assert result1["ingested"] is True
+    assert result1["skipped_reason"] is None
+    # Step 0 wrote the deterministic webhook_id from record.slack_ts.
+    assert result1["delivery_id"] == "slack_msg_ingest_C500_1745500300.111000"
+
+    # Second delivery: edit event for the same logical message.
+    # OUTER ts differs (Slack stamps it to the edit-event time), INNER
+    # ts is preserved as the original message's ts. The new dedup key
+    # uses record.slack_ts (the inner ts) so the second delivery
+    # collides with the first.
+    edit = {
+        "type": "message",
+        "subtype": "message_changed",
+        "channel": "C500",
+        "ts": "1745500313.000100",  # OUTER edit-event ts (different)
+        "message": {
+            "type": "message",
+            "ts": "1745500300.111000",  # INNER original ts (same)
+            "user": "UCLIENT1",
+            "text": "Edited message text",
+            "edited": {
+                "ts": "1745500313.000000",
+                "user": "UCLIENT1",
+            },
+        },
+    }
+    result2 = ri.ingest_message_event(_envelope(edit))
+
+    assert result2["ingested"] is False
+    assert result2["skipped_reason"] == "duplicate"
+    # The cosmetic delivery_id on the duplicate result reflects the
+    # canonical inner ts — same key as the first delivery.
+    assert result2["delivery_id"] == "slack_msg_ingest_C500_1745500300.111000"
+    # Forensic duplicate-audit row written.
+    forensic = [
+        w for w in fake_db.webhook_inserts
+        if w["webhook_id"].startswith("slack_msg_ingest_dup_")
+    ]
+    assert len(forensic) == 1
+    assert forensic[0]["payload"]["original_delivery_id"] == (
+        "slack_msg_ingest_C500_1745500300.111000"
+    )
+
+
+def test_message_changed_with_different_inner_ts_processed_separately(fake_db):
+    """Defensive: if a `message_changed` event ever arrives with an
+    inner ts that doesn't match any prior delivery (rare — would mean
+    Slack re-keyed the edit, or a manual replay constructed a synthetic
+    event), the dedup gate should NOT collapse it against an unrelated
+    message. Each distinct inner ts is its own logical message."""
+    fake_db.channels = [_client_channel("C501")]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+
+    edit_with_unfamiliar_inner_ts = {
+        "type": "message",
+        "subtype": "message_changed",
+        "channel": "C501",
+        "ts": "1745500500.000100",
+        "message": {
+            "type": "message",
+            "ts": "1745500499.776655",  # never seen before
+            "user": "UCLIENT1",
+            "text": "freshly-edited never-before-seen message",
+        },
+    }
+
+    result = ri.ingest_message_event(_envelope(edit_with_unfamiliar_inner_ts))
+
+    # Processes as a normal first delivery — no dedup collision.
+    assert result["ingested"] is True
+    assert result["skipped_reason"] is None
+    assert result["delivery_id"] == "slack_msg_ingest_C501_1745500499.776655"
+
+
+def test_pre_dedup_early_exit_audit_rows_use_pre_dedup_prefix(fake_db):
+    """Both pre-step-0 early-exit branches (non-client channel,
+    ignorable subtype) write a plain INSERT under the
+    `slack_msg_ingest_pre_dedup_` webhook_id prefix. Audit-ledger
+    queries can filter on the prefix to separate these rows from
+    happy-path and forensic-duplicate rows."""
+    # Non-client channel skip
+    fake_db.channels = []
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C_NON_CLIENT",
+            "user": "U1",
+            "text": "skip me",
+            "ts": "1745500600.111111",
+        })
+    )
+
+    # Ignorable subtype skip
+    fake_db.channels = [_client_channel("C_CLIENT")]
+    fake_db.clients = [{"slack_user_id": "U1"}]
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "subtype": "channel_join",
+            "channel": "C_CLIENT",
+            "user": "U1",
+            "text": "<@U1> has joined the channel",
+            "ts": "1745500601.222222",
+        })
+    )
+
+    pre_dedup_rows = [
+        w for w in fake_db.webhook_inserts
+        if w["webhook_id"].startswith("slack_msg_ingest_pre_dedup_")
+    ]
+    assert len(pre_dedup_rows) == 2
+    skip_reasons = {row["payload"]["skip_reason"] for row in pre_dedup_rows}
+    assert skip_reasons == {"non_client_channel", "ignorable_subtype"}
+    # None of the early-exit rows touched step 0.
+    assert fake_db.webhook_upserts == []
+
+
+def test_happy_path_delivery_id_uses_record_slack_ts(fake_db):
+    """For a regular (non-edit) `message` event, `event.ts` ==
+    `record.slack_ts`, so the post-parse delivery_id is identical to
+    what the prior (outer-ts) gate would have produced. This documents
+    the invariant: the dedup key shape is the same for non-edit
+    messages; only edits behave differently from the prior spec."""
+    fake_db.channels = [_client_channel("C700")]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+
+    result = ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C700",
+            "user": "UCLIENT1",
+            "text": "vanilla message",
+            "ts": "1745500700.123456",
+        })
+    )
+
+    assert result["ingested"] is True
+    assert result["delivery_id"] == "slack_msg_ingest_C700_1745500700.123456"
+    # Step 0 fired exactly once with the canonical key.
+    assert len(fake_db.webhook_upserts) == 1
+    assert (
+        fake_db.webhook_upserts[0]["webhook_id"]
+        == "slack_msg_ingest_C700_1745500700.123456"
+    )
 
 
 # ---------------------------------------------------------------------------
