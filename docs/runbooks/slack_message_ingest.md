@@ -60,35 +60,54 @@ Sequence at first deploy:
    after sending a test message in a pilot channel. Drake's gate
    (post-deploy testing on real surface).
 
-## Dedup gate (step 0, added 2026-05-20)
+## Dedup gate (step 0, restructured 2026-05-21)
 
-Every realtime delivery passes through a dedup gate BEFORE any side
-effect fires. The gate uses `webhook_deliveries.webhook_id` (PK) as
-the dedup primitive via UPSERT-with-`ignore_duplicates=True` — same
-pattern proven in production by the Fathom webhook handler.
+Every realtime delivery passes through a dedup gate before any
+downstream side effect (slack_messages upsert, passive-monitor fork,
+escalation fan-out) fires. The gate uses `webhook_deliveries.webhook_id`
+(PK) as the dedup primitive via UPSERT-with-`ignore_duplicates=True`
+— same pattern proven in production by the Fathom webhook handler.
 
-**Deterministic webhook_id format:**
+**Position in the pipeline (post-2026-05-21):** Step 0 runs AFTER
+channel-allowlist + subtype gate + `parse_message`, and BEFORE
+`_upsert_message` / `_maybe_dispatch_passive_monitor`. The key
+construction uses `record.slack_channel_id` + `record.slack_ts` —
+both stable across `message_changed` redeliveries because `record`
+is the parsed inner-event shape. The prior position (step 0 BEFORE
+parsing, keyed on `event.get("ts")`) failed to dedup edits — see
+`docs/reports/ella-duplicate-webhook-delivery-diagnostic.md` for
+the diagnostic that surfaced the bug.
+
+**Deterministic webhook_id format (happy path through step 0):**
 
 ```
-slack_msg_ingest_{slack_channel_id}_{slack_ts}
+slack_msg_ingest_{record.slack_channel_id}_{record.slack_ts}
 ```
 
-Example: `slack_msg_ingest_C0AFEC456JG_1745500000.000100`.
+Example: `slack_msg_ingest_C0AFEC456JG_1745500000.000100`. For a
+regular (non-edit) message, `record.slack_ts == event.ts`. For a
+`message_changed` event, `record.slack_ts` is the INNER message ts
+(unchanged across edits), so two deliveries of the same logical
+message (original + edit) collide on the PK and the second is
+short-circuited.
 
-Malformed events with no channel or no ts fall back to
-`slack_msg_ingest_malformed_{uuid}` — a one-off UUID so two distinct
-malformed deliveries don't false-dedup against each other on a fixed
-key.
+**Three webhook_id prefixes for distinct intents:**
+
+| Prefix | Source | When written |
+|--------|--------|--------------|
+| `slack_msg_ingest_{channel}_{ts}` | Step 0 UPSERT + lifecycle UPDATE | Happy path through step 0; one row per logical message, lifecycle `received → processed/failed/malformed` |
+| `slack_msg_ingest_dup_{uuid}` | `_write_duplicate_audit_row` INSERT | Forensic row written when step 0's UPSERT returns empty data; `processing_status='duplicate'` |
+| `slack_msg_ingest_pre_dedup_{uuid}` | `_insert_audit_terminal` INSERT | Early-exit branches BEFORE step 0 (non-client channel, ignorable subtype, parser-returned-None); single-state row with terminal status |
 
 **Behavior on duplicate.** When Slack re-delivers the same logical
 message (retry semantics, `message_changed` redelivery, manual replay)
-the second UPSERT returns empty data (the PK already exists) and
-`ingest_message_event` short-circuits with `skipped_reason='duplicate'`
-before any downstream side effect — no `slack_messages` upsert, no
-passive-monitor dispatch, no ack post, no DM fan-out. A forensic audit
-row is written with a UUID-suffixed `webhook_id`, `processing_status='duplicate'`,
-and `payload.original_delivery_id` linking back to the first delivery
-for trace-ability.
+the second UPSERT returns empty data and `ingest_message_event`
+short-circuits with `skipped_reason='duplicate'` before any downstream
+side effect — no second `slack_messages` upsert, no second
+passive-monitor dispatch, no second ack post, no DM fan-out. A
+forensic audit row is written with a UUID-suffixed `webhook_id`,
+`processing_status='duplicate'`, and `payload.original_delivery_id`
+linking back to the first delivery for trace-ability.
 
 **Fail-open on DB outage.** If the step-0 UPSERT raises an unexpected
 exception (non-PK-collision: DB unavailable, network timeout), the
@@ -97,24 +116,43 @@ pipeline run. Better to risk processing one possible-duplicate during
 a DB blip than to drop a legitimate client message. The downstream
 code's exception handler captures any further issues.
 
+**Audit observability — three useful queries:**
+
+```sql
+-- Forensic duplicates caught by the gate (the dedup gate firing
+-- successfully). Should be non-zero on healthy traffic.
+select count(*) from webhook_deliveries
+ where source = 'slack_message_ingest'
+   and webhook_id like 'slack_msg_ingest_dup_%'
+   and received_at >= now() - interval '7 days';
+
+-- Pre-dedup early-exit rows (audit-only, not part of dedup).
+-- Spikes indicate noisy non-client traffic or subtype churn.
+select count(*) from webhook_deliveries
+ where source = 'slack_message_ingest'
+   and webhook_id like 'slack_msg_ingest_pre_dedup_%'
+   and received_at >= now() - interval '7 days';
+
+-- Happy-path rows by terminal status — the lifecycle that step 0
+-- writes (received → processed/failed/malformed).
+select processing_status, count(*) from webhook_deliveries
+ where source = 'slack_message_ingest'
+   and webhook_id ~ '^slack_msg_ingest_C[A-Z0-9]+_[0-9]+\.[0-9]+$'
+   and received_at >= now() - interval '7 days'
+ group by processing_status;
+```
+
+A zero count on the first query over a week of meaningful traffic =
+probably broken (Slack does retry occasionally; with the post-parse
+key, edits also count as dupes and should show up here).
+
 **Closes** the 2026-05-19 EOD `docs/known-issues.md` entry
 "Passive dispatch has no idempotency check against duplicate Slack
 message delivery" — the misfire that produced two ack posts + four DMs
-from a single Slack delivery would no longer fire.
-
-**Audit observability.** To monitor how often Slack actually
-redelivers, query:
-
-```sql
-select count(*) from webhook_deliveries
- where source = 'slack_message_ingest'
-   and processing_status = 'duplicate'
-   and received_at >= now() - interval '7 days';
-```
-
-A non-zero count over a week of traffic confirms the gate is firing.
-Zero rows over a week of meaningful traffic = probably broken
-(Slack does retry occasionally).
+from a single Slack delivery would no longer fire. The prior 2026-05-20
+ship had the correct architecture but the wrong dedup key (outer ts);
+the 2026-05-21 fix moves the key to the inner ts via post-parse
+construction.
 
 ## Audit ledger contract
 

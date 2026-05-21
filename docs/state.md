@@ -34,6 +34,31 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-21 — Ella realtime-ingest dedup `message_changed` fix
+
+`docs/specs/ella-realtime-ingest-dedup-message-changed.md`. Follow-up to the 2026-05-21 morning diagnostic that confirmed the prior 2026-05-20 dedup gate was firing zero true-duplicate audit rows in production despite 11 documented duplicate dispatches across 8 channels in ~36 hours of post-resume traffic. Root cause: the gate keyed on `event.get("ts")` (outer event ts), which differs between an original `message` event and its follow-on `message_changed` edit event — so the PK collision the gate relies on never fired.
+
+**The structural fix.** The pipeline order changes: channel-allowlist + subtype gate + parser invocation all now run BEFORE step 0. The dedup gate moves post-parse and builds the webhook_id from `record.slack_channel_id` + `record.slack_ts` — both stable across `message_changed` redeliveries because `record` is the parsed inner-event shape. A user edit now produces a webhook_id that PK-collides with the original delivery's key → second delivery short-circuits as duplicate before the `slack_messages` upsert and passive-monitor fork.
+
+**Audit-row shape.** Three webhook_id prefixes for distinct intents:
+- `slack_msg_ingest_{channel}_{ts}` — happy path through step 0 (UPSERT received → UPDATE processed/failed).
+- `slack_msg_ingest_dup_{uuid}` — forensic duplicate row, written when step 0's UPSERT returns empty data.
+- `slack_msg_ingest_pre_dedup_{uuid}` — NEW: terminal INSERT for early-exit branches that fire BEFORE step 0 (non-client channel, ignorable subtype, parser-returned-None). New helper `_insert_audit_terminal` writes these.
+
+**Test suite expansion.** New tests pin: `message_changed` dedup against the original message ts (the production failure mode), distinct-inner-ts not falsely dedup'd, pre-dedup audit rows use the right prefix, happy-path delivery_id invariant. The previous spec's `test_message_changed_uses_outer_ts_for_dedup_key` (which pinned the broken behavior as expected) was deleted. Full suite: **697 passing** (was 694; +4 new, -1 deleted broken-behavior).
+
+**Doc updates riding along.** `docs/runbooks/slack_message_ingest.md` (Dedup gate section rewritten — post-parse key from `record.slack_ts`, new prefix table); `docs/agents/ella/ella.md` (trigger pipeline mention + changelog); `docs/known-issues.md` (Problem A resolution corrected to point to this spec instead of the prior partial fix, plus NEW entry logging the `author_type='bot'` finding from the diagnostic).
+
+Post-state: **42 migrations, 13 Python serverless functions, 697 pytest passing, 6 TopNav tabs**. No migration; no env-var changes. **Production resume on the 136 paused channels is gated on Drake's three-case smoke validation in `#ella-test-drakeonly`** (first-delivery happy path, edit-event dedup, two-distinct-messages-don't-false-dedup). The kill-switch UPDATE from 2026-05-21 stays as-is until smoke passes.
+
+### 2026-05-21 — Ella duplicate-webhook diagnostic (read-only)
+
+`docs/specs/ella-duplicate-webhook-delivery-diagnostic.md`. Read-only diagnostic confirming the 2026-05-20 dedup gate's structural bug. Five queries against cloud Supabase via `psycopg2` on the pooler URL. Key findings: 11 duplicate dispatches / 8 channels / 36 hours post-2026-05-20-resume; zero `slack_msg_ingest_dup_*` audit rows ever fired; the second webhook_id in every duplicate set encodes a `.000XXX` clean-microsecond ts (the Slack `message_changed` event's outer `event.ts`, distinct from the original message's natural-entropy ts). Spec status `shipped` (no gate (c)). Follow-up fix spec slug named in the report: `ella-realtime-ingest-dedup-message-changed` (now also shipped).
+
+**Surfaced for hygiene per gate (b):** the previous spec's `What could go wrong #6` anticipated this failure mode in advance but classified it "acceptable for v1" with the reasoning "Slack edits are rare in client channels." Production reality contradicted that within 36 hours. Captured as a Surprises entry in the diagnostic report.
+
+**Side-finding (separate from the dedup bug):** Ella's posts ingest with `author_type='bot'` instead of `'ella'` for `slack_user_id='U0ATX2Y8GTD'`. Logged in `docs/known-issues.md` as a separate spec for a future session.
+
 ### 2026-05-20 — Ella realtime-ingest idempotency gate (production resume unblocked)
 
 `docs/specs/ella-realtime-ingest-idempotency.md`. Closes Problem A — the third and final structural gap from the 2026-05-19 EOD misfire. With this spec shipped, production passive monitoring can be re-enabled on the 136 paused channels (operationally a single `UPDATE slack_channels SET passive_monitoring_enabled = true WHERE test_mode = false` — Drake's call when ready; not in this spec's scope).

@@ -36,7 +36,7 @@ Ella answers client questions in their private Slack channels at near-CSM qualit
 
 **Every message** in a channel mapped to a `clients` row with `passive_monitoring_enabled = true` (and global `ELLA_PASSIVE_MONITORING_ENABLED=true`) flows through one webhook ingest:
 
-`api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:ingest_message_event` (step 0: dedup gate via `webhook_deliveries.webhook_id` PK on `(channel, ts)` — duplicates short-circuit before any side effect) → `_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
+`api/slack_events.py` (`message` event) → `ingestion/slack/realtime_ingest.py:ingest_message_event` (channel-allowlist + subtype gate + `parse_message` first; then step 0 dedup gate via `webhook_deliveries.webhook_id` PK on `(channel, record.slack_ts)` — inner/canonical ts so `message_changed` redeliveries collide on the original message's key and short-circuit before any side effect) → `_maybe_dispatch_passive_monitor` → `agents.ella.passive_monitor.evaluate_passive_trigger` → `agents.ella.passive_dispatch.persist_passive_evaluation`.
 
 - The `app_mention` event is a **logged no-op**. Slack fires a parallel `message` event alongside every `app_mention` (the app subscribes to `message.groups` on all client channels); handling app_mention too would double-fire. The reactive machinery (`_should_dual_trigger`, `_build_app_mention_from_message`, `_process_mention`) is removed.
 - The @-mention is detected in realtime_ingest (`detect_at_mentions` — parses every `<@U...>` mention, returns `mentions / is_ella_mentioned / is_routed_to_others`) and the three booleans are threaded through `PassiveTriggerPayload.is_ella_mentioned` + `.is_routed_to_others`.
@@ -391,6 +391,20 @@ Batches 2/3.
   now triggers a brief warm opener instead of silence. No
   architecture/migration/env beyond the new module. Spec:
   `docs/specs/ella-at-mention-structural-override.md`.
+- realtime-ingest dedup `message_changed` fix (2026-05-21): the
+  2026-05-20 dedup gate shipped the correct architecture but the
+  wrong key — it built the webhook_id from the OUTER `event.ts`,
+  which differs between an original `message` event and its
+  follow-on `message_changed` edit event. Production saw 11
+  duplicate dispatches / 8 channels / 36 hours after the resume
+  before the bug was caught. The 2026-05-21 fix moves step 0 AFTER
+  parse_message and keys on `record.slack_channel_id +
+  record.slack_ts` (inner/canonical ts, stable across edits). New
+  pre-dedup audit-row prefix `slack_msg_ingest_pre_dedup_{uuid}`
+  for the channel/subtype/parser-None early-exit branches that now
+  fire before step 0. Diagnostic: `docs/reports/ella-duplicate-
+  webhook-delivery-diagnostic.md`. Spec: `docs/specs/ella-realtime-
+  ingest-dedup-message-changed.md`.
 - realtime-ingest idempotency gate (2026-05-20): closes the third
   structural gap from the 2026-05-19 EOD misfire. `webhook_id` in
   `ingestion/slack/realtime_ingest.py` is now deterministic per
