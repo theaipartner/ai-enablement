@@ -469,3 +469,219 @@ def test_no_candidates_clean_exit(fake_db, slack_calls):
     assert result["checked"] == 0
     assert result["posted"] == 0
     assert len(slack_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Client-only filter (post-2026-05-21 — see
+# docs/specs/ella-unanswered-flagger-client-only-and-terse-post.md)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_drops_team_member_authored_candidates(fake_db, slack_calls):
+    """The primary bug fix: a team_member's question that doesn't get
+    a follow-up within 2h should NOT be flagged to #unanswered-channels.
+    Only client-authored messages should surface there."""
+    client_item = _item("dg-client", "cli-1", "C1")
+    team_item = _item("dg-team", "cli-1", "C1")
+    team_item["triggering_message_ts"] = "1745500200.000200"
+    fake_db.items = [client_item, team_item]
+    fake_db.slack_messages = [
+        _backing_message(client_item, author_type="client"),
+        _backing_message(team_item, author_type="team_member"),
+    ]
+    fake_db.clients = [_client()]
+    fake_db.team_members = [_scott()]
+
+    result = cron.run_ella_unanswered_flagger_cron()
+
+    assert result["checked"] == 1  # only the client-authored row survived the filter
+    assert result["posted"] == 1
+    assert len(slack_calls) == 1
+    # The surviving item is the client-authored one.
+    upd = fake_db.item_updates[0]
+    assert upd["id"] == "dg-client"
+
+
+def test_filter_drops_bot_authored_candidates(fake_db, slack_calls):
+    """Side benefit of the client-only filter: the open
+    `author_type='bot'` known issue (Ella's posts misclassifying as
+    bot) is also handled. Bot-tagged candidates fail the
+    `== 'client'` check and never get flagged. Pins this defensive
+    behavior so a future relaxation of the filter doesn't accidentally
+    surface Ella's own posts as 'unanswered'."""
+    item = _item()
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item, author_type="bot")]
+    fake_db.clients = [_client()]
+    fake_db.team_members = [_scott()]
+
+    result = cron.run_ella_unanswered_flagger_cron()
+
+    assert result["checked"] == 0
+    assert result["posted"] == 0
+    assert len(slack_calls) == 0
+
+
+def test_filter_drops_candidate_with_missing_backing_slack_messages_row(
+    fake_db, slack_calls
+):
+    """A digest item whose source slack_messages row doesn't exist is
+    treated as NOT client-authored and filtered out. Defensive: the
+    cron is a safety net, not a backstop for ingestion gaps. Could
+    happen during a partial-failure window in the realtime pipeline."""
+    item = _item()
+    fake_db.items = [item]
+    # Intentionally NO backing slack_messages row.
+    fake_db.slack_messages = []
+    fake_db.clients = [_client()]
+    fake_db.team_members = [_scott()]
+
+    result = cron.run_ella_unanswered_flagger_cron()
+
+    assert result["checked"] == 0
+    assert result["posted"] == 0
+    assert len(slack_calls) == 0
+
+
+def test_filter_skips_channel_on_author_lookup_failure(
+    fake_db, slack_calls, monkeypatch
+):
+    """If the per-channel author_type lookup raises, all candidates in
+    that channel are skipped THIS tick (better to under-flag than
+    over-flag during a transient DB blip). Candidates in OTHER
+    channels in the same tick still process normally — failure
+    isolation per channel, not whole-tick."""
+    good_item = _item("dg-good", "cli-1", "C_GOOD")
+    bad_item = _item("dg-bad", "cli-2", "C_BAD")
+    fake_db.items = [good_item, bad_item]
+    fake_db.slack_messages = [
+        _backing_message(good_item),
+        _backing_message(bad_item),
+    ]
+    fake_db.clients = [
+        _client("cli-1", "GoodCo"),
+        _client("cli-2", "BadCo"),
+    ]
+    fake_db.team_members = [_scott()]
+
+    # Monkeypatch the table() factory to raise selectively for the
+    # bad channel's slack_messages lookup. Wrap the original.
+    original_table = fake_db.table
+
+    def _selective_table(name):
+        chain = original_table(name)
+        original_execute = chain.execute
+
+        def _maybe_raise():
+            if (
+                name == "slack_messages"
+                and chain._eq.get("slack_channel_id") == "C_BAD"
+                and isinstance(chain._eq.get("slack_ts"), tuple)
+            ):
+                raise RuntimeError("transient DB blip on this channel")
+            return original_execute()
+
+        chain.execute = _maybe_raise
+        return chain
+
+    monkeypatch.setattr(fake_db, "table", _selective_table)
+
+    result = cron.run_ella_unanswered_flagger_cron()
+
+    # Only the good-channel candidate survived — bad-channel one was
+    # filtered out due to the lookup failure (missing key in
+    # author_types dict → False on the `== 'client'` check).
+    assert result["checked"] == 1
+    assert result["posted"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Terse channel-post format (post-2026-05-21)
+# ---------------------------------------------------------------------------
+
+
+def test_format_terse_one_line_happy_path():
+    """The new format is one line: mentions + 'unanswered in
+    {client}'s channel ({time_ago}): {permalink}'."""
+    row = {
+        "slack_channel_id": "C1",
+        "triggering_message_ts": "1745500100.000100",
+        "created_at": _iso(_NOW - timedelta(hours=3)),
+    }
+    body = cron._format_channel_post(
+        row,
+        client_name="Acme Co",
+        mention_ids=["U_SCOTT", "U_ADVISOR"],
+    )
+
+    # One line, no newlines.
+    assert "\n" not in body
+    # Mentions at the start.
+    assert body.startswith("<@U_SCOTT> <@U_ADVISOR> ")
+    # Anchor copy.
+    assert "unanswered in Acme Co's channel" in body
+    # Time-ago in parens.
+    assert "(3h ago)" in body
+    # Permalink trailing.
+    assert "slack.com/archives/C1/p1745500100000100" in body
+
+
+def test_format_terse_drops_legacy_fields():
+    """Documents removal: snippet, category, reasoning, alert-bell
+    prefix, posted-by line are all gone."""
+    row = {
+        "slack_channel_id": "C1",
+        "triggering_message_ts": "1745500100.000100",
+        "message_text": "Where is the booking link?",
+        "digest_category": "question_program",
+        "haiku_reasoning": "client asking for booking link",
+        "created_at": _iso(_NOW - timedelta(hours=2)),
+    }
+    body = cron._format_channel_post(row, "Acme Co", ["U_SCOTT"])
+
+    # None of the V1 multi-line fields appear.
+    assert "🔔" not in body and ":bell:" not in body
+    assert "Ella's read" not in body
+    assert "Posted:" not in body
+    assert "this message has been sitting" not in body
+    # Snippet and reasoning text don't leak into the channel post.
+    assert "Where is the booking link" not in body
+    assert "question_program" not in body
+    assert "client asking for booking link" not in body
+
+
+def test_format_no_mentions_renders_without_leading_prefix():
+    """Zero mentions → no leading prefix, no orphan space."""
+    row = {
+        "slack_channel_id": "C1",
+        "triggering_message_ts": "1745500100.000100",
+        "created_at": _iso(_NOW - timedelta(hours=2)),
+    }
+    body = cron._format_channel_post(row, "Acme Co", mention_ids=[])
+    assert not body.startswith(" ")
+    assert body.startswith("unanswered in Acme Co's channel")
+
+
+def test_format_missing_client_name_renders_unknown():
+    row = {
+        "slack_channel_id": "C1",
+        "triggering_message_ts": "1745500100.000100",
+        "created_at": _iso(_NOW - timedelta(hours=2)),
+    }
+    body = cron._format_channel_post(row, client_name=None, mention_ids=["U_X"])
+    assert "(unknown client)'s channel" in body
+
+
+def test_format_missing_permalink_inputs_renders_degenerate_url():
+    """Missing channel/ts → permalink builder returns an empty-channel
+    URL with no ts. The format still renders one clean line (no
+    crash, no orphan whitespace). Operationally fine — the row was
+    malformed enough that we wouldn't expect a real permalink."""
+    row = {
+        "created_at": _iso(_NOW - timedelta(hours=2)),
+        # No slack_channel_id, no triggering_message_ts
+    }
+    body = cron._format_channel_post(row, "Acme Co", ["U_X"])
+    assert "\n" not in body
+    assert body.endswith("https://slack.com/archives//p")
+    assert ": https://" in body  # single space after colon, no double-space
