@@ -105,6 +105,21 @@ class _Chain:
             ch = self._eq.get("slack_channel_id")
             author = self._eq.get("author_type")
             after = self._gt[1] if self._gt else None
+            # Two query shapes hit this table:
+            #   - _has_human_intervention: eq channel + eq
+            #     author_type='team_member' + gt sent_at; returns up to 1.
+            #   - _filter_to_client_authored: eq channel + in_ slack_ts;
+            #     returns rows projected to (channel, ts, author_type).
+            slack_ts_filter = self._eq.get("slack_ts")
+            if isinstance(slack_ts_filter, tuple) and slack_ts_filter[0] == "in":
+                wanted_tses = slack_ts_filter[1]
+                hits = [
+                    msg
+                    for msg in self.fake.slack_messages
+                    if msg["slack_channel_id"] == ch
+                    and msg.get("slack_ts") in wanted_tses
+                ]
+                return SimpleNamespace(data=hits)
             hits = [
                 msg
                 for msg in self.fake.slack_messages
@@ -216,11 +231,30 @@ def _scott(uid="U_SCOTT"):
     }
 
 
+def _backing_message(item: dict, author_type: str = "client") -> dict:
+    """Seed a `slack_messages` row matching `item`'s
+    (slack_channel_id, triggering_message_ts) with the given
+    `author_type`. The post-2026-05-21 client-only filter in
+    `_filter_to_client_authored` looks for this row; without it the
+    candidate gets dropped pre-intervention-check."""
+    return {
+        "slack_channel_id": item["slack_channel_id"],
+        "slack_ts": item["triggering_message_ts"],
+        "author_type": author_type,
+        # sent_at not consulted by the client-only filter (only the
+        # intervention check reads sent_at). Set to anything past
+        # epoch for completeness.
+        "sent_at": item["created_at"],
+    }
+
+
 # ---------------------------------------------------------------------------
 
 
 def test_happy_path_posts_and_marks(fake_db, slack_calls):
-    fake_db.items = [_item()]
+    item = _item()
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item)]
     fake_db.clients = [_client()]
     fake_db.team_members = [_scott()]
 
@@ -249,11 +283,17 @@ def test_human_response_after_marks_resolved_no_post(fake_db, slack_calls):
     fake_db.clients = [_client()]
     fake_db.team_members = [_scott()]
     fake_db.slack_messages = [
+        # Seed the client-authored backing row so the candidate passes
+        # the post-2026-05-21 client-only filter.
+        _backing_message(item),
+        # team_member follow-up message that the intervention check
+        # detects.
         {
             "slack_channel_id": "C1",
+            "slack_ts": "1745500200.000001",
             "author_type": "team_member",
             "sent_at": _iso(_NOW - timedelta(hours=1)),  # after created_at
-        }
+        },
     ]
 
     result = cron.run_ella_unanswered_flagger_cron()
@@ -268,16 +308,21 @@ def test_human_response_after_marks_resolved_no_post(fake_db, slack_calls):
 
 
 def test_human_response_before_created_at_still_posts(fake_db, slack_calls):
-    fake_db.items = [_item(age=timedelta(hours=3))]
+    item = _item(age=timedelta(hours=3))
+    fake_db.items = [item]
     fake_db.clients = [_client()]
     fake_db.team_members = [_scott()]
-    # team_member message BEFORE the flagged message landed.
+    # team_member message BEFORE the flagged message landed. The
+    # backing client message lets the candidate pass the
+    # post-2026-05-21 client-only filter.
     fake_db.slack_messages = [
+        _backing_message(item),
         {
             "slack_channel_id": "C1",
+            "slack_ts": "1745500050.000001",
             "author_type": "team_member",
             "sent_at": _iso(_NOW - timedelta(hours=5)),
-        }
+        },
     ]
 
     result = cron.run_ella_unanswered_flagger_cron()
@@ -324,11 +369,13 @@ def test_kill_switch_off(fake_db, slack_calls, monkeypatch):
 
 
 def test_multiple_items_one_failure_isolated(fake_db, monkeypatch):
-    fake_db.items = [
+    items = [
         _item("dg-1", "cli-1", "C1"),
         _item("dg-2", "cli-2", "C2"),
         _item("dg-3", "cli-3", "C3"),
     ]
+    fake_db.items = items
+    fake_db.slack_messages = [_backing_message(i) for i in items]
     fake_db.clients = [
         _client("cli-1", "Acme", "U_A1"),
         _client("cli-2", "Beta", "U_A2"),
@@ -352,7 +399,9 @@ def test_multiple_items_one_failure_isolated(fake_db, monkeypatch):
 
 
 def test_scott_is_primary_advisor_dedup(fake_db, slack_calls):
-    fake_db.items = [_item()]
+    item = _item()
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item)]
     fake_db.clients = [_client(advisor="U_SCOTT")]  # advisor == Scott
     fake_db.team_members = [_scott("U_SCOTT")]
     cron.run_ella_unanswered_flagger_cron()
@@ -361,7 +410,9 @@ def test_scott_is_primary_advisor_dedup(fake_db, slack_calls):
 
 
 def test_no_primary_advisor_only_scott(fake_db, slack_calls):
-    fake_db.items = [_item()]
+    item = _item()
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item)]
     fake_db.clients = [_client(advisor=None)]
     fake_db.team_members = [_scott()]
     cron.run_ella_unanswered_flagger_cron()
@@ -371,7 +422,9 @@ def test_no_primary_advisor_only_scott(fake_db, slack_calls):
 
 
 def test_no_scott_posts_without_scott_mention(fake_db, slack_calls):
-    fake_db.items = [_item()]
+    item = _item()
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item)]
     fake_db.clients = [_client(advisor="U_ADVISOR")]
     fake_db.team_members = []  # zero head_csm
     result = cron.run_ella_unanswered_flagger_cron()

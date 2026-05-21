@@ -305,7 +305,10 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
 
 def _fetch_candidates(db, now_utc: datetime) -> list[dict[str, Any]]:
     """Unposted rows aged into the [2h, 7d] window, oldest first,
-    capped at _MAX_PER_TICK."""
+    capped at _MAX_PER_TICK. Filters to client-authored triggering
+    messages only (team_member / ella / bot / workflow / unknown
+    excluded — the unanswered flagger surfaces 'client needs a human',
+    not advisor questions to the team)."""
     stale_before = (now_utc - _STALE_AFTER).isoformat()
     backstop_after = (now_utc - _BACKSTOP).isoformat()
     resp = (
@@ -318,7 +321,96 @@ def _fetch_candidates(db, now_utc: datetime) -> list[dict[str, Any]]:
         .limit(_MAX_PER_TICK)
         .execute()
     )
-    return list(resp.data or [])
+    candidates = list(resp.data or [])
+    if not candidates:
+        return []
+    return _filter_to_client_authored(db, candidates)
+
+
+def _filter_to_client_authored(
+    db, candidates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Filter candidates whose triggering message has
+    `author_type='client'` in `slack_messages`. Two-query pattern: the
+    candidate fetch above already ran one SELECT; this helper groups
+    candidates by channel and runs one SELECT per distinct channel
+    against `slack_messages` to pull the author_type. Then a JS-side
+    lookup filters non-client rows out.
+
+    NOTE on the distinction with `_has_human_intervention`: that helper
+    also reads `slack_messages.author_type` but for a different reason
+    (it's detecting whether a `team_member` has FOLLOWED UP on the
+    flagged message). This helper reads `author_type` of the FLAGGED
+    MESSAGE ITSELF — different row, different field semantic, different
+    filter. The two checks coexist; this one runs first (drops
+    team_member-authored candidates pre-intervention-check) so the
+    intervention check only runs against the surviving client-authored
+    rows.
+
+    Side benefit (2026-05-21): the open `author_type='bot'` known issue
+    (Ella's posts misclassifying as bot — see docs/known-issues.md) is
+    also handled implicitly here. Bot-classified messages won't pass
+    the `== 'client'` check either, so this filter prevents the
+    unanswered flagger from accidentally surfacing Ella's own posts
+    as "unanswered" while that bug stays open.
+
+    Defensive on missing rows: a candidate whose source `slack_messages`
+    row doesn't exist (rare — would mean the message got into
+    `pending_digest_items` but never into `slack_messages`; possible
+    during a partial-failure window in the realtime pipeline) is
+    treated as NOT client-authored and filtered out. The cron is a
+    safety net, not a backstop for ingestion gaps.
+    """
+    # Build the (channel, ts) tuples we need to look up. Same
+    # composite key the slack_messages unique index uses.
+    keys = [
+        (c.get("slack_channel_id"), c.get("triggering_message_ts"))
+        for c in candidates
+    ]
+    keys = [(ch, ts) for ch, ts in keys if ch and ts]
+    if not keys:
+        return []
+
+    # PostgREST can't filter on a composite IN clause directly, but
+    # since slack_channel_id is usually shared across many candidates
+    # in a single tick, group by channel and query per-channel with
+    # an IN on slack_ts. Caps the round-trips at the distinct-channel
+    # count (typically far fewer than the candidate count).
+    by_channel: dict[str, list[str]] = {}
+    for ch, ts in keys:
+        by_channel.setdefault(ch, []).append(ts)
+
+    author_types: dict[tuple[str, str], str] = {}
+    for channel_id, ts_list in by_channel.items():
+        try:
+            resp = (
+                db.table("slack_messages")
+                .select("slack_channel_id,slack_ts,author_type")
+                .eq("slack_channel_id", channel_id)
+                .in_("slack_ts", ts_list)
+                .execute()
+            )
+            for row in resp.data or []:
+                key = (row["slack_channel_id"], row["slack_ts"])
+                author_types[key] = row.get("author_type") or "unknown"
+        except Exception as exc:
+            logger.warning(
+                "ella_unanswered_flagger_cron: author lookup failed "
+                "channel=%s: %s",
+                channel_id,
+                exc,
+            )
+            # On lookup failure, skip ALL candidates in this channel
+            # for this tick — they get retried next tick. Better to
+            # under-flag than over-flag during a transient blip.
+            continue
+
+    return [
+        c for c in candidates
+        if author_types.get(
+            (c.get("slack_channel_id"), c.get("triggering_message_ts"))
+        ) == "client"
+    ]
 
 
 def _has_human_intervention(db, row: dict[str, Any]) -> bool:
