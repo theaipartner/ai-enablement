@@ -55,6 +55,14 @@ logger = logging.getLogger("ai_enablement.slack_message_ingest")
 _DELIVERY_SOURCE = "slack_message_ingest"
 _CONTENT_SOURCE_INGESTED = "ingested"
 
+# Webhook_id prefixes for the three audit-row shapes (post-2026-05-21
+# dedup-key restructure):
+#   slack_msg_ingest_{channel}_{ts}           — happy-path through step 0
+#   slack_msg_ingest_dup_{uuid}               — forensic-duplicate row
+#   slack_msg_ingest_pre_dedup_{uuid}         — early-exit before step 0
+_HAPPY_PATH_PREFIX = "slack_msg_ingest"
+_PRE_DEDUP_PREFIX = "slack_msg_ingest_pre_dedup"
+
 # Skip-reason vocabulary. Pinned here so SQL queries
 # `payload->>'skip_reason'` have a stable enum.
 _SKIP_NON_CLIENT_CHANNEL = "non_client_channel"
@@ -387,6 +395,49 @@ def _upsert_message(db, record: SlackMessageRecord) -> None:
     db.table("slack_messages").upsert(
         payload, on_conflict="slack_channel_id,slack_ts"
     ).execute()
+
+
+def _insert_audit_terminal(
+    db,
+    *,
+    delivery_id_prefix: str,
+    status: str,
+    error: str | None,
+    payload: dict[str, Any],
+) -> None:
+    """INSERT a single-state audit row for an early-exit branch that
+    fires BEFORE step 0 (channel-skip, subtype-skip, parser-None).
+    Those branches don't have a `received` row to UPDATE — the dedup
+    gate hasn't fired yet — so they need a plain INSERT.
+
+    Webhook_id format: `{delivery_id_prefix}_{uuid}` — UUID-suffixed so
+    these rows never PK-collide. They aren't meant to participate in
+    dedup; the message never reaches the pipeline anyway. The prefix
+    distinguishes them from happy-path rows
+    (`slack_msg_ingest_{channel}_{ts}`) and from forensic-duplicate
+    rows (`slack_msg_ingest_dup_{uuid}`) so audit-ledger queries can
+    filter by intent.
+
+    Best-effort: a failure here is logged + swallowed."""
+    row: dict[str, Any] = {
+        "webhook_id": f"{delivery_id_prefix}_{uuid.uuid4()}",
+        "source": _DELIVERY_SOURCE,
+        "processing_status": status,
+        "payload": payload,
+        "headers": {},
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if error is not None:
+        row["processing_error"] = error[:2000]
+    try:
+        db.table("webhook_deliveries").insert(row).execute()
+    except Exception as exc:
+        logger.warning(
+            "slack_message_ingest: terminal audit insert failed "
+            "delivery_id_prefix=%s: %s",
+            delivery_id_prefix,
+            exc,
+        )
 
 
 def _insert_audit(
