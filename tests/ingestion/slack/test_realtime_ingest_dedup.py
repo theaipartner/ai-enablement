@@ -384,44 +384,12 @@ def test_step0_fail_open_on_db_outage(fake_db):
 # ---------------------------------------------------------------------------
 
 
-def test_message_changed_uses_outer_ts_for_dedup_key(fake_db):
-    """`message_changed` events have an inner ts (original message ts)
-    and an outer ts (the edit-event ts). The dedup gate runs against
-    the outer event ts (the one Slack delivers at the top level),
-    which is what `slack_channel_id` and `slack_ts` resolve to in
-    `ingest_message_event`. This means two distinct edits of the same
-    message produce two distinct dedup keys (different outer ts each
-    time), so both are processed — Slack's edit semantics flow through.
-    But a *retry* of the same edit event has the same outer ts and is
-    correctly deduped.
-
-    Pins this assumption so a future change to the dedup key (e.g.,
-    using the inner message.ts) doesn't silently change behavior."""
-    fake_db.channels = [_client_channel("C500")]
-    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
-
-    edit_event = {
-        "type": "message",
-        "subtype": "message_changed",
-        "channel": "C500",
-        "ts": "1745500300.999000",  # outer (edit-event ts)
-        "message": {
-            "type": "message",
-            "user": "UCLIENT1",
-            "text": "edited",
-            "ts": "1745500300.111000",  # inner (original message ts)
-        },
-    }
-
-    result1 = ri.ingest_message_event(_envelope(edit_event))
-    result2 = ri.ingest_message_event(_envelope(edit_event))
-
-    # First edit-event: processed.
-    assert result1["ingested"] is True
-    assert result1["delivery_id"] == "slack_msg_ingest_C500_1745500300.999000"
-
-    # Retry of the same edit-event: duplicate.
-    assert result2["skipped_reason"] == "duplicate"
+# NOTE: The previous test at this location
+# (`test_message_changed_uses_outer_ts_for_dedup_key`) pinned the
+# BROKEN pre-2026-05-21 behavior — see `docs/reports/ella-duplicate-
+# webhook-delivery-diagnostic.md` § Surprises. It was deleted as part
+# of `ella-realtime-ingest-dedup-message-changed`. The new correct-
+# behavior tests live below in the "message_changed dedup" block.
 
 
 # ---------------------------------------------------------------------------
@@ -430,8 +398,12 @@ def test_message_changed_uses_outer_ts_for_dedup_key(fake_db):
 
 
 def test_result_dict_carries_delivery_id_for_non_client_channel_path(fake_db):
-    """Even on the non-client-channel skip, the result dict reflects
-    the same deterministic delivery_id used at step 0."""
+    """Post-2026-05-21: non-client-channel skip fires BEFORE step 0,
+    so no UPSERT or UPDATE — just a single terminal INSERT under the
+    `slack_msg_ingest_pre_dedup_` prefix. The result dict's
+    `delivery_id` keeps the cosmetic deterministic shape (so callers'
+    log lines stay readable), but the actual `webhook_id` written to
+    the audit ledger is the UUID-suffixed pre-dedup form."""
     fake_db.channels = []  # channel not found → non-client path
 
     result = ri.ingest_message_event(
@@ -445,10 +417,13 @@ def test_result_dict_carries_delivery_id_for_non_client_channel_path(fake_db):
     )
 
     assert result["skipped_reason"] == "non_client_channel"
+    # Cosmetic delivery_id is still the deterministic shape.
     assert result["delivery_id"] == "slack_msg_ingest_C600_1745500400.000100"
-    assert len(fake_db.webhook_upserts) == 1
-    assert len(fake_db.webhook_updates) == 1
-    assert (
-        fake_db.webhook_updates[0]["payload"]["processing_status"]
-        == "processed"
-    )
+    # No UPSERT (step 0 never fired) and no UPDATE.
+    assert fake_db.webhook_upserts == []
+    assert fake_db.webhook_updates == []
+    # The actual audit row is a terminal INSERT.
+    assert len(fake_db.webhook_inserts) == 1
+    audit = fake_db.webhook_inserts[0]
+    assert audit["webhook_id"].startswith("slack_msg_ingest_pre_dedup_")
+    assert audit["processing_status"] == "processed"

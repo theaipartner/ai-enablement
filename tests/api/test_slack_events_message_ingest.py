@@ -258,9 +258,14 @@ def test_skip_non_client_channel(fake_db):
     assert result["ingested"] is False
     assert result["skipped_reason"] == "non_client_channel"
     assert fake_db.slack_messages_upserts == []
-    assert len(fake_db.webhook_deliveries_upserts) == 1  # step 0 fired
-    assert len(fake_db.webhook_deliveries_updates) == 1  # skip-branch audit
-    audit = fake_db.webhook_deliveries_updates[0]["payload"]
+    # Post-2026-05-21: non-client channel skip fires BEFORE step 0
+    # (the dedup gate moved post-parse), so the audit row is a plain
+    # INSERT under the pre-dedup prefix — no UPSERT, no UPDATE.
+    assert fake_db.webhook_deliveries_upserts == []
+    assert fake_db.webhook_deliveries_updates == []
+    assert len(fake_db.webhook_deliveries_inserts) == 1
+    audit = fake_db.webhook_deliveries_inserts[0]
+    assert audit["webhook_id"].startswith("slack_msg_ingest_pre_dedup_")
     assert audit["processing_status"] == "processed"
     assert audit["processing_error"] == "skipped_non_client_channel"
     assert audit["payload"]["skip_reason"] == "non_client_channel"
@@ -317,7 +322,11 @@ def test_skip_ignorable_subtype(fake_db):
 
     assert result["skipped_reason"] == "ignorable_subtype"
     assert fake_db.slack_messages_upserts == []
-    audit = fake_db.webhook_deliveries_updates[0]["payload"]
+    # Post-2026-05-21: subtype skip fires BEFORE step 0 → terminal INSERT.
+    assert fake_db.webhook_deliveries_upserts == []
+    assert fake_db.webhook_deliveries_updates == []
+    audit = fake_db.webhook_deliveries_inserts[0]
+    assert audit["webhook_id"].startswith("slack_msg_ingest_pre_dedup_")
     assert audit["processing_status"] == "processed"
     assert audit["processing_error"] == "skipped_ignorable_subtype"
     assert audit["payload"]["skip_reason"] == "ignorable_subtype"
@@ -629,7 +638,9 @@ def test_message_deleted_is_skipped_as_ignorable(fake_db):
 
     assert result["skipped_reason"] == "ignorable_subtype"
     assert fake_db.slack_messages_upserts == []
-    audit = fake_db.webhook_deliveries_updates[0]["payload"]
+    # Post-2026-05-21: message_deleted skip fires BEFORE step 0 → terminal INSERT.
+    audit = fake_db.webhook_deliveries_inserts[0]
+    assert audit["webhook_id"].startswith("slack_msg_ingest_pre_dedup_")
     assert audit["payload"]["subtype"] == "message_deleted"
 
 

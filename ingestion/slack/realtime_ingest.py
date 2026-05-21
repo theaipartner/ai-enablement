@@ -97,13 +97,21 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
     slack_channel_id = event.get("channel")
     slack_ts = event.get("ts")
     subtype = event.get("subtype")
-    # Deterministic-per-logical-message webhook_id. Slack re-deliveries
-    # of the same `(channel, ts)` hit the `webhook_deliveries.webhook_id`
-    # PK and step 0 below short-circuits. Malformed events with no
-    # channel or ts fall back to a UUID — effectively no-op dedup so
-    # two distinct malformed deliveries don't collide on a fixed key.
+
+    # `delivery_id` is the cosmetic identifier returned to the caller +
+    # used in log lines. The PHYSICAL webhook_id written into
+    # `webhook_deliveries` depends on which branch fires:
+    #   - Happy path through step 0: deterministic
+    #     `slack_msg_ingest_{record.slack_channel_id}_{record.slack_ts}`
+    #     (inner ts, stable across message_changed redeliveries).
+    #   - Pre-dedup early exit (channel/subtype/parser-None):
+    #     UUID-suffixed `slack_msg_ingest_pre_dedup_{uuid}`.
+    #   - Forensic-duplicate row: UUID-suffixed `slack_msg_ingest_dup_{uuid}`.
+    # The cosmetic `delivery_id` here is the outer-ts form so log lines
+    # stay readable; it gets overwritten with the canonical inner-ts
+    # form after the parser resolves the record.
     if slack_channel_id and slack_ts:
-        delivery_id = f"slack_msg_ingest_{slack_channel_id}_{slack_ts}"
+        delivery_id = f"{_HAPPY_PATH_PREFIX}_{slack_channel_id}_{slack_ts}"
     else:
         delivery_id = f"slack_msg_ingest_malformed_{uuid.uuid4()}"
 
@@ -115,44 +123,27 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
         "slack_channel_id": slack_channel_id,
         "slack_ts": slack_ts,
     }
+    # Tracks whether step 0 wrote a `received` row that the exception
+    # handler can UPDATE to `failed`. False until `_try_register_delivery`
+    # returns True. When False, an exception falls through to a fresh
+    # `_insert_audit_terminal` INSERT under the pre-dedup prefix.
+    step_0_succeeded = False
 
     try:
         from shared.db import get_client
 
         db = get_client()
 
-        # ----- Step 0: Dedup gate --------------------------------------
-        # Atomic register against the webhook_deliveries PK. On
-        # duplicate, return early before any side effect (slack_messages
-        # upsert, passive-monitor dispatch, escalation fan-out) fires.
-        # Closes the 2026-05-19 EOD misfire's Problem A —
-        # `docs/known-issues.md` § "Passive dispatch has no idempotency
-        # check against duplicate Slack message delivery."
-        if not _try_register_delivery(
-            db,
-            delivery_id=delivery_id,
-            slack_channel_id=slack_channel_id,
-            slack_ts=slack_ts,
-        ):
-            logger.info(
-                "slack_message_ingest: duplicate delivery_id=%s channel=%s ts=%s",
-                delivery_id,
-                slack_channel_id,
-                slack_ts,
-            )
-            result["skipped_reason"] = "duplicate"
-            return result
-
-        # ----- Channel-allowlist gate ----------------------------------
+        # ----- Channel-allowlist gate (pre-dedup) ----------------------
         channel_row = _lookup_channel(db, slack_channel_id)
         if (
             channel_row is None
             or channel_row.get("client_id") is None
             or channel_row.get("is_archived") is True
         ):
-            _insert_audit(
+            _insert_audit_terminal(
                 db,
-                delivery_id=delivery_id,
+                delivery_id_prefix=_PRE_DEDUP_PREFIX,
                 status="processed",
                 error="skipped_non_client_channel",
                 payload={
@@ -174,11 +165,11 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
             result["skipped_reason"] = _SKIP_NON_CLIENT_CHANNEL
             return result
 
-        # ----- Subtype gate -------------------------------------------
+        # ----- Subtype gate (pre-dedup) -------------------------------
         if subtype in _SYSTEM_SUBTYPES:
-            _insert_audit(
+            _insert_audit_terminal(
                 db,
-                delivery_id=delivery_id,
+                delivery_id_prefix=_PRE_DEDUP_PREFIX,
                 status="processed",
                 error="skipped_ignorable_subtype",
                 payload={
@@ -201,12 +192,15 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
             result["skipped_reason"] = _SKIP_IGNORABLE_SUBTYPE
             return result
 
-        # ----- Parse + upsert -----------------------------------------
+        # ----- Parse (pre-dedup) ---------------------------------------
         # `message_changed` events carry the new message under
         # `event.message` rather than directly on the event dict; the
         # outer event has subtype='message_changed' and a `message` sub-
         # dict with type='message' + the updated text/ts. Unwrap so the
-        # parser sees the inner shape it expects.
+        # parser sees the inner shape it expects — and critically,
+        # `record.slack_ts` becomes the INNER message ts, which is
+        # what step 0 below uses as the dedup key (so the second
+        # delivery of an edited message dedups against the original).
         event_for_parser = event
         if subtype == "message_changed":
             inner = event.get("message")
@@ -234,9 +228,9 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
             # don't). Treat as ignorable_subtype with whatever subtype
             # we can extract, so the audit ledger has a discriminator.
             inner_subtype = event_for_parser.get("subtype") or subtype
-            _insert_audit(
+            _insert_audit_terminal(
                 db,
-                delivery_id=delivery_id,
+                delivery_id_prefix=_PRE_DEDUP_PREFIX,
                 status="processed",
                 error="skipped_ignorable_subtype",
                 payload={
@@ -251,6 +245,35 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
             )
             result["skipped_reason"] = _SKIP_IGNORABLE_SUBTYPE
             return result
+
+        # ----- Step 0: Dedup gate (POST-PARSE, post-2026-05-21) -------
+        # Atomic register against the webhook_deliveries PK using the
+        # INNER/canonical message ts from `record.slack_ts`. This is
+        # stable across `message_changed` redeliveries (the prior spec
+        # `ella-realtime-ingest-idempotency` used the outer event ts,
+        # which differed between original + edit deliveries — diagnostic
+        # in `docs/reports/ella-duplicate-webhook-delivery-diagnostic.md`).
+        delivery_id = (
+            f"{_HAPPY_PATH_PREFIX}_{record.slack_channel_id}_{record.slack_ts}"
+        )
+        result["delivery_id"] = delivery_id
+        result["slack_ts"] = record.slack_ts
+
+        if not _try_register_delivery(
+            db,
+            delivery_id=delivery_id,
+            slack_channel_id=record.slack_channel_id,
+            slack_ts=record.slack_ts,
+        ):
+            logger.info(
+                "slack_message_ingest: duplicate delivery_id=%s channel=%s ts=%s",
+                delivery_id,
+                record.slack_channel_id,
+                record.slack_ts,
+            )
+            result["skipped_reason"] = "duplicate"
+            return result
+        step_0_succeeded = True
 
         _upsert_message(db, record)
 
@@ -304,24 +327,38 @@ def ingest_message_event(payload: dict[str, Any]) -> dict[str, Any]:
         # Best-effort audit row for the failure. If THIS insert also
         # raises, swallow — the outer try/except already captured the
         # primary exception and we never propagate from this function.
+        # When step 0 fired (`received` row exists), UPDATE it to
+        # `failed`. When it didn't (exception during channel lookup /
+        # parser / etc.), INSERT a fresh terminal row under the
+        # pre-dedup prefix.
         try:
             from shared.db import get_client
 
             db = get_client()
-            _insert_audit(
-                db,
-                delivery_id=delivery_id,
-                status="failed",
-                error=str(exc)[:2000],
-                payload={
-                    "slack_channel_id": slack_channel_id,
-                    "slack_ts": slack_ts,
-                    "slack_user_id": event.get("user"),
-                    "author_type": None,
-                    "message_type": None,
-                    "subtype": subtype,
-                },
-            )
+            failure_payload = {
+                "slack_channel_id": slack_channel_id,
+                "slack_ts": slack_ts,
+                "slack_user_id": event.get("user"),
+                "author_type": None,
+                "message_type": None,
+                "subtype": subtype,
+            }
+            if step_0_succeeded:
+                _insert_audit(
+                    db,
+                    delivery_id=delivery_id,
+                    status="failed",
+                    error=str(exc)[:2000],
+                    payload=failure_payload,
+                )
+            else:
+                _insert_audit_terminal(
+                    db,
+                    delivery_id_prefix=_PRE_DEDUP_PREFIX,
+                    status="failed",
+                    error=str(exc)[:2000],
+                    payload=failure_payload,
+                )
         except Exception:
             logger.warning(
                 "slack_message_ingest: audit-row insert during exception path "
