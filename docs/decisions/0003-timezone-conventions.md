@@ -50,7 +50,7 @@ This ADR is the durable record. Future timezone deviations discovered during oth
 ## Implementation pointers
 
 - **Standard / code home:** `lib/time/est-periods.ts`.
-- **Consumers today:** `lib/db/cost-hub.ts`, `lib/db/ella-runs.ts:getEllaSummaryStats`.
+- **Consumers today:** `lib/db/cost-hub.ts`. (`lib/db/ella-runs.ts:getEllaSummaryStats` was also a consumer until the `/ella/runs` audit page was removed on 2026-05-24 — spec `remove-ella-runs-page` deleted the data layer with the route.)
 - **Cron UTC→ET map:** `docs/runbooks/cron_schedule.md`.
 - **Origin:** the cost-hub-vs-`/ella/runs` cost diagnostic; spec slug `ella-summary-est-alignment-and-timezone-adr` (spec + report deleted at 2026-05-15 EOD — recover from git history: `git log --diff-filter=D -- docs/specs/ella-summary-est-alignment-and-timezone-adr.md`).
 

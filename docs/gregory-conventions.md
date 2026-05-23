@@ -6,7 +6,7 @@ How Gregory's pages compose. Conventions live here so primitives in `components/
 
 ## Detail-page slot order
 
-Every detail page (`/clients/[id]`, `/calls/[id]`, `/ella/runs/[id]`) composes in this order, top to bottom. Slots can be skipped (use `EmptyStateAwareSection` with `mode='hide'`) but never reordered.
+Every detail page (`/clients/[id]`, `/calls/[id]`) composes in this order, top to bottom. Slots can be skipped (use `EmptyStateAwareSection` with `mode='hide'`) but never reordered.
 
 1. **HeaderBand** — eyebrow + serif title + state pills + right-aligned actions + optional backlink. One `<h1>`. The page's primary identity. Use the eyebrow taxonomy below.
 2. **Glance row** — inline-editable toggles, dropdowns, or pills that answer "what's the current state?" Single horizontal row. Should fit above the fold on a 1024px viewport.
@@ -17,11 +17,11 @@ Every detail page (`/clients/[id]`, `/calls/[id]`, `/ella/runs/[id]`) composes i
 
 ## List-page slot order
 
-Every list page (`/clients`, `/calls`, `/ella/runs`) composes in this order.
+Every list page (`/clients`, `/calls`) composes in this order.
 
 1. **HeaderBand** — same primitive as detail pages. Eyebrow is the list eyebrow ("CSM · CLIENTS"); right-aligned `actions` slot typically carries the row count.
-2. **Optional metric strip** — conditional. `/clients` may get the TodayDigest in Part 2; `/ella/runs` keeps its existing `EllaRunsSummaryBand`; `/calls` likely doesn't need one. Not every page has this slot — render only when meaningful.
-3. **FilterBar** — search + filter chips + date range (where applicable) + saved-views (where applicable). Existing `FilterBar` / `CallsFilterBar` / `EllaRunsFilterBar` live here; Part 2 may consolidate.
+2. **Optional metric strip** — conditional. `/clients` may get the TodayDigest in Part 2; `/calls` likely doesn't need one. Not every page has this slot — render only when meaningful.
+3. **FilterBar** — search + filter chips + date range (where applicable) + saved-views (where applicable). Existing `FilterBar` / `CallsFilterBar` live here; Part 2 may consolidate.
 4. **Table** — sortable column headers, inline-editable cells where appropriate. Information density takes priority over editorial breathing room — Gregory's lists are 100+ rows.
 5. **Pagination** — bottom of table. "Load 100 more" pattern when row counts justify it.
 
@@ -78,8 +78,6 @@ Every page uses `HeaderBand`. Composition rules:
 | `/clients/[id]`       | `CLIENT · DETAIL`  |
 | `/calls`              | `CSM · CALLS`      |
 | `/calls/[id]`         | `CALL · DETAIL`    |
-| `/ella/runs`          | `ELLA · AUDIT`     |
-| `/ella/runs/[id]`     | `ELLA · RUN`       |
 
 If a future page doesn't fit the taxonomy cleanly, add an entry here in the same spec that ships the page.
 

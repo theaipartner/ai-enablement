@@ -48,11 +48,11 @@ Added in migration `0032_team_members_access_tier.sql` (2026-05-14). Four hierar
 | Tier | Outranks | Sees today |
 |------|----------|------------|
 | `creator` | admin, head_csm, csm | Everything. Drake. |
-| `admin` | head_csm, csm | Everything Drake sees. Nabeel today; will host the future Settings / admin-cost-hub surfaces. Also sees `/ella/runs` (the Ella audit dashboard). |
-| `head_csm` | csm | Clients, Calls; not Ella. Scott Wilson today; future Meeting Tracker surface is head-CSM gated. |
+| `admin` | head_csm, csm | Everything Drake sees. Nabeel today; hosts `/cost-hub` and any future Settings / admin surfaces. (The Ella audit dashboard at `/ella/runs` was admin-gated until it was removed 2026-05-24.) |
+| `head_csm` | csm | Clients, Calls; plus the `/teams` Meeting Tracker. Scott Wilson today. |
 | `csm` | (default) | Clients, Calls. Lou Perez, Nico Sandoval, Zain, plus every default row. |
 
-Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib/auth/access-tier-shared.ts` (pure type + `tierAtLeast` helper, importable from Client Components). The `(authenticated)` layout calls `getCurrentUserAccessTier()` once per page load; a missing `team_members` row for the authenticated user redirects to `/login?error=no_team_member_row` with an error banner. Sub-layouts (`app/(authenticated)/ella/layout.tsx`) call `tierAtLeast(tier, 'admin')` and redirect to `/clients?error=insufficient_access` on failure. `components/top-nav.tsx` receives the resolved tier as a prop and filters `NAV_ITEMS` by `requiredTier` so a CSM doesn't see the Ella link at all.
+Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib/auth/access-tier-shared.ts` (pure type + `tierAtLeast` helper, importable from Client Components). The `(authenticated)` layout calls `getCurrentUserAccessTier()` once per page load; a missing `team_members` row for the authenticated user redirects to `/login?error=no_team_member_row` with an error banner. Admin-only sub-layouts call `tierAtLeast(tier, 'admin')` and redirect to `/clients?error=insufficient_access` on failure (currently `app/(authenticated)/cost-hub/layout.tsx`; the `ella/layout.tsx` that previously protected the audit pages was deleted alongside the routes on 2026-05-24). `components/top-nav.tsx` receives the resolved tier as a prop and filters `NAV_ITEMS` by `requiredTier`.
 
 Auth-side identity is `team_members.email == supabase auth user.email`, looked up via the admin (service-role) client. Email match is case-insensitive (`ilike`).
 

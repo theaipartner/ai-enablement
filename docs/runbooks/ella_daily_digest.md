@@ -58,8 +58,11 @@ ET hour shifts one hour across the DST boundary.
 
 Empty day: `:mag: *Ella's daily flags — <date>*` then `No flags
 today.` It still fires — silent failure (cron didn't run) is worse
-than empty success. Bodies over 35k chars truncate with a
-`/ella/runs` pointer footer (Slack's hard limit is 40k).
+than empty success. Bodies over 35k chars truncate with a generic
+`(… more flagged messages truncated)` footer (Slack's hard limit is
+40k). The truncation footer previously pointed at the `/ella/runs`
+audit page; that pointer was dropped 2026-05-24 when the audit page
+was removed.
 
 ## Manual fire / backfill
 

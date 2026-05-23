@@ -23,7 +23,7 @@ Pipeline (one entry per non-@-mention client-authored message):
    - `skip_reason='kill_switch'` → **no `agent_runs` row at all**.
    - Every other passive outcome (`respond` / `acknowledge_and_escalate` / `skip`) collapses to: write `agent_runs` row + (if `digest_flag=true`) write `pending_digest_items` row. **Nothing posted in-channel. No DMs fired from this path.**
    - `trigger_metadata.haiku_decision` is recorded (the Haiku's pick) for audit, but the dispatch doesn't act on it differently.
-   - **Status honesty (2026-05-23):** if the decision Haiku raised an exception (its reasoning starts `haiku_call_failed:`) or the outer `evaluate_passive_trigger` exception handler fired (`skip_reason='exception'`), `agent_runs.status='error'` (not `'success'`) and the failure is captured in `error_message`. Surfaces on `/ella/runs WHERE status='error'`.
+   - **Status honesty (2026-05-23):** if the decision Haiku raised an exception (its reasoning starts `haiku_call_failed:`) or the outer `evaluate_passive_trigger` exception handler fired (`skip_reason='exception'`), `agent_runs.status='error'` (not `'success'`) and the failure is captured in `error_message`. Query: `select id, started_at, error_message from agent_runs where agent_name='ella' and status='error' order by started_at desc;`.
 
 4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute. Post-split, `_dispatch_respond` no longer queues `pending_ella_responses` rows, so the queue drains to empty over time. Any stale rows from before the split are handled by `agent.respond_to_passive_trigger` which is now a recorded no-op (`status='skipped'`, `skip_reason='passive_voice_removed'`). Once the queue is empty, the cron has nothing to drain — it stays scheduled as belt-and-suspenders.
 
@@ -86,7 +86,7 @@ select id, started_at, trigger_metadata->>'haiku_decision' as decision,
  limit 20;
 ```
 
-Or filter in the dashboard at `/ella/runs` (Batch 2.2 audit surface — the dropdown surfaces `trigger_type` and the decision metadata directly).
+(The Batch 2.2 audit dashboard at `/ella/runs` that previously filtered this view was removed 2026-05-24 — use the SQL above.)
 
 ### Queue depth (substantive + general-inquiry only)
 
@@ -127,8 +127,10 @@ select created_at, slack_channel_id, haiku_decision, digest_category,
 
 Historical `webhook_deliveries` rows under `source='ella_escalation_dm'`
 / `'ella_passive_escalation_dm'` from before the rewrite still exist
-and render on `/ella/runs`; only **reactive `digest_only`** writes new
-`ella_escalation_dm` rows now.
+in the table; only **reactive `digest_only`** writes new
+`ella_escalation_dm` rows now. (The `/ella/runs` audit page that
+rendered these was removed 2026-05-24 — query `webhook_deliveries`
+directly to inspect historical rows.)
 
 ### CSM intervention counter (the key Batch 2.4 prerequisite metric)
 
@@ -163,7 +165,7 @@ Iteration: cheap LLMs go off-format occasionally. Per spec, unparseable defaults
 
 ### Kill switch flipped during the 1-min queue wait
 
-Behavior: the next cron drain marks the row `cancelled_kill_switch` (global) or `cancelled_channel_disabled` (per-channel). No client-facing posts fire. Drake sees the cancellation in `/ella/runs`.
+Behavior: the next cron drain marks the row `cancelled_kill_switch` (global) or `cancelled_channel_disabled` (per-channel). No client-facing posts fire. The cancellation is visible via `select * from pending_ella_responses where status in ('cancelled_kill_switch','cancelled_channel_disabled') order by updated_at desc;`.
 
 ### Cron backlog after extended outage
 
@@ -182,9 +184,10 @@ anymore** — the KB search is context only, never a drop point, so the
 client message that passes the 2 pre-LLM gates reaches Haiku. A miss
 is now purely a Haiku-judgment miss.
 
-Mitigation: `/ella/runs` surfaces every decision with the message text,
-`haiku_decision`, `digest_flag`, `digest_category`, and reasoning.
-Drake reviews post-hoc and iterates `_HAIKU_SYSTEM_PROMPT` (the
+Mitigation: every decision is on the `agent_runs` row (message text in
+`input_summary`, `haiku_decision` / `digest_flag` / `digest_category` /
+`haiku_reasoning` in `trigger_metadata`). Drake reviews post-hoc via
+SQL on `agent_runs` and iterates `_HAIKU_SYSTEM_PROMPT` (the
 DIGEST FLAG / digest_only criteria). Because the flagging stance is
 permissive ("flag if uncertain about whether Scott would care"), the
 expected failure mode is over-flagging, not under-flagging — which is
@@ -221,8 +224,7 @@ Hothi posted `<@Scott> <@Lou> Who controls my sub account?` and the
 decision Haiku rationalized `acknowledge_and_escalate` despite the
 explicit human-routing. See `docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`.
 
-To audit how often Gate 3 fires, query `/ella/runs` filtered by
-`skip_reason='routed_to_humans'`, or directly:
+To audit how often Gate 3 fires, query `agent_runs` directly:
 
 ```sql
 select count(*) from agent_runs
@@ -247,7 +249,7 @@ After Drake flips `ELLA_PASSIVE_MONITORING_ENABLED=true` in Vercel and redeploys
     where slack_channel_id = 'C<DRAKE_TEST_CHANNEL>';
    ```
 
-2. Drake posts a client-shaped message in `#ella-test-drakeonly`. Expected: `/ella/runs` shows a new `trigger_type='passive_monitor'` row within seconds. If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~1-2 minutes later, the cron drains it and posts to the channel.
+2. Drake posts a client-shaped message in `#ella-test-drakeonly`. Expected: a new `agent_runs` row with `agent_name='ella'` + `trigger_type='passive_monitor'` lands within seconds (query the table directly). If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~1-2 minutes later, the cron drains it and posts to the channel.
 
 3. Iterate until comfortable. Production rollout to other channels is post-validation work — not in the Batch 2.3 spec.
 
@@ -290,7 +292,7 @@ relevance is no longer a gate, so the threshold has no effect.
    - **`skip` test:** off-topic chatter ("lol that meeting was wild") — nothing for Ella to do.
    - **`escalate` test:** sensitive content phrasing — "I've been thinking about cancelling" or similar billing/cancellation language.
 
-3. Watch the `/ella/runs` dashboard after each post. Within 1-2 minutes the decision row appears with `trigger_type='passive_monitor'` and the matching `haiku_decision` value in `trigger_metadata`. For `respond_*` decisions, a second row appears (the cron-drain row) with `trigger_type='passive_substantive'` or `'passive_general_inquiry'` when Ella actually posts.
+3. Query `agent_runs` after each post (filter `agent_name='ella' AND trigger_type='passive_monitor' ORDER BY started_at DESC`). Within 1-2 minutes the decision row appears with the matching `haiku_decision` value in `trigger_metadata`. For `respond_*` decisions, a second row appears (the cron-drain row) with `trigger_type='passive_substantive'` or `'passive_general_inquiry'` when Ella actually posts.
 
 ### Filtering test traffic out of production metrics
 

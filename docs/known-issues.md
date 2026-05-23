@@ -125,12 +125,11 @@ Resolved structurally via `ella-at-mention-routing-gate-and-advisor-context` (20
 - **Next action:** rewrite the list query's action-items embed to use a `calls!inner(primary_client_id)`-style JOIN instead of the FK-on-owner_client_id relation, OR drop the embed and compute the count via a separate aggregated query keyed on the client's call IDs. Likely 5-10 line change in `getClientsList`. Spec-grade once Drake decides it's worth the cycle.
 - **Logged:** 2026-05-13.
 
-## Ella audit dashboard (`/ella/runs`) — 5 follow-up fixes flagged during validation
+## Ella audit dashboard (`/ella/runs`) — superseded: page removed 2026-05-24
 
-- **What:** Drake validated the Batch 2.2 audit dashboard in production on 2026-05-11 and flagged five distinct items requiring follow-up fixes. The specific items were not enumerated in the chat session; they'll be captured here when Drake re-engages with the dashboard and writes them up. Five issues total — each gets either its own followup line below this entry, or a single bundled spec, depending on whether they cluster.
-- **Why it matters:** the dashboard is shipped but has known rough edges. Without capturing the specific issues, they could get lost in the post-handoff context drop. The 5 flagged items represent the gap between "the dashboard works" and "the dashboard is ready for CSM use beyond Drake."
-- **Next action:** Drake fills in the five specific items below this entry when he next engages with the dashboard. If they cluster (e.g., "filter UX issues" + "detail-view rendering bugs" + "performance"), bundle into a single fix spec. If they're independent, capture as individual followups. Either way, the gap closes when the five items are addressed.
-- **Logged:** 2026-05-11.
+- **What:** Drake flagged five follow-up items against the Batch 2.2 audit dashboard during 2026-05-11 validation. The page was removed entirely on 2026-05-24 (spec `remove-ella-runs-page`) — the post-@-mention-split passive path is observation-only (digest + unanswered-flagger only), so the per-run audit page had no remaining purpose.
+- **Resolution:** any future operational inspection of Ella runs is via SQL on `agent_runs` (filter by `agent_name='ella'`); the five followups die with the page.
+- **Logged:** 2026-05-11. **Superseded:** 2026-05-24.
 
 ## `/run` slash command requires `/run .` to invoke — bug
 
@@ -271,8 +270,8 @@ Resolved architecturally, not by ceiling bump. The V2 brain shipped with a weekl
 ## Passive Haiku prompt — thresholds + categories will need iteration
 
 - **What:** Batch 2.3 ships with Builder-chosen defaults: KB-relevance threshold 0.3, firm-after-first keyword overlap >= 3 content words, Haiku auto-escalate fence covering billing / complaints / advice / emotional / prompt-injection / CSM-directed. Real misses + misfires only surface against production traffic.
-- **Why it matters:** wrong thresholds = either too much skip (Ella missing helpable moments) or too much misfire (Ella interjecting where she shouldn't). The audit dashboard at `/ella/runs` surfaces every decision with reasoning; Drake reviews post-launch.
-- **Next action:** after the first ~50-100 production passive decisions, review the `/ella/runs` flagged-anomaly view, identify miss / misfire patterns, iterate (`_HAIKU_SYSTEM_PROMPT` and / or `_DEFAULT_KB_RELEVANCE_THRESHOLD` constants in `agents/ella/passive_monitor.py`). Document the iteration history in `docs/agents/ella/ella.md` § Eval Criteria once the eval set bootstraps.
+- **Why it matters:** wrong thresholds = either too much skip (Ella missing helpable moments) or too much misfire (Ella interjecting where she shouldn't). Every decision lands on `agent_runs` with the message text + reasoning in `trigger_metadata`; Drake reviews post-launch via SQL (the `/ella/runs` audit page was removed 2026-05-24).
+- **Next action:** after the first ~50-100 production passive decisions, query `agent_runs WHERE agent_name='ella' AND trigger_type='passive_monitor'` for miss / misfire patterns, iterate (`_HAIKU_SYSTEM_PROMPT` and / or `_DEFAULT_KB_RELEVANCE_THRESHOLD` constants in `agents/ella/passive_monitor.py`). Document the iteration history in `docs/agents/ella/ella.md` § Eval Criteria once the eval set bootstraps.
 - **Revisit trigger:** post-rollout to `#ella-test-drakeonly`, after 1-2 weeks of decisions accumulated.
 - **Logged:** 2026-05-11.
 

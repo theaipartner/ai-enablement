@@ -34,7 +34,7 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 - **Next action:** when editing either prompt, grep the other and reconcile. Stronger: consider extracting the shared escalation-categories text into a constant both prompts import (would require restructuring both system prompts, deferred). Or: add a CLAUDE.md note that any escalation-rule edit requires touching both files.
 - **Logged:** 2026-05-23.
 
-## Status-honesty fix: failed LLM calls now visible on /ella/runs
+## Status-honesty fix: failed LLM calls now land as agent_runs.status='error'
 
 - **What:** Folded into the 2026-05-23 split. The `agent_runs` rows from failed Sonnet (@ handler) and failed decision Haiku (passive) calls now land with `status='error'` and `error_message` populated, instead of the prior silent `status='success'` with the failure buried in `output_summary`. The 2026-05-21 → 2026-05-23 Anthropic-cap incident logged 181 silent-fail rows; that diagnostic took a Vercel-log dive to root-cause because the database showed nothing wrong. Post-fix, the same incident would be visible with `SELECT count(*) FROM agent_runs WHERE agent_name='ella' AND status='error' AND started_at >= now() - interval '1 hour'`.
 - **Why it matters:** observability for the "Ella's gone quiet" failure mode. Resolved.
