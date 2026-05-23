@@ -34,6 +34,24 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-23 — Ella @-mention / passive path split (PARTIAL — pending Drake gate (c) smoke)
+
+End of a five-spec session that diagnosed and remedied the post-2026-05-19 @-mention regression. Diagnostic chain: warm-opener / `/ella/runs` diagnostic → BadRequestError-log investigation (Anthropic usage-cap hit, now resolved) → KB retrieval access diagnostic (refuted all five retrieval-layer hypotheses; pinned the cause to the mention classifier's over-aggressive `acknowledge_and_escalate` navigation rule) → @-mention archaeology (recovered the proven pre-2026-05-18 reactive behavior from git history at `0347f51^`) → **this split spec**.
+
+**Architecture change.** Realtime ingest forks on `is_ella_mentioned`:
+- `True` → new `agents.ella.agent.handle_at_mention(payload)`. Synchronous. Retrieve → ONE Sonnet call with KB chunks visible → parse structured-JSON output `{response_text, escalate, handoff_reasoning}` → post / ack+escalate. Four-category escalation logic (judgment-call / emotional / money / no-good-context); explicitly NO navigation rule. `trigger_type='slack_mention'` (or `'bare_mention'` for the <5-char short circuit). Both `@Ella` (bot user_id) and the human-account mention trigger this path.
+- `False` → `passive_monitor.evaluate_passive_trigger` → `passive_dispatch.persist_passive_evaluation`. **Observation-only post-split:** write `agent_runs` + (if `digest_flag`) `pending_digest_items`. No in-channel posts, no escalation DMs from the passive path.
+
+**Files touched.** Created `agents/ella/agent.py` (rewritten end-to-end — new `handle_at_mention` + neutered `respond_to_passive_trigger` + retained legacy `respond_to_mention` adapter). Rewrote `agents/ella/passive_dispatch.py` (now observation-only, ~700 lines → ~210). Trimmed `agents/ella/passive_monitor.py` (removed the `is_ella_mentioned` branch + `mention_classification` field). Wired the fork in `ingestion/slack/realtime_ingest.py:_maybe_dispatch_passive_monitor`. **Deleted**: `agents/ella/mention_classifier.py`, `agents/ella/digest_response.py`, `tests/agents/ella/test_mention_classifier.py`, `tests/agents/ella/test_digest_response.py`. Rewrote `tests/agents/ella/test_passive_dispatch.py` (new observation-only contract). Rewrote `tests/agents/ella/test_agent.py` (covers `handle_at_mention` substantive / escalate / bare-mention / failed-Sonnet cases). Added three split-fork tests to `tests/ingestion/slack/test_realtime_ingest_passive_fork.py`. Removed the dead mention-classifier test from `tests/agents/ella/test_passive_monitor.py`.
+
+**Status-honesty fix folded in.** Both paths now end `agent_runs.status='error'` (with `error_message` captured) when their LLM call raises, instead of the prior silent `status='success'` with the failure buried in `output_summary`. Closes the gap that hid 181 failed Haiku calls during the 2026-05-21 → 2026-05-23 Anthropic-cap incident.
+
+**Counts after this ship.** Test suite green at **676 passing**. No new migrations. No env-var changes. `mention_classifier` cost surface removed (≈$1.25/month historic baseline → 0).
+
+**Pending.** Drake gate (c) post-deploy smoke in `#ella-test-drakeonly` + a real channel: (1) @Ella-app curriculum question → real answer; (2) @human-account curriculum question → real answer; (3) @Ella escalate-worthy → ack + DM; (4) non-@ passive message → silent in-channel + digest still picks it up. Spec stays `in-flight` and report stays `PARTIAL` until smoke passes.
+
+Spec: `docs/specs/ella-at-mention-passive-split.md`. Report (PARTIAL): `docs/reports/ella-at-mention-passive-split.md`. Archaeology: `docs/reports/ella-at-mention-archaeology.md`. KB-retrieval diagnostic (cause-of-regression): `docs/reports/ella-kb-retrieval-access-diagnostic.md`.
+
 ### 2026-05-21 EOD — Ella misfire resolution arc + production resume
 
 Connective narrative for a non-linear day. The per-ship entries below capture each change in isolation; this one tells the day as a single arc — what was believed at start of day, what turned out to be wrong, what the actual root cause was, and the open items at EOD.

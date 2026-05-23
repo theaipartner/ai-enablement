@@ -1,37 +1,33 @@
 # Runbook: Ella passive monitoring
 
-Operational guide for Ella V2 Batch 2.3 passive monitoring. Covers what it is, how to enable / disable, how to verify the path is flowing, and the failure / recovery procedures.
+Operational guide for Ella's passive observation path. Covers what it is, how to enable / disable, how to verify the path is flowing, and the failure / recovery procedures.
 
 ## What it is
 
-Passive monitoring flips Ella from "reactive only" (responds when @-mentioned) to "passively observing every client message in passive-monitoring-enabled channels, deciding whether to respond, and acting on a 1-minute delay." (Original spec wrote this as a 3-5 min CSM-interjection window; Drake's 2026-05-11 call dropped the delay to 1 min because CSMs are structurally in meetings and don't respond inside any realistic window. The queue + cron + intervention-check machinery stays in place pending production data; if `cancelled_csm_intervened` stays at ~0 after meaningful traffic, Batch 2.4 will rip the queue and move to synchronous response from the ingest fork.)
+Passive monitoring after the **2026-05-23 split** is **observation-only in client channels**. Ella's decision Haiku still evaluates every non-@-mention client message and tags it for the daily digest signal, but the dispatch layer NO LONGER posts in-channel and NO LONGER fires escalation DMs from the passive path. The product rule: **in client channels, Ella speaks only when @-mentioned.** Passive feeds internal-channel surfaces (digest, unanswered-flagger); it does not interject in client conversations.
 
-Pipeline (one entry per client-authored message):
+@-mention handling is its own path (`agents.ella.agent.handle_at_mention`) and is documented in `docs/agents/ella/ella.md` § @-Mention Handling. This runbook is only the passive (non-@-mention) observation pipeline.
 
-1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op; the parallel `message` event is the ONE evaluation path — @-mentions included). The fork calls `detect_at_mentions` (parses every `<@U...>` mention, returns `is_ella_mentioned` + `is_routed_to_others`) and threads both booleans through `PassiveTriggerPayload`.
-2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — **two-path dispatch (structural override, 2026-05-19 PM):** three pre-LLM gates run once — (1) global kill switch, (2) author-type (`client` + `team_member` always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row), (3) routed-to-humans (added 2026-05-20: when `is_routed_to_others=True`, skip pre-LLM with `skip_reason='routed_to_humans'` + `digest_flag=True` + `digest_category='other'` — the dispatch writes the audit row + the digest item; no DB fetch, no Haiku call, no in-channel ack, no DM fan-out). Then KB vector search + recent-context fetch + speaker resolve, then **branch on `payload.is_ella_mentioned`:**
-   - **`true` → CLASSIFIER PATH.** `agents.ella.mention_classifier.classify_mention_response` picks one of four shapes: `respond_haiku` / `respond_sonnet` / `acknowledge_and_escalate` / `warm_opener`. **`skip` is structurally absent from the enum** (the structural fix after three failed prompt iterations — `docs/specs/ella-at-mention-structural-override.md`). Result lands on `PassiveEvaluation.mention_classification`.
-   - **`false` → DECISION HAIKU PATH.** `decide_passive_response` returns `respond` (+`response_model: haiku|sonnet`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus independent `digest_flag`/`digest_category`. CSM-directed / KB-relevance / firm-after-first are soft prompt rules, not gates.
-3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — branches on `evaluation.mention_classification`:
-   - `skip_reason='kill_switch'` → **no `agent_runs` row at all**. `skip_reason='non_human_author'` → audit row written.
-   - **Mention path** (`_dispatch_mention`, classifier handled):
-     - `respond_haiku` → response Haiku posts directly.
-     - `respond_sonnet` → `pending_ella_responses` row with the `respond_substantive` shim for the unchanged cron.
-     - `acknowledge_and_escalate` → post `ack_text`, write `escalations` row, fan DMs to Scott + primary advisor, write `pending_digest_items`. `status='escalated'`.
-     - `warm_opener` → `digest_response.generate_response(mode='warm_opener')` writes a 1-sentence invite + posts.
-     - `trigger_metadata.mention_classifier_shape` is set (not `haiku_decision`).
-   - **Decision Haiku path** (non-mention):
-     - `respond` + `response_model='haiku'` → response Haiku posts directly.
-     - `respond` + `response_model='sonnet'` → `pending_ella_responses` row (`haiku_decision='respond_substantive'`, +1 min).
-     - `acknowledge_and_escalate` → posts ack, writes `escalations` row, fans DMs, writes digest item. `status='escalated'`.
-     - `skip` → nothing further (a `pending_digest_items` row too if `digest_flag=true`).
-     - `trigger_metadata.haiku_decision` is set (not `mention_classifier_shape`).
-   - Independent of path: any `digest_flag=true` writes a `pending_digest_items` row for the daily digest (`docs/runbooks/ella_daily_digest.md`).
-4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute, picks due rows, re-checks the kill switches + per-channel toggle + CSM-intervention, dispatches the response or cancels the row.
+Pipeline (one entry per non-@-mention client-authored message):
 
-Real-world perceived latency is **1-2 minutes** end-to-end: the 1-minute insert-time delay plus up to 60 seconds of cron-tick lag. Per-minute is the floor on Vercel Cron (Pro plan); going lower would require a different scheduling primitive.
+1. **Realtime ingest** (`ingestion/slack/realtime_ingest.py`) — every Slack `message` event lands here (the `app_mention` event is a logged no-op). `_maybe_dispatch_passive_monitor` calls `detect_at_mentions` (parses every `<@U...>` mention, returns `is_ella_mentioned` + `is_routed_to_others`). **Fork:** `is_ella_mentioned=True` → `agents.ella.agent.handle_at_mention(payload)` (NOT this runbook's scope); `is_ella_mentioned=False` → continue with `evaluate_passive_trigger`.
 
-Default-stance is **stay out**: every uncertain case skips silently. Misfiring is more costly than missing.
+2. **Decision** (`agents/ella/passive_monitor.py:evaluate_passive_trigger`) — three pre-LLM gates:
+   - **Gate 1 — global kill switch.** `ELLA_PASSIVE_MONITORING_ENABLED` must be 'true'. Else silent skip, NO `agent_runs` row.
+   - **Gate 2 — author type.** `client` and `team_member` are always evaluated; `ella`/`bot`/`workflow`/`unknown` skip *with* an audit row.
+   - **Gate 3 — routed-to-humans.** When `is_routed_to_others=True` (the message @-mentions a non-Ella human), pre-LLM skip with `skip_reason='routed_to_humans'` + `digest_flag=True` + `digest_category='other'`. No Haiku call.
+   
+   Past the gates: KB vector search + recent-context fetch + speaker resolve, then `decide_passive_response` runs the decision Haiku. Output: `respond` (+`response_model`) / `acknowledge_and_escalate` (+`ack_text`) / `skip`, plus the independent `digest_flag` / `digest_category`. The Haiku's outputs feed the digest signal only post-split.
+
+3. **Persistence + side effects** (`agents/ella/passive_dispatch.py:persist_passive_evaluation`) — observation-only:
+   - `skip_reason='kill_switch'` → **no `agent_runs` row at all**.
+   - Every other passive outcome (`respond` / `acknowledge_and_escalate` / `skip`) collapses to: write `agent_runs` row + (if `digest_flag=true`) write `pending_digest_items` row. **Nothing posted in-channel. No DMs fired from this path.**
+   - `trigger_metadata.haiku_decision` is recorded (the Haiku's pick) for audit, but the dispatch doesn't act on it differently.
+   - **Status honesty (2026-05-23):** if the decision Haiku raised an exception (its reasoning starts `haiku_call_failed:`) or the outer `evaluate_passive_trigger` exception handler fired (`skip_reason='exception'`), `agent_runs.status='error'` (not `'success'`) and the failure is captured in `error_message`. Surfaces on `/ella/runs WHERE status='error'`.
+
+4. **Cron drainer** (`api/passive_ella_cron.py:run_passive_ella_cron`) — runs every minute. Post-split, `_dispatch_respond` no longer queues `pending_ella_responses` rows, so the queue drains to empty over time. Any stale rows from before the split are handled by `agent.respond_to_passive_trigger` which is now a recorded no-op (`status='skipped'`, `skip_reason='passive_voice_removed'`). Once the queue is empty, the cron has nothing to drain — it stays scheduled as belt-and-suspenders.
+
+Default-stance is **observe**: every passive message is logged to `agent_runs`, optionally flagged for the digest, and never acted on in-channel.
 
 ## Dual kill switches
 

@@ -13,6 +13,20 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 
 ---
 
+## Co-edit risk on Ella's split prompts (@-handler vs passive decision Haiku)
+
+- **What:** The 2026-05-23 split has two prompts that jointly determine Ella's @-mention vs passive behavior — the @-handler's appended `_AT_MENTION_EXTENSION` in `agents/ella/agent.py` and the passive decision Haiku's `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py`. Both reference the same content domains and escalation rules, but they're edited independently. The 2026-05-18 unified-rewrite drifted in exactly this way: `_BASE_PROMPT` retained "what a module covers" as answerable while the mention classifier prompt added a contradictory "what module is Y in → escalate" rule. Cost: an entire production regression cycle.
+- **Why it matters:** any future tightening of the four escalation categories or any addition of a new "don't answer this" rule needs to happen in BOTH prompts (or it'll drift). The next time a similar contradiction lands, the diagnostic chain (Director + Drake spent ~half a session on it this round) replays.
+- **Next action:** when editing either prompt, grep the other and reconcile. Stronger: consider extracting the shared escalation-categories text into a constant both prompts import (would require restructuring both system prompts, deferred). Or: add a CLAUDE.md note that any escalation-rule edit requires touching both files.
+- **Logged:** 2026-05-23.
+
+## Status-honesty fix: failed LLM calls now visible on /ella/runs
+
+- **What:** Folded into the 2026-05-23 split. The `agent_runs` rows from failed Sonnet (@ handler) and failed decision Haiku (passive) calls now land with `status='error'` and `error_message` populated, instead of the prior silent `status='success'` with the failure buried in `output_summary`. The 2026-05-21 → 2026-05-23 Anthropic-cap incident logged 181 silent-fail rows; that diagnostic took a Vercel-log dive to root-cause because the database showed nothing wrong. Post-fix, the same incident would be visible with `SELECT count(*) FROM agent_runs WHERE agent_name='ella' AND status='error' AND started_at >= now() - interval '1 hour'`.
+- **Why it matters:** observability for the "Ella's gone quiet" failure mode. Resolved.
+- **Next action:** none — closed. Listed here as a record so the next observability gap surface knows what the prior shape looked like.
+- **Logged:** 2026-05-23.
+
 ## Ella user-token posting (M1.4) — DEPLOYED, awaiting Nabeel feedback before pilot rollout
 
 - **What:** M1.4.1 (discovery) → M1.4.2 (operational setup) → M1.4.3 (code change + 14 tests) all shipped 2026-04-27 in commits up to `751cb38`. `api/slack_events.py:_post_to_slack` now uses a two-token strategy: try `SLACK_USER_TOKEN` (xoxp-, posts as @ella user, no APP tag); fall back to `SLACK_BOT_TOKEN` (xoxb-, with APP tag) on any failure. Smoke-tested in `#ella-test-drakeonly` — replies render with no APP tag. Operational rollback (unset `SLACK_USER_TOKEN` + redeploy) takes ~30 sec, no code change. Pinned by `test_no_user_token_uses_bot_directly`.
