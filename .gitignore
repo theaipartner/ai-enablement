@@ -65,3 +65,8 @@ supabase/snippets/
 # Snapshots of the live preview at run time — not source. Regenerate by
 # re-running the script.
 scripts/preview-screenshots/
+
+# Throwaway discovery output — e.g. scripts/explore_close_api.py dumps
+# raw JSON under .probe-out/close/. Findings get folded into reports;
+# the raw dumps stay local.
+.probe-out/
