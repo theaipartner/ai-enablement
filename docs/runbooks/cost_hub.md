@@ -151,22 +151,32 @@ either if it was active when the month started or anywhere within
 the month (e.g. archiving an active sub on the 23rd keeps its cost
 in May's running total; it just stops counting from June onward).
 
-**Editable table vs running total — two derived lists.** The cost-hub
-page splits the data into two surfaces that look at archive state
-differently. The Monthly Subscriptions / One-Off Extras EDITABLE
-TABLES show non-archived rows only (you don't edit rows you've
-removed). The "TOTAL · THIS MONTH" RUNNING TOTAL includes
-mid-month-archived rows (their cost was real this month). Both
-surfaces share the same `subscriptionActiveInMonth` predicate via
-`getSubscriptionsActiveInCurrentMonth` (for subs) +
-`getCurrentMonthExtrasForTotal` (for extras) on the total side,
-while the tables keep using `getMonthlySubscriptions` /
-`getCurrentMonthExtras` (archive-excluded). Before the 2026-05-23
-fix, one list (archive-excluded) fed both surfaces; mid-month-
-archived rows wrongly disappeared from the total. See
-`docs/reports/cost-hub-current-month-total-fix.md`. The
-Playwright verifier (`scripts/verify-cost-hub-preview.ts` § step 5)
-asserts the invariant end-to-end so regressions are caught.
+**One list, two surfaces, sum-to-total invariant (2026-05-24).** The
+cost-hub page derives ONE list per surface — `subsActiveInMonth` (for
+subscriptions) and `extrasForTotal` (for extras) — both archive-
+inclusive. The same list feeds BOTH the visible table AND the
+"TOTAL · THIS MONTH" running total, so the visible line items'
+costs sum to the total displayed at the top. The pre-2026-05-24
+shape (separate `editableSubscriptions` for the table vs
+`subsActiveInMonth` for the total) was confusing: archived-mid-
+month rows were counted in the total but invisible in the table,
+so the page didn't add up. Now they show with a "Cancelled" badge
+(see next subsection) so what you see is what you get.
+
+**Cancelled subs stay visible with a "Cancelled" badge** for the
+month they're still being counted in (post-2026-05-24 redesign).
+A subscription that's been Cancelled (soft-archived) mid-month
+shows in the Monthly Subscriptions table with a red "Cancelled"
+badge in place of the Edit button, an opacity-dimmed strike-
+through provider name, and a Remove (×) button as the only
+remaining action. Its cost stays in the running total because
+Drake paid for it this month. When the month rolls over, the
+cancelled row drops out of the visible list automatically
+(`subscriptionActiveInMonth` returns false once `archived_at`
+predates the new month's start) and stops counting from there
+forward. So the lifecycle is: Active → Cancelled-this-month
+(visible, counted, no Edit) → gone from current view + count
+next month → still in history for the months it was active.
 
 **Existing-row backfill.** Migration 0039 set `effective_from =
 created_at::date` for the rows present at apply time — they retain
@@ -190,10 +200,37 @@ to March's total. True per-month price history (a price-versioned
 sub-rows table or an `effective_from`-keyed price ledger) remains the
 out-of-scope-for-V1 future iteration if reconciliation ever needs it.
 
+## Cancel vs Remove (the × menu)
+
+Each subscription row has TWO destructive buttons in its action area
+(post-2026-05-24, spec `cost-hub-total-cancel-remove-and-add`):
+
+- **Cancel** (neutral border): soft-archive (`archived_at = now()`).
+  The subscription stops counting next month but stays counted in
+  THIS month's total + visible in the list with a "Cancelled" badge.
+  Use for "I cancelled the sub but already paid for this month."
+  Reversible via SQL (set `archived_at = NULL`).
+
+- **Remove (×)** (red border, destructive): hard `DELETE`. The row
+  is gone from THIS month's total, gone from all historical month
+  totals, gone from the table. Irreversible. Use for mistakes only
+  ("typo'd the cost", "added the wrong sub"). The confirm dialog
+  warns explicitly before the delete fires.
+
+Cancelled-this-month rows show only Remove in their action area
+(Cancel already happened; no point cancelling again). Cancelled
+rows whose paid month has passed don't show at all (they drop out
+of the visible list once `archived_at` predates the new month's
+start; still in history).
+
+One-off extras have only **Remove** (no Cancel — there's no "next
+month" semantic for a one-off cost). Same destructive confirm
+pattern.
+
 ## Recovering a bad delete
 
-Soft-archive means the row is still in the table, just filtered out by
-the partial index + page query. Restore:
+For **Cancel** (soft archive): the row is still in the table, just
+filtered out of forward months once they begin. Restore with:
 
 ```sql
 -- monthly_subscriptions
@@ -217,10 +254,18 @@ WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC LIMIT 20;
 ```
 
-The Playwright verifier (`scripts/verify-cost-hub-preview.ts`) leaves
-soft-archived test rows behind (provider/description prefixed
-`__verify_`). They're filtered out of every query but identifiable in
-SQL if a true cleanup is ever wanted:
+For **Remove** (hard delete): the row is gone — no recovery from the
+DB. Restore by manually re-adding via the Add form with the same
+provider/cost/effective_from. Note: the new row will have a fresh
+`id` + `created_at`, so it won't be a perfect "undo" — but the
+totals will reconcile.
+
+The Playwright verifier (`scripts/verify-cost-hub-preview.ts`)
+hard-DELETEs its `__verify_*` test rows in a try/finally cleanup
+step (post-2026-05-24 rewrite). If the verifier ever fails mid-run
+in a way that breaks the cleanup, the leftover test rows can be
+removed via SQL — same pattern that resolved the 2026-05-23
+pollution incident:
 
 ```sql
 DELETE FROM monthly_subscriptions WHERE provider LIKE '__verify_%';
