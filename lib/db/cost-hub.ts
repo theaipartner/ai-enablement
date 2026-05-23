@@ -144,12 +144,13 @@ export type MonthlySubscription = {
   updated_at: string
 }
 
-// A subscription's archive state, needed by the history-month rollup
-// (an archived sub still counts toward months it was active in). The
-// live editable table only ever sees non-archived rows, so the public
-// MonthlySubscription type omits archived_at; the history path uses
-// this richer internal shape.
-type SubscriptionForHistory = {
+// A subscription's archive state, needed by anything that has to
+// reason about active-in-month overlap (both the history-month rollup
+// AND the current-month total — both need to count subs that were
+// active in month M even if archived since). The live editable table
+// only ever sees non-archived rows, so the public MonthlySubscription
+// type omits archived_at; the archive-inclusive shape is below.
+type SubscriptionWithArchive = {
   id: string
   monthly_cost_usd: number
   effective_from: string // ISO date YYYY-MM-DD
@@ -359,17 +360,24 @@ export async function getMonthlySubscriptions(): Promise<MonthlySubscription[]> 
   }))
 }
 
-// Internal: every subscription INCLUDING archived ones, with the
-// fields the history-month rollup needs. An archived sub still counts
-// toward the months it was active in, so the history path can't use
-// the archived_at-IS-NULL-filtered public getter.
-async function fetchSubscriptionsForHistory(): Promise<SubscriptionForHistory[]> {
+// Internal: every subscription INCLUDING archived ones. Used by:
+//   - getMonthTotal (history path) — an archived sub still counts toward
+//     the months it was active in, so the history rollup can't use the
+//     archived_at-IS-NULL-filtered public getter.
+//   - getSubscriptionsActiveInCurrentMonth (current-month total path) —
+//     same reasoning for the current month: a sub archived mid-month
+//     should still count toward this month's running total. (Was a
+//     real production bug pre-2026-05-23 — the page used
+//     `getMonthlySubscriptions` + a hardcoded `archived_at: null` for
+//     the total, dropping mid-month-archived rows; see
+//     `docs/reports/cost-hub-current-month-total-fix.md`.)
+async function fetchAllSubscriptionsWithArchive(): Promise<SubscriptionWithArchive[]> {
   const supabase = createAdminClient()
   const { data, error } = await supabase
     .from('monthly_subscriptions')
     .select('id, monthly_cost_usd, effective_from, archived_at')
   if (error) {
-    throw new Error(`fetchSubscriptionsForHistory: ${error.message}`)
+    throw new Error(`fetchAllSubscriptionsWithArchive: ${error.message}`)
   }
   return (data ?? []).map((row) => ({
     id: row.id,
@@ -377,6 +385,24 @@ async function fetchSubscriptionsForHistory(): Promise<SubscriptionForHistory[]>
     effective_from: row.effective_from,
     archived_at: row.archived_at,
   }))
+}
+
+// Public: subscriptions that count toward the CURRENT month's running
+// total — includes mid-month-archived rows (they were active this month;
+// Drake paid for them this month). Same overlap predicate the history
+// path uses (`subscriptionActiveInMonth`), applied to
+// `getCurrentMonthBoundaries()`. Returns the cost-bearing shape only —
+// the editable table doesn't render archived rows, so it has no use for
+// this list; it consumes the archive-excluded `getMonthlySubscriptions`
+// instead.
+export async function getSubscriptionsActiveInCurrentMonth(): Promise<
+  SubscriptionWithArchive[]
+> {
+  const { monthStart, monthEnd } = getCurrentMonthBoundaries()
+  const all = await fetchAllSubscriptionsWithArchive()
+  return all.filter((sub) =>
+    subscriptionActiveInMonth(sub, monthStart, monthEnd),
+  )
 }
 
 // Current-month [start, end) boundaries in America/New_York, as UTC
@@ -393,18 +419,27 @@ export function getCurrentMonthBoundaries(): {
   }
 }
 
-export async function getCurrentMonthExtras(): Promise<CostExtra[]> {
+// EST first-of-current-month as YYYY-MM-DD — shared by the two extras
+// fetchers so the boundary is computed once + identically. (`getEstPeriodBoundary`
+// returns a UTC instant representing EST midnight; we format it in EST
+// so the YYYY-MM-DD matches the user's mental model of "first of the month.")
+function _currentMonthStartDateEst(): string {
   const monthStart = getEstPeriodBoundary('month')
-  // `incurred_on` is a date column; compare against the YYYY-MM-DD
-  // string of monthStart in EST. We format the date in EST so the
-  // boundary aligns with the user's expectation of "first of the month."
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   })
-  const monthStartDate = fmt.format(monthStart) // YYYY-MM-DD
+  return fmt.format(monthStart)
+}
+
+// Editable-table extras: non-archived, incurred this month. What the
+// `/cost-hub` page renders in the One-Off Extras editable table.
+// Archived extras don't belong in the editable table (you don't edit
+// rows you've already removed), so the archive filter stays here.
+export async function getCurrentMonthExtras(): Promise<CostExtra[]> {
+  const monthStartDate = _currentMonthStartDateEst()
   const supabase = createAdminClient()
   const { data, error } = await supabase
     .from('cost_extras')
@@ -413,6 +448,33 @@ export async function getCurrentMonthExtras(): Promise<CostExtra[]> {
     .gte('incurred_on', monthStartDate)
     .order('incurred_on', { ascending: false })
   if (error) throw new Error(`getCurrentMonthExtras: ${error.message}`)
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    incurred_on: row.incurred_on,
+    description: row.description,
+    cost_usd: Number(row.cost_usd),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }))
+}
+
+// Total-bearing extras: ALL extras incurred this month, including
+// archived ones. An extra incurred this month then archived this month
+// was still a real cost Drake paid for this month — archiving (the
+// soft-delete UI button) shouldn't retroactively remove it from the
+// running total. The editable table hides it (no use rendering an
+// archived row as editable); the total counts it. Mirrors the
+// subscription fix where `getSubscriptionsActiveInCurrentMonth`
+// includes mid-month-archived rows for the same reason.
+export async function getCurrentMonthExtrasForTotal(): Promise<CostExtra[]> {
+  const monthStartDate = _currentMonthStartDateEst()
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('cost_extras')
+    .select('id, incurred_on, description, cost_usd, created_at, updated_at')
+    .gte('incurred_on', monthStartDate)
+    .order('incurred_on', { ascending: false })
+  if (error) throw new Error(`getCurrentMonthExtrasForTotal: ${error.message}`)
   return (data ?? []).map((row) => ({
     id: row.id,
     incurred_on: row.incurred_on,
@@ -459,7 +521,7 @@ async function getMonthTotal(offsetMonths: number): Promise<MonthTotalRow> {
   // price for every active month (locked trade-off per spec
   // § Historical sub price drift). Includes archived subs because an
   // archived sub still counts toward the months it was active in.
-  const allSubs = await fetchSubscriptionsForHistory()
+  const allSubs = await fetchAllSubscriptionsWithArchive()
   const subscriptions = allSubs
     .filter((sub) => subscriptionActiveInMonth(sub, monthStart, monthEnd))
     .reduce((sum, sub) => sum + Number(sub.monthly_cost_usd), 0)
@@ -516,10 +578,16 @@ export async function getRecentMonthTotals(
 // Total-this-month aggregator (for the big-number box)
 // ---------------------------------------------------------------------------
 
+// Narrow the parameter types to ONLY the field actually summed — the
+// total doesn't need provider/notes/etc., just the cost numbers. This
+// lets both the editable-table shape (`MonthlySubscription`) and the
+// archive-inclusive shape (`SubscriptionWithArchive`) be passed; pre-
+// 2026-05-23 the page passed the wrong list, post-fix it passes
+// `getSubscriptionsActiveInCurrentMonth()` (`SubscriptionWithArchive[]`).
 export async function getCurrentMonthTotal(
   bucketSummaries: BucketSummaries,
-  subscriptions: MonthlySubscription[],
-  currentMonthExtras: CostExtra[],
+  subscriptions: { monthly_cost_usd: number }[],
+  currentMonthExtras: { cost_usd: number }[],
 ): Promise<number> {
   const anthropic = Object.values(bucketSummaries).reduce(
     (sum, summary) => sum + summary.thisMonth.totalCost,

@@ -3,9 +3,11 @@ import {
   BUCKET_DEFINITIONS,
   getAnthropicBucketSummaries,
   getCurrentMonthExtras,
+  getCurrentMonthExtrasForTotal,
   getCurrentMonthBoundaries,
   getCurrentMonthTotal,
   getMonthlySubscriptions,
+  getSubscriptionsActiveInCurrentMonth,
   subscriptionActiveInMonth,
   getRecentMonthTotals,
   type BucketSummary,
@@ -57,19 +59,40 @@ function currentMonthLabel(): string {
 }
 
 export default async function CostHubPage() {
-  const [summaries, subscriptions, extras, recentMonths] = await Promise.all([
+  // Six parallel fetches. Two derived lists per surface:
+  //   - `subscriptions` (archive-excluded) → editable subscriptions table.
+  //   - `subsActiveInMonth` (archive-INCLUSIVE; mid-month-archived rows kept) → running total.
+  //   - `extras` (archive-excluded, this-month) → editable extras table.
+  //   - `extrasForTotal` (archive-INCLUSIVE, this-month) → running total.
+  // The split fixes the pre-2026-05-23 bug where one list fed both surfaces
+  // and mid-month-archived rows wrongly vanished from the total (display
+  // bug, data was intact). See
+  // `docs/reports/cost-hub-current-month-total-fix.md`.
+  const [
+    summaries,
+    subscriptions,
+    subsActiveInMonth,
+    extras,
+    extrasForTotal,
+    recentMonths,
+  ] = await Promise.all([
     getAnthropicBucketSummaries(),
     getMonthlySubscriptions(),
+    getSubscriptionsActiveInCurrentMonth(),
     getCurrentMonthExtras(),
+    getCurrentMonthExtrasForTotal(),
     getRecentMonthTotals(12),
   ])
 
-  // Filter the non-archived subs to those active in the CURRENT month
-  // (effective_from has started, not future-dated). The same filtered
-  // list feeds both the editable table render AND the running total
-  // so the two never disagree.
+  // Editable-table list: non-archived subs that are also active in the
+  // current month (effective_from has started; not future-dated). The
+  // future-date filter avoids surfacing a sub that was added with an
+  // effective_from set to next month — it shouldn't render as editable
+  // until it actually starts contributing. `archived_at: null` is
+  // honest here because `getMonthlySubscriptions` already filtered
+  // archived rows at the DB layer.
   const { monthStart, monthEnd } = getCurrentMonthBoundaries()
-  const activeSubscriptions = subscriptions.filter((s) =>
+  const editableSubscriptions = subscriptions.filter((s) =>
     subscriptionActiveInMonth(
       { effective_from: s.effective_from, archived_at: null },
       monthStart,
@@ -77,13 +100,17 @@ export default async function CostHubPage() {
     ),
   )
 
+  // Total uses the archive-inclusive list — mid-month-archived rows
+  // count toward this month's total because Drake paid for them this
+  // month. `getCurrentMonthTotal` is a pure sum; it doesn't know or
+  // care about archive state.
   const totalThisMonth = await getCurrentMonthTotal(
     summaries,
-    activeSubscriptions,
-    extras,
+    subsActiveInMonth,
+    extrasForTotal,
   )
 
-  const subRows: SubscriptionRow[] = activeSubscriptions.map((s) => ({
+  const subRows: SubscriptionRow[] = editableSubscriptions.map((s) => ({
     id: s.id,
     provider: s.provider,
     monthly_cost_usd: s.monthly_cost_usd,

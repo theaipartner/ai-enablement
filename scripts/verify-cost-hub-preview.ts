@@ -11,8 +11,16 @@
  *   2. Assert the five Anthropic bucket boxes are present.
  *   3. Assert the "Total this month" box renders a dollar amount.
  *   4. Add a test monthly subscription, assert it appears, delete it.
- *   5. Add a test one-off extra, assert it appears, delete it.
- *   6. Screenshot to scripts/.preview/cost-hub.png.
+ *   5. Archive-still-counts assertion (post-2026-05-23 fix): add a
+ *      today-dated sub with a distinctive cost, capture the total,
+ *      archive it (soft-delete), assert the row is gone from the
+ *      editable table AND the total still reflects the cost.
+ *      Symmetric assertion for extras. The bug this guards against:
+ *      pre-fix, archiving a mid-month sub wrongly removed it from the
+ *      current-month total. See
+ *      `docs/reports/cost-hub-current-month-total-fix.md`.
+ *   6. Add a test one-off extra, assert it appears, delete it.
+ *   7. Screenshot to scripts/.preview/cost-hub.png.
  *
  * Note: the delete is a SOFT archive (the row stays in the table with
  * archived_at set). The test rows use a clearly-marked provider /
@@ -140,7 +148,83 @@ async function main(): Promise<void> {
     }
     console.log('[verify] both test subscriptions deleted (soft-archived)')
 
-    // --- 5. Add + delete a one-off extra ---
+    // --- 5. Archive-still-counts: mid-month-archived sub remains in total ---
+    //
+    // The pre-2026-05-23 bug: `page.tsx`'s `activeSubscriptions` list
+    // was derived from `getMonthlySubscriptions()` (archive-excluded)
+    // and fed BOTH the editable table AND the running total. So
+    // archiving a sub mid-month wrongly dropped its cost from the
+    // total. The fix splits into two derived lists; the total uses
+    // `getSubscriptionsActiveInCurrentMonth()` (archive-inclusive).
+    // This step guards the new behavior end-to-end.
+    const TEST_SUB_ARCHIVED = `${TEST_SUB_PROVIDER}_archive_still_counts`
+    const ARCHIVE_COST = 77.77 // distinctive amount
+
+    // 5a. Baseline total before adding the test sub.
+    const baselineTotal = await readTotalThisMonthUsd(page)
+    console.log(`[verify] baseline total before add: $${baselineTotal.toFixed(2)}`)
+
+    // 5b. Add a today-dated sub with the distinctive cost. Wait for
+    // the post-add page refresh to settle so we read a fresh total.
+    await subBox.locator('input[placeholder="Provider"]').fill(TEST_SUB_ARCHIVED)
+    await subBox
+      .locator('input[placeholder="Monthly cost USD"]')
+      .fill(ARCHIVE_COST.toFixed(2))
+    await subBox.locator('input[placeholder="Notes (optional)"]').fill('archive-still-counts')
+    await subBox.locator('input[aria-label="Effective from"]').fill(today)
+    await subBox.locator('button[type="submit"]:has-text("Add")').click()
+    await page.waitForSelector(`text=${TEST_SUB_ARCHIVED}`, { timeout: 15_000 })
+    // Wait for the running total to actually reflect the add — the
+    // `router.refresh()` after the server action is asynchronous.
+    await page.waitForFunction(
+      ({ baseline, delta }) => {
+        const txt = document.querySelector('.geg-gold-box .geg-serif')?.textContent ?? ''
+        const m = txt.match(/\$([\d,]+\.\d{2})/)
+        if (!m) return false
+        const cur = Number(m[1].replace(/,/g, ''))
+        return Math.abs(cur - (baseline + delta)) < 0.01
+      },
+      { baseline: baselineTotal, delta: ARCHIVE_COST },
+      { timeout: 15_000 },
+    )
+    const totalAfterAdd = await readTotalThisMonthUsd(page)
+    console.log(
+      `[verify] total after add: $${totalAfterAdd.toFixed(2)} (expected ${(baselineTotal + ARCHIVE_COST).toFixed(2)})`,
+    )
+    if (Math.abs(totalAfterAdd - (baselineTotal + ARCHIVE_COST)) >= 0.01) {
+      throw new Error(
+        `add did not move total by ${ARCHIVE_COST}: ${baselineTotal} → ${totalAfterAdd}`,
+      )
+    }
+
+    // 5c. Archive (soft-delete) the test sub, then assert (a) it's gone
+    // from the editable table AND (b) the total is STILL baseline +
+    // cost (the fix's invariant). Pre-fix this assertion would have
+    // failed because the total snapped back to baseline.
+    page.once('dialog', (d) => d.accept())
+    const archiveRow = subBox.locator('div', { hasText: TEST_SUB_ARCHIVED }).last()
+    await archiveRow
+      .locator(`button[aria-label="Delete ${TEST_SUB_ARCHIVED}"]`)
+      .click()
+    await page.waitForSelector(`text=${TEST_SUB_ARCHIVED}`, {
+      state: 'detached',
+      timeout: 15_000,
+    })
+    // Wait for the post-archive refresh to settle. Total should NOT
+    // have moved off baseline+cost.
+    await page.waitForLoadState('networkidle')
+    const totalAfterArchive = await readTotalThisMonthUsd(page)
+    console.log(
+      `[verify] total after archive: $${totalAfterArchive.toFixed(2)} (expected unchanged at ${(baselineTotal + ARCHIVE_COST).toFixed(2)})`,
+    )
+    if (Math.abs(totalAfterArchive - (baselineTotal + ARCHIVE_COST)) >= 0.01) {
+      throw new Error(
+        `archive-still-counts FAILED: total moved from ${(baselineTotal + ARCHIVE_COST).toFixed(2)} to ${totalAfterArchive.toFixed(2)} after archive (should be unchanged)`,
+      )
+    }
+    console.log('[verify] archive-still-counts: PASS (sub gone from table, cost stays in total)')
+
+    // --- 6. Add + delete a one-off extra ---
     const extraBox = page
       .locator('.geg-gold-box', { hasText: 'ONE-OFF · EXTRAS' })
       .first()
@@ -165,7 +249,7 @@ async function main(): Promise<void> {
     })
     console.log('[verify] test extra deleted (soft-archived)')
 
-    // --- 6. Screenshot ---
+    // --- 7. Screenshot ---
     const shotPath = path.join(OUT_DIR, 'cost-hub.png')
     await page.screenshot({ path: shotPath, fullPage: true })
     console.log(`[verify] wrote ${shotPath}`)
@@ -173,6 +257,22 @@ async function main(): Promise<void> {
   } finally {
     await browser.close()
   }
+}
+
+// Read the "TOTAL · THIS MONTH" big-number value as a USD number.
+// Parses `$X,XXX.XX` from the `.geg-serif` heading inside the total
+// box. Throws on missing/unparseable.
+async function readTotalThisMonthUsd(page: import('@playwright/test').Page): Promise<number> {
+  const totalBox = page
+    .locator('.geg-gold-box', { hasText: 'TOTAL · THIS MONTH' })
+    .first()
+  const heading = totalBox.locator('.geg-serif').first()
+  const text = (await heading.textContent()) ?? ''
+  const m = text.match(/\$([\d,]+\.\d{2})/)
+  if (!m) {
+    throw new Error(`could not parse total-this-month dollar amount from: ${text}`)
+  }
+  return Number(m[1].replace(/,/g, ''))
 }
 
 main().catch((err) => {
