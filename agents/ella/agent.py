@@ -50,7 +50,7 @@ from agents.ella.passive_monitor import PassiveTriggerPayload
 from agents.ella.prompts import build_system_prompt
 from agents.ella.retrieval import (
     ContextBundle,
-    fetch_recent_channel_context,
+    fetch_recent_at_mention_exchanges,
     retrieve_context_for_client,
 )
 from shared.claude_client import complete
@@ -99,9 +99,19 @@ NONE of the following are escalation triggers on their own:
 - A long question, a multi-part question, or a question phrased in many ways.
 - A clean factual program/curriculum/process question, even when the KB chunks only partially match — paraphrase what you have, name the gap honestly, do NOT bail to the advisor by default.
 
+# CONVERSATIONAL CONTINUITY
+
+When a RECENT @-MENTION EXCHANGES block appears below, it shows your last few @-mention exchanges in THIS channel — each one is the user's prior @-mention plus your reply to it. Use it to:
+
+- Thread the conversation. If the new question builds on something asked recently, reference it naturally ("you asked about X earlier — building on that, …"). Don't fabricate continuity that isn't there; only reference prior exchanges when the new message genuinely connects.
+- Avoid restating recent answers verbatim. If you already explained X two messages ago and the user is asking a follow-up, push the thread forward; don't re-derive from scratch.
+- Treat each exchange as one user-question + one of-your-replies pair. The "user" lines are clients or advisors @-mentioning you; the "ella" lines are what you replied.
+
 # FIRM AFTER FIRST
 
-Check the recent channel context (provided below in the RECENT CHANNEL CONTEXT section, when available) for any prior message from you (Ella) on the same topic that ended in an escalation. If you find one, do NOT re-engage substantively on the same topic. Route harder ("worth picking this up with the advisor directly") rather than restating the same answer. One pass; then you step back.
+Check the RECENT @-MENTION EXCHANGES block below (when present) for any prior exchange where YOU ESCALATED on the same topic — your reply was a warm ack handing off to the advisor rather than a substantive answer. If you find one, do NOT re-engage substantively on the same topic. Route harder ("worth picking this up with the advisor directly") rather than restating the same ack.
+
+This rule fires on a prior ESCALATION on the same topic, NOT on a prior substantive answer to a similar question. If the user is asking the same thing again because they didn't see / didn't grok your previous answer, answer it again (concisely, perhaps pointing to what you said before). FIRM AFTER FIRST is about not re-ack-ing a handoff that's already in flight — it is NOT about refusing to repeat yourself.
 
 # OUTPUT FORMAT
 
@@ -202,7 +212,16 @@ def handle_at_mention(payload: PassiveTriggerPayload) -> AtMentionResult:
         context = _retrieve_context(channel_client["id"], payload.triggering_message_text or "")
         client_for_prompt = dict(channel_client)
         client_for_prompt["primary_csm"] = context.primary_csm
-        recent_channel_context = fetch_recent_channel_context(
+        # Scoped context for the @ handler: last 3 @-mention EXCHANGES
+        # in this channel (mention + Ella's reply, paired by user_id
+        # per the open `author_type='bot'` issue). Replaces the broader
+        # 15-turn `fetch_recent_channel_context` the unified-rewrite
+        # era used here — that was too noisy for the @ use case (15
+        # raw turns of unrelated channel crosstalk) and never wired
+        # into the prompt for answering, only for FIRM AFTER FIRST.
+        # The passive observation path still uses
+        # `fetch_recent_channel_context` for its decision Haiku.
+        recent_at_mention_exchanges = fetch_recent_at_mention_exchanges(
             payload.slack_channel_id,
             before_ts=payload.triggering_message_ts,
         )
@@ -210,7 +229,7 @@ def handle_at_mention(payload: PassiveTriggerPayload) -> AtMentionResult:
             client_for_prompt,
             context.chunks,
             speaker=speaker,
-            recent_channel_context=recent_channel_context,
+            recent_at_mention_exchanges=recent_at_mention_exchanges,
         )
         try:
             parsed = _call_sonnet_for_at_mention(
@@ -453,17 +472,31 @@ def _build_at_mention_system_prompt(
     chunks: list,
     *,
     speaker: SpeakerIdentity | None,
-    recent_channel_context: str,
+    recent_at_mention_exchanges: str,
 ) -> str:
     """@-handler system prompt: base prompt + restored four-category
-    escalation logic + structured-JSON output contract."""
+    escalation logic + structured-JSON output contract + (when
+    non-empty) the RECENT @-MENTION EXCHANGES block.
+
+    `build_system_prompt` is called WITHOUT `recent_channel_context`
+    on purpose — the @ path uses a narrower last-3-mention-exchanges
+    block (this function appends it with its own header) rather than
+    the broad 15-turn channel-context block the passive path uses.
+    """
     base = build_system_prompt(
         client_for_prompt,
         chunks,
         speaker=speaker,
-        recent_channel_context=recent_channel_context,
     )
-    return base + "\n\n" + _AT_MENTION_EXTENSION
+    extension = _AT_MENTION_EXTENSION
+    if recent_at_mention_exchanges:
+        extension = (
+            extension
+            + "\n\n# RECENT @-MENTION EXCHANGES IN THIS CHANNEL"
+            + " (last 3, oldest first; each pair = one user @-mention + your reply)\n\n"
+            + recent_at_mention_exchanges
+        )
+    return base + "\n\n" + extension
 
 
 def _call_sonnet_for_at_mention(

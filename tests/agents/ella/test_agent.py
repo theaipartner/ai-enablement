@@ -82,7 +82,7 @@ def _patch_common(mocker, *, speaker=_CLIENT_SPEAKER, channel_client=None):
         ),
     )
     mocker.patch(
-        "agents.ella.agent.fetch_recent_channel_context", return_value=""
+        "agents.ella.agent.fetch_recent_at_mention_exchanges", return_value=""
     )
     mocker.patch(
         "agents.ella.agent.build_system_prompt", return_value="[base_prompt]"
@@ -397,6 +397,100 @@ def test_passive_trigger_is_a_skip_no_post(mocker):
     # agent_run recorded as skipped (status honesty)
     assert runs[0]["status"] == "skipped"
     assert "passive_voice_removed" in runs[0]["output_summary"]
+
+
+# ---------------------------------------------------------------------------
+# Recent @-mention exchanges wiring
+# ---------------------------------------------------------------------------
+
+
+def test_handle_at_mention_passes_recent_exchanges_into_prompt(mocker):
+    """Spec acceptance (e): the handler calls the new
+    fetch_recent_at_mention_exchanges helper and the returned text
+    reaches the system prompt with the labeled header so Sonnet can
+    use it for continuity + FIRM AFTER FIRST."""
+    capture = _patch_common(mocker)
+    # Override the default empty exchanges with a real-looking string.
+    fake_block = (
+        "[2026-05-23 13:30 ET — 30 minutes ago] user (Drake): "
+        "<@UBOT0001> what's covered in module 3\n"
+        "[2026-05-23 13:30 ET — 30 minutes ago] ella (Ella): "
+        "Module 3 covers sales fundamentals."
+    )
+    mocker.patch(
+        "agents.ella.agent.fetch_recent_at_mention_exchanges",
+        return_value=fake_block,
+    )
+    # Capture the assembled system prompt by stubbing complete().
+    captured_system = {}
+
+    def _capture_complete(**kw):
+        captured_system["system"] = kw["system"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "response_text": "Building on what we discussed about module 3...",
+                    "escalate": False,
+                    "handoff_reasoning": None,
+                }
+            ),
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=Decimal("0"),
+            model="claude-sonnet-4-6",
+            raw=None,
+        )
+
+    mocker.patch("agents.ella.agent.complete", side_effect=_capture_complete)
+
+    agent.handle_at_mention(
+        _payload(text="<@UBOT0001> how does that connect to module 4?")
+    )
+
+    system = captured_system["system"]
+    # The block reaches the prompt with its header.
+    assert "# RECENT @-MENTION EXCHANGES IN THIS CHANNEL" in system
+    assert "what's covered in module 3" in system
+    assert "Module 3 covers sales fundamentals." in system
+    # And the prompt instructs Sonnet about continuity + FIRM AFTER FIRST.
+    assert "CONVERSATIONAL CONTINUITY" in system
+    assert "FIRM AFTER FIRST" in system
+
+
+def test_handle_at_mention_omits_block_when_no_prior_exchanges(mocker):
+    """When the fetch returns empty (no prior @-mentions in channel),
+    the RECENT @-MENTION EXCHANGES header should NOT appear in the
+    prompt — keeps the prompt clean for first-time conversations."""
+    capture = _patch_common(mocker)
+    # Default fixture already stubs fetch_recent_at_mention_exchanges → "".
+    captured_system = {}
+
+    def _capture_complete(**kw):
+        captured_system["system"] = kw["system"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "response_text": "Hey Drake — sure, here's the answer.",
+                    "escalate": False,
+                    "handoff_reasoning": None,
+                }
+            ),
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=Decimal("0"),
+            model="claude-sonnet-4-6",
+            raw=None,
+        )
+
+    mocker.patch("agents.ella.agent.complete", side_effect=_capture_complete)
+
+    agent.handle_at_mention(_payload())
+
+    system = captured_system["system"]
+    assert "# RECENT @-MENTION EXCHANGES IN THIS CHANNEL" not in system
+    # The CONVERSATIONAL CONTINUITY instruction text still appears
+    # (it's in the static extension); the data block just doesn't.
+    assert "CONVERSATIONAL CONTINUITY" in system
 
 
 # ---------------------------------------------------------------------------
