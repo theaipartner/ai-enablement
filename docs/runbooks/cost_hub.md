@@ -145,7 +145,28 @@ months."
 a sub sets `archived_at`; the sub still contributes to every month
 between `effective_from` and the archive date. It only drops out of
 months that begin on/after the archive date. So deleting a sub today
-does not erase it from last month's total.
+does not erase it from last month's total — AND, after the 2026-05-23
+current-month-total fix, doesn't erase it from THIS month's total
+either if it was active when the month started or anywhere within
+the month (e.g. archiving an active sub on the 23rd keeps its cost
+in May's running total; it just stops counting from June onward).
+
+**Editable table vs running total — two derived lists.** The cost-hub
+page splits the data into two surfaces that look at archive state
+differently. The Monthly Subscriptions / One-Off Extras EDITABLE
+TABLES show non-archived rows only (you don't edit rows you've
+removed). The "TOTAL · THIS MONTH" RUNNING TOTAL includes
+mid-month-archived rows (their cost was real this month). Both
+surfaces share the same `subscriptionActiveInMonth` predicate via
+`getSubscriptionsActiveInCurrentMonth` (for subs) +
+`getCurrentMonthExtrasForTotal` (for extras) on the total side,
+while the tables keep using `getMonthlySubscriptions` /
+`getCurrentMonthExtras` (archive-excluded). Before the 2026-05-23
+fix, one list (archive-excluded) fed both surfaces; mid-month-
+archived rows wrongly disappeared from the total. See
+`docs/reports/cost-hub-current-month-total-fix.md`. The
+Playwright verifier (`scripts/verify-cost-hub-preview.ts` § step 5)
+asserts the invariant end-to-end so regressions are caught.
 
 **Existing-row backfill.** Migration 0039 set `effective_from =
 created_at::date` for the rows present at apply time — they retain
