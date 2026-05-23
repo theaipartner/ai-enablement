@@ -15,12 +15,14 @@ type NavItem = {
 // Nav vocabulary + per-item gate. Server-side filter in the layout
 // passes the resolved tier down; the conditional render below hides
 // items the user can't access. requiredTier='csm' is "everyone with an
-// authenticated session", admin gates Ella, etc.
+// authenticated session", admin gates Cost Hub, etc. The `/ella/runs`
+// item was removed 2026-05-24 (spec `remove-ella-runs-page`) — the
+// post-@-mention-split passive path is observation-only (digest +
+// unanswered-flagger only), so the per-run audit page had no purpose.
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/clients', label: 'Clients', requiredTier: 'csm' },
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
   { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
-  { href: '/ella/runs', label: 'Ella', requiredTier: 'admin' },
   { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
@@ -45,7 +47,6 @@ export function TopNav({
   function isActive(href: string): boolean {
     if (href === '/clients') return pathname === '/clients' || pathname.startsWith('/clients/')
     if (href === '/calls') return pathname === '/calls' || pathname.startsWith('/calls/')
-    if (href === '/ella/runs') return pathname === '/ella/runs' || pathname.startsWith('/ella/runs/')
     if (href === '/teams') return pathname === '/teams' || pathname.startsWith('/teams/')
     if (href === '/tasks') return pathname === '/tasks' || pathname.startsWith('/tasks/')
     if (href === '/cost-hub') return pathname === '/cost-hub' || pathname.startsWith('/cost-hub/')

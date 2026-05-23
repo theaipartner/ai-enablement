@@ -254,9 +254,9 @@ def test_cost_recorded_when_haiku_was_called(fake_db):
 def test_haiku_call_failure_lands_as_status_error(fake_db):
     """When the decision Haiku raises, passive_monitor returns a
     PassiveDecision with `reasoning='haiku_call_failed: ...'`. The
-    dispatch layer must surface that as `status='error'` so the
-    failure is visible on `/ella/runs WHERE status='error'`, not
-    buried in a 'success' row's output_summary."""
+    dispatch layer must surface that as `status='error'` on the
+    persisted agent_runs row, not bury it inside a 'success' row's
+    output_summary."""
     ev = PassiveEvaluation(
         payload=_payload(),
         decision=_decision(

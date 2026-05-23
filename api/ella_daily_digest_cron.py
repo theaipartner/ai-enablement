@@ -337,8 +337,7 @@ def _format_digest_message(
     if len(body) > _BODY_TRUNCATE_AT:
         body = (
             body[:_BODY_TRUNCATE_AT].rstrip()
-            + "\n\n_(… more flagged messages truncated — see `/ella/runs` "
-            "for the full list)_"
+            + "\n\n_(… more flagged messages truncated)_"
         )
     return body
 

@@ -533,7 +533,7 @@ def test_routed_to_humans_skip_no_haiku_call(fake_db, monkeypatch):
     """When `is_routed_to_others=True`, Gate 3 fires BEFORE any Haiku
     call. The skip carries digest_flag=True so the dispatch layer
     writes the digest item, and skip_reason='routed_to_humans' so
-    /ella/runs can filter on it."""
+    downstream queries can filter on it."""
     called = {"haiku": 0}
 
     def _spy(**kw):

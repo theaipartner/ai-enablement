@@ -5,11 +5,10 @@
 // readable `@First Last` in the dashboard by looking up the user ID
 // against the `clients` + `team_members` tables.
 //
-// Both the list page (`getEllaRunsList`) and the detail page
-// (`getEllaRunDetail`) call into the same helpers so behavior stays
-// consistent. The DB lookup itself stays in `lib/db/ella-runs.ts`
-// (callers build the map once per request from a known set of texts);
-// this module is the pure-function transform layer.
+// Pure-function transform layer: callers (any surface that renders
+// Slack text with mentions) build the U-ID → display-name map once per
+// request and pass it in. The lookup helpers live wherever the calling
+// surface keeps its DB code.
 
 // Slack user IDs start with U (regular users) or W (workspace-grid /
 // Slack Connect). Both can appear in `<@...>` mention syntax.
