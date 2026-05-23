@@ -77,12 +77,20 @@ Resolved-by-removal via `ella-at-mention-routing-gate-and-advisor-context` (2026
 - **Next action:** Operational, not code. Ensure Ella's bot is invited to every client channel the flagger surfaces from. The existing `scripts/invite_ella_and_bot_to_client_channels.py` (dry-run + apply) is the relevant rollout tool; full-fleet rollout was pending Drake-led ops work as of the 2026-05-10 Batch 1 wrap (`docs/state.md`). No spec needed — this entry exists so the next person doesn't waste time looking for a code fix.
 - **Logged:** 2026-05-21 (surfaced during the post-resume EOD review of the unanswered-flagger ship).
 
-## Ella posts classified as `author_type='bot'` instead of `'ella'` in `slack_messages`
+## ~~Ella posts classified as `author_type='bot'` instead of `'ella'` in `slack_messages`~~ — RESOLVED 2026-05-23 (misdiagnosed; fix landed via reply-as-human spec)
 
-- **What:** `parser._resolve_author` is not recognizing Ella's user account (`slack_user_id='U0ATX2Y8GTD'` behind `SLACK_USER_TOKEN`) — her posts ingest with `author_type='bot'`. Verified empirically: SQL on cloud `slack_messages` shows 6+ Ella posts over the trailing 7 days under this user_id, all bot-tagged. Surfaced during the 2026-05-21 duplicate-webhook diagnostic (`docs/reports/ella-duplicate-webhook-delivery-diagnostic.md` § Surprises).
-- **Why it matters:** Downstream queries filtering on `author_type='ella'` silently fail to match Ella's own posts — including the CSM-intervention check in `api/passive_ella_cron.py:_csm_intervened`. Independent of the message_changed dedup bug (resolved separately 2026-05-21). Doesn't block the production resume currently gated on the dedup-gate smoke, but should be fixed before any downstream consumer of `author_type='ella'` is added.
-- **Next action:** Likely root cause — `shared.slack_identity.get_user_id_for_token(os.environ.get("SLACK_USER_TOKEN"))` is returning a different user_id than what Ella actually posts under, OR returning None. Inspect the parser's author resolution: when `ella_user_id` is None or doesn't match, the message falls through to the bot-detection branch (`subtype == 'bot_message' or bot_id`) and gets tagged `bot`. Verify with a one-shot script reading `auth.test` against the live `SLACK_USER_TOKEN` and comparing to `slack_messages.slack_user_id`. Spec needed once production is stable post-dedup-fix.
-- **Logged:** 2026-05-21 (surfaced from the duplicate-webhook diagnostic).
+The 2026-05-23 safety investigation (`docs/reports/ella-reply-as-human-investigation.md`) proved this entry was misdiagnosed:
+
+- `auth.test SLACK_BOT_TOKEN` → `U0ATX2Y8GTD`
+- `auth.test SLACK_USER_TOKEN` → `U0B03PTJD3P`
+
+The original entry conflated the two user_ids — it claimed `U0ATX2Y8GTD` was behind `SLACK_USER_TOKEN`, but `U0ATX2Y8GTD` is actually the BOT user_id. Cloud verification: every `slack_messages` row with `slack_user_id='U0B03PTJD3P'` (the real SLACK_USER_TOKEN id) is correctly tagged `author_type='ella'` — 42 historical rows, the all-time count. Every row with `slack_user_id='U0ATX2Y8GTD'` (the bot id) is correctly tagged `author_type='bot'` — including all 62 of Ella's current posts. The parser was never broken; the post identity changed.
+
+What actually happened: the 2026-05-18 unified-path collapse moved Ella's reply path off the M1.4 two-token `_post_to_slack` (which preferred user token) onto the bot-only `shared.slack_post.post_message`. The bot user_id is what's been showing in `slack_messages` since, and the parser dutifully tags bot-posted messages as `'bot'`. The last `'ella'`-tagged row is 2026-05-18 19:30 UTC — the moment of the collapse.
+
+The 2026-05-23 evening `ella-reply-as-human` spec ships `shared.slack_post.post_message_as_user_first` and routes `handle_at_mention`'s four client-facing post sites through it. Going forward, the user-token path is used first (replies post as `U0B03PTJD3P` → tagged `'ella'`); bot-token fallback covers any user-token failure (replies post as `U0ATX2Y8GTD` → tagged `'bot'`). Both branches are correctly tagged by the (working) parser. Post-deploy verification: query `slack_messages` for fresh `author_type='ella'` rows in the first hour after the deploy lands. See `docs/agents/ella/ella.md` § Response Location for the live shape. CSM-intervention check in `api/passive_ella_cron.py:_csm_intervened` (mentioned in the original entry) is now a moot concern since the cron is itself a no-op post-2026-05-23 split.
+
+Meta-lesson logged in `docs/reports/ella-reply-as-human-investigation.md`: this is an example of a known-issues entry being wrong because the root cause was inferred without verifying against live data. The empirical check (auth.test on both tokens + one SELECT) took 30 seconds and conclusively refuted the prior diagnosis.
 
 ## ~~Decision Haiku has no rule for "client @-mentioned specific humans → Ella stays silent"~~ — RESOLVED 2026-05-20
 

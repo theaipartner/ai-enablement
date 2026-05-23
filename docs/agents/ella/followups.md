@@ -13,6 +13,13 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 
 ---
 
+## Reply-as-human rollback procedure (post-2026-05-23 evening ship)
+
+- **What:** The 2026-05-23 evening `ella-reply-as-human` spec routed Ella's @-mention replies through `shared.slack_post.post_message_as_user_first` — `SLACK_USER_TOKEN` first, `SLACK_BOT_TOKEN` fallback. If user-token posting needs to go away (rendering issue, scope problem, anything), the rollback is purely operational: **unset `SLACK_USER_TOKEN` in Vercel env vars and redeploy**. The helper sees no token, falls through to the bot path immediately, replies revert to APP-tagged bot posts. No code change required. Same shape as the M1.4 operational rollback procedure (`docs/architecture/ella_user_token.md` if it still exists; the pattern is identical).
+- **Why it matters:** zero-code-change rollback is the safety net for any future reason to swap back to bot-only posting. Drake should know the procedure without needing to grep code.
+- **Next action:** none — closed. Listed for operational reference.
+- **Logged:** 2026-05-23 evening.
+
 ## FIRM AFTER FIRST sharpening — pending real-world signal post-2026-05-23 evening
 
 - **What:** The 2026-05-23 evening recent-context spec sharpened the @ handler's FIRM AFTER FIRST rule: it now fires on a prior ESCALATION on the same topic (your reply was a warm ack handing off), NOT on a prior substantive answer to a similar question. Smoke-1 (2026-05-23 afternoon) had Ella refusing to repeat herself when Drake hammered the same answerable question 4× in 10 min. The narrower scoped context (3 actual mention exchanges vs the prior fuzzy 15-turn window) + the sharpened rule together should fix this — but the fix is structural + prompt-driven, not test-pinned (the trigger pattern is rare and hard to unit-test for; the unit tests cover the wiring + prompt content, not Sonnet's adherence to the sharpened rule).
