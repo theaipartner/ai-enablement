@@ -13,6 +13,13 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 
 ---
 
+## FIRM AFTER FIRST sharpening — pending real-world signal post-2026-05-23 evening
+
+- **What:** The 2026-05-23 evening recent-context spec sharpened the @ handler's FIRM AFTER FIRST rule: it now fires on a prior ESCALATION on the same topic (your reply was a warm ack handing off), NOT on a prior substantive answer to a similar question. Smoke-1 (2026-05-23 afternoon) had Ella refusing to repeat herself when Drake hammered the same answerable question 4× in 10 min. The narrower scoped context (3 actual mention exchanges vs the prior fuzzy 15-turn window) + the sharpened rule together should fix this — but the fix is structural + prompt-driven, not test-pinned (the trigger pattern is rare and hard to unit-test for; the unit tests cover the wiring + prompt content, not Sonnet's adherence to the sharpened rule).
+- **Why it matters:** If the rule keeps over-firing on legitimate repeats, the user-facing effect is "Ella refuses to help me with this thing" — worse than the original navigation-escalate regression in some ways. Worth a watch.
+- **Next action:** Drake spot-checks during normal @ usage over the next few days. If the over-firing pattern recurs (Ella ack-escalates a follow-up that didn't deserve it), the next step is either (a) further tighten the prompt to be even more explicit, or (b) structural — only consider FIRM AFTER FIRST when the prior reply's `agent_runs.status='escalated'` (not just "looked like an ack"), threaded into the fetch.
+- **Logged:** 2026-05-23 evening.
+
 ## Co-edit risk on Ella's split prompts (@-handler vs passive decision Haiku)
 
 - **What:** The 2026-05-23 split has two prompts that jointly determine Ella's @-mention vs passive behavior — the @-handler's appended `_AT_MENTION_EXTENSION` in `agents/ella/agent.py` and the passive decision Haiku's `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py`. Both reference the same content domains and escalation rules, but they're edited independently. The 2026-05-18 unified-rewrite drifted in exactly this way: `_BASE_PROMPT` retained "what a module covers" as answerable while the mention classifier prompt added a contradictory "what module is Y in → escalate" rule. Cost: an entire production regression cycle.

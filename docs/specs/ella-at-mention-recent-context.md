@@ -1,6 +1,6 @@
 # Ella @-mention conversational context — last 3 mention exchanges + use-it-to-answer
 **Slug:** ella-at-mention-recent-context
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
