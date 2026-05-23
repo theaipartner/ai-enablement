@@ -70,3 +70,9 @@ scripts/preview-screenshots/
 # raw JSON under .probe-out/close/. Findings get folded into reports;
 # the raw dumps stay local.
 .probe-out/
+
+# Engine CSV — Drake's local working copy of the daily-tracker sheet
+# used during Close-ingestion planning. Not source of truth; the
+# canonical sheet lives in Google Sheets. Local file is the reference
+# Builder reads at design time per docs/specs/close-ingestion-v1.md.
+Data Sheet - Overall Engine.csv
