@@ -173,16 +173,14 @@ def test_respond_with_haiku_model(fake_db, monkeypatch):
             "reasoning": "clean factual",
         },
     )
-    # Non-mention path → exercises the decision Haiku (which still
-    # produces respond/haiku). The @-mention path is tested in
-    # test_mention_classifier; here we only validate the decision-Haiku
-    # branch still routes respond correctly post-prompt-surgery.
+    # Non-mention path → exercises the decision Haiku. @-mentions are
+    # routed upstream to the dedicated @ handler and never reach this
+    # module post-2026-05-23 split.
     ev = evaluate_passive_trigger(_payload(mentioned=False))
     assert ev.decision.decision == "respond"
     assert ev.decision.response_model == "haiku"
     assert ev.decision.ack_text is None
     assert ev.skip_reason is None
-    assert ev.mention_classification is None
 
 
 def test_respond_missing_model_defaults_sonnet(fake_db, monkeypatch):
@@ -575,53 +573,34 @@ def test_routed_to_humans_skip_no_db_fetch(monkeypatch):
     assert ev.skip_reason == "routed_to_humans"
 
 
-def test_mention_path_wins_over_routed_flag(fake_db, monkeypatch):
-    """Defensive precedence: even if a malformed payload arrived with
-    BOTH `is_ella_mentioned=True` AND `is_routed_to_others=True` (a
-    shape detect_at_mentions never produces), the classifier path must
-    take precedence — Gate 3 only fires when is_routed_to_others alone
-    is set. This pins the ordering in `_evaluate`."""
+def test_routed_path_takes_gate3_skip(fake_db, monkeypatch):
+    """Gate 3 fires when `is_routed_to_others=True` and
+    `is_ella_mentioned=False` — pre-LLM skip, no Haiku call. Post the
+    2026-05-23 split, @-mentioned messages never reach this module
+    (they're routed upstream in realtime_ingest), so we only need to
+    verify Gate 3's behavior here."""
 
-    from agents.ella import mention_classifier as mc
+    # Stub `complete` so that if anything DID reach the decision Haiku,
+    # we'd see it in the test failure rather than a real API call.
+    called = {"complete": 0}
 
-    captured = {"classifier_called": False}
-
-    def _stub_classify(**kwargs):
-        captured["classifier_called"] = True
-        return mc.MentionClassification(
-            shape="warm_opener",
-            ack_text=None,
-            digest_flag=False,
-            digest_category=None,
-            reasoning="bare",
-            haiku_cost_usd=Decimal("0"),
-            haiku_input_tokens=0,
-            haiku_output_tokens=0,
-        )
-
-    monkeypatch.setattr(
-        "agents.ella.mention_classifier.classify_mention_response", _stub_classify
-    )
-
-    # Stub `complete` for any decision-Haiku surface that might be reached.
-    monkeypatch.setattr(
-        "agents.ella.passive_monitor.complete",
-        lambda **kw: SimpleNamespace(
+    def _track(*a, **kw):
+        called["complete"] += 1
+        return SimpleNamespace(
             text="{}",
             input_tokens=0,
             output_tokens=0,
             cost_usd=Decimal("0"),
             model="h",
             raw=None,
-        ),
-    )
+        )
 
-    ev = evaluate_passive_trigger(
-        _payload(mentioned=False, routed_to_others=True)
-    )
-    # Gate 3 fires because routed_to_others is set and mentioned is False.
+    monkeypatch.setattr("agents.ella.passive_monitor.complete", _track)
+
+    ev = evaluate_passive_trigger(_payload(routed_to_others=True))
     assert ev.skip_reason == "routed_to_humans"
-    assert captured["classifier_called"] is False
+    # Gate 3 is pre-LLM by construction; no Haiku call.
+    assert called["complete"] == 0
 
 
 def test_regular_path_still_works_when_no_flags_set(fake_db, monkeypatch):

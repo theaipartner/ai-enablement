@@ -373,3 +373,187 @@ def test_passive_fork_no_mention_no_routing_flag(fake_db, monkeypatch):
     payload = captured["payload"]
     assert payload.is_routed_to_others is False
     assert payload.is_ella_mentioned is False
+
+
+# ---------------------------------------------------------------------------
+# Split-path fork tests (2026-05-23) — @-mentions route to the new @ handler;
+# non-@-mention messages stay on the passive observation path.
+# ---------------------------------------------------------------------------
+
+
+def test_bot_mention_routes_to_at_handler_not_passive(fake_db, monkeypatch):
+    """Spec acceptance case (a): @-mention of the BOT user_id routes
+    through `agents.ella.agent.handle_at_mention`, NOT through the
+    passive monitor. The two paths must not co-fire."""
+    fake_db.channel_rows = [
+        {
+            "id": "ch-1",
+            "slack_channel_id": "C100",
+            "client_id": "client-uuid-1",
+            "is_archived": False,
+            "passive_monitoring_enabled": True,
+        }
+    ]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("SLACK_USER_TOKEN", "")
+    monkeypatch.setattr(
+        "ingestion.slack.realtime_ingest.get_user_id_for_token",
+        lambda token: "UBOT0001" if token == "xoxb-fake" else None,
+    )
+
+    at_calls = []
+    passive_calls = []
+
+    def _at_handler(payload):
+        at_calls.append(payload)
+        return SimpleNamespace(
+            agent_run_id="run-at",
+            trigger_type="slack_mention",
+            response_text="x",
+            escalated=False,
+            escalation_id=None,
+            posted=True,
+            status="success",
+        )
+
+    monkeypatch.setattr("agents.ella.agent.handle_at_mention", _at_handler)
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.evaluate_passive_trigger",
+        lambda payload: passive_calls.append(payload) or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_dispatch.persist_passive_evaluation",
+        lambda ev: {"decision": "skip"},
+    )
+
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C100",
+            "user": "UCLIENT1",
+            "text": "<@UBOT0001> what's covered in module 3",
+            "ts": "1745500010.000100",
+        })
+    )
+
+    # @ handler called exactly once
+    assert len(at_calls) == 1
+    assert at_calls[0].is_ella_mentioned is True
+    assert at_calls[0].slack_channel_id == "C100"
+    # Passive monitor NOT called — split prevents double-fire
+    assert passive_calls == []
+
+
+def test_human_token_mention_routes_to_at_handler(fake_db, monkeypatch):
+    """Spec acceptance case (b): @-mention of the HUMAN account user_id
+    (SLACK_USER_TOKEN's user) also triggers the @ handler, not passive."""
+    fake_db.channel_rows = [
+        {
+            "id": "ch-1",
+            "slack_channel_id": "C100",
+            "client_id": "client-uuid-1",
+            "is_archived": False,
+            "passive_monitoring_enabled": True,
+        }
+    ]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "")
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-fake")
+    monkeypatch.setattr(
+        "ingestion.slack.realtime_ingest.get_user_id_for_token",
+        lambda token: "UHUMAN001" if token == "xoxp-fake" else None,
+    )
+
+    at_calls = []
+    passive_calls = []
+    monkeypatch.setattr(
+        "agents.ella.agent.handle_at_mention",
+        lambda payload: (
+            at_calls.append(payload)
+            or SimpleNamespace(
+                agent_run_id="run-at",
+                trigger_type="slack_mention",
+                response_text="x",
+                escalated=False,
+                escalation_id=None,
+                posted=True,
+                status="success",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.evaluate_passive_trigger",
+        lambda payload: passive_calls.append(payload) or SimpleNamespace(),
+    )
+
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C100",
+            "user": "UCLIENT1",
+            "text": "<@UHUMAN001> can you help with the sales module",
+            "ts": "1745500011.000100",
+        })
+    )
+
+    assert len(at_calls) == 1
+    assert at_calls[0].is_ella_mentioned is True
+    assert passive_calls == []
+
+
+def test_non_mention_routes_to_passive_not_at_handler(fake_db, monkeypatch):
+    """Spec acceptance case (e): a non-@-mention message still goes
+    through the passive observation path (which now writes a digest
+    item but no in-channel post). The @ handler must NOT be called."""
+    fake_db.channel_rows = [
+        {
+            "id": "ch-1",
+            "slack_channel_id": "C100",
+            "client_id": "client-uuid-1",
+            "is_archived": False,
+            "passive_monitoring_enabled": True,
+        }
+    ]
+    fake_db.clients = [{"slack_user_id": "UCLIENT1"}]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setattr(
+        "ingestion.slack.realtime_ingest.get_user_id_for_token",
+        lambda token: "UBOT0001" if token == "xoxb-fake" else None,
+    )
+
+    at_calls = []
+    passive_calls = []
+    monkeypatch.setattr(
+        "agents.ella.agent.handle_at_mention",
+        lambda payload: at_calls.append(payload),
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_monitor.evaluate_passive_trigger",
+        lambda payload: (
+            passive_calls.append(payload)
+            or SimpleNamespace(
+                payload=payload,
+                decision=SimpleNamespace(decision="skip", reasoning="r"),
+                skip_reason="haiku_skip",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "agents.ella.passive_dispatch.persist_passive_evaluation",
+        lambda ev: {"decision": "skip"},
+    )
+
+    ri.ingest_message_event(
+        _envelope({
+            "type": "message",
+            "channel": "C100",
+            "user": "UCLIENT1",
+            "text": "just thinking out loud, no mention",
+            "ts": "1745500012.000100",
+        })
+    )
+
+    assert at_calls == []
+    assert len(passive_calls) == 1
+    assert passive_calls[0].is_ella_mentioned is False
