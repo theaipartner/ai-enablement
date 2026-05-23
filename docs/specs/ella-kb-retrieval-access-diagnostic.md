@@ -1,6 +1,6 @@
 # Ella curriculum retrieval regression — what's in the KB vs what she can reach (read-only)
 **Slug:** ella-kb-retrieval-access-diagnostic
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
