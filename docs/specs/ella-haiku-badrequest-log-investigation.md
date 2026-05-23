@@ -1,6 +1,6 @@
 # Ella Haiku BadRequestError — root cause from Vercel logs (read-only)
 **Slug:** ella-haiku-badrequest-log-investigation
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
