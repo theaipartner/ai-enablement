@@ -98,7 +98,7 @@ def _patch_common(mocker, *, speaker=_CLIENT_SPEAKER, channel_client=None):
     mocker.patch("agents.ella.agent.start_agent_run", side_effect=_fake_start)
     mocker.patch("agents.ella.agent.end_agent_run", side_effect=_fake_end)
     mocker.patch(
-        "agents.ella.agent.post_message",
+        "agents.ella.agent.post_message_as_user_first",
         side_effect=lambda ch, txt, **kw: (
             posted.append((ch, txt))
             or {"ok": True, "slack_error": None, "ts": "1.0"}
@@ -377,7 +377,7 @@ def test_passive_trigger_is_a_skip_no_post(mocker):
 
     mocker.patch("agents.ella.agent.start_agent_run", side_effect=_fake_start)
     mocker.patch("agents.ella.agent.end_agent_run", side_effect=_fake_end)
-    posted = mocker.patch("agents.ella.agent.post_message")
+    posted = mocker.patch("agents.ella.agent.post_message_as_user_first")
     sonnet = mocker.patch("agents.ella.agent.complete")
 
     result = agent.respond_to_passive_trigger(
@@ -491,6 +491,121 @@ def test_handle_at_mention_omits_block_when_no_prior_exchanges(mocker):
     # The CONVERSATIONAL CONTINUITY instruction text still appears
     # (it's in the static extension); the data block just doesn't.
     assert "CONVERSATIONAL CONTINUITY" in system
+
+
+# ---------------------------------------------------------------------------
+# Reply identity — all four client-facing post sites route via
+# post_message_as_user_first (NOT the bot-only post_message)
+# ---------------------------------------------------------------------------
+
+
+def _capture_post_target(mocker, *, sonnet_text=None):
+    """Patch the helper, return a list capturing each call's args."""
+    calls = []
+    mocker.patch(
+        "agents.ella.agent.post_message_as_user_first",
+        side_effect=lambda ch, txt, **kw: (
+            calls.append((ch, txt))
+            or {"ok": True, "slack_error": None, "ts": "1.0"}
+        ),
+    )
+    # Default plumbing — start/end_agent_run, retrieval, prompt, channel client.
+    mocker.patch("agents.ella.agent.resolve_speaker_identity", return_value=_CLIENT_SPEAKER)
+    mocker.patch("agents.ella.agent._resolve_channel_client", return_value=dict(_CLIENT))
+    mocker.patch(
+        "agents.ella.agent._retrieve_context",
+        return_value=ContextBundle(chunks=[], client=dict(_CLIENT), primary_csm=None),
+    )
+    mocker.patch("agents.ella.agent.fetch_recent_at_mention_exchanges", return_value="")
+    mocker.patch("agents.ella.agent.build_system_prompt", return_value="[sys]")
+    mocker.patch("agents.ella.agent.start_agent_run", return_value="run-1")
+    mocker.patch("agents.ella.agent.end_agent_run")
+    if sonnet_text is not None:
+        mocker.patch(
+            "agents.ella.agent.complete",
+            return_value=SimpleNamespace(
+                text=sonnet_text,
+                input_tokens=10,
+                output_tokens=5,
+                cost_usd=Decimal("0"),
+                model="claude-sonnet-4-6",
+                raw=None,
+            ),
+        )
+    return calls
+
+
+def test_substantive_answer_posts_via_user_first(mocker):
+    """Site 1: the main answer post in handle_at_mention routes through
+    the new user-first helper (NOT bot-only post_message)."""
+    calls = _capture_post_target(
+        mocker,
+        sonnet_text=json.dumps(
+            {
+                "response_text": "Module 3 covers sales fundamentals.",
+                "escalate": False,
+                "handoff_reasoning": None,
+            }
+        ),
+    )
+    agent.handle_at_mention(_payload())
+    assert len(calls) == 1
+    assert calls[0] == ("C09", "Module 3 covers sales fundamentals.")
+
+
+def test_escalate_ack_posts_via_user_first(mocker):
+    """Site 2: the escalate-branch ack reuses the same post line as
+    site 1, so it inherits the user-first routing automatically. Pin
+    that explicitly."""
+    calls = _capture_post_target(
+        mocker,
+        sonnet_text=json.dumps(
+            {
+                "response_text": "Hey — let me get your advisor on this.",
+                "escalate": True,
+                "handoff_reasoning": "Client asking about a refund.",
+            }
+        ),
+    )
+    # Stub the escalation fan-out so we don't need to mock its DB/Slack
+    # internals; we only care about the in-channel ack post.
+    mocker.patch("agents.ella.agent.ella_escalate", return_value="esc-1")
+    mocker.patch("agents.ella.agent.fire_escalation_dms", return_value=[])
+    mocker.patch("agents.ella.agent.resolve_escalation_recipients", return_value=[])
+    mocker.patch("agents.ella.agent.insert_digest_item", return_value="dg-1")
+
+    agent.handle_at_mention(_payload(text="<@UBOT0001> I want a refund"))
+    assert len(calls) == 1
+    assert calls[0] == ("C09", "Hey — let me get your advisor on this.")
+
+
+def test_sonnet_failure_canned_line_posts_via_user_first(mocker):
+    """Site 3: the canned graceful line posted on Sonnet exception
+    also routes through user-first."""
+    calls = _capture_post_target(mocker)
+    mocker.patch(
+        "agents.ella.agent.complete",
+        side_effect=RuntimeError("anthropic transient"),
+    )
+    agent.handle_at_mention(_payload())
+    assert len(calls) == 1
+    channel, text = calls[0]
+    assert channel == "C09"
+    assert "hiccup" in text.lower()
+
+
+def test_bare_mention_canned_opener_posts_via_user_first(mocker):
+    """Site 4: bare-mention short-circuit (no LLM call) — canned warm
+    opener still routes through user-first so Ella renders as the
+    human on every client-facing reply."""
+    calls = _capture_post_target(mocker)
+    # Bare mention triggers via empty stripped text.
+    agent.handle_at_mention(_payload(text="<@UBOT0001>"))
+    assert len(calls) == 1
+    channel, text = calls[0]
+    assert channel == "C09"
+    # Text is one of the canned bare openers — non-empty.
+    assert text
 
 
 # ---------------------------------------------------------------------------

@@ -153,3 +153,124 @@ def post_message(
             "slack_error": f"{type(exc).__name__}: {exc}",
             "ts": None,
         }
+
+
+# ---------------------------------------------------------------------------
+# Two-token helper for Ella's CLIENT-channel @-mention replies
+# ---------------------------------------------------------------------------
+
+
+def post_message_as_user_first(
+    channel_id: str,
+    text: str,
+    *,
+    thread_ts: str | None = None,
+    blocks: list | None = None,
+) -> dict[str, Any]:
+    """Post a Slack message via `SLACK_USER_TOKEN` first; on ANY failure
+    fall back to `SLACK_BOT_TOKEN`.
+
+    Used by Ella's @-mention reply path (`agents.ella.agent.handle_at_mention`)
+    so client-channel replies render as the human Slack account (no APP
+    tag) when the user token is available. The bot-token fallback is the
+    permanent safety net — a user-token hiccup (token unset, transport
+    error, Slack `ok=false` like missing_scope/not_in_channel) never
+    drops a reply.
+
+    Fire-and-forget like `post_message` — never raises. Returns the same
+    dict shape: `{"ok": bool, "slack_error": str | None, "ts": str | None}`.
+
+    Why a separate helper instead of folding into `post_message`:
+    internal-CS posts (per-call summaries, accountability cron, digest,
+    unanswered-flagger) post to internal channels where the APP tag is
+    fine and where a user-token post would be wrong. Only Ella's
+    CLIENT-channel @-mention replies should render as the human. Keep
+    the surfaces separate so the routing decision stays explicit at
+    each call site.
+
+    The M1.4 two-token strategy is what this restores
+    (`docs/agents/ella/followups.md` § Ella user-token posting). The
+    previous home was `api/slack_events.py:_post_to_slack` (now deleted
+    — was dead code after the 2026-05-18 unified-path collapse made
+    `app_mention` a no-op). The pattern is the same; this lives in
+    `shared/slack_post.py` so the @ handler can import it alongside the
+    bot-only `post_message` without touching the old slack_events module.
+
+    Operational rollback if user-token posting needs to go away: unset
+    `SLACK_USER_TOKEN` in Vercel env vars. The helper sees no token,
+    falls straight through to the bot path. No code change required.
+    """
+    body: dict[str, Any] = {"channel": channel_id, "text": text}
+    if thread_ts:
+        body["thread_ts"] = thread_ts
+    if blocks:
+        body["blocks"] = blocks
+
+    user_token = os.environ.get("SLACK_USER_TOKEN")
+    if user_token:
+        try:
+            ok, slack_error, ts = call_chat_post_message(user_token, body)
+            if ok:
+                logger.info(
+                    "slack_post: user-token ok channel=%s thread_ts=%s",
+                    channel_id,
+                    thread_ts,
+                )
+                return {"ok": True, "slack_error": None, "ts": ts}
+            # ok=false from the user path — fall through to bot. Log so the
+            # operational reason (missing_scope, not_in_channel, etc.) is
+            # visible in Vercel logs without exposing the token.
+            logger.warning(
+                "slack_post: user-token ok=false channel=%s slack_error=%s "
+                "— falling back to bot-token",
+                channel_id,
+                slack_error,
+            )
+        except Exception as exc:
+            # Any transport-level failure on the user path: HTTP non-2xx,
+            # timeout, JSON decode error, etc. Catch broadly so the bot
+            # path is reachable. Don't include the request body or token
+            # in the log line.
+            logger.warning(
+                "slack_post: user-token transport failure channel=%s "
+                "exc_type=%s exc=%s — falling back to bot-token",
+                channel_id,
+                type(exc).__name__,
+                exc,
+            )
+
+    # Bot fallback — either user token absent or user path failed. Same
+    # shape + same fire-and-forget contract as `post_message`.
+    bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    if not bot_token:
+        logger.error("slack_post: SLACK_BOT_TOKEN not configured")
+        return {"ok": False, "slack_error": "missing_bot_token", "ts": None}
+
+    try:
+        ok, slack_error, ts = call_chat_post_message(bot_token, body)
+        if ok:
+            logger.info(
+                "slack_post: bot-token ok channel=%s thread_ts=%s",
+                channel_id,
+                thread_ts,
+            )
+            return {"ok": True, "slack_error": None, "ts": ts}
+        logger.warning(
+            "slack_post: bot-token ok=false channel=%s slack_error=%s",
+            channel_id,
+            slack_error,
+        )
+        return {"ok": False, "slack_error": slack_error, "ts": None}
+    except Exception as exc:
+        logger.warning(
+            "slack_post: bot-token transport failure channel=%s "
+            "exc_type=%s exc=%s",
+            channel_id,
+            type(exc).__name__,
+            exc,
+        )
+        return {
+            "ok": False,
+            "slack_error": f"{type(exc).__name__}: {exc}",
+            "ts": None,
+        }

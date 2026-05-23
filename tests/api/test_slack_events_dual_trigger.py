@@ -18,10 +18,15 @@ def test_removed_reactive_machinery_is_gone():
     assert not hasattr(se, "_process_mention")
 
 
-def test_post_to_slack_still_present():
-    """`_post_to_slack` survives the refactor (independently tested,
-    reusable post helper)."""
-    assert hasattr(se, "_post_to_slack")
+def test_post_to_slack_removed():
+    """`_post_to_slack` was deleted 2026-05-23 (spec
+    `ella-reply-as-human`) — its M1.4 two-token reply path moved to
+    `shared.slack_post.post_message_as_user_first`. The function had
+    been dead code since the 2026-05-18 unified-path collapse made
+    the `app_mention` branch a no-op; its only callers were tests."""
+    assert not hasattr(se, "_post_to_slack")
+    # `_ingest_message_event` survives — it's the live dispatch target
+    # for the `message`-event branch.
     assert hasattr(se, "_ingest_message_event")
 
 

@@ -56,7 +56,7 @@ from agents.ella.retrieval import (
 from shared.claude_client import complete
 from shared.db import get_client
 from shared.logging import end_agent_run, logger, start_agent_run
-from shared.slack_post import post_message
+from shared.slack_post import post_message_as_user_first
 
 # Sonnet 4.6 — default model for the @ response, matching the proven
 # pre-2026-05-18 behavior.
@@ -251,7 +251,7 @@ def handle_at_mention(payload: PassiveTriggerPayload) -> AtMentionResult:
             canned = (
                 "I hit a hiccup answering that — let me get your advisor on this one."
             )
-            post_message(payload.slack_channel_id, canned)
+            post_message_as_user_first(payload.slack_channel_id, canned)
             end_agent_run(
                 run_id,
                 status="error",
@@ -272,7 +272,9 @@ def handle_at_mention(payload: PassiveTriggerPayload) -> AtMentionResult:
         escalate_flag = parsed["escalate"]
         handoff_reasoning = parsed["handoff_reasoning"]
 
-        post_result = post_message(payload.slack_channel_id, response_text)
+        post_result = post_message_as_user_first(
+            payload.slack_channel_id, response_text
+        )
         posted = bool(post_result.get("ok"))
 
         if escalate_flag:
@@ -354,7 +356,7 @@ def _handle_bare_mention(
         input_summary=stripped_text[:200],
     )
     response = _pick_bare_response(speaker)
-    post_result = post_message(payload.slack_channel_id, response)
+    post_result = post_message_as_user_first(payload.slack_channel_id, response)
     end_agent_run(
         run_id,
         status="success",
