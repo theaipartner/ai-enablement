@@ -144,15 +144,19 @@ export type MonthlySubscription = {
   updated_at: string
 }
 
-// A subscription's archive state, needed by anything that has to
-// reason about active-in-month overlap (both the history-month rollup
-// AND the current-month total — both need to count subs that were
-// active in month M even if archived since). The live editable table
-// only ever sees non-archived rows, so the public MonthlySubscription
-// type omits archived_at; the archive-inclusive shape is below.
-type SubscriptionWithArchive = {
+// A subscription with its archive state. Used by anything that has to
+// reason about active-in-month overlap — the history-month rollup, the
+// current-month total, AND (post-2026-05-24) the visible
+// subscriptions table which now shows cancelled-this-month rows with
+// a "Cancelled" badge. Includes provider/notes so the visible-row
+// render doesn't need a separate metadata lookup against
+// `getMonthlySubscriptions` (which is archive-excluded, so doesn't
+// have cancelled rows).
+export type SubscriptionWithArchive = {
   id: string
+  provider: string
   monthly_cost_usd: number
+  notes: string | null
   effective_from: string // ISO date YYYY-MM-DD
   archived_at: string | null
 }
@@ -375,13 +379,15 @@ async function fetchAllSubscriptionsWithArchive(): Promise<SubscriptionWithArchi
   const supabase = createAdminClient()
   const { data, error } = await supabase
     .from('monthly_subscriptions')
-    .select('id, monthly_cost_usd, effective_from, archived_at')
+    .select('id, provider, monthly_cost_usd, notes, effective_from, archived_at')
   if (error) {
     throw new Error(`fetchAllSubscriptionsWithArchive: ${error.message}`)
   }
   return (data ?? []).map((row) => ({
     id: row.id,
+    provider: row.provider,
     monthly_cost_usd: Number(row.monthly_cost_usd),
+    notes: row.notes,
     effective_from: row.effective_from,
     archived_at: row.archived_at,
   }))
@@ -526,7 +532,14 @@ async function getMonthTotal(offsetMonths: number): Promise<MonthTotalRow> {
     .filter((sub) => subscriptionActiveInMonth(sub, monthStart, monthEnd))
     .reduce((sum, sub) => sum + Number(sub.monthly_cost_usd), 0)
 
-  // Extras: rows where incurred_on falls in this month.
+  // Extras: rows where incurred_on falls in this month. ARCHIVE-INCLUSIVE
+  // — an extra incurred in month M was a real cost for M regardless of
+  // later archive (the soft-delete UI button shouldn't retroactively
+  // erase past-month spend). Mirrors the current-month fix in
+  // `getCurrentMonthExtrasForTotal` (spec `cost-hub-current-month-total-fix`);
+  // history had the same bug shape pre-2026-05-24 and is fixed here in
+  // the same archive-inclusive shape (spec
+  // `cost-hub-total-cancel-remove-and-add` Part 5).
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
@@ -539,7 +552,6 @@ async function getMonthTotal(offsetMonths: number): Promise<MonthTotalRow> {
   const { data: extrasRows, error: extrasErr } = await supabase
     .from('cost_extras')
     .select('cost_usd')
-    .is('archived_at', null)
     .gte('incurred_on', monthStartDate)
     .lt('incurred_on', monthEndDate)
   if (extrasErr) throw new Error(`getMonthTotal extras: ${extrasErr.message}`)

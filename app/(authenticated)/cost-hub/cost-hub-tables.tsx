@@ -5,8 +5,9 @@ import { useState, useTransition } from 'react'
 import {
   addCostExtraAction,
   addMonthlySubscriptionAction,
-  deleteCostExtraAction,
-  deleteMonthlySubscriptionAction,
+  cancelMonthlySubscriptionAction,
+  removeCostExtraAction,
+  removeMonthlySubscriptionAction,
   updateCostExtraAction,
   updateMonthlySubscriptionAction,
 } from './actions'
@@ -25,6 +26,14 @@ export type SubscriptionRow = {
   monthly_cost_usd: number
   notes: string | null
   effective_from: string // YYYY-MM-DD
+  // True for rows that have been Cancelled (soft-archived) but are
+  // still counted in the current month (archived_at >= monthStart).
+  // Renders with a "cancelled" badge + non-editable; the × menu offers
+  // only Remove (Cancel already happened). Part 2 of spec
+  // `cost-hub-total-cancel-remove-and-add` (2026-05-24): the visible
+  // subscriptions list = active + cancelled-this-month so its visible
+  // costs sum to the subscriptions portion of the running total.
+  is_cancelled: boolean
 }
 
 export type CostExtraRow = {
@@ -106,13 +115,49 @@ export function MonthlySubscriptionsTable({
     })
   }
 
-  function onDelete(id: string, provider: string) {
-    if (!confirm(`Delete subscription "${provider}"? It will be soft-archived (recoverable via SQL).`)) {
+  // CANCEL — soft-archive. Sub stops counting next month; stays in
+  // this month's total + visible-with-badge until month rollover.
+  // The use case: "we cancelled the sub but already paid this month."
+  function onCancel(id: string, provider: string) {
+    if (
+      !confirm(
+        `Cancel subscription "${provider}"?\n\n` +
+          `It will stop counting NEXT month but stays counted in THIS ` +
+          `month's total (and shows in the list with a "cancelled" badge) ` +
+          `because you already paid for it this month.`,
+      )
+    ) {
       return
     }
     setError(null)
     startTransition(async () => {
-      const result = await deleteMonthlySubscriptionAction(id)
+      const result = await cancelMonthlySubscriptionAction(id)
+      if (!result.success) {
+        setError(result.error)
+      }
+      router.refresh()
+    })
+  }
+
+  // REMOVE — hard DELETE. Gone from totals + history. Irreversible.
+  // The use case: "I added this by mistake."
+  function onRemove(id: string, provider: string) {
+    if (
+      !confirm(
+        `REMOVE subscription "${provider}" permanently?\n\n` +
+          `This DELETES the row entirely:\n` +
+          `  • Gone from this month's running total\n` +
+          `  • Gone from all historical month totals\n` +
+          `  • Cannot be undone\n\n` +
+          `Use this for mistakes only. To stop a sub going forward while ` +
+          `keeping this month's cost, use Cancel instead.`,
+      )
+    ) {
+      return
+    }
+    setError(null)
+    startTransition(async () => {
+      const result = await removeMonthlySubscriptionAction(id)
       if (!result.success) {
         setError(result.error)
       }
@@ -218,7 +263,8 @@ export function MonthlySubscriptionsTable({
               onSave={(provider, cost, notes, effectiveFrom) =>
                 onSaveEdit(row.id, provider, cost, notes, effectiveFrom)
               }
-              onDelete={() => onDelete(row.id, row.provider)}
+              onCancel={() => onCancel(row.id, row.provider)}
+              onRemove={() => onRemove(row.id, row.provider)}
               disabled={isPending}
             />
           ))}
@@ -261,7 +307,8 @@ function SubscriptionRowCmp({
   onStartEdit,
   onCancelEdit,
   onSave,
-  onDelete,
+  onCancel,
+  onRemove,
   disabled,
 }: {
   row: SubscriptionRow
@@ -274,7 +321,10 @@ function SubscriptionRowCmp({
     notes: string | null,
     effectiveFrom: string,
   ) => void
-  onDelete: () => void
+  // Soft-archive — stops next month, keeps this month.
+  onCancel: () => void
+  // Hard DELETE — gone from everything. Destructive.
+  onRemove: () => void
   disabled: boolean
 }) {
   const [provider, setProvider] = useState(row.provider)
@@ -366,14 +416,28 @@ function SubscriptionRowCmp({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '2fr 1fr 3fr 1fr auto auto',
+        // 3 action slots after the data columns: Edit (or cancelled badge),
+        // Cancel button (or empty for already-cancelled rows), Remove button.
+        gridTemplateColumns: '2fr 1fr 3fr 1fr auto auto auto',
         gap: 8,
         alignItems: 'center',
         padding: '10px 0',
         borderBottom: '1px solid var(--color-geg-border)',
+        // Subtle visual de-emphasis for cancelled rows so they don't
+        // read as "active" at a glance. Still rendered so the visible
+        // costs sum to the running total.
+        opacity: row.is_cancelled ? 0.65 : 1,
       }}
     >
-      <span style={{ fontSize: 14, color: 'var(--color-geg-text)' }}>
+      <span
+        style={{
+          fontSize: 14,
+          color: 'var(--color-geg-text)',
+          // Strike-through the provider name on cancelled rows for an
+          // extra visual cue beyond the badge.
+          textDecoration: row.is_cancelled ? 'line-through' : 'none',
+        }}
+      >
         {row.provider}
       </span>
       <span
@@ -398,35 +462,85 @@ function SubscriptionRowCmp({
       >
         {row.effective_from}
       </span>
+      {/*
+        Action slots — three columns, but cancelled rows skip Edit
+        (no point editing a cancelled sub) and Cancel (already done).
+        Cancelled rows show: badge / empty / Remove.
+        Active rows show: Edit / Cancel / Remove.
+      */}
+      {row.is_cancelled ? (
+        <span
+          className="geg-mono"
+          style={{
+            fontSize: 10,
+            color: 'var(--color-geg-warn)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.12em',
+            border: '1px solid var(--color-geg-warn)',
+            borderRadius: 4,
+            padding: '3px 8px',
+            textAlign: 'center',
+            whiteSpace: 'nowrap',
+          }}
+          aria-label="Cancelled this month"
+          title="Cancelled — still counted in this month's total. Drops out next month."
+        >
+          Cancelled
+        </span>
+      ) : (
+        <button
+          onClick={onStartEdit}
+          disabled={disabled}
+          style={{
+            padding: '4px 10px',
+            fontSize: 12,
+            background: 'transparent',
+            border: '1px solid var(--color-geg-border)',
+            color: 'var(--color-geg-text-2)',
+            borderRadius: 4,
+            cursor: 'pointer',
+          }}
+        >
+          Edit
+        </button>
+      )}
+      {row.is_cancelled ? (
+        <span />
+      ) : (
+        <button
+          onClick={onCancel}
+          disabled={disabled}
+          style={{
+            padding: '4px 10px',
+            fontSize: 12,
+            background: 'transparent',
+            border: '1px solid var(--color-geg-border)',
+            color: 'var(--color-geg-text-2)',
+            borderRadius: 4,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+          title="Cancel — stops next month, stays counted this month"
+        >
+          Cancel
+        </button>
+      )}
       <button
-        onClick={onStartEdit}
-        disabled={disabled}
-        style={{
-          padding: '4px 10px',
-          fontSize: 12,
-          background: 'transparent',
-          border: '1px solid var(--color-geg-border)',
-          color: 'var(--color-geg-text-2)',
-          borderRadius: 4,
-          cursor: 'pointer',
-        }}
-      >
-        Edit
-      </button>
-      <button
-        onClick={onDelete}
+        onClick={onRemove}
         disabled={disabled}
         className="geg-action-item-x"
         style={{
           padding: '4px 10px',
           fontSize: 14,
           background: 'transparent',
-          border: '1px solid var(--color-geg-border)',
-          color: 'var(--color-geg-text-3)',
+          // Subtle red border to signal destructive action distinct from Cancel.
+          border: '1px solid var(--color-geg-warn)',
+          color: 'var(--color-geg-warn)',
           borderRadius: 4,
           cursor: 'pointer',
         }}
-        aria-label={`Delete ${row.provider}`}
+        aria-label={`Remove ${row.provider} permanently`}
+        title="Remove — hard delete, gone from all totals + history"
       >
         ×
       </button>
@@ -490,13 +604,26 @@ export function CostExtrasTable({ rows }: { rows: CostExtraRow[] }) {
     })
   }
 
-  function onDelete(id: string, description: string) {
-    if (!confirm(`Delete extra "${description}"? It will be soft-archived (recoverable via SQL).`)) {
+  // REMOVE — hard DELETE. Extras don't have a Cancel option (no "next
+  // month" semantic for one-offs); the only destructive op is Remove.
+  // Spec `cost-hub-total-cancel-remove-and-add` Part 4: "for extras
+  // 'cancel' doesn't really mean anything; extras likely just need
+  // 'remove' (hard delete)."
+  function onRemove(id: string, description: string) {
+    if (
+      !confirm(
+        `REMOVE extra "${description}" permanently?\n\n` +
+          `This DELETES the row entirely:\n` +
+          `  • Gone from this month's running total\n` +
+          `  • Gone from all historical month totals\n` +
+          `  • Cannot be undone`,
+      )
+    ) {
       return
     }
     setError(null)
     startTransition(async () => {
-      const result = await deleteCostExtraAction(id)
+      const result = await removeCostExtraAction(id)
       if (!result.success) {
         setError(result.error)
       }
@@ -591,7 +718,7 @@ export function CostExtrasTable({ rows }: { rows: CostExtraRow[] }) {
               onSave={(date, desc, cost) =>
                 onSaveEdit(row.id, date, desc, cost)
               }
-              onDelete={() => onDelete(row.id, row.description)}
+              onRemove={() => onRemove(row.id, row.description)}
               disabled={isPending}
             />
           ))}
@@ -634,7 +761,7 @@ function ExtraRowCmp({
   onStartEdit,
   onCancelEdit,
   onSave,
-  onDelete,
+  onRemove,
   disabled,
 }: {
   row: CostExtraRow
@@ -642,7 +769,8 @@ function ExtraRowCmp({
   onStartEdit: () => void
   onCancelEdit: () => void
   onSave: (date: string, desc: string, cost: number) => void
-  onDelete: () => void
+  // Hard DELETE — extras have no Cancel option. Destructive.
+  onRemove: () => void
   disabled: boolean
 }) {
   const [date, setDate] = useState(row.incurred_on)
@@ -763,19 +891,21 @@ function ExtraRowCmp({
         Edit
       </button>
       <button
-        onClick={onDelete}
+        onClick={onRemove}
         disabled={disabled}
         className="geg-action-item-x"
         style={{
           padding: '4px 10px',
           fontSize: 14,
           background: 'transparent',
-          border: '1px solid var(--color-geg-border)',
-          color: 'var(--color-geg-text-3)',
+          // Subtle red border to signal destructive action — same shape as subs Remove.
+          border: '1px solid var(--color-geg-warn)',
+          color: 'var(--color-geg-warn)',
           borderRadius: 4,
           cursor: 'pointer',
         }}
-        aria-label={`Delete ${row.description}`}
+        aria-label={`Remove ${row.description} permanently`}
+        title="Remove — hard delete, gone from all totals + history"
       >
         ×
       </button>

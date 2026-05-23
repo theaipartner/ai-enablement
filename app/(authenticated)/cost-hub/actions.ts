@@ -7,14 +7,21 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // Server actions for the admin-tier /cost-hub page. Every action
 // self-checks admin-tier access as defense-in-depth (the sub-layout
 // already gates, but server actions are reachable from any page).
-// All six actions revalidatePath('/cost-hub') on success so the page
+// All actions revalidatePath('/cost-hub') on success so the page
 // rerenders with fresh data.
 //
-// Soft archive on delete — historical month totals stay accurate for
-// months when the row was active. Hard delete via SQL is available
-// for the rare "I never want to see this row again" case.
+// Two destructive operations per row, post-2026-05-24 spec
+// `cost-hub-total-cancel-remove-and-add` Part 4:
+//   - CANCEL (subs only): soft-archive (`archived_at = now()`). Stops
+//     counting NEXT month; STAYS visible-with-cancelled-badge + counted
+//     in totals for THIS month (the month was already paid). For "I
+//     cancelled the sub mid-month."
+//   - REMOVE (subs + extras): hard `DELETE`. Gone from everything
+//     including this month + history. For "I added this by mistake."
+//     UI gates this behind a destructive confirm.
+// Extras only have REMOVE (no "next month" semantic for one-offs).
 //
-// Spec: docs/specs/cost-hub.md.
+// Spec: docs/specs/cost-hub.md (V1) + docs/specs/cost-hub-total-cancel-remove-and-add.md.
 
 type ActionResult =
   | { success: true }
@@ -138,7 +145,13 @@ export async function updateMonthlySubscriptionAction(
   return { success: true }
 }
 
-export async function deleteMonthlySubscriptionAction(
+// CANCEL — soft-archive a monthly subscription. Stops counting next
+// month; stays in this month's total (Drake paid for it this month)
+// and stays visible in the editable list with a "cancelled" badge
+// (non-editable) until the month rolls over. Was previously named
+// `deleteMonthlySubscriptionAction`; renamed for clarity in the
+// two-operation model (see module docstring).
+export async function cancelMonthlySubscriptionAction(
   id: string,
 ): Promise<ActionResult> {
   const auth = await requireAdmin()
@@ -146,13 +159,37 @@ export async function deleteMonthlySubscriptionAction(
     return { success: false, error: auth.error }
   }
   const supabase = createAdminClient()
-  // Soft archive — historical totals still see this row's monthly_cost
-  // for months when it was active.
   const { error } = await supabase
     .from('monthly_subscriptions')
     .update({ archived_at: new Date().toISOString() })
     .eq('id', id)
     .is('archived_at', null)
+  if (error) {
+    return { success: false, error: error.message }
+  }
+  revalidatePath('/cost-hub')
+  return { success: true }
+}
+
+// REMOVE — hard DELETE a monthly subscription. Gone from totals,
+// gone from history, irreversible. For mistakes (added the wrong
+// sub, typo'd cost, etc.). UI gates this behind a destructive confirm.
+// The `is_('archived_at', null)` guard is intentionally OMITTED so
+// already-cancelled rows can still be removed (the table renders
+// cancelled rows with a remove option in case Drake wants to clear
+// them out entirely instead of waiting for month rollover).
+export async function removeMonthlySubscriptionAction(
+  id: string,
+): Promise<ActionResult> {
+  const auth = await requireAdmin()
+  if (auth !== true) {
+    return { success: false, error: auth.error }
+  }
+  const supabase = createAdminClient()
+  const { error } = await supabase
+    .from('monthly_subscriptions')
+    .delete()
+    .eq('id', id)
   if (error) {
     return { success: false, error: error.message }
   }
@@ -237,7 +274,11 @@ export async function updateCostExtraAction(
   return { success: true }
 }
 
-export async function deleteCostExtraAction(
+// REMOVE — hard DELETE a cost_extras row. Gone from totals + history.
+// Extras only have Remove (no Cancel) — they're one-off costs, not
+// recurring, so the "stop next month, keep this month" semantic Cancel
+// gives subs doesn't apply. UI gates this behind a destructive confirm.
+export async function removeCostExtraAction(
   id: string,
 ): Promise<ActionResult> {
   const auth = await requireAdmin()
@@ -247,9 +288,8 @@ export async function deleteCostExtraAction(
   const supabase = createAdminClient()
   const { error } = await supabase
     .from('cost_extras')
-    .update({ archived_at: new Date().toISOString() })
+    .delete()
     .eq('id', id)
-    .is('archived_at', null)
   if (error) {
     return { success: false, error: error.message }
   }
