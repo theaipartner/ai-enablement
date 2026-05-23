@@ -34,6 +34,47 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-23 — Close CRM ingestion V1 (migration 0043 applied + scope-limited backfill)
+
+First mirror of Close CRM data into Supabase — foundation of the Gregory sales-side surface (eventual CEO/business-engine dashboard). Three-spec arc: `close-smartview-discovery` (endpoints + 11-status pipeline + Smartviews are operational filters not data sources), `close-full-data-inventory` (REAL data findings: activity density SMS 67% / Call 12% / status-change 7%, 52 populated lead cfs across attribution/workflow/payment layers, opportunities are $1 placeholders), then this ship.
+
+**Migration 0043 applied to cloud Supabase.** Migration count: 42 → **43**. Six new mirror tables:
+- `close_leads` — denormalized lead mirror with ~30 funnel-relevant cfs as typed columns + `custom_fields_raw` jsonb catch-all for the remaining ~50 (69 total columns).
+- `close_lead_status_changes` — funnel-spine event stream for Hand Downs / DQs / Downsells / Booked Meetings / No Shows / Deposits / Client status-flip counts.
+- `close_calls` — Call activity mirror for Setter/Closer Dials, Calls Connected (duration > 0), time-to-first-dial.
+- `close_sms` — dominant channel (67% activity); spine for First Message Response.
+- `close_opportunities` — workflow markers (NOT money; `value` is $1 placeholder in this org).
+- `close_custom_field_definitions` — cf reference table (~100 rows).
+
+Indexes target per-day aggregation queries. All upserts on `close_id` PK; idempotent. Dual-verified post-apply (schema reality via `to_regclass` for every table AND ledger via `supabase_migrations.schema_migrations`). Public table count: prior + 6.
+
+**Ingestion module `ingestion/close/`** mirrors the Fathom shape — thin client (`client.py` urllib + HTTP Basic key-as-username + 60s timeout / 3-try retry on timeout/429), JSON-projection parser (`parser.py` with `_CF_NAME_TO_COLUMN` projecting by cf NAME not ID — survives org-admin recreate-with-new-id), idempotent pipeline (`pipeline.py` with `sync_lead` / `sync_all_leads` / `sync_recently_updated_leads` / `sync_all_opportunities` / `sync_custom_field_definitions`).
+
+**Tier derivation** baked into ingestion per Drake's confirmed business logic (`investment` cf ≥ $2k disposable → tier_1; < $2k → tier_2; null on unknown). Validated on real Typeform output during smoke (`Under $2,000` → tier_2 correctly).
+
+**Triage-count canonical** = `close_leads.triage_showed='Yes'` (NOT the lead-status-change to `Unconfirmed Booking - Handed over`). Matches Drake's "phone call where a human qualifies the lead" semantic. Gap-risk monitoring SQL in the runbook — the cf needs reliable closer-fill-in for the count to track reality.
+
+**Backfill script `scripts/backfill_close.py`** has `--smoke` (idempotent 1-lead end-to-end) / `--apply` (bulk, Drake-gated) / `--limit N` modes per the operational pattern. Smoke passed clean; bulk ran ~7h before Drake elected to stop ("we only need information moving forward"). Final row counts (date range 2025-07-29 → 2026-05-23, ≈10 months):
+
+| Table | Rows |
+|---|---:|
+| `close_custom_field_definitions` | 101 |
+| `close_leads` | 5,172 |
+| `close_lead_status_changes` | 9,509 |
+| `close_calls` | 14,683 |
+| `close_sms` | 46,304 |
+| `close_opportunities` | 0 (skipped per Drake) |
+
+**Sanity numbers (post-backfill):** opt-ins last 7 days = **265**; status distribution top-heavy as expected (New Opt-in 2613, Disqualified 1522, Unconfirmed Booking 378, Confirmed Booking 262, Client 95); tier distribution tier_1 1,697 (33%) / tier_2 3,065 (59%) / null 410 (8%); last-7-day activity 619 outbound calls, 413 inbound SMS, 2,158 lead-status changes. Numbers match real-funnel shape.
+
+**Opportunities (`close_opportunities`) is empty.** Leads-walker is `cf-defs → all leads → all opps` in sequence; on early termination the opps step never ran. Standalone backfill (~5-10 min) was offered + declined — opportunities are informationally redundant with status-change events + lead cfs for the Engine-sheet metrics we care about. The future polling-cron spec will add an opportunity poll if/when an Engine-sheet metric depends on opp-level state.
+
+**No Vercel changes, no env-var changes, no new crons.** The polling-cron `api/close_poll_cron.py` (15-min cadence on `date_updated > now-20m`) is scoped in `docs/runbooks/close_ingestion.md` and is the natural next spec.
+
+Documentation: `docs/schema/close_{leads,lead_status_changes,calls,sms,opportunities,custom_field_definitions}.md` (one per new table per CLAUDE.md § Documentation). `docs/runbooks/close_ingestion.md` covers backfill modes + gate model + triage-count-path + tier-derivation + polling-cron-vs-webhooks decision + failure modes + re-run safety. `CLAUDE.md` § Folder Structure gains `ingestion/close/`.
+
+Spec: `docs/specs/close-ingestion-v1.md`. Reports: `docs/reports/close-ingestion-v1.md` (PARTIAL — pre-gate-(a) state intentionally preserved) + `docs/reports/close-ingestion-v1-pt2.md` (resume after Drake approval).
+
 ### 2026-05-23 — Ella @-mention / passive path split (PARTIAL — pending Drake gate (c) smoke)
 
 End of a five-spec session that diagnosed and remedied the post-2026-05-19 @-mention regression. Diagnostic chain: warm-opener / `/ella/runs` diagnostic → BadRequestError-log investigation (Anthropic usage-cap hit, now resolved) → KB retrieval access diagnostic (refuted all five retrieval-layer hypotheses; pinned the cause to the mention classifier's over-aggressive `acknowledge_and_escalate` navigation rule) → @-mention archaeology (recovered the proven pre-2026-05-18 reactive behavior from git history at `0347f51^`) → **this split spec**.
