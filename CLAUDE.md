@@ -309,6 +309,7 @@ ai-enablement/
 │   ├── fathom/                 # Call transcripts — backlog `.txt` path + realtime webhook
 │   ├── slack/                  # Channel history backfill (REST only; Events API deferred to Ella V2)
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
+│   ├── close/                  # Close CRM lead + activity mirror (backfill V1; polling cron scoped)
 │   └── crm/                    # (planned)
 ├── api/                        # Vercel Python serverless functions (11 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
