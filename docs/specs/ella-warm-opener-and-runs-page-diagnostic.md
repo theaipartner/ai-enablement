@@ -1,6 +1,6 @@
 # Ella warm-opener misfire + /ella/runs empty — diagnostic (read-only)
 **Slug:** ella-warm-opener-and-runs-page-diagnostic
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
