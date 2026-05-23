@@ -441,7 +441,10 @@ async function cleanupVerifyRows(): Promise<void> {
   console.log(`[verify] cleanup: deleted ${extraCount ?? 0} __verify_* extra rows`)
 }
 
-// Fill the add form + click Add + wait for the row to appear in the table.
+// Fill the add form + click Add + wait for the row to appear in the
+// table AND the running total to reflect the new cost. The
+// `router.refresh()` after the server action is async — without the
+// total-wait the next caller can read a stale total and fail.
 async function addSubscription(
   page: Page,
   subBox: ReturnType<Page['locator']>,
@@ -450,12 +453,31 @@ async function addSubscription(
   notes: string,
   effectiveFrom: string,
 ): Promise<void> {
+  const totalBefore = await readTotalThisMonthUsd(page)
+  const delta = Number.parseFloat(cost)
   await subBox.locator('input[placeholder="Provider"]').fill(provider)
   await subBox.locator('input[placeholder="Monthly cost USD"]').fill(cost)
   await subBox.locator('input[placeholder="Notes (optional)"]').fill(notes)
   await subBox.locator('input[aria-label="Effective from"]').fill(effectiveFrom)
   await subBox.locator('button[type="submit"]:has-text("Add")').click()
+  // Wait for the DOM row first (cheap).
   await page.waitForSelector(`text=${provider}`, { timeout: 15_000 })
+  // Then wait for the total to move by the expected delta. Subs whose
+  // `effective_from` is in a future month don't move the running total
+  // (subscriptionActiveInMonth returns false) — but the verifier never
+  // adds future-dated subs in normal flow, so a 0-delta would be a
+  // genuine bug and the assertion below would catch it.
+  await page.waitForFunction(
+    ({ before, expected }) => {
+      const txt = document.querySelector('.geg-gold-box .geg-serif')?.textContent ?? ''
+      const m = txt.match(/\$([\d,]+\.\d{2})/)
+      if (!m) return false
+      const cur = Number(m[1].replace(/,/g, ''))
+      return Math.abs(cur - (before + expected)) < 0.01
+    },
+    { before: totalBefore, expected: delta },
+    { timeout: 15_000 },
+  )
 }
 
 function assertWithin(actual: number, expected: number, tolerance: number, msg: string): void {
