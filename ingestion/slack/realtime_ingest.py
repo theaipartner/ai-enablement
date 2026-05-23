@@ -748,6 +748,22 @@ def _maybe_dispatch_passive_monitor(
             is_routed_to_others=mention_result["is_routed_to_others"],
             test_mode=bool(channel_row.get("test_mode")),
         )
+
+        # Split-path fork (2026-05-23): @-mentions go through the
+        # restored synchronous @ handler; non-@-mention messages stay
+        # on the passive observation path (decision Haiku → digest
+        # item, no in-channel voice). The two paths share the same
+        # PassiveTriggerPayload shape but never co-fire.
+        if payload.is_ella_mentioned:
+            # client-authored mentions are by far the common case;
+            # team_member mentions also route through here (an advisor
+            # asking Ella in a client channel).
+            if payload.author_type in ("client", "team_member"):
+                from agents.ella.agent import handle_at_mention
+
+                handle_at_mention(payload)
+            return
+
         evaluation = evaluate_passive_trigger(payload)
         persist_passive_evaluation(evaluation)
     except Exception as exc:

@@ -1,43 +1,36 @@
-"""Ella's decision module (structural-override architecture, 2026-05-19 PM).
+"""Ella's passive-observation decision module (split-path, 2026-05-23).
 
 Public entry point: `evaluate_passive_trigger(payload)`. Called by the
 realtime-ingest fork (`ingestion/slack/realtime_ingest.py`) for every
-human message in a passive-monitoring-enabled channel.
+human message in a passive-monitoring-enabled channel that is NOT an
+@-mention of Ella. @-mention messages are routed to
+`agents.ella.agent.handle_at_mention` upstream and never reach this
+module.
 
-**Two-path dispatch** (the structural fix after three failed
-prompt-engineering attempts at "@-mention trumps all"):
+After the 2026-05-23 split, passive monitoring is **observation-only**:
+the decision Haiku here picks `respond` / `acknowledge_and_escalate` /
+`skip` and tags `digest_flag` / `digest_category`, but the dispatch
+layer (`passive_dispatch.persist_passive_evaluation`) no longer posts
+in client channels or fires escalation DMs from the passive path. The
+Haiku's output is used purely to drive the daily digest signal
+(`pending_digest_items`).
 
-  - **`is_ella_mentioned=true`** → bypass the decision Haiku entirely
-    and call `mention_classifier.classify_mention_response`. That
-    module's output enum has NO `skip` — the model literally cannot
-    fill `skip` in the schema. Result lands on
-    `PassiveEvaluation.mention_classification`; the dispatch layer
-    branches on it to `_dispatch_mention`.
-  - **`is_ella_mentioned=false`** → the decision Haiku in this module
-    (`_HAIKU_SYSTEM_PROMPT` + `decide_passive_response`) does the
-    "should Ella interject" judgment. Output: `respond` / `acknowledge_and_escalate` / `skip`.
-
-Pipeline (gates run once for both paths, then we branch on the LLM):
+Pipeline:
 
   1. Gate 1 — Global kill switch. `ELLA_PASSIVE_MONITORING_ENABLED`
      must be 'true'. Else silent skip, NO `agent_runs` row.
   2. Gate 2 — Author type. `client` and `team_member` are always
-     evaluated (CSMs talk to Ella too). `ella` / `bot` / `workflow` /
-     `unknown` skip — but WITH an `agent_runs` row for audit.
-  3. Fetch recent channel messages (raw rows, includes Ella's posts).
-  4. Build the KB embedding query from the combined conversation
-     (recent messages + triggering message ×2).
-  5. KB vector search using that combined query (context, not a gate).
-  6. Resolve channel client + primary CSM + speaker identity.
-  7. **Branch:** mentioned → classifier Haiku; not mentioned →
-     decision Haiku.
+     evaluated. `ella` / `bot` / `workflow` / `unknown` skip — but
+     WITH an `agent_runs` row for audit.
+  3. Gate 3 — Routed-to-humans. Pre-LLM skip when the message
+     @-mentions a non-Ella human; digest item still written.
+  4. Fetch recent channel messages, build KB query, run vector search.
+  5. Resolve channel client + primary CSM + speaker identity.
+  6. Call the decision Haiku.
 
-The decision Haiku prompt was pruned of all @-mention overlay sections
-on 2026-05-19 PM (the override section, the worked example, the
-conditional qualifiers) — no @-mention message reaches this prompt
-anymore, so those sections were just rationalization surface. See
-`docs/specs/ella-at-mention-structural-override.md` for the
-diagnosis + design.
+`is_ella_mentioned=True` on this path should never happen post-split —
+if it ever does (routing bug), the decision Haiku runs as a safety net
+but the @ handler is the right home for those messages.
 """
 
 from __future__ import annotations
@@ -162,19 +155,6 @@ class PassiveEvaluation:
     kb_chunks: list[Chunk] = field(default_factory=list)
     recent_channel_context: str = ""
     primary_csm: dict[str, Any] | None = None
-    # When `payload.is_ella_mentioned` is True, the decision Haiku is
-    # bypassed entirely and the classifier Haiku in
-    # `agents.ella.mention_classifier` produces a `MentionClassification`
-    # carrying the response shape (`respond_haiku` / `respond_sonnet` /
-    # `acknowledge_and_escalate` / `warm_opener` — never `skip`). The
-    # `decision` field on this evaluation carries a sentinel value in
-    # that case; `passive_dispatch.persist_passive_evaluation` checks
-    # `mention_classification is not None` and branches to
-    # `_dispatch_mention` instead of the existing routing. None on the
-    # decision-Haiku-handled (non-mention) path.
-    mention_classification: Any = (
-        None  # MentionClassification | None — avoid import cycle by typing as Any
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -282,38 +262,13 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
         else "unknown"
     )
 
-    # @-mention messages bypass the decision Haiku entirely and go
-    # through the classifier (which has NO `skip` in its output enum —
-    # the structural fix). Non-@-mention messages take the existing
-    # decision-Haiku path.
-    if payload.is_ella_mentioned:
-        from agents.ella.mention_classifier import classify_mention_response
-
-        classification = classify_mention_response(
-            payload=payload,
-            kb_chunks=kb_chunks,
-            recent_context=recent_context,
-            primary_csm=primary_csm,
-            channel_client=None,
-            speaker_role=speaker_role,
-            speaker_name=speaker_name,
-        )
-        # Placeholder `decision` so the dataclass invariant holds; the
-        # dispatch layer branches on `mention_classification is not
-        # None` and never reads `decision` on this path.
-        return PassiveEvaluation(
-            payload=payload,
-            decision=PassiveDecision(
-                decision="mention_classifier_handled",
-                reasoning=classification.reasoning,
-            ),
-            skip_reason=None,
-            kb_chunks=kb_chunks,
-            recent_channel_context=recent_context,
-            primary_csm=primary_csm,
-            mention_classification=classification,
-        )
-
+    # @-mention messages are routed to the dedicated synchronous @
+    # handler in `agents.ella.agent.handle_at_mention` from
+    # `realtime_ingest._maybe_dispatch_passive_monitor` and never reach
+    # this function. If we ever see `is_ella_mentioned=True` here it's
+    # a routing bug — fall through to the decision Haiku as a safety
+    # net rather than raising, but the wiring upstream should prevent
+    # it.
     primary_advisor_name = _primary_advisor_name(primary_csm)
 
     decision = decide_passive_response(
