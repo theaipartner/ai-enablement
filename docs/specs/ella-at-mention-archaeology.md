@@ -1,6 +1,6 @@
 # Ella @-mention path archaeology — recover the proven pre-classifier behavior (read-only)
 **Slug:** ella-at-mention-archaeology
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
