@@ -1,6 +1,6 @@
 # Ella reply-as-human-account — safety investigation (read-only, NO change)
 **Slug:** ella-reply-as-human-investigation
-**Status:** in-flight
+**Status:** shipped
 
 **Target branch: ella-worktree**
 
