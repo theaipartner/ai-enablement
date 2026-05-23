@@ -34,6 +34,72 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-21 EOD — Ella misfire resolution arc + production resume
+
+Connective narrative for a non-linear day. The per-ship entries below capture each change in isolation; this one tells the day as a single arc — what was believed at start of day, what turned out to be wrong, what the actual root cause was, and the open items at EOD.
+
+**Starting state.** Production passive monitoring had been paused 2026-05-19 EOD (136 channels at `passive_monitoring_enabled=false`). Two ships had landed believed-to-resolve the 2026-05-19 misfire: the @-mention routing gate + assigned-advisor context (2026-05-20 morning) and the realtime-ingest idempotency gate (2026-05-20 afternoon). Production had been resumed late 2026-05-20 evening via a single `UPDATE slack_channels SET passive_monitoring_enabled = true WHERE test_mode = false`.
+
+**Rediscovery.** Drake observed Ella double-posting in production client channels (Trevor Heck, Shivam Patel screenshots — semantically-identical ack pairs seconds apart). Initial hypothesis: the prior afternoon's idempotency gate wasn't working.
+
+**Diagnostic detour.** Chat-side investigation worked through several wrong hypotheses before landing on the cause. First: `pending_ella_responses` cron race — disproven, zero rows for the affected channels. Second: a different response path entirely (the unanswered-flagger cron or a reactive @-mention handler) — disproven, the unanswered flagger only posts internally and no separate reactive path was producing these. A query-construction error compounded the confusion: the diagnostic queried `agent_runs.trigger_metadata->>'slack_channel_id'` when the actual key is `triggering_slack_channel_id`; the wrong-key query returned zero rows, falsely suggesting the passive-monitor pipeline wasn't involved. Corrected query revealed the pipeline WAS firing — twice per logical message. A side-finding surfaced during the detour: Ella's posts ingest as `author_type='bot'` rather than `'ella'` (logged separately, see Open issues below).
+
+**Root cause (confirmed via formal diagnostic + Builder investigation).** Slack `message_changed` events (fired when a user edits a message) carry a different OUTER `event.ts` than the original `message` event for the same logical message. The 2026-05-20 idempotency gate built its dedup key from the outer `event.ts`, so an edit produced a different dedup key, the PK collision never fired, and the full pipeline ran twice — two `agent_runs`, two acks, two escalation rows, four DMs. Production scope: 11 documented duplicate dispatches across 8 channels in ~36 hours. Zero `slack_msg_ingest_dup_*` audit rows had ever been written — the gate had never caught a true duplicate in production.
+
+**Wrong-call acknowledgment.** The 2026-05-20 idempotency spec had explicitly anticipated this failure mode in its "What could go wrong #6" and classified it "acceptable for v1" on the assumption that Slack edits are rare in client channels. Production reality (11 dupes / 36 hours) contradicted that within 36 hours. A judgment error in the prior spec, owned in the corrective work.
+
+**The fix.** `ella-realtime-ingest-dedup-message-changed` moved dedup-key construction from pre-parse (outer `event.ts`) to post-parse (inner `record.slack_ts`, which is stable across edits). Smoke-validated by Drake in `#ella-test-drakeonly`: posted a message, edited it, confirmed the edit produced a `slack_msg_ingest_dup_*` row with `processing_status='duplicate'` and NO second response. First time a true duplicate was caught in production-shaped testing.
+
+**Accepted trade-off.** Edits that add critical content are now suppressed (Ella sees only the pre-edit text). Accepted because the alternative (11 dupes / 36 hours) was worse for client trust, and clients can post a follow-up message to add context.
+
+**Second resume.** After smoke validation, Drake re-ran `UPDATE slack_channels SET passive_monitoring_enabled = true WHERE test_mode = false AND passive_monitoring_enabled = false AND is_archived = false` — 136 channels back on.
+
+**Day's ships (linked to per-ship entries below):**
+
+- `ella-duplicate-webhook-delivery-diagnostic` — read-only investigation confirming the structural bug.
+- `ella-realtime-ingest-dedup-message-changed` — the corrective fix moving the dedup key post-parse.
+- `ella-unanswered-flagger-client-only-and-terse-post` — client-only filter (drops team_member candidates) + terse one-line post format on the unanswered-flagger cron. Drake observed it working in production (two messages came through correctly). Still pending formal gate (c) confirmation on the team_member-exclusion case.
+- `ella-doc-hygiene-sweep-2026-05-21` — forward-pointer annotations across the prior idempotency-ship docs (spec / report / runbook section / state.md entry) plus a dead-code inventory catalogued in `docs/known-issues.md § Code hygiene — deferred cleanup`.
+- `ella-at-mention-routing-gate-and-advisor-context` (recap — landed 2026-05-20 morning, prior to today's arc) — pre-LLM routing gate making `acknowledge_and_escalate` structurally unreachable for routed-to-humans messages.
+- `ella-realtime-ingest-idempotency` (recap — landed 2026-05-20 afternoon, part of today's arc; the partial fix that did not catch the dominant `message_changed` pattern).
+
+**Production posture (EOD 2026-05-21).** 136 channels at `passive_monitoring_enabled=true` as of the second resume. `#ella-test-drakeonly` retains `test_mode=true` for ongoing smoke-testing. Dual kill switches (env var `ELLA_PASSIVE_MONITORING_ENABLED` + per-channel `passive_monitoring_enabled`) remain the fallback. `#ella-test-drakeonly` stays the validation surface.
+
+**Open issues (with pointers):**
+
+- `author_type='bot'` misclassification of Ella's posts in `slack_messages` — logged in `docs/known-issues.md` (entry "Ella posts classified as `author_type='bot'`"). Independent of the dedup bug; needs a future spec.
+- Unanswered-flagger permalink unfurl requires Ella's bot to be a channel member — logged in `docs/known-issues.md` (entry "Unanswered-flagger Slack permalinks unfurl only when Ella's bot is in the source channel"). Slack-side unfurl behavior, not a code bug; operational note for the channel-membership rollout.
+- Architectural rehaul conversation (tabled). Drake raised that Ella may need a rehaul — passive monitoring adds complexity, KB coverage is call-only (no curriculum / GHL / offer docs), and the 15-message context window limits depth. Four product-shape options tabled for a future conversation (likely with Nabeel): (1) CSM copilot — team-facing only, never posts in client channels; (2) pure escalation router + digest — reads everything, never responds in-channel; (3) curriculum FAQ bot scoped tightly to high-similarity KB hits; (4) status quo with continued patching. No decision made; flagged so it resurfaces.
+
+**Still pending gate (c).** Unanswered-flagger team_member-exclusion smoke case (per the `ella-unanswered-flagger-client-only-and-terse-post` spec).
+
+**Monitoring queries for the next few hours.** Drake should run these against cloud Supabase (via the pooler URL + `psycopg2`) to confirm the resume held. The exact key names match the cloud schema; both queries are scoped to the window since the second resume.
+
+```sql
+-- Q1: Dedup gate firing at scale? Non-zero = gate working on real duplicates.
+SELECT
+  count(*) AS dupes_caught,
+  count(DISTINCT (payload->>'original_delivery_id')) AS distinct_originals
+FROM webhook_deliveries
+WHERE source = 'slack_message_ingest'
+  AND processing_status = 'duplicate'
+  AND received_at >= '2026-05-21 18:00:00';  -- second-resume cutover, adjust to actual UTC
+
+-- Q2: Decision mix on the passive path. Skip-dominant = healthy default stance;
+-- acknowledge_and_escalate-dominant = worth a look.
+SELECT
+  trigger_metadata->>'haiku_decision' AS decision,
+  count(*) AS n
+FROM agent_runs
+WHERE agent_name = 'ella'
+  AND trigger_type IN ('passive_monitor', 'passive_dispatch')
+  AND started_at >= '2026-05-21 18:00:00'
+GROUP BY 1
+ORDER BY n DESC;
+```
+
+Post-state: **42 migrations, 13 Python serverless functions, 706 pytest passing, 6 TopNav tabs** — all unchanged (no code touched today; doc-only EOD entry). No migration, no env-var changes, no production traffic generated by the EOD entry itself.
+
 ### 2026-05-21 — Ella doc hygiene sweep + dead-code inventory
 
 `docs/specs/ella-doc-hygiene-sweep-2026-05-21.md`. Pure documentation reconciliation closing out the four-ship Ella arc that started 2026-05-19 EOD. Four forward-pointer annotation blocks added to the prior-spec docs that read confidently about a fix the production data later contradicted (idempotency spec + report + runbook Dedup-gate section + state.md 2026-05-20 entry). Annotations use a consistent "UPDATED 2026-05-21:" format so future scans for stale claims are trivial. **Original content unchanged** — annotations prefix the affected sections, never rewrite history. The known-issues Problem A entry was checked but not modified — its existing resolution note already referenced both ships explicitly.

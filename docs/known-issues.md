@@ -70,6 +70,13 @@ Resolved-by-removal via `ella-at-mention-routing-gate-and-advisor-context` (2026
 ~~- **Next action:** Per-channel rate-limit on `acknowledge_and_escalate` (e.g., one ack per channel per 5 minutes, with the digest item still writing each time so Scott's daily skim isn't impoverished). Implementation can be in-memory cache, DB-backed check against recent `agent_runs`, or Redis if introduced. Spec required before production resume.~~
 - **Logged:** 2026-05-19 (EOD; surfaced from the C0AFEC456JG misfire diagnostic). Resolved-by-removal 2026-05-20.
 
+## Unanswered-flagger Slack permalinks unfurl only when Ella's bot is in the source channel
+
+- **What:** The 2026-05-21 unanswered-flagger terse one-line post format ends with a Slack permalink to the source message. Slack auto-unfurls the permalink into a message preview ONLY when the bot posting the message (Ella) is a member of the source channel. Posts from channels Ella isn't in render as a bare URL with no preview. Drake observed this in production on 2026-05-21.
+- **Why it matters:** Slack-side unfurl behavior, not a code bug — but it's an operational gotcha. CSMs scanning `#unanswered-channels` get a much faster signal when the preview renders (client + message text visible without clicking). Without the preview, the post is just a URL and a mention.
+- **Next action:** Operational, not code. Ensure Ella's bot is invited to every client channel the flagger surfaces from. The existing `scripts/invite_ella_and_bot_to_client_channels.py` (dry-run + apply) is the relevant rollout tool; full-fleet rollout was pending Drake-led ops work as of the 2026-05-10 Batch 1 wrap (`docs/state.md`). No spec needed — this entry exists so the next person doesn't waste time looking for a code fix.
+- **Logged:** 2026-05-21 (surfaced during the post-resume EOD review of the unanswered-flagger ship).
+
 ## Ella posts classified as `author_type='bot'` instead of `'ella'` in `slack_messages`
 
 - **What:** `parser._resolve_author` is not recognizing Ella's user account (`slack_user_id='U0ATX2Y8GTD'` behind `SLACK_USER_TOKEN`) — her posts ingest with `author_type='bot'`. Verified empirically: SQL on cloud `slack_messages` shows 6+ Ella posts over the trailing 7 days under this user_id, all bot-tagged. Surfaced during the 2026-05-21 duplicate-webhook diagnostic (`docs/reports/ella-duplicate-webhook-delivery-diagnostic.md` § Surprises).
