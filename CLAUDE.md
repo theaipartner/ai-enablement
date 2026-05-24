@@ -322,6 +322,7 @@ ai-enablement/
 │   ├── wistia/                 # Wistia video analytics mirror (3-hour cron, rolling 14-day window)
 │   ├── calendly/               # Calendly scheduled events + invitees mirror (live webhook receiver + 7d backfill)
 │   ├── typeform/               # Typeform lead opt-in mirror (live webhook + 15-min cron backstop)
+│   ├── clarity/                # Microsoft Clarity page metrics mirror (daily cron, no backfill possible)
 │   └── crm/                    # (planned)
 ├── api/                        # Vercel Python serverless functions (11 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)

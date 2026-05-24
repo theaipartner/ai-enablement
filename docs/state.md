@@ -34,6 +34,35 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-24 — Microsoft Clarity ingestion (migration 0049 + daily cron + first-run populated; Vercel env Drake-gated)
+
+Sixth sales-side data source after Close + Meta + Wistia + Calendly + Typeform. Mirrors Clarity per-URL per-day page metrics into Supabase — source for Engine-sheet FUNNELS rows 25 (Landing Page Visits), 26 (Avg Time on Landing Page), and 37 (Avg Time on Thank-You Page; the long-standing "Wistia" mis-tag on row 37 is resolved — discovery confirmed Clarity has per-URL time-on-page).
+
+**The defining constraint:** Clarity's API returns ONLY the last 1-3 days. **No historical backfill possible.** History accumulates from cron start. The daily cron pulling `numOfDays=3` self-heals up to 2 missed days; >3-day outages = permanent gaps (acceptable, documented).
+
+**Migration 0049 applied to cloud Supabase.** Migration count: 47 → **49** (skipped 0048 because Typeform's `0048_typeform_mirror.sql` was being applied in parallel from `worktree-b`; both now landed cleanly). Single hybrid table `clarity_metrics_daily` keyed on `(snapshot_date, metric_name, url)`:
+- Typed columns for Traffic + EngagementTime hot fields (`total_session_count`, `total_bot_session_count`, `distinct_user_count`, `pages_per_session_percentage`, `total_time`, `active_time`) feed the three named Engine-sheet metrics.
+- `raw jsonb` catch-all carries the per-URL row dict regardless of metric (and is the SOLE data column for the 6 quality-signal blocks: DeadClickCount, RageClickCount, QuickbackClick, ExcessiveScroll, ScriptErrorCount, ErrorClickCount, ScrollDepth).
+- `url` stored raw (querystrings preserved — Clarity does NOT normalize); `url_path` derived at ingest via `urlparse(url).path` for aggregation grouping. Discovery saw 45 distinct URL+QS variants collapse to 8 paths.
+- Sentinel `'__total__'` stored in both `url` and `url_path` for the null-URL aggregate row Traffic returns (avoids NULL-in-PK semantics; daily totals stay queryable).
+- Two secondary indexes: `(url_path, snapshot_date desc)` for the per-path rollup pattern, `(metric_name, snapshot_date desc)` for per-metric scans.
+
+**Ingestion module `ingestion/clarity/`** — four files matching the meta/wistia precedent: `__init__.py` (load-bearing canonical config — `LANDING_PAGE_PATH='/lp'`, `THANK_YOU_PAGE_PATH='/confirmation'`, `DEFAULT_TIME_METRIC='active_time'`, `TOTAL_SENTINEL='__total__'`), `client.py` (urllib-only Bearer GET with `User-Agent: ai-enablement/1.0` defensive Cloudflare UA, single endpoint `GET /export-data/api/v1/project-live-insights?numOfDays=3&dimension1=URL`, types HTTP errors via `ClarityAPIError`), `parser.py` (the 9-block array → flat row-dict mapping; case-tolerant Url field lookup; string→int casts on count fields; null-URL → sentinel; duplicate-key detection; graceful warnings on malformed shapes), `pipeline.py` (`sync_clarity_metrics_daily(db, client)` with `SyncOutcome` dataclass; **single batched `db.table().upsert(rows_list, on_conflict=...)` call** — chose batched over per-row after the first --apply hit HTTP/2 `ConnectionTerminated` at ~96 sequential per-row calls against the pooler).
+
+**Daily cron `api/clarity_sync_cron.py`** at `0 10 * * *` UTC (~5/6 AM ET). Mirror of `meta_sheet_sync_cron.py` shape: `CRON_SECRET` Bearer auth, audit row to `webhook_deliveries` with `source='clarity_sync'`, `maxDuration: 60`. Per tick: 1 of 10 daily reqs used; ~200 rows upserted in one batch call.
+
+**Manual wrapper `scripts/sync_clarity.py`** with `--smoke` / `--apply` / `--days` modes. `--smoke` exercises full fetch+parse without DB writes (canonical pre-apply gate per CLAUDE.md § Operational patterns); `--apply` does the upsert + a fresh-client re-query for the canonical-metric preview (showing /lp Traffic + /lp EngagementTime + /confirmation EngagementTime so Drake eyeballs realism).
+
+**First-run population done locally (2026-05-24).** 191 rows in `clarity_metrics_daily` for snapshot 2026-05-24, distributed across 9 distinct url_paths × 9 metric blocks (Traffic has 47 rows because it captures more URL+QS variants; other blocks 18 each). Canonical metrics observed match discovery: `/lp` Traffic 15 sessions / 18 users, `/lp` EngagementTime 79s active / 551s total across 12 rows, `/confirmation` EngagementTime 63s active / 66s total across 2 rows. Idempotent re-pull verified (batched upsert with last-write-wins on the natural-key PK).
+
+**Tests: +40 across `tests/ingestion/clarity/`** — config constants (4), parser shape + url_path derivation + null-URL sentinel + string→int casts + quality-block typed-cols-NULL + malformed handling + multi-block fixture + real-probe round-trip (24), pipeline orchestration + idempotency + batch-failure semantics + on_conflict shape + snapshot-date defaulting (12). **Total suite: 759 + 189 = 948 passing post-Clarity.**
+
+**Vercel deploy + env vars are Drake-gated (gate d).** `vercel.json` updated with the `api/clarity_sync_cron.py` function entry + the daily cron schedule. **Still needed in Vercel before the cron runs in prod:** `CLARITY_API_KEY` (gate d — Drake adds; until added, the cron returns `clarity_token_unavailable` and audits cleanly, no production damage).
+
+**Engine sheet row-37 re-tag pending** — flagged for Drake to flip Wistia → Clarity on the rollup definition; no code change needed, just sheet hygiene.
+
+**Docs shipped:** `docs/schema/clarity_metrics_daily.md` + `docs/runbooks/clarity_ingestion.md` + `.env.example` entry + `CLAUDE.md` § Folder Structure (`ingestion/clarity/`) + this state.md entry.
+
 ### 2026-05-24 — Calendly ingestion (migration 0047 + 7-day backfill; live webhooks Drake-gated)
 
 Fourth sales-side data source. Mirrors Calendly scheduled events + invitees + event-type catalog into Supabase — source for the Engine sheet's six Calendly-sourced rows (FUNNELS section: 3 plain + 3 "with logic" closer rows).

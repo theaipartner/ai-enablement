@@ -1,6 +1,6 @@
 # Microsoft Clarity Ingestion — Daily Self-Healing Cron (No Backfill)
 **Slug:** clarity-ingestion
-**Status:** in-flight
+**Status:** shipped
 **Target branch:** main
 
 ## ⚠️ Landscape note + MIGRATION NUMBER
