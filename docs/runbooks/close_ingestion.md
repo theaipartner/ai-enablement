@@ -129,34 +129,81 @@ Refreshed in ingestion on every lead upsert; written to `close_leads.tier`.
 
 If Typeform values diverge from the assumed pattern, update `_CF_NAME_TO_COLUMN` / `derive_tier` in `ingestion/close/parser.py` and re-run the backfill (idempotent — `tier` refreshes on every upsert).
 
-## Ongoing ingestion: polling cron (V1) vs webhooks (deferred)
+## Ongoing ingestion: live webhooks (shipped 2026-05-23 — `close-live-webhooks`)
 
-**V1 ships polling cron, not webhooks.** Two reasons:
+**Live path: `api/close_events.py`** — a Vercel serverless function Close pushes events to in real time. Drake chose webhooks over polling for true real-time freshness; the polling helper (`sync_recently_updated_leads`) is kept as an operational backstop for catching up after webhook outages.
 
-1. **Webhook subscription registration is a Close-side configuration step that Drake gates** (env-var / external-config territory; CLAUDE.md § Drake's gates § (d)). Polling has zero Close-side setup beyond the existing API key.
-2. **Polling is the safer first-pass.** Webhook deliveries can be missed, duplicated, or arrive out of order — the Fathom flow has been reliable but it took infrastructure work to get there. Polling on `date_updated > {last_high_water}` is correct-by-construction.
+### Subscribed events
 
-### Polling cron design (planned — not in this spec's shipped scope)
+Registered via `scripts/register_close_webhook.py`; the script's `EVENTS_IN_SCOPE` list is the source of truth. Current set:
 
-When wired up:
+| Object type | Action | Routes to |
+|---|---|---|
+| `lead` | `created` / `updated` / `merged` | `close_leads` |
+| `opportunity` | `created` / `updated` | `close_opportunities` (Drake 2026-05-23 override) |
+| `activity.call` | `created` / `updated` / `answered` / `completed` | `close_calls` |
+| `activity.sms` | `created` / `updated` / `sent` | `close_sms` |
+| `activity.lead_status_change` | `created` / `updated` | `close_lead_status_changes` |
 
-- **Endpoint:** `api/close_poll_cron.py` (Vercel serverless function)
-- **Schedule:** every 15 minutes (mirrors the Fathom poll cadence)
-- **Logic:** call `sync_recently_updated_leads(since_iso=now-20min)` — overlap window tolerates clock skew. The 20-minute overlap at a 15-minute cadence means each lead update gets at least one cron tick.
-- **Env vars needed (gate (d) — Drake sets):**
-  - `CLOSE_API_KEY` (already in `.env.local`; also needs to be set in Vercel)
-  - `CRON_SECRET` (already exists — `Authorization: Bearer $CRON_SECRET`)
+**Triage stays in Airtable, NOT Close** — see § Triage-count path above. The webhook ingest mirrors `close_leads.triage_showed` if it appears in a lead payload (harmless), but it's not the canonical triage source.
 
-This cron is **scoped, not built** in `close-ingestion-v1`. Follow-up spec when V1 backfill is shipped + verified.
+**Custom-activity events + opportunity-status-change activity events are NOT routed** today — both fold into the lead-status-change or opportunity.updated events that already trigger upserts. Add a route in `_route_event` (api/close_events.py) if a future metric needs the dedicated stream.
 
-### Webhook path (deferred)
+### Signature verification (security boundary)
 
-Close supports webhook subscriptions for `lead.created`, `lead.updated`, `activity.created`, etc. Trade-offs:
+Close signs every delivery. Algorithm (verbatim from Close docs, fetched 2026-05-23):
 
-- **Pro:** near-realtime data freshness; no polling cost.
-- **Con:** subscription setup requires Close API call(s) from a Drake-supervised session; receiver endpoint needs durability + idempotency vs duplicate deliveries (same shape as the Ella realtime ingestion work).
+```python
+data = headers['close-sig-timestamp'] + payload
+signature = hmac.new(bytearray.fromhex(key), data.encode('utf-8'),
+                     hashlib.sha256).hexdigest()
+valid = hmac.compare_digest(headers['close-sig-hash'], signature)
+```
 
-Not in V1. Revisit after the polling cron has a few weeks of clean operational history.
+- `key` = `CLOSE_WEBHOOK_SECRET` env var (hex string; Close gives it once at subscription creation).
+- Replay window: 5 minutes against `close-sig-timestamp` (Close doesn't document a window; we add one defensively).
+- Implementation: `api/close_events.py:_verify_signature`. Unit tests in `tests/api/test_close_events.py` exercise tampered body, wrong timestamp, wrong/empty/non-hex secret, empty headers.
+
+### Idempotency
+
+Three layers:
+
+1. **Audit-row dedup:** synthesized `webhook_id = "close:{timestamp}:{sha256(body)[:16]}"`. PK on `webhook_deliveries.webhook_id` makes true duplicates a no-op (200 fast-ack, no re-processing).
+2. **Per-row upsert:** every helper in `ingestion/close/pipeline.py` calls `.upsert(on_conflict="close_id")`. A legitimate retry with a fresh timestamp re-attempts processing but doesn't duplicate.
+3. **Fail-soft:** handler exceptions mark the row `failed` and STILL return 200 so Close doesn't auto-disable after 3 days of failures. Use the polling backstop to heal anything that truly failed.
+
+### Live activation runbook (Drake's gate-(d) steps)
+
+Sequential — each step depends on the previous one landing:
+
+1. **Builder commits + pushes `api/close_events.py` to `main`.** Vercel auto-deploys.
+2. **Drake confirms the deploy.** `curl https://ai-enablement-sigma.vercel.app/api/close_events` should return `{"status":"ok","endpoint":"close_events","accepts":"POST"}`. (Or hit it in a browser.) If the function 404s, the deploy didn't include `api/close_events.py` — wait + retry.
+3. **Drake runs `scripts/register_close_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/close_events`.** Script POSTs to Close's `/webhook/` endpoint with the events from `EVENTS_IN_SCOPE`. Response prints the signing secret — **copy it now**, Close only shows it once.
+4. **Drake adds `CLOSE_WEBHOOK_SECRET=<the hex string>` to Vercel project env vars.** Redeploy (Vercel may not pick up env changes automatically on next request — confirm via the dashboard).
+5. **Drake verifies end-to-end.** Change something on a lead in the Close UI (e.g. update a status). Within seconds:
+   - `SELECT count(*) FROM webhook_deliveries WHERE source='close_webhook' AND received_at >= now() - interval '5 min'` → ≥ 1.
+   - Matching row in the relevant mirror table updated (e.g. `close_leads.date_updated` for that lead's `close_id`).
+6. **If something looks wrong**, check `webhook_deliveries.processing_status` for `failed` / `malformed` rows, plus the corresponding `processing_error` field for the traceback.
+
+### Polling backstop (operational, not primary)
+
+`scripts/backfill_close.py --apply --limit N` and the pipeline's `sync_recently_updated_leads(since_iso=...)` stay available for catching up after:
+
+- A webhook outage (Vercel down, Close-side failure, network).
+- A Close auto-pause of the subscription (3 days of failures or 100k backlog — Drake reactivates via Close API).
+- A receiver-bug repair where we want to backfill the missed window.
+
+There is no scheduled cron for polling today; run on-demand when needed.
+
+### Keeping custom-field definitions fresh
+
+The webhook receiver loads `cf_id → name` from our `close_custom_field_definitions` mirror table (populated by the backfill). When a Close admin adds or renames a custom field, run `scripts/sync_close_cf_definitions.py` to refresh the mirror. Until refreshed:
+
+- New leads / lead updates still ingest correctly.
+- The new cf's value lands in `close_leads.custom_fields_raw` jsonb but NOT in a typed column.
+- After the sync script runs, subsequent webhook deliveries project the new cf to its typed column (if mapped in `_CF_NAME_TO_COLUMN`). Existing rows need a backfill re-run (`--apply --limit N` against affected leads) to backfill the typed column.
+
+Wrap into a scheduled cron in a future spec if cf drift becomes a real ops problem.
 
 ## Failure modes + debugging
 
@@ -167,7 +214,11 @@ Not in V1. Revisit after the polling cron has a few weeks of clean operational h
 | 429s | Rate limit | Client backs off + retries 3× automatically; if persistent, reduce concurrency or page size |
 | Read timeout on heavy lead's `/activity/` | Some leads have very long timelines | Client has 60s timeout + 3-try retry; persistent timeouts → switch to `_type__in` per-type calls instead of bundled |
 | Tier values wrong on real data | Typeform values diverged from assumed pattern | Update `_CF_NAME_TO_COLUMN` + `derive_tier()` in `ingestion/close/parser.py`; re-run backfill (idempotent) |
-| `close_leads` row missing custom-field columns | cf id ≠ name map | Re-run `sync_custom_field_definitions()` first to refresh names |
+| `close_leads` row missing custom-field columns | cf id ≠ name map | Re-run `scripts/sync_close_cf_definitions.py` first to refresh names |
+| Webhook 401s repeatedly | `CLOSE_WEBHOOK_SECRET` wrong/missing in Vercel | Confirm env var is set; redeploy to pick it up; verify by re-registering subscription if secret was lost (Close shows it only once) |
+| `webhook_deliveries.processing_status='failed'` accumulating | Receiver bug or persistent transient error | Inspect `processing_error` for the traceback; fix + redeploy; re-process via polling backstop |
+| Close subscription `status='paused'` | 3 days of failures or 100k backlog hit | Diagnose the failure mode first, then reactivate via Close API or dashboard |
+| Unknown event types in logs | Close sent something we haven't routed | Audit row exists with full payload; add a route in `_route_event` if a metric needs it |
 
 ## Re-run safety
 
@@ -177,8 +228,11 @@ Soft-deletion in Close (which is rare) is NOT mirrored — a lead deleted in Clo
 
 ## Out of scope (future specs)
 
-- **Webhook subscription path** — see § Webhook path above.
-- **Close Export API for cold-start backfill** — if pagination ceilings become a problem on very large pulls.
-- **EOC Forms ingestion** — separate source, separate spec. The Engine sheet's CLOSING section sources from here, NOT from Close. Until EOC Forms ingestion lands, the closing-funnel money rows have no Supabase source. The Close payment cfs on `close_leads` are mirrored but secondary.
-- **Custom-field value history** — Close exposes 30-day rolling history via the Event Log API. Useful for back-population if we need historical reconstruction of cf values that changed before ingestion started.
-- **Email activity mirror** — deferred per spec (6% of activity; Drake dropped from First Message Response definition). Add `close_emails` if a future metric needs it.
+- **Triage ingestion** — lives in Airtable forms, not Close. Will be its own ingestion spec.
+- **EOC Forms ingestion** — separate source, serves the Engine sheet's CLOSING section. Until it lands, closing-funnel money rows have no Supabase source. Close payment cfs on `close_leads` are mirrored as secondary cross-validation only.
+- **Custom-field value history** — Close exposes 30-day rolling history via the Event Log API. Useful for back-population if we need historical reconstruction of cf values.
+- **Email activity mirror** — deferred (6% of activity; Drake dropped from First Message Response definition). Add `close_emails` if a future metric needs it.
+- **Custom-activity events + opportunity-status-change activity events** — not routed today; folded into lead-status-change / opportunity.updated. Add to `_route_event` if needed.
+- **Scheduled cf-definition cron** — manual `scripts/sync_close_cf_definitions.py` for V1; cron-ify if drift becomes a real problem.
+- **Close Export API for cold-start re-backfill** — if pagination ceilings ever become a problem.
+- **Auto-reactivation of paused subscriptions** — currently a Drake-action.

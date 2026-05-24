@@ -34,6 +34,26 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-23 — Close CRM live ingestion (webhook receiver shipped; activation Drake-gated)
+
+Live path for Close data. `api/close_events.py` is the Vercel serverless webhook receiver — verifies Close's HMAC-SHA256 signature (`close-sig-hash` header, hex-decoded secret, 5-min replay window), parses `event.object_type` + `event.action`, routes to the matching idempotent upsert helper in `ingestion/close/pipeline.py`. Synthesized dedup key (`close:{ts}:{sha256(body)[:16]}`) on `webhook_deliveries.webhook_id` handles true duplicates; fail-soft always returns 200 on handled errors so Close's 3-day auto-disable doesn't fire on a single bad payload.
+
+**Event types subscribed (per `scripts/register_close_webhook.py:EVENTS_IN_SCOPE`):** lead.created/updated/merged → `close_leads`; opportunity.created/updated → `close_opportunities` (Drake 2026-05-23 override — mirror everything Close emits per Core Principle #1; `value` stays $1-placeholder NOT money); activity.call.created/updated/answered/completed → `close_calls`; activity.sms.created/updated/sent → `close_sms`; activity.lead_status_change.created/updated → `close_lead_status_changes`. Triage stays in Airtable, NOT Close — `triage_showed` cf is sparse precisely because triage isn't captured here; a future Airtable-triage ingestion spec is the canonical source.
+
+**New pipeline helpers** (`ingestion/close/pipeline.py`): `load_lead_cf_id_to_name(db)` reads the cf-name map from our mirror (no API call), plus per-row `upsert_lead_from_payload` / `upsert_call_from_payload` / `upsert_sms_from_payload` / `upsert_opportunity_from_payload` / `upsert_lead_status_change_from_payload` — thin wrappers around the existing `parse_*` functions so backfill + webhook share the same parser path. Unknown cfs in a webhook payload degrade gracefully: value lands in `custom_fields_raw` jsonb only; `scripts/sync_close_cf_definitions.py` refreshes the cf-name map on demand (Drake-run when a new cf is created in Close).
+
+**Subscription registration** is gate-(d) territory. Drake runs `scripts/register_close_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/close_events`; script POSTs to Close's `/api/v1/webhook/` with `EVENTS_IN_SCOPE` and prints the signing secret (shown once). Drake adds `CLOSE_WEBHOOK_SECRET` to Vercel env vars + redeploys. Full activation runbook in `docs/runbooks/close_ingestion.md` § Live activation runbook.
+
+**Distinguish receiver-shipped from live-in-production.** This entry covers the code merge + `vercel.json` wiring; live activation depends on Drake's three steps (deploy verify → subscription register → secret + redeploy). State will reflect "live" after those land.
+
+**Polling backstop retained.** `sync_recently_updated_leads(since_iso=...)` stays as the operational catch-up tool for webhook outages / Close auto-pause recovery. No scheduled cron today.
+
+**Test suite: 733 passing** (+41 from this spec: 27 in `tests/api/test_close_events.py` covering signature/replay/dedup-key/routing — including Drake's opportunity override — and 14 in `tests/ingestion/close/test_pipeline_webhook_helpers.py` covering the per-row upserts and graceful cf-degradation).
+
+Migration count unchanged at 43 (no new tables — reuses the V1 mirror tables). `vercel.json` adds `api/close_events.py` per-file runtime config. `.env.example` documents `CLOSE_WEBHOOK_SECRET` (hex string, format + how-to-obtain + gate (d) note). No new crons.
+
+Spec: `docs/specs/close-live-webhooks.md`. Report: `docs/reports/close-live-webhooks.md`.
+
 ### 2026-05-23 — Close CRM ingestion V1 (migration 0043 applied + scope-limited backfill)
 
 First mirror of Close CRM data into Supabase — foundation of the Gregory sales-side surface (eventual CEO/business-engine dashboard). Three-spec arc: `close-smartview-discovery` (endpoints + 11-status pipeline + Smartviews are operational filters not data sources), `close-full-data-inventory` (REAL data findings: activity density SMS 67% / Call 12% / status-change 7%, 52 populated lead cfs across attribution/workflow/payment layers, opportunities are $1 placeholders), then this ship.
