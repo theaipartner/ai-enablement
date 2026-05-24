@@ -273,14 +273,18 @@ def _verify_mac(body: bytes, sig_header: str, mac_secret_b64: str) -> bool:
     """Airtable signs notification pings with:
 
         digest = HMAC-SHA256(raw_body, base64_decode(macSecretBase64))
-        header = `X-Airtable-Content-MAC: hmac-sha256=<base64_encode(digest)>`
+        header = `X-Airtable-Content-MAC: hmac-sha256=<HEX(digest)>`
 
-    Some receivers report the header value as raw base64 (no
-    `hmac-sha256=` prefix); accept both defensively.
+    Verified against the Web API webhooks-overview docs 2026-05-24:
+    Airtable's reference implementation uses `hmac.digest('hex')`,
+    NOT base64. The `macSecretBase64` returned at webhook creation
+    IS base64 — that's just the wire format for transporting the key
+    bytes; it must be base64-decoded BEFORE use as the HMAC key.
 
-    The `macSecretBase64` value is returned exactly once by Airtable
-    when the webhook is created (see `register_airtable_webhook.py`);
-    Drake stores it in Vercel as `AIRTABLE_WEBHOOK_MAC_SECRET`.
+    History note (2026-05-24): the original implementation base64-
+    encoded the digest, which silently rejected every real Airtable
+    ping (cursor advanced to 21 with 20+ queued payloads, all 401'd).
+    Fixed to hex in `airtable-webhook-mac-fix`.
 
     Constant-time compare via `hmac.compare_digest`.
     """
@@ -297,10 +301,11 @@ def _verify_mac(body: bytes, sig_header: str, mac_secret_b64: str) -> bool:
         logger.error("airtable_webhook: macSecretBase64 not valid base64")
         return False
 
-    expected = base64.b64encode(
-        hmac.new(secret_bytes, body, hashlib.sha256).digest()
-    ).decode("ascii")
-    return hmac.compare_digest(presented, expected)
+    expected = hmac.new(secret_bytes, body, hashlib.sha256).hexdigest()
+    # Lowercase both sides — Airtable's hex is lowercase per
+    # `hmac.digest('hex')` semantics, but normalize defensively against
+    # a future case-flip on either side.
+    return hmac.compare_digest(presented.lower(), expected.lower())
 
 
 # ---------------------------------------------------------------------------
