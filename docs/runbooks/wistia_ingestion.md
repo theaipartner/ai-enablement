@@ -19,7 +19,9 @@ The Engine sheet's four Wistia metrics (VSL Engagement Rate, VSL Average View Du
    └──────────┬──────────┘
               │ GET /v1/medias.json (inventory)
               │ GET /v1/medias/{id}/stats.json (lifetime)
-              │ GET /modern/stats/medias/{id}/by_date (per-day)
+              │ GET /modern/analytics/medias/{id}/timeseries (per-day, post-2026-05-24)
+              │   — replaced /modern/stats/medias/{id}/by_date (legacy; synthesized
+              │     hours_watched, see docs/reports/wistia-watchtime-verify.md)
               ▼
    ┌─────────────────────┐
    │ api/wistia_sync_    │  every 3h via Vercel Cron
@@ -42,7 +44,7 @@ The Engine sheet's four Wistia metrics (VSL Engagement Rate, VSL Average View Du
 
 ### Rate limit
 
-Wistia caps at **600 req/min per account**. Violations return **HTTP 503 (NOT 429)** with no `Retry-After` header. The client exponentially backs off (5s × attempt, 3 tries). The cron's per-tick budget is ~163 API calls (1 projects + 80 inventory + 80 lifetime-stats + 80 by_date) — ~27% of one minute's quota, well within bounds.
+Wistia caps at **600 req/min per account**. Violations return **HTTP 503 (NOT 429)** with no `Retry-After` header. The client exponentially backs off (5s × attempt, 3 tries). The cron's per-tick budget is ~163 API calls (1 projects + 80 inventory + 80 lifetime-stats + 80 timeseries) — ~27% of one minute's quota, well within bounds.
 
 ## Endpoints
 
@@ -51,9 +53,14 @@ Wistia caps at **600 req/min per account**. Violations return **HTTP 503 (NOT 42
 | `GET /v1/medias.json?page=N&per_page=100` | Inventory pagination | Returns empty list when exhausted. Pagination safety cap = 50 pages (5000 medias). |
 | `GET /v1/projects.json?page=N&per_page=100` | Project lookup | Fallback for `project_name` resolution when media payload omits it. |
 | `GET /v1/medias/{hashed_id}/stats.json` | Lifetime aggregates | Cross-check values only; `wistia_media_daily` is the canonical time-series. |
-| `GET /modern/stats/medias/{hashed_id}/by_date?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | **Per-day stats — the load-bearing source** | Requires `X-Wistia-API-Version: 2026-03` header. Returns list of `{date, load_count, play_count, hours_watched}`, zero-activity days = zeros (not nulls). |
+| `GET /modern/analytics/medias/{hashed_id}/timeseries?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&granularity=daily` | **Per-day stats — the load-bearing source (post-2026-05-24)** | Requires `X-Wistia-API-Version: 2026-03` header. Returns list of `{timestamp, plays, unique_plays, unique_loads, unique_visitors, played_time (seconds), engagement_rate (0-1), play_rate, cta_*, form_conversions}`, zero-activity days have zeros (not nulls). **`end_date` is EXCLUSIVE** — the client wrapper `fetch_timeseries` adds +1 day internally so callers pass inclusive end. |
+| `GET /modern/stats/medias/{hashed_id}/by_date?...` | **DEPRECATED** — replaced 2026-05-24 | Was the per-day source; verification proved it synthesized `hours_watched` (fake daily engagement). Method retained on the client (`fetch_by_date`) for ad-hoc legacy queries; pipeline + cron do NOT use it. See `docs/reports/wistia-watchtime-verify.md`. |
 
 `/v1/medias/{id}/engagement` is documented but 404s on this account's API version. Don't use it.
+
+### Date semantics gotcha (CRITICAL)
+
+The new `/timeseries` endpoint uses **`end_date` EXCLUSIVE**. The legacy `by_date` used inclusive on both. To preserve the inclusive convention every other source in the codebase uses, `WistiaClient.fetch_timeseries(start_date, end_date)` takes an INCLUSIVE end_date and adds +1 day internally before hitting the API. Get this wrong (bypass the wrapper, pass exclusive bounds directly) and you silently drop the latest day.
 
 ## Cron cadence
 
@@ -78,9 +85,11 @@ If the cron misses a window > 14 days (Vercel outage, account-paused), days olde
 .venv/bin/python scripts/backfill_wistia.py --apply --limit 10
 ```
 
-**Window:** `2024-01-01` → today (≈ 875 days as of 2026-05-24). Wistia returns zeros for days before account/media existence — no error.
+**Window (post-2026-05-24 cutover):** `today - 30d` → today (~31 days). The cutover narrowed from the 90-day window (which itself was narrowed from the original 2024-01-01 because Wistia's per-media timeseries computation is server-side-event-walk-slow at wider windows). 30 days covers the Engine sheet's per-day rendering; older history (already in pre-cutover legacy columns) is preserved as historical audit but doesn't get the new columns retroactively.
 
-**Volume:** 80 medias × ~875 days = ~70k row-upserts max. At ~10 upserts/sec via PostgREST, backfill takes ~2 minutes plus API call latency (~160 Wistia calls × ~300ms ≈ 50s). Total wall time ~3 minutes; fits comfortably in Vercel's cron `maxDuration: 300`.
+**Volume:** 80 medias × ~31 days = ~2,480 row-upserts. API: 1 projects + 80 inventory + 80 lifetime-stats + 80 timeseries = ~163 calls. Total wall time ~3-5 minutes (most cost is timeseries server-side latency).
+
+**To extend the window** (e.g. backfill the new columns further back), bump `BACKFILL_START` in `scripts/backfill_wistia.py` and re-run `--apply`. Idempotent on `(hashed_id, day)`; legacy columns untouched.
 
 **Smoke gate (mandatory before `--apply`):** smoke mode upserts the full inventory but only ONE media's per-day data. Per CLAUDE.md § Operational patterns. Re-runnable; safe to re-trigger.
 
@@ -130,17 +139,29 @@ SELECT count(*) FROM wistia_medias;  -- expect ~80
 SELECT min(day), max(day), count(*) FROM wistia_media_daily;
 
 -- The two active VSL variants per discovery report — last 7 days
-SELECT hashed_id, sum(play_count) AS plays_7d, sum(hours_watched) AS hours_7d
+-- (uses post-cutover columns; legacy play_count + hours_watched
+--  remain on pre-cutover rows but should NOT be used for daily metrics)
+SELECT hashed_id, sum(plays_filtered) AS plays_7d, sum(played_time_seconds) AS seconds_7d
 FROM wistia_media_daily
 WHERE hashed_id IN ('i1173gx76b', 'nbump1crwb')
   AND day >= current_date - interval '7 days'
 GROUP BY hashed_id;
 
 -- The TYP video per discovery report
-SELECT day, play_count, hours_watched
+SELECT day, plays_filtered, played_time_seconds, engagement_rate
 FROM wistia_media_daily
 WHERE hashed_id = 'fbgjxwe62y'
   AND day >= current_date - interval '14 days'
+ORDER BY day DESC;
+
+-- Spot-check the cutover boundary — engagement_rate VARIES day-to-day
+-- (vs the flat constant the old by_date-derived approach produced)
+SELECT day, plays_filtered, engagement_rate,
+       round(engagement_rate * 100, 2) AS engagement_pct
+FROM wistia_media_daily
+WHERE hashed_id = 'i1173gx76b'
+  AND day >= current_date - interval '14 days'
+  AND plays_filtered > 0
 ORDER BY day DESC;
 ```
 
@@ -150,8 +171,9 @@ Per the spec — these belong to the future aggregation/dashboard layer:
 
 - **Canonical-VSL selection.** The discovery report identified two currently-active VSLs (`i1173gx76b` Direct Closer Funnel + `nbump1crwb` v2). The Engine sheet's "VSL" metric may be one of them, both combined, or include Base 44 (`6qq1eq4wmq`). Aggregation queries pick.
 - **Canonical-TYP selection.** Discovery identified `fbgjxwe62y` as the clear winner among the 7 Confirmation Page videos. Aggregation can default to that and let an override be added later.
-- **Engagement-rate + avg-view-duration derivations.** Formulas in `docs/schema/wistia_media_daily.md`. Live in the aggregation layer.
+- **Engagement-rate is no longer derived** post-2026-05-24 — the timeseries endpoint returns it directly per day. Avg-view-duration = `played_time_seconds / plays_filtered` per the schema doc.
 - **Engagement-rate semantic confirmation.** Wistia's "engagement" = "average % of video watched." Aggregation-layer engineer should verify that matches the Engine-sheet author's intent before exposing the metric.
+- **Canonical play-count choice.** `play_count` (legacy, raw) vs `plays_filtered` (post-cutover, bot-filtered, ~14% lower) — aggregation layer picks which to surface as "VSL Plays" on the dashboard. My recommendation: `plays_filtered` (newer-API canonical, filtered = closer to "real human plays").
 
 ## Out of scope (future specs)
 
