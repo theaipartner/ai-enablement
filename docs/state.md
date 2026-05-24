@@ -34,6 +34,39 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-24 — Wistia timeseries cutover (migration 0046; real per-day engagement now in DB)
+
+Surgical cutover of the per-day source endpoint from the legacy `/modern/stats/medias/{id}/by_date` (which synthesized `hours_watched` as `play_count × per-media constant`, producing flat-fake daily engagement) to the new `/modern/analytics/medias/{id}/timeseries?granularity=daily` (Bottler-powered; returns real per-day variance for `played_time` seconds + `engagement_rate` 0-1 + bot-filtered `plays`). The verification proof was the previous spec (`docs/reports/wistia-watchtime-verify.md`); this spec ships the fix.
+
+**Migration 0046 applied to cloud Supabase.** Migration count: 45 → **46**. ALTER on existing `wistia_media_daily` adds 11 columns:
+- `played_time_seconds integer` (real watch time, seconds — replaces the deprecated `hours_watched`)
+- `engagement_rate numeric(6,4)` (0-1 float, stored RAW — NOT ×100)
+- `play_rate numeric(6,4)`
+- `plays_filtered integer` (bot-filtered; SEPARATE from legacy `play_count` because the two endpoints disagree ~14%)
+- `unique_plays / unique_visitors / unique_loads`
+- `cta_impressions / cta_conversions / cta_conversion_rate / form_conversions` (mirror-everything per Core Principle #1; zero today but free in the payload)
+
+Legacy columns (`load_count`, `play_count`, `hours_watched`) kept as historical audit. Column comments + schema doc + runbook loudly mark them DEPRECATED with pointers to the replacements. Post-cutover pipeline does NOT refresh them — verified at scale: on `i1173gx76b` 2026-05-23 the row now has BOTH `legacy[load=328 plays=236 hours=2.7859]` (prior wide-window by_date backfill — preserved) AND `new[pf=202 pts=7161]` (post-cutover timeseries — populated).
+
+**Code cutover:** `ingestion/wistia/client.py` adds `fetch_timeseries(start_date, end_date, granularity)`. Takes INCLUSIVE end_date (matching every other ingestion source's convention); converts to the new endpoint's EXCLUSIVE end_date by adding +1 day internally before the API call (the #1 footgun per the verify report — bypassing this wrapper silently drops the latest day). `parser.parse_timeseries_entry` extracts `timestamp[:10]` → `day`, stores `played_time` as seconds-int + `engagement_rate` as 0-1 float RAW. Deliberately does NOT include legacy columns in the row dict so existing values are preserved by supabase-py's upsert. `pipeline.sync_wistia` swaps `fetch_by_date` → `fetch_timeseries`. Cron schedule unchanged; rolling 14-day window logic unchanged.
+
+**Backfill window narrowed 90d → 30d** per spec. The pre-cutover wide-window data on the legacy columns is preserved as historical audit; the new columns only get populated for the 30-day cutover window. Older days have legacy values but NULL on the new columns — aggregation should treat pre-2026-04-24 days as "legacy only" until/unless a wider backfill is needed.
+
+**Real-variance verification — the whole point:** on `i1173gx76b` (VSL Direct Closer Funnel variant), engagement_rate over the last 14 active days ranges **9.91% → 25.38%**. Compare to the flat 17.22% the pre-cutover by_date-derived approach produced on the same period. The cutover delivered real per-day signal exactly as predicted by the verify report. TYP video `fbgjxwe62y` similarly varies 2.41% → 69.65% across the same window.
+
+**Final row counts** (bulk apply): 80 medias × 31-day window = **2,480 rows upserted, 0 failures**, ~3 min wall time. Total post-cutover-period: 9,407 bot-filtered plays + 462,791 seconds of watch time across the account (=128.6 hours of video content watched in 30 days, ~4.15 hours/day average across all 80 medias).
+
+**Backwards-incompatible reads.** The aggregation layer (future) MUST use `plays_filtered` + `played_time_seconds` + `engagement_rate` for daily metrics. Using `play_count` + `hours_watched` for daily engagement = the constant-artifact bug we just fixed. Schema doc + runbook spell this out loudly; the canonical-play-count choice between `play_count` (legacy, raw) and `plays_filtered` (post-cutover, bot-filtered) is the aggregation-layer engineer's call (my lean: `plays_filtered` — newer-API canonical, closer to real-human plays).
+
+**Test suite: 805 passing** (+9 from this spec — 8 new parser tests, 1 new pipeline test, 5 existing pipeline tests renamed `by_date` → `timeseries`). Critical guard tests added:
+- `test_parse_timeseries_entry_engagement_rate_is_raw_0_to_1` — guards against accidentally storing ×100
+- `test_parse_timeseries_entry_played_time_is_seconds_integer` — guards against hours-vs-seconds repeat
+- `test_parse_timeseries_does_not_touch_legacy_columns` + `test_sync_post_cutover_does_not_overwrite_legacy_columns` — the cutover's load-bearing no-overwrite invariant, locked at both parser + orchestrator levels
+
+`vercel.json` unchanged (cron still `30 */3 * * *`, function unchanged). No new env vars. `CLAUDE.md` § Folder Structure unchanged (ingestion/wistia/ already listed). `WISTIA_API_TOKEN` in Vercel was already added with the prior ship; no gate-(d) action needed.
+
+Spec: `docs/specs/wistia-timeseries-migration.md`. Reports: `docs/reports/wistia-timeseries-migration.md` (PARTIAL — gate (a) halt), `docs/reports/wistia-timeseries-migration-pt2.md` (apply + bulk + verification).
+
 ### 2026-05-24 — Wistia video analytics ingestion live (migration 0045 + 90-day backfill)
 
 Third sales-side data source after Close + Meta. Mirrors all 80 medias' raw inventory + per-day stats from Wistia into Supabase (`wistia_medias` + `wistia_media_daily`). Source for the Engine sheet's FUNNELS section (VSL Engagement Rate, VSL Average View Duration, TYP Engagement Rate, TYP Average View Duration — all DERIVED at aggregation time per Core Principle #1).
