@@ -65,6 +65,11 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/close_events.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
