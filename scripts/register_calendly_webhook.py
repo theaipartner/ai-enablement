@@ -78,6 +78,24 @@ def _get_token() -> str:
 
 
 def _request(method: str, path: str, *, body: dict | None = None) -> dict:
+    """Convenience wrapper that returns parsed JSON body only.
+    Use _request_full when response headers also matter (e.g. when
+    hunting for a one-shot signing_key that might live in a header)."""
+    payload, _headers, _status = _request_full(method, path, body=body)
+    return payload
+
+
+def _request_full(
+    method: str,
+    path: str,
+    *,
+    body: dict | None = None,
+) -> tuple[dict, dict, int]:
+    """Like _request but also returns response headers + status.
+    Used by the --register flow so the signing_key search can scan
+    headers as well as body (Calendly's docs portal is SPA-locked and
+    we can't read the exact response shape from there; empirically
+    the key may live in either)."""
     url = f"{BASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {
@@ -91,7 +109,9 @@ def _request(method: str, path: str, *, body: dict | None = None) -> dict:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             payload = resp.read().decode()
-            return json.loads(payload) if payload else {}
+            parsed = json.loads(payload) if payload else {}
+            resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+            return parsed, resp_headers, resp.status
     except urllib.error.HTTPError as e:
         body_text = ""
         try:
@@ -101,6 +121,91 @@ def _request(method: str, path: str, *, body: dict | None = None) -> dict:
         print(f"\nERROR HTTP {e.code} on {method} {path}", file=sys.stderr)
         print(f"Body: {body_text}", file=sys.stderr)
         raise SystemExit(2)
+
+
+# ---------------------------------------------------------------------------
+# Signing-key extraction — hunts in every plausible location.
+# ---------------------------------------------------------------------------
+#
+# Drake reported (after a failed first registration) that the signing_key
+# wasn't visibly captured. Two failure-mode hypotheses we defend against:
+#   1. The key IS in the response body but at a path we didn't print
+#      prominently enough — the user missed it scrolling past the JSON.
+#   2. The key is at a different field name OR in a response header.
+# Solution: print everything loudly, search exhaustively, surface the
+# winner in a HUGE BOX that's the FIRST thing printed post-POST so it
+# doesn't scroll away.
+
+# Candidate field names — order doesn't matter; we check all.
+_SIGNING_KEY_FIELDS: tuple[str, ...] = (
+    "signing_key",
+    "signature_key",
+    "webhook_signing_key",
+    "secret",
+    "key",
+)
+
+# Response headers Calendly *might* use for one-shot secret delivery.
+_SIGNING_KEY_HEADERS: tuple[str, ...] = (
+    "x-signing-key",
+    "x-webhook-signing-key",
+    "calendly-signing-key",
+    "x-calendly-signing-key",
+)
+
+
+def _find_signing_key(
+    body: dict,
+    resp_headers: dict,
+) -> tuple[str | None, str | None]:
+    """Walk body + headers exhaustively. Returns (key, where_found_path)
+    or (None, None) if not located. `path` is human-readable for
+    debugging output."""
+    # 1. Top-level body keys.
+    for f in _SIGNING_KEY_FIELDS:
+        v = body.get(f)
+        if isinstance(v, str) and v:
+            return v, f"body.{f}"
+
+    # 2. Nested in 'resource' (the conventional Calendly v2 wrapper).
+    resource = body.get("resource")
+    if isinstance(resource, dict):
+        for f in _SIGNING_KEY_FIELDS:
+            v = resource.get(f)
+            if isinstance(v, str) and v:
+                return v, f"body.resource.{f}"
+
+    # 3. Headers (sometimes APIs ship one-shot secrets in headers).
+    for h in _SIGNING_KEY_HEADERS:
+        v = resp_headers.get(h)
+        if isinstance(v, str) and v:
+            return v, f"header.{h}"
+
+    # 4. Recursive scan as a last resort — any field name containing
+    #    'sign' or 'secret' at any depth.
+    def _walk(node, path: str = "body"):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                lo = k.lower()
+                if isinstance(v, str) and v and (
+                    "sign" in lo or "secret" in lo or lo == "key"
+                ):
+                    return v, f"{path}.{k}"
+                if isinstance(v, (dict, list)):
+                    hit = _walk(v, f"{path}.{k}")
+                    if hit:
+                        return hit
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                hit = _walk(item, f"{path}[{i}]")
+                if hit:
+                    return hit
+        return None
+
+    hit = _walk(body)
+    if hit:
+        return hit
+    return None, None
 
 
 def list_subscriptions() -> None:
@@ -148,36 +253,70 @@ def register_subscription(callback_url: str, dry_run: bool) -> None:
         return
 
     print("\nPOST /api/v1/webhook_subscriptions ...")
-    resp = _request("POST", "/webhook_subscriptions", body=body)
-    print("\nSUCCESS — subscription created. Response:\n")
-    print(json.dumps(resp, indent=2))
-
-    # Calendly returns the signing key under various field names depending
-    # on the API version — try the common ones.
-    resource = resp.get("resource") or resp
-    sig_key = (
-        resource.get("signing_key")
-        or resource.get("signature_key")
-        or resource.get("secret")
-        or resp.get("signing_key")
-        or resp.get("signature_key")
+    resp_body, resp_headers, resp_status = _request_full(
+        "POST", "/webhook_subscriptions", body=body,
     )
+
+    # Find the signing key BEFORE printing anything verbose, so the BIG
+    # BOX is the first thing the user sees after the POST (doesn't
+    # scroll past a long JSON dump).
+    sig_key, sig_path = _find_signing_key(resp_body, resp_headers)
+
+    # 1. BIG BOX FIRST — what to do.
     if sig_key:
-        print(
-            "\n" + "=" * 70
-            + f"\nSIGNING KEY (set as CALENDLY_WEBHOOK_SECRET in Vercel):\n\n  {sig_key}\n\n"
-            + "Add to Vercel project env vars, then redeploy to pick it up.\n"
-            + "Calendly's signing-key field may only be returned on create —\n"
-            + "copy it now. If you lose it, delete + recreate the subscription.\n"
-            + "=" * 70
-        )
+        box_width = 78
+        print("\n" + "█" * box_width)
+        print("█" + " " * (box_width - 2) + "█")
+        print(f"█  CALENDLY SIGNING KEY (set as CALENDLY_WEBHOOK_SECRET in Vercel)".ljust(box_width - 1) + "█")
+        print("█" + " " * (box_width - 2) + "█")
+        print("█  Found at: " + (sig_path or "<unknown>").ljust(box_width - 14) + "█")
+        print("█" + " " * (box_width - 2) + "█")
+        # Wrap key across multiple lines if needed; never split mid-key
+        # so copy-paste is foolproof.
+        print(f"█  KEY:".ljust(box_width - 1) + "█")
+        # Print the key on its own clean line, no border interference,
+        # so terminal triple-click selects exactly the key.
+        print()
+        print(f"  {sig_key}")
+        print()
+        print("█" + " " * (box_width - 2) + "█")
+        print("█  COPY IT NOW — Calendly returns the signing key ONCE at".ljust(box_width - 1) + "█")
+        print("█  creation. If lost, delete + re-register the subscription.".ljust(box_width - 1) + "█")
+        print("█" + " " * (box_width - 2) + "█")
+        print("█" * box_width)
     else:
-        print(
-            "\nWARN: response had no obvious signing_key field. Inspect the JSON "
-            "above; the signing key may be under a different name. If absent, "
-            "Calendly may require fetching it via a separate endpoint — check "
-            "https://developer.calendly.com/api-docs/4c305798a61d3-webhook-signatures"
-        )
+        print("\n" + "!" * 78)
+        print("! SIGNING KEY NOT FOUND in any plausible location.            !")
+        print("! Searched: top-level body fields, body.resource.*, response  !")
+        print("! headers, and recursive scan for any 'sign' / 'secret' /     !")
+        print("! 'key' field at any depth.                                   !")
+        print("! Inspect the diagnostic dump below; the key may be under     !")
+        print("! a field name we don't recognize, OR Calendly may require a  !")
+        print("! separate GET to retrieve it (rare).                         !")
+        print("!" * 78)
+
+    # 2. Diagnostic dump — full body + headers, every top-level key
+    #    labeled, so it's impossible to miss anything Calendly returned.
+    print("\n" + "─" * 78)
+    print("DIAGNOSTIC DUMP — full POST response")
+    print("─" * 78)
+    print(f"HTTP status: {resp_status}")
+    print(f"\nResponse headers ({len(resp_headers)} entries):")
+    for k, v in sorted(resp_headers.items()):
+        # Don't truncate — the user may need to inspect any of these
+        # to find the key if it's there.
+        print(f"  {k}: {v}")
+    print(f"\nResponse body top-level keys: {list(resp_body.keys())}")
+    if isinstance(resp_body.get("resource"), dict):
+        print(f"Response body resource keys: {list(resp_body['resource'].keys())}")
+    print("\nFull response body (pretty-printed):")
+    print(json.dumps(resp_body, indent=2))
+    print("─" * 78)
+
+    if sig_key:
+        # Repeat the key one more time at the very bottom of output, so
+        # whichever direction the user scrolls they hit it.
+        print(f"\n>>> CALENDLY_WEBHOOK_SECRET = {sig_key}\n")
 
 
 def delete_subscription(sub_uri: str) -> None:
