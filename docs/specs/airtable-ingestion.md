@@ -1,7 +1,7 @@
 # Airtable Live Ingestion — Setter Triage + Full Closer (US + AUS) Mirror + Webhook + Cron Backstop
 **Slug:** airtable-ingestion
-**Status:** in-flight
-**Target branch:** worktree-b
+**Status:** shipped
+**Target branch:** main
 
 ## ⚠️ Parallel-work landscape — READ FIRST
 
