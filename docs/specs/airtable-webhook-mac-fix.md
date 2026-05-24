@@ -1,6 +1,6 @@
 # Airtable Webhook MAC Fix — Receiver Rejects Real Pings (401)
 **Slug:** airtable-webhook-mac-fix
-**Status:** in-flight
+**Status:** shipped
 **Target branch:** main
 
 ## Context
