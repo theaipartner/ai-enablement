@@ -435,13 +435,13 @@ Operational refinements landed in parallel that evening: Ella's passive-monitor 
 
 The 39 migrations + 11 Python serverless functions + 6-tab TopNav (Clients / Calls / Teams / Ella / Cost Hub / Tasks) describe the post-state. Full per-spec detail in `docs/state.md`. ADRs: 0001 foundational stack, 0002 title-convention enforcement (+ v2 revision), 0003 timezone conventions.
 
-**Next major arc: Gregory V2 — sales-side.** Specifics TBD; the scoping conversation happens in a future session. See § Next Session Priorities.
+**Next major arc: Gregory V2 — sales-side.** First piece shipped 2026-05-24: admin-tier `/sales-dashboard` page that visualizes the Engine sheet's 9 sections directly against the seven ingested mirror tables (Meta / Clarity / Wistia / Typeform / Calendly / Airtable / Close / `calls`). LIVE / PENDING / NOT-CONNECTED state per metric; no aggregation layer, no invented numbers. ~30 of ~140 Engine rows landed as LIVE; the rest are PENDING (cross-source / derived / schema-doc-flagged) or NOT-CONNECTED (IG / YT / GHL / Wix / Gamma / TrustPilot upstream). Broader sales-side arc (closer reps, conversion bottleneck analysis, etc.) still TBD — needs the scoping conversation with Drake + Nabeel. See § Next Session Priorities.
 
 ## Next Session Priorities
 
 **Read this section first** when starting a new session — it's the single source of truth for where to start.
 
-1. **Gregory V2 — sales-side.** The next major arc. Gregory V1 served CSM operations; V2 turns attention to the sales team. Scope and shape are open — needs a scoping conversation with Drake + Nabeel before any spec is drafted. Backlog items previously on this pointer (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved in `docs/future-ideas.md` so this stays a tight pointer to the live arc.
+1. **Gregory V2 — sales-side.** The next major arc. Gregory V1 served CSM operations; V2 turns attention to the sales team. **First piece shipped 2026-05-24:** `/sales-dashboard` admin-tier page (`docs/specs/sales-dashboard-v1.md`, `docs/runbooks/sales_dashboard.md`) — Nabeel's first look at the Engine sheet against real mirror data. Broader sales-side scope (closer rep performance views, conversion bottleneck analysis, cross-source aggregation layer that turns the dashboard's ~75 PENDING cells into LIVE ones, the v2 chart layer) still needs the scoping conversation with Drake + Nabeel before any new spec is drafted. Backlog items previously on this pointer (Ella V2 Batch 2.1 retrieval scope, NPS V1.5 piping, Client Business Context Vault, etc.) are shelved in `docs/future-ideas.md` so this stays a tight pointer to the live arc.
 
 **Watch posture (no spec yet — EOD-eyeball, not forward work):**
 
