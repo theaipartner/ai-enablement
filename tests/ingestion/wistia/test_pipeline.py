@@ -59,6 +59,23 @@ def _make_stats(plays: int = 0, avg_pct: int = 0) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _ts_entry(day: str, **fields) -> dict:
+    """Build a timeseries entry shaped like Wistia's response.
+    Default zeros for fields not specified."""
+    return {
+        "timestamp": f"{day} 05:00:00.000Z",
+        "plays": fields.get("plays", 0),
+        "unique_plays": fields.get("unique_plays", 0),
+        "unique_loads": fields.get("unique_loads", 0),
+        "unique_visitors": fields.get("unique_visitors", 0),
+        "played_time": fields.get("played_time", 0),
+        "engagement_rate": fields.get("engagement_rate", 0.0),
+        "play_rate": fields.get("play_rate", 0.0),
+        "cta_impressions": 0, "cta_conversions": 0,
+        "cta_conversion_rate": 0.0, "form_conversions": 0,
+    }
+
+
 def test_sync_happy_path(mock_db, mock_client):
     medias = [
         _make_media("hash1", "Video 1"),
@@ -66,9 +83,9 @@ def test_sync_happy_path(mock_db, mock_client):
     ]
     mock_client.iter_medias.return_value = iter(medias)
     mock_client.fetch_lifetime_stats.return_value = _make_stats(plays=100, avg_pct=25)
-    mock_client.fetch_by_date.return_value = [
-        {"date": "2026-05-22", "load_count": 10, "play_count": 5, "hours_watched": 0.1},
-        {"date": "2026-05-23", "load_count": 12, "play_count": 6, "hours_watched": 0.12},
+    mock_client.fetch_timeseries.return_value = [
+        _ts_entry("2026-05-22", plays=5, played_time=120, engagement_rate=0.10),
+        _ts_entry("2026-05-23", plays=6, played_time=150, engagement_rate=0.12),
     ]
     outcome = sync_wistia(
         mock_client, mock_db,
@@ -87,7 +104,7 @@ def test_sync_lifetime_stats_failure_still_writes_inventory(mock_db, mock_client
     """Per-media lifetime-stats 404 / 503 → warning, inventory still lands."""
     mock_client.iter_medias.return_value = iter([_make_media("hash1")])
     mock_client.fetch_lifetime_stats.side_effect = WistiaAPIError("stats 404")
-    mock_client.fetch_by_date.return_value = []
+    mock_client.fetch_timeseries.return_value = []
     outcome = sync_wistia(
         mock_client, mock_db,
         start_date=date(2026, 5, 22), end_date=date(2026, 5, 23),
@@ -98,17 +115,17 @@ def test_sync_lifetime_stats_failure_still_writes_inventory(mock_db, mock_client
     assert any("lifetime_stats hash1" in w for w in outcome.warnings)
 
 
-def test_sync_by_date_failure_fails_soft(mock_db, mock_client):
-    """One media's by_date failing doesn't abort the run."""
+def test_sync_timeseries_failure_fails_soft(mock_db, mock_client):
+    """One media's timeseries failing doesn't abort the run."""
     mock_client.iter_medias.return_value = iter([
         _make_media("hash1"),
         _make_media("hash2"),
     ])
     mock_client.fetch_lifetime_stats.return_value = _make_stats()
-    # hash1 by_date raises; hash2 succeeds.
-    mock_client.fetch_by_date.side_effect = [
-        WistiaAPIError("by_date 500"),
-        [{"date": "2026-05-23", "load_count": 5, "play_count": 2, "hours_watched": 0.05}],
+    # hash1 timeseries raises; hash2 succeeds.
+    mock_client.fetch_timeseries.side_effect = [
+        WistiaAPIError("timeseries 500"),
+        [_ts_entry("2026-05-23", plays=2, played_time=60, engagement_rate=0.05)],
     ]
     outcome = sync_wistia(
         mock_client, mock_db,
@@ -116,7 +133,7 @@ def test_sync_by_date_failure_fails_soft(mock_db, mock_client):
     )
     assert outcome.medias_synced == 2  # both inventory rows landed
     assert outcome.daily_rows_upserted == 1  # only hash2's day
-    assert any("by_date hash1" in e for e in outcome.errors)
+    assert any("timeseries hash1" in e for e in outcome.errors)
 
 
 def test_sync_iter_medias_failure_returns_empty_outcome(mock_db, mock_client):
@@ -131,12 +148,12 @@ def test_sync_iter_medias_failure_returns_empty_outcome(mock_db, mock_client):
     assert any("iter_medias" in e for e in outcome.errors)
 
 
-def test_sync_max_medias_caps_by_date_calls(mock_db, mock_client):
-    """--smoke / --limit path: only N medias get the by_date stage."""
+def test_sync_max_medias_caps_timeseries_calls(mock_db, mock_client):
+    """--smoke / --limit path: only N medias get the timeseries stage."""
     medias = [_make_media(f"hash{i}") for i in range(5)]
     mock_client.iter_medias.return_value = iter(medias)
     mock_client.fetch_lifetime_stats.return_value = _make_stats()
-    mock_client.fetch_by_date.return_value = []
+    mock_client.fetch_timeseries.return_value = []
     outcome = sync_wistia(
         mock_client, mock_db,
         start_date=date(2026, 5, 23), end_date=date(2026, 5, 23),
@@ -144,8 +161,37 @@ def test_sync_max_medias_caps_by_date_calls(mock_db, mock_client):
     )
     # All 5 medias get inventory rows...
     assert outcome.medias_synced == 5
-    # ...but only 2 get the by_date call.
-    assert mock_client.fetch_by_date.call_count == 2
+    # ...but only 2 get the timeseries call.
+    assert mock_client.fetch_timeseries.call_count == 2
+
+
+def test_sync_post_cutover_does_not_overwrite_legacy_columns(mock_db, mock_client):
+    """The cutover upsert must NOT include load_count / play_count /
+    hours_watched in the row dict — leaving pre-cutover values intact."""
+    mock_client.iter_medias.return_value = iter([_make_media("hash1")])
+    mock_client.fetch_lifetime_stats.return_value = _make_stats()
+    mock_client.fetch_timeseries.return_value = [
+        _ts_entry("2026-05-23", plays=10, played_time=400, engagement_rate=0.15),
+    ]
+    sync_wistia(
+        mock_client, mock_db,
+        start_date=date(2026, 5, 23), end_date=date(2026, 5, 23),
+    )
+    # Find the daily-row upsert call (vs the inventory upsert).
+    upsert_calls = [
+        c for c in mock_db.table.return_value.upsert.call_args_list
+        if isinstance(c.args[0], dict) and c.args[0].get("day")
+    ]
+    assert upsert_calls, "expected at least one daily-row upsert"
+    daily_row = upsert_calls[0].args[0]
+    for legacy in ("load_count", "play_count", "hours_watched"):
+        assert legacy not in daily_row, (
+            f"legacy column {legacy!r} leaked into post-cutover upsert"
+        )
+    # New columns DO land.
+    assert daily_row["played_time_seconds"] == 400
+    assert daily_row["engagement_rate"] == 0.15
+    assert daily_row["plays_filtered"] == 10
 
 
 def test_sync_projects_failure_is_warning_not_error(mock_db, mock_client):
