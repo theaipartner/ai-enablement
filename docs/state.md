@@ -34,6 +34,33 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-24 — Meta ad-spend ingestion live (migration 0044 + Cortana → Sheet pipeline)
+
+Second sales-side data source after Close. Pulls the team's Cortana → Google Sheet (Sheet ID `1XX6MV7dqAsjlWOiwkuKe9d1uWc1qFR4Dt1CfCVfK8d4`, first tab `Sheet1`) and mirrors per-day Meta ad metrics into `meta_ad_daily`. Idempotent on `day` PK; Cortana's same-day restatements collapse to one mirror row (last-write-wins). Same Core Principle #1 as Close: agents and the Gregory aggregation layer read from Supabase, not the Sheet.
+
+**Migration 0044 applied to cloud Supabase.** Migration count: 43 → **44**. Single new table `meta_ad_daily` (13 columns): `day date PK` + 8 source-mirror columns (frequency, amount_spent, impressions, clicks_all, link_clicks, unique_link_clicks, cpm, cost_per_unique_link_click) + `ctr numeric` DERIVED + `ctr_source_raw text` (forensic) + `created_at`/`updated_at` + `set_updated_at` trigger. Dual-verified post-apply.
+
+**CTR is derived, not mirrored.** The Sheet's "CTR (Link Click-Through Rate)" column is broken — Cortana exports it formatted as a date serial, so every row reads `1899-12-31` (Sheets serial 0 = the percentage-formatted-as-date bug). The ingestion layer computes `ctr = link_clicks / impressions * 100` (NULL-guarded against zero impressions); the raw broken value is captured in `ctr_source_raw` for forensic transparency. Spot-checked on 3 days — derivation matches raw math exactly.
+
+**Pre-existing Google OAuth scope was widened** from `calendar.readonly` to add `spreadsheets.readonly` (commit `e54a602`; SCOPE constant in `lib/google/oauth.ts:26` + `app/api/auth/google/callback/route.ts:21`). Drake re-consented at `/api/auth/google/connect` to re-mint the refresh token with both scopes. Same token row (`oauth_tokens` keyed on `(team_member_id='drake-id', provider='google')`) serves both the Teams calendar sync cron AND this new Meta sheet sync cron. Scope-reauth procedure documented in `docs/runbooks/meta_sheet_ingestion.md` § Auth.
+
+**Ingestion module `ingestion/meta/`** mirrors the Fathom + Close shape — thin sheets_client (`stdlib urllib`, bearer-token auth, per-tick tab discovery so a future Cortana rename doesn't break the cron), parser (HEADER_TO_COLUMN name-keyed projection; defensive numeric parse strips `$`/`,`; CTR derivation in `_derive_ctr`), pipeline orchestrator (`sync_meta_ad_daily` does discover → fetch A:J → parse → per-row upsert with fail-soft, returns `SyncOutcome` with rows_parsed/upserted/failed + warnings + errors).
+
+**Vercel cron `api/meta_sheet_sync_cron.py`** runs every 3 hours (`0 */3 * * *`). Mirrors `teams_calendar_sync_cron` shape: `CRON_SECRET` bearer auth, drake-lookup via team_members email, `get_valid_access_token(drake.id)`, sync, audit row in `webhook_deliveries` with `source='meta_sheet_sync'`. Same code path serves cron + first-time bulk pull — the Sheet IS the history.
+
+**First production run successful** (manual trigger via Vercel dashboard at 2026-05-24 02:17 UTC):
+- 23 sheet rows parsed → 23 upserted → 0 failed (1 row collapsed via day-PK duplicate handling for `2026-05-23`)
+- 22 rows now in `meta_ad_daily`, date range **2026-05-02 → 2026-05-23**
+- Total spend covered: **$25,543.23** across 22 days (~$1,161/day avg)
+- 397,847 impressions, 7,081 link clicks
+- Audit row in `webhook_deliveries` shows status=`processed`, warnings=[], errors=[]
+
+**Test suite: 797 passing** (+32 from this spec: 17 in `tests/ingestion/meta/test_parser.py` covering live-shape parsing + CTR derivation + defensive numeric parse + header-name-keyed re-order tolerance + missing-column-warns + day-parse skip behavior + HEADER_TO_COLUMN sanity; 6 in `tests/ingestion/meta/test_pipeline.py` covering orchestration + fail-soft + warning propagation; 9 in `tests/api/test_meta_sheet_sync_cron.py` covering auth + drake-missing + oauth-failure + happy-path orchestration).
+
+`vercel.json` adds the per-file runtime config + `0 */3 * * *` cron schedule. `CLAUDE.md` § Folder Structure adds `ingestion/meta/`. `.env.example` unchanged (cron reuses `CRON_SECRET`, `GOOGLE_OAUTH_*`, `SUPABASE_*`).
+
+Spec: `docs/specs/meta-sheet-ingestion.md`. Reports: `docs/reports/meta-sheet-ingestion.md` (Pt 1 PARTIAL — scope-gate halt), `docs/reports/meta-sheet-ingestion-pt2.md` (Pt 2 PARTIAL — scope passed, artifacts built, gate (a) halt), `docs/reports/meta-sheet-ingestion-pt3.md` (Pt 3 — apply + cron live).
+
 ### 2026-05-23 — Close CRM live ingestion (webhook receiver shipped; activation Drake-gated)
 
 Live path for Close data. `api/close_events.py` is the Vercel serverless webhook receiver — verifies Close's HMAC-SHA256 signature (`close-sig-hash` header, hex-decoded secret, 5-min replay window), parses `event.object_type` + `event.action`, routes to the matching idempotent upsert helper in `ingestion/close/pipeline.py`. Synthesized dedup key (`close:{ts}:{sha256(body)[:16]}`) on `webhook_deliveries.webhook_id` handles true duplicates; fail-soft always returns 200 on handled errors so Close's 3-day auto-disable doesn't fire on a single bad payload.
