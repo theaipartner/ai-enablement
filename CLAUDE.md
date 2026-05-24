@@ -319,6 +319,7 @@ ai-enablement/
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
 │   ├── close/                  # Close CRM lead + activity mirror (backfill V1; polling cron scoped)
 │   ├── meta/                   # Meta ad-spend mirror via Cortana → Google Sheet (3-hour cron)
+│   ├── wistia/                 # Wistia video analytics mirror (3-hour cron, rolling 14-day window)
 │   └── crm/                    # (planned)
 ├── api/                        # Vercel Python serverless functions (11 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
