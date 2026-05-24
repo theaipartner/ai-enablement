@@ -318,6 +318,7 @@ ai-enablement/
 │   ├── slack/                  # Channel history backfill (REST only; Events API deferred to Ella V2)
 │   ├── content/                # Filesystem-sourced HTML lessons (Drive API deferred to Ella V2)
 │   ├── close/                  # Close CRM lead + activity mirror (backfill V1; polling cron scoped)
+│   ├── meta/                   # Meta ad-spend mirror via Cortana → Google Sheet (3-hour cron)
 │   └── crm/                    # (planned)
 ├── api/                        # Vercel Python serverless functions (11 deployed — see state.md § Vercel deployment for the inventory)
 ├── app/                        # Next.js 14 dashboard routes (Gregory)
