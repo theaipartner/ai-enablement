@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -46,13 +46,19 @@ from shared.db import get_client  # noqa: E402
 from ingestion.wistia.client import WistiaClient  # noqa: E402
 from ingestion.wistia.pipeline import SyncOutcome, sync_wistia  # noqa: E402
 
-# Backfill floor. Originally 2024-01-01 (full account history, ~875
-# days). Narrowed 2026-05-24 to 90 days after Drake observed the
-# wider window was ~25 min wall time and decided recent history is
-# enough — the Engine sheet's per-day rows render from this; older
-# trends can backfill later if needed by bumping this date and
-# re-running (idempotent on (hashed_id, day)).
-BACKFILL_START = date(2026, 2, 23)
+# Backfill floor. History:
+#   - 2024-01-01 (~875 days) — original, too slow (~25 min wall time)
+#   - 2026-02-23 (90 days) — narrowed mid-run by Drake on by_date pipeline
+#   - 2026-04-24 (30 days) — narrowed again on 2026-05-24 cutover to
+#     the timeseries endpoint per docs/specs/wistia-timeseries-migration.md.
+#     The cutover added six new columns (played_time_seconds,
+#     engagement_rate, plays_filtered, uniques, CTA/form). 30 days
+#     covers the Engine sheet's per-day rendering with minimum API +
+#     DB work; older days have legacy by_date data already and don't
+#     need the new columns retroactively (the aggregation layer treats
+#     pre-cutover rows as "legacy" and uses the new columns for any
+#     window that contains 2026-04-24+).
+BACKFILL_START = date.today() - timedelta(days=30)
 
 
 def _print_outcome(label: str, outcome: SyncOutcome) -> None:
@@ -78,7 +84,7 @@ def _print_outcome(label: str, outcome: SyncOutcome) -> None:
 
 
 def dry_run(client: WistiaClient) -> int:
-    print("Dry-run: auth + sample inventory + 1 sample by_date call.")
+    print("Dry-run: auth + sample inventory + 1 sample timeseries call.")
     first_media = None
     media_count = 0
     for m in client.iter_medias():
@@ -92,12 +98,12 @@ def dry_run(client: WistiaClient) -> int:
         print(f"  first media: hashed_id={first_media.get('hashed_id')!r} "
               f"name={first_media.get('name')!r} duration={first_media.get('duration')}")
         sample_hid = first_media["hashed_id"]
-        sample = client.fetch_by_date(
+        sample = client.fetch_timeseries(
             sample_hid,
             start_date=BACKFILL_START.isoformat(),
             end_date=date.today().isoformat(),
         )
-        print(f"  by_date {sample_hid} {BACKFILL_START} .. today: {len(sample)} days")
+        print(f"  timeseries {sample_hid} {BACKFILL_START} .. today: {len(sample)} days")
         if sample:
             print(f"    first day: {sample[0]}")
             print(f"    last day:  {sample[-1]}")
