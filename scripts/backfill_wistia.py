@@ -46,12 +46,13 @@ from shared.db import get_client  # noqa: E402
 from ingestion.wistia.client import WistiaClient  # noqa: E402
 from ingestion.wistia.pipeline import SyncOutcome, sync_wistia  # noqa: E402
 
-# Backfill floor — no documented Wistia API ceiling, but pick a sane
-# account-creation-era floor rather than literally infinite.
-# Engine-sheet history needs months back, not years, so 2024-01-01
-# generously covers everything currently of interest while keeping the
-# per-media call (which Wistia computes by walking events) fast.
-BACKFILL_START = date(2024, 1, 1)
+# Backfill floor. Originally 2024-01-01 (full account history, ~875
+# days). Narrowed 2026-05-24 to 90 days after Drake observed the
+# wider window was ~25 min wall time and decided recent history is
+# enough — the Engine sheet's per-day rows render from this; older
+# trends can backfill later if needed by bumping this date and
+# re-running (idempotent on (hashed_id, day)).
+BACKFILL_START = date(2026, 2, 23)
 
 
 def _print_outcome(label: str, outcome: SyncOutcome) -> None:
