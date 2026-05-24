@@ -2,13 +2,39 @@
 
 ONE-SHOT setup script. **Drake runs this** — gate (d) territory:
 creates real Calendly-side state + needs the deployed receiver URL to
-exist first + returns the signing secret to put in Vercel env.
+exist first + ships the signing secret Drake puts in Vercel env.
 
 Usage:
     .venv/bin/python scripts/register_calendly_webhook.py            # list existing
     .venv/bin/python scripts/register_calendly_webhook.py --dry-run --url https://...
     .venv/bin/python scripts/register_calendly_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/calendly_events
+    .venv/bin/python scripts/register_calendly_webhook.py --register --url https://... --signing-key <preexisting_secret>
     .venv/bin/python scripts/register_calendly_webhook.py --delete <subscription_uri>
+
+How Calendly signing works (verified 2026-05-24):
+
+  Calendly does NOT auto-generate a signing key on subscription
+  creation. The empirical 201 response is just `{resource: {...}}`
+  with no `signing_key` in body or headers. Webhooks delivered to a
+  subscription created without a key arrive UNSIGNED.
+
+  To get signed deliveries you must include `signing_key` in the POST
+  body at create time. Calendly then HMAC-SHA256-signs every webhook
+  using THAT key. The kashew/calendly-v2-sdk WebhookPayloadClient
+  source confirms the verification scheme:
+      [t, v1] = header.split(',')          # "t=<ts>,v1=<hex>"
+      data    = ts + '.' + body            # period separator, UTF-8
+      sig     = hmac_sha256(key_utf8, data).hexdigest()
+  Our api/calendly_events.py `_verify_signature` already implements
+  this exactly. The only missing piece was supplying the key at create.
+
+This script's default: generate a cryptographically strong random
+secret (`secrets.token_urlsafe(48)` → ~64 URL-safe chars),
+send it to Calendly as `signing_key`, print it in a big box so
+Drake can paste it into Vercel as CALENDLY_WEBHOOK_SECRET.
+
+Pass `--signing-key <value>` to use an existing secret instead
+(useful for rotation or paste-from-Bitwarden).
 
 Per docs/runbooks/calendly_ingestion.md § Live activation runbook:
 
@@ -18,11 +44,11 @@ Per docs/runbooks/calendly_ingestion.md § Live activation runbook:
          curl https://ai-enablement-sigma.vercel.app/api/calendly_events
          → {"status":"ok","endpoint":"calendly_events","accepts":"POST"}
     3. Drake runs THIS script with --register --url <URL>.
-    4. Script prints the signing key from Calendly's response.
-       **Copy it now** — Calendly may only show it once.
-    5. Drake adds CALENDLY_WEBHOOK_SECRET=<signing_key> to Vercel env
+       Script generates a secret, POSTs it to Calendly, prints it.
+       **Copy it now** — only this script and Calendly hold it.
+    4. Drake adds CALENDLY_WEBHOOK_SECRET=<signing_key> to Vercel env
        vars. Redeploy to pick it up.
-    6. Verify end-to-end: book a real meeting in Calendly, watch for
+    5. Verify end-to-end: book a real meeting in Calendly, watch for
        a row in webhook_deliveries with source='calendly_webhook' +
        a corresponding upsert in calendly_invitees + calendly_scheduled_events.
 
@@ -39,6 +65,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -228,14 +255,36 @@ def list_subscriptions() -> None:
         print(f"    scope:        {s.get('scope')}")
 
 
-def register_subscription(callback_url: str, dry_run: bool) -> None:
+def register_subscription(
+    callback_url: str,
+    dry_run: bool,
+    signing_key_override: str | None = None,
+) -> None:
     me = _request("GET", "/users/me")
     me_resource = me.get("resource") or me
     org_uri = me_resource.get("current_organization")
     user_uri = me_resource.get("uri")
+
+    # Generate the signing key locally if Drake didn't pass one. Calendly
+    # does NOT auto-generate (empirically confirmed 2026-05-24: the 201
+    # response was just {resource: {...}} with no key). We MUST supply it
+    # at create-time or webhook deliveries arrive unsigned.
+    if signing_key_override:
+        signing_key = signing_key_override
+        key_origin = "user-supplied (--signing-key)"
+    else:
+        # token_urlsafe(48) → 64 URL-safe base64 chars. ~288 bits of entropy.
+        # Calendly treats the key as a plain UTF-8 string for HMAC
+        # (per kashew/calendly-v2-sdk WebhookPayloadClient source); the
+        # URL-safe charset stays safe across copy/paste boundaries
+        # (env var values, JSON literals, terminal selection).
+        signing_key = secrets.token_urlsafe(48)
+        key_origin = "generated locally (secrets.token_urlsafe(48))"
+
     print(f"Organization: {org_uri}")
     print(f"User (will be the subscription creator): {user_uri}")
     print(f"Callback URL: {callback_url}")
+    print(f"Signing key origin: {key_origin}")
     print(f"Events ({len(EVENTS_IN_SCOPE)}):")
     for ev in EVENTS_IN_SCOPE:
         print(f"  - {ev}")
@@ -246,65 +295,72 @@ def register_subscription(callback_url: str, dry_run: bool) -> None:
         "organization": org_uri,
         "user": user_uri,
         "scope": "organization",
+        "signing_key": signing_key,
     }
 
     if dry_run:
         print("\n[dry-run] No POST issued. Re-run with --register to create.")
+        # Show the body shape we WOULD send, with the signing_key
+        # redacted so a dry-run doesn't leak the secret into terminal
+        # scrollback / Loom recordings.
+        preview = {**body, "signing_key": f"<{len(signing_key)}-char secret, redacted>"}
+        print(f"Would POST body: {json.dumps(preview, indent=2)}")
         return
 
-    print("\nPOST /api/v1/webhook_subscriptions ...")
+    print("\nPOST /webhook_subscriptions ...")
     resp_body, resp_headers, resp_status = _request_full(
         "POST", "/webhook_subscriptions", body=body,
     )
 
-    # Find the signing key BEFORE printing anything verbose, so the BIG
-    # BOX is the first thing the user sees after the POST (doesn't
-    # scroll past a long JSON dump).
-    sig_key, sig_path = _find_signing_key(resp_body, resp_headers)
+    # BIG BOX FIRST — the secret Drake needs. We know what it is
+    # because we generated (or were handed) it; Calendly's POST response
+    # does NOT echo signing_key back, so we print the value we sent.
+    box_width = 78
+    print("\n" + "█" * box_width)
+    print("█" + " " * (box_width - 2) + "█")
+    label = "  CALENDLY_WEBHOOK_SECRET — paste this into Vercel env vars"
+    print(("█" + label).ljust(box_width - 1) + "█")
+    print("█" + " " * (box_width - 2) + "█")
+    print(("█  Origin: " + key_origin).ljust(box_width - 1) + "█")
+    print("█" + " " * (box_width - 2) + "█")
+    print("█" * box_width)
+    # Print the key on its own clean line, no border interference,
+    # so terminal triple-click selects exactly the key.
+    print()
+    print(f"  {signing_key}")
+    print()
+    print("█" * box_width)
+    print("█" + " " * (box_width - 2) + "█")
+    print("█  This is the ONLY copy printed. Calendly does not echo it back.".ljust(box_width - 1) + "█")
+    print("█  If lost: delete + re-register the subscription with a new key.".ljust(box_width - 1) + "█")
+    print("█" + " " * (box_width - 2) + "█")
+    print("█" * box_width)
 
-    # 1. BIG BOX FIRST — what to do.
-    if sig_key:
-        box_width = 78
-        print("\n" + "█" * box_width)
-        print("█" + " " * (box_width - 2) + "█")
-        print(f"█  CALENDLY SIGNING KEY (set as CALENDLY_WEBHOOK_SECRET in Vercel)".ljust(box_width - 1) + "█")
-        print("█" + " " * (box_width - 2) + "█")
-        print("█  Found at: " + (sig_path or "<unknown>").ljust(box_width - 14) + "█")
-        print("█" + " " * (box_width - 2) + "█")
-        # Wrap key across multiple lines if needed; never split mid-key
-        # so copy-paste is foolproof.
-        print(f"█  KEY:".ljust(box_width - 1) + "█")
-        # Print the key on its own clean line, no border interference,
-        # so terminal triple-click selects exactly the key.
-        print()
-        print(f"  {sig_key}")
-        print()
-        print("█" + " " * (box_width - 2) + "█")
-        print("█  COPY IT NOW — Calendly returns the signing key ONCE at".ljust(box_width - 1) + "█")
-        print("█  creation. If lost, delete + re-register the subscription.".ljust(box_width - 1) + "█")
-        print("█" + " " * (box_width - 2) + "█")
-        print("█" * box_width)
-    else:
-        print("\n" + "!" * 78)
-        print("! SIGNING KEY NOT FOUND in any plausible location.            !")
-        print("! Searched: top-level body fields, body.resource.*, response  !")
-        print("! headers, and recursive scan for any 'sign' / 'secret' /     !")
-        print("! 'key' field at any depth.                                   !")
-        print("! Inspect the diagnostic dump below; the key may be under     !")
-        print("! a field name we don't recognize, OR Calendly may require a  !")
-        print("! separate GET to retrieve it (rare).                         !")
-        print("!" * 78)
+    # Defensive cross-check: scan the response in case Calendly DOES
+    # echo a key back (e.g., a newer API version or different field
+    # name than expected). If found and it matches what we sent, great.
+    # If found and differs, surface it loudly — Calendly may have
+    # rejected our key and substituted its own.
+    echoed_key, echoed_path = _find_signing_key(resp_body, resp_headers)
+    if echoed_key:
+        if echoed_key == signing_key:
+            print(f"\n[ok] Calendly echoed the signing_key back at {echoed_path} — matches what we sent.")
+        else:
+            print("\n" + "!" * box_width)
+            print("! WARNING: Calendly returned a signing_key that DIFFERS from what we sent. !")
+            print(f"! Sent:    {signing_key}")
+            print(f"! Got at {echoed_path}: {echoed_key}")
+            print("! Use the value Calendly returned (above) — that's what they'll sign with. !")
+            print("!" * box_width)
 
-    # 2. Diagnostic dump — full body + headers, every top-level key
-    #    labeled, so it's impossible to miss anything Calendly returned.
+    # Diagnostic dump — full body + headers. Useful if a future Calendly
+    # API shift changes the response shape and we need to debug.
     print("\n" + "─" * 78)
     print("DIAGNOSTIC DUMP — full POST response")
     print("─" * 78)
     print(f"HTTP status: {resp_status}")
     print(f"\nResponse headers ({len(resp_headers)} entries):")
     for k, v in sorted(resp_headers.items()):
-        # Don't truncate — the user may need to inspect any of these
-        # to find the key if it's there.
         print(f"  {k}: {v}")
     print(f"\nResponse body top-level keys: {list(resp_body.keys())}")
     if isinstance(resp_body.get("resource"), dict):
@@ -313,10 +369,9 @@ def register_subscription(callback_url: str, dry_run: bool) -> None:
     print(json.dumps(resp_body, indent=2))
     print("─" * 78)
 
-    if sig_key:
-        # Repeat the key one more time at the very bottom of output, so
-        # whichever direction the user scrolls they hit it.
-        print(f"\n>>> CALENDLY_WEBHOOK_SECRET = {sig_key}\n")
+    # Repeat the key one more time at the very bottom of output, so
+    # whichever direction the user scrolls they hit it.
+    print(f"\n>>> CALENDLY_WEBHOOK_SECRET = {signing_key}\n")
 
 
 def delete_subscription(sub_uri: str) -> None:
@@ -334,6 +389,13 @@ def main() -> int:
     p.add_argument("--delete", metavar="SUB_URI",
                    help="Delete an existing subscription by full URI")
     p.add_argument("--url", help="Receiver URL (required for --register / --dry-run)")
+    p.add_argument(
+        "--signing-key",
+        metavar="SECRET",
+        help=("Use a specific signing key instead of generating a fresh one. "
+              "Useful for rotation or restoring from Bitwarden. Omit to "
+              "auto-generate a strong random secret."),
+    )
     args = p.parse_args()
 
     if args.delete:
@@ -344,7 +406,11 @@ def main() -> int:
         if not args.url:
             print("--url required with --register / --dry-run", file=sys.stderr)
             return 2
-        register_subscription(args.url, dry_run=args.dry_run and not args.register)
+        register_subscription(
+            args.url,
+            dry_run=args.dry_run and not args.register,
+            signing_key_override=args.signing_key,
+        )
         return 0
 
     list_subscriptions()
