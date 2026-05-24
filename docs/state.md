@@ -34,6 +34,35 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-24 — Wistia video analytics ingestion live (migration 0045 + 90-day backfill)
+
+Third sales-side data source after Close + Meta. Mirrors all 80 medias' raw inventory + per-day stats from Wistia into Supabase (`wistia_medias` + `wistia_media_daily`). Source for the Engine sheet's FUNNELS section (VSL Engagement Rate, VSL Average View Duration, TYP Engagement Rate, TYP Average View Duration — all DERIVED at aggregation time per Core Principle #1).
+
+**Migration 0045 applied to cloud Supabase.** Migration count: 44 → **45**. Two new tables:
+- `wistia_medias` (reference, `hashed_id` PK, 16 columns) — name/duration/project + 5 lifetime aggregate cross-check fields + Wistia-side timestamps. ~80 rows.
+- `wistia_media_daily` (time-series, composite PK `(hashed_id, day)`, 8 columns) — raw `load_count` / `play_count` / `hours_watched`. `hours_watched` stored as **HOURS** (Wistia API convention; aggregation layer converts via × 3600). Secondary index on `day DESC` for cross-video rollups.
+
+Dual-verified post-apply (schema reality + indexes + triggers + ledger).
+
+**Ingestion module `ingestion/wistia/`** mirrors the Meta sheet shape: stdlib-urllib client (Bearer auth, `X-Wistia-API-Version: 2026-03` header pinned for the `/modern/stats/medias/{id}/by_date` endpoint, 503 rate-limit back-off with 3 retries), pure-projection parser (no derivations; `hours_watched` stays in hours), fail-soft orchestrator (`sync_wistia`). `sync_wistia_rolling(window_days=14)` is the cron entry point.
+
+**Live cron `api/wistia_sync_cron.py`** at `30 */3 * * *` (every 3h, offset from meta_sync's `0 */3` to stagger spikes). 14-day rolling window per tick — Wistia's late-arriving event counts self-heal via last-write-wins on `(hashed_id, day)` upsert. Audit row to `webhook_deliveries` with `source='wistia_sync'`. `maxDuration: 300` for Wistia API latency headroom. **NOT yet activated in production** — requires Drake to add `WISTIA_API_TOKEN` to Vercel env (gate (d)). Until added, the cron returns `wistia_token_unavailable` and audits cleanly; no production damage.
+
+**Backfill scope narrowed mid-run from full account history → last 90 days.** Initial bulk used the spec's wide `2024-01-01` start (~875 days), running ~3 medias/min on the per-media `by_date` calls (Wistia computes server-side via event walk). At ~20 min remaining and only 11/80 medias done, Drake elected option B: kill, narrow to 90 days, restart. Second run: 80/80 medias, 91-day window, **7,280 daily rows upserted, 0 failures** in ~3 minutes. The first 11 wide-window medias keep their 875-day history (idempotent — narrower re-run doesn't add older rows, just doesn't write more). Total `wistia_media_daily` rows after both runs: **16,276**.
+
+**Spot-check found a real Wistia API limitation worth documenting.** Engagement-rate and avg-view-duration derived from per-day `(hours_watched, play_count, duration)` are **identical across consecutive days for any given media**. The math: `hours_watched/play_count` returns the same ratio every day, matching the **lifetime** `averagePercentWatched` from `/v1/medias/{id}/stats.json` exactly (VSL `i1173gx76b`: 17.22% derived ≡ 17% lifetime; TYP `fbgjxwe62y`: 21.49% derived ≡ 22% lifetime). Conclusion: Wistia's per-day `hours_watched` is a synthesized value (= `lifetime_avg_pct × duration × play_count`), NOT actual seconds-of-content-watched-that-day. Per-day **volume** (loads, plays) IS real and varies; per-day **engagement variance** is essentially zero. This narrows what the Engine sheet's per-day engagement charts can show (constant per media until the lifetime average shifts) — the aggregation-layer spec needs to call out this caveat for the dashboard author. Discovery missed this because it sampled zero-activity windows where the artifact didn't show.
+
+**Sanity numbers (vs `docs/reports/wistia-discovery.md` 14-day data):**
+- Two active VSLs last 7d: `i1173gx76b` 1,256 plays / 14.9 hours-watched, `nbump1crwb` 60 plays / 0.6 hours-watched. Direct Closer Funnel variant is now dominant; v2 traffic dropped sharply since discovery (likely A/B-test concluded).
+- TYP `fbgjxwe62y` last 7d: 32 plays / 0.4 hours-watched (down from 153 plays / 14d in discovery — proportional cooldown matches the VSL variant shift).
+- 90-day totals: 7,280 rows, 204,244 loads, 16,497 plays, 251.1 hours-watched cumulative across all 80 medias.
+
+**Test suite: 827 passing** (+31 from this spec: 13 in `tests/ingestion/wistia/test_parser.py`, 9 in `test_pipeline.py`, 9 in `tests/api/test_wistia_sync_cron.py`).
+
+`vercel.json` adds the per-file runtime + cron schedule. `CLAUDE.md` § Folder Structure gains `ingestion/wistia/`. `.env.example` documents `WISTIA_API_TOKEN` with the dual-location (local + Vercel) requirement loudly called out.
+
+Spec: `docs/specs/wistia-ingestion.md`. Reports: `docs/reports/wistia-ingestion.md` (Pt 1 PARTIAL — gate (a) halt), `docs/reports/wistia-ingestion-pt2.md` (Pt 2 — apply + backfill + the lifetime-engagement-per-day surprise).
+
 ### 2026-05-24 — Meta ad-spend ingestion live (migration 0044 + Cortana → Sheet pipeline)
 
 Second sales-side data source after Close. Pulls the team's Cortana → Google Sheet (Sheet ID `1XX6MV7dqAsjlWOiwkuKe9d1uWc1qFR4Dt1CfCVfK8d4`, first tab `Sheet1`) and mirrors per-day Meta ad metrics into `meta_ad_daily`. Idempotent on `day` PK; Cortana's same-day restatements collapse to one mirror row (last-write-wins). Same Core Principle #1 as Close: agents and the Gregory aggregation layer read from Supabase, not the Sheet.
