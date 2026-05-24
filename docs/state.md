@@ -34,7 +34,6 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
-<<<<<<< HEAD
 ### 2026-05-24 — Calendly ingestion (migration 0047 + 7-day backfill; live webhooks Drake-gated)
 
 Fourth sales-side data source. Mirrors Calendly scheduled events + invitees + event-type catalog into Supabase — source for the Engine sheet's six Calendly-sourced rows (FUNNELS section: 3 plain + 3 "with logic" closer rows).
@@ -78,7 +77,6 @@ Until activation, the cron-equivalent (no scheduled cron — webhooks ARE the li
 Spec: `docs/specs/calendly-ingestion.md`. Reports: `docs/reports/calendly-ingestion.md` (PARTIAL — gate (a) halt) + `docs/reports/calendly-ingestion-pt2.md` (apply + backfill + Engine-row verification).
 
 DEFERRED: Engine row 95 "Follow Up Meetings" — Calendly has no native concept; Aman/team picks definition (3 candidate interpretations in the runbook). Ingestion mirrors everything; aggregation waits.
-=======
 ### 2026-05-24 — Typeform live ingestion (migration 0048; receiver + cron + backfill shipped, activation Drake-gated)
 
 Fifth sales-side data source after Close + Meta + Wistia + Calendly. Top-of-funnel **opt-in / lead** mirror — 31 forms in the account, ~14k total responses across active + dormant funnels, ~10k on the active Setter Funnel (PWSNd0h2). NOT client data: no `clients` resolution, no identity-matching, no auto-creation of client rows from a Typeform response (per spec § Why this exists, Drake-clarified).
@@ -100,7 +98,6 @@ Fifth sales-side data source after Close + Meta + Wistia + Calendly. Top-of-funn
 **Activation runbook** at `docs/runbooks/typeform_ingestion.md` covers the 8-step order-of-operations: (1) apply 0048 (Drake gate (a), sequenced vs Calendly), (2) merge + deploy receiver, (3) confirm `/api/typeform_events` 200 on GET, (4) Drake adds `TYPEFORM_WEBHOOK_SECRET` to Vercel + redeploys (gate (d)), (5) `--smoke` then `--apply` backfill, (6) Drake runs `register_typeform_webhooks.py --apply` pointing at deployed URL, (7) verify one real opt-in flows end-to-end (gate (c)), (8) confirm cron backstop audits clean.
 
 **PII posture:** mirror raw (Drake's call per spec § PII). Emails / phones / names live in `typeform_responses.answers` as their original values; respondent IPs live in `typeform_responses.hidden.ip`. Rationale: data already exists in Typeform's DB so mirror creates no new exposure; Supabase is service-role-only. **Test fixtures + the discovery report mask all PII to `<redacted-*>` placeholders.**
->>>>>>> worktree-b
 
 ### 2026-05-24 — Wistia timeseries cutover (migration 0046; real per-day engagement now in DB)
 
