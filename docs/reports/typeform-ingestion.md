@@ -27,7 +27,7 @@ Executed on branch `worktree-b` at `~/projects/ai-enablement-b` (parallel-work i
 - `vercel.json` — registers `api/typeform_events.py` (`maxDuration: 60`) + `api/typeform_sync_cron.py` (`maxDuration: 300`) + cron entry `*/15 * * * *`.
 - `.env.example` — adds `TYPEFORM_API_KEY` + `TYPEFORM_WEBHOOK_SECRET` blocks with full setup commentary + the spec-vs-actual env-var-name reconciliation note (spec said `_TOKEN`; `.env.local` has `_KEY`; both accepted by `from_env()`).
 - `CLAUDE.md` — § Folder Structure single-line add of `ingestion/typeform/`.
-- `docs/state.md` — § Gregory editorial skin shipped entry for the 2026-05-24 ship.
+- `docs/state.md` — appended a new `### 2026-05-24 — Typeform live ingestion (migration 0048; receiver + cron + backfill shipped, activation Drake-gated)` H3 entry. Position: directly under the existing `## Gregory editorial skin shipped` H2 (which is pre-existing tech debt as a section name — it currently holds Wistia, Meta, Close, Calendly, and now Typeform entries, none of which are about "Gregory editorial skin." NOT renamed in this spec; flagged for a future doc-hygiene sweep).
 
 **Cherry-picked from origin/main (not modified by this work, just brought onto worktree-b's history so the spec was readable here):**
 
