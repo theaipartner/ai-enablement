@@ -34,6 +34,50 @@ As of 2026-05-08 (Call Review V1 + Gregory V2 brain + Fathom auto-review + daily
 
 ## Gregory editorial skin shipped
 
+### 2026-05-24 — Calendly ingestion (migration 0047 + 7-day backfill; live webhooks Drake-gated)
+
+Fourth sales-side data source. Mirrors Calendly scheduled events + invitees + event-type catalog into Supabase — source for the Engine sheet's six Calendly-sourced rows (FUNNELS section: 3 plain + 3 "with logic" closer rows).
+
+**Migration 0047 applied to cloud Supabase.** Migration count: 46 → **47**. Three new tables, URI-keyed PKs throughout, loose FKs (webhook delivery vs backfill order isn't guaranteed; 58% of historical events reference RETIRED event-type URIs absent from the catalog per discovery):
+- `calendly_event_types` — reference, ~14 rows; the aggregation layer filters by event NAME not event_type URI per discovery findings.
+- `calendly_scheduled_events` — URI PK, 18 cols; `event_created_at` is the booking-time field the Engine sheet keys on (NOT `start_time`); `name` is the canonical filter field; `cancellation` jsonb populated on canceled events.
+- `calendly_invitees` — URI PK, 21 cols; `rescheduled` boolean + `old_invitee`/`new_invitee` URIs carry reschedule lineage; load-bearing for not double-counting in Engine row 93 ("New Scheduled Meetings" filters `rescheduled=false`).
+
+Dual-verified post-apply (3 tables / 11 indexes / 3 triggers / ledger).
+
+**Ingestion module `ingestion/calendly/`** mirrors the Close shape. Two operational quirks specific to Calendly:
+- **MANDATORY `User-Agent` header** on every request — Cloudflare 1010 / `browser_signature_banned` blocks default Python-urllib (first source in this codebase to require a custom UA; documented + tested).
+- **Closer-event-type config constant** at `ingestion/calendly/__init__.py:CLOSER_EVENT_TYPE_NAMES` (Drake-confirmed `"ai partner strategy call"`; one-line change if Aman/team expand).
+
+**Live webhook receiver `api/calendly_events.py`** — Vercel serverless function. HMAC SHA256 signature verify (Stripe-style `t=<ts>,v1=<hex>` header; secret as UTF-8 bytes; 5-min replay window). Synthesized `webhook_deliveries.webhook_id` dedup key (`calendly:{ts}:{sha256(body)[:16]}`). Routes `invitee.created` / `invitee.canceled` to `sync_invitee_and_event` (upsert invitee + fetch parent event); `invitee_no_show.created` / `.deleted` to invitee-only upsert; unknown events get audit row + no upsert (mirror-everything posture). Fail-soft (always 200 on handled errors so Calendly doesn't auto-disable).
+
+**7-day backfill complete:** **76 events × 76 invitees / 0 failures** in ~30s wall time. Status breakdown 51 active / 25 canceled (~33% cancel rate; matches discovery). Reschedule lineage observed on 6 invitees (canceled-side rows with `new_invitee` populated).
+
+**Engine row previews verified end-to-end on real data:**
+- Row 34 Closer Bookings last 7 days (EDT): **28 total** (4/9/1/2/6/3/3 across the week)
+- Row 35 Next Day bookings: **15 total** (3/4/1/1/3/1/2)
+- Row 36 Two Days Out: **10 total** (4/1/3/1/1)
+
+**Data finding worth flagging for the aggregation-layer spec:** the closer-event name has THREE casing variants in production data — `AI Partner Strategy Call` (33), `Ai Partner Strategy Call` (16), and **`AI Partner Strategy Call.`** with a trailing period (7). Current case-insensitive match catches 49/56 closer events; misses the 7 trailing-period variants. The aggregation layer should either expand `CLOSER_EVENT_TYPE_NAMES` to include the period variant OR strip trailing punctuation before matching.
+
+**Webhook activation NOT yet live in production** — Drake-gated:
+1. Confirm Vercel deploy of `api/calendly_events.py`.
+2. Run `scripts/register_calendly_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/calendly_events`.
+3. Copy signing key from response.
+4. Add `CALENDLY_WEBHOOK_SECRET=<key>` to Vercel env + redeploy.
+5. Verify a real booking flows end-to-end.
+6. If signature 401s on first delivery, inspect `webhook_deliveries.headers.calendly-webhook-signature` (timestamp preserved; signature redacted) — the Stripe-style assumption may need adjustment.
+
+Until activation, the cron-equivalent (no scheduled cron — webhooks ARE the live path) is the backfill script; re-run for periodic catch-up. Until then, audit rows would just say `failed` per delivery — no production damage.
+
+**Test suite: 861 passing** (+56 from this spec: 15 parser + 15 pipeline + 26 webhook-receiver tests). Critical guard tests include reschedule-pair-no-double-count + signature-tampering-rejected + retired-event-type-URI-preserves-name.
+
+`vercel.json` adds `api/calendly_events.py` per-file runtime (`maxDuration: 60`). `CLAUDE.md` § Folder Structure gains `ingestion/calendly/`. `.env.example` documents `CALENDLY_API_KEY` (canonical name — spec said `_API_TOKEN`; canonical matches `CLOSE_API_KEY` precedent; client accepts both for backwards-compat) + `CALENDLY_WEBHOOK_SECRET`.
+
+Spec: `docs/specs/calendly-ingestion.md`. Reports: `docs/reports/calendly-ingestion.md` (PARTIAL — gate (a) halt) + `docs/reports/calendly-ingestion-pt2.md` (apply + backfill + Engine-row verification).
+
+DEFERRED: Engine row 95 "Follow Up Meetings" — Calendly has no native concept; Aman/team picks definition (3 candidate interpretations in the runbook). Ingestion mirrors everything; aggregation waits.
+
 ### 2026-05-24 — Wistia timeseries cutover (migration 0046; real per-day engagement now in DB)
 
 Surgical cutover of the per-day source endpoint from the legacy `/modern/stats/medias/{id}/by_date` (which synthesized `hours_watched` as `play_count × per-media constant`, producing flat-fake daily engagement) to the new `/modern/analytics/medias/{id}/timeseries?granularity=daily` (Bottler-powered; returns real per-day variance for `played_time` seconds + `engagement_rate` 0-1 + bot-filtered `plays`). The verification proof was the previous spec (`docs/reports/wistia-watchtime-verify.md`); this spec ships the fix.
