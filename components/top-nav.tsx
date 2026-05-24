@@ -24,6 +24,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
   { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
   { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
+  { href: '/sales-dashboard', label: 'Sales', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
 
@@ -50,6 +51,7 @@ export function TopNav({
     if (href === '/teams') return pathname === '/teams' || pathname.startsWith('/teams/')
     if (href === '/tasks') return pathname === '/tasks' || pathname.startsWith('/tasks/')
     if (href === '/cost-hub') return pathname === '/cost-hub' || pathname.startsWith('/cost-hub/')
+    if (href === '/sales-dashboard') return pathname === '/sales-dashboard' || pathname.startsWith('/sales-dashboard/')
     return false
   }
 
