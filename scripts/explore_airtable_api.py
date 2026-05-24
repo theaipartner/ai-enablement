@@ -63,16 +63,22 @@ TARGET_BASE_ID = "appCWa6TV6p7EBarC"
 TARGET_TABLES: dict[str, str] = {
     # Airtable table id → human label (the labels are NOT used as
     # identifiers; only for report-side readability)
+    # Resume-spec scope narrowing 2026-05-24: dropped Closer Booked
+    # Calls (tbla3benxdsq4n0kP) + Setter Direct Bookings
+    # (tblRNhANZ7OGqjlrM) per Drake. Only Setter Triage + Full Closer
+    # Report are probed for records/semantics; the base-level schema
+    # call still returns ALL tables in the base for context.
     "tblaoMsiE3FSkHjQt": "Setter Triage Calls",
     "tblYsh3fxTpXuPdIW": "Full Closer Report",
-    "tbla3benxdsq4n0kP": "Closer Booked Calls",
-    "tblRNhANZ7OGqjlrM": "Setter Direct Bookings",
 }
 
-# Try the accountability PAT first (already wired for the accountability
-# roster — may already reach this base), then the generic AIRTABLE_API_KEY
-# fallback. Order matters: first hit wins.
+# Token walk order matters: first to 200 on the schema call wins.
+# AIRTABLE_SALES_PAT minted by Drake 2026-05-24 with schema.bases:read
+# + data.records:read + base appCWa6TV6p7EBarC access — primary
+# candidate. The other two stay as fallbacks (they 403 on the schema
+# call per the PARTIAL report; harmless to attempt).
 CANDIDATE_TOKEN_VARS: list[str] = [
+    "AIRTABLE_SALES_PAT",
     "AIRTABLE_ACCOUNTABILITY_PAT",
     "AIRTABLE_API_KEY",
 ]
