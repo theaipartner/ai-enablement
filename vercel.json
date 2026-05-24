@@ -85,6 +85,16 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/typeform_events.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/typeform_sync_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
@@ -97,6 +107,7 @@
     { "path": "/api/ella_daily_digest_cron", "schedule": "30 20 * * *" },
     { "path": "/api/ella_unanswered_flagger_cron", "schedule": "*/15 * * * *" },
     { "path": "/api/meta_sheet_sync_cron", "schedule": "0 */3 * * *" },
-    { "path": "/api/wistia_sync_cron", "schedule": "30 */3 * * *" }
+    { "path": "/api/wistia_sync_cron", "schedule": "30 */3 * * *" },
+    { "path": "/api/typeform_sync_cron", "schedule": "*/15 * * * *" }
   ]
 }
