@@ -23,7 +23,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
+const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/spreadsheets.readonly'
 
 // Refresh tokens 60 seconds BEFORE the stored expiry. The Google access
 // token nominally lasts 3600s; the buffer absorbs round-trip latency on

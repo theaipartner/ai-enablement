@@ -18,7 +18,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 const STATE_COOKIE = 'google_oauth_state'
 const TEAMS_REDIRECT = '/teams'
-const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
+const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/spreadsheets.readonly'
 
 function redirectWithError(req: NextRequest, code: string) {
   const url = new URL(TEAMS_REDIRECT, req.nextUrl.origin)
