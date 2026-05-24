@@ -88,12 +88,17 @@ def parse_by_date_entry(
     hashed_id: str,
     entry: dict[str, Any],
 ) -> dict[str, Any]:
-    """Project one entry from /modern/stats/medias/{id}/by_date into a
-    wistia_media_daily row dict.
+    """DEPRECATED post-2026-05-24. Use parse_timeseries_entry.
 
-    Entry shape (verified live during discovery):
+    Project one entry from /modern/stats/medias/{id}/by_date into a
+    wistia_media_daily row dict. Entry shape (verified live during
+    discovery):
         {"date": "2026-05-23", "load_count": 12, "play_count": 5,
          "hours_watched": 0.085}
+
+    Retained for ad-hoc legacy queries; the post-cutover pipeline
+    uses parse_timeseries_entry. See migration 0046 header for the
+    rationale.
     """
     if not entry.get("date"):
         return {}
@@ -103,4 +108,65 @@ def parse_by_date_entry(
         "load_count": entry.get("load_count", 0) or 0,
         "play_count": entry.get("play_count", 0) or 0,
         "hours_watched": entry.get("hours_watched", 0) or 0,
+    }
+
+
+def parse_timeseries_entry(
+    hashed_id: str,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Project one entry from /modern/analytics/medias/{id}/timeseries
+    into a wistia_media_daily row dict (real per-day variance).
+
+    Entry shape (verified live during watchtime-verify probe):
+        {"timestamp": "2026-04-27 05:00:00.000Z",
+         "plays": 23, "unique_plays": ..., "unique_loads": 8,
+         "unique_visitors": ..., "played_time": 494,
+         "engagement_rate": 0.09078, "play_rate": 0.75,
+         "cta_impressions": 0, "cta_conversions": 0,
+         "cta_conversion_rate": 0.0, "form_conversions": 0}
+
+    Field mapping (load-bearing — see migration 0046 column comments):
+      - `timestamp` → `day`: date portion (`timestamp[:10]`). Wistia's
+        bucket-start timestamp aligns with the account's local calendar
+        day (verified to match the legacy by_date `date` field exactly,
+        so the cutover boundary doesn't introduce a one-day shift).
+      - `played_time` → `played_time_seconds` (INTEGER seconds —
+        already correct unit; no conversion).
+      - `engagement_rate` → `engagement_rate` (0–1 float — stored RAW,
+        not ×100; display layer formats).
+      - `play_rate` → `play_rate` (0–1 float, stored raw).
+      - `plays` → `plays_filtered` (NEW column distinct from the
+        legacy `play_count`; the two endpoints disagree on play counts,
+        timeseries is bot-filtered ~14% lower per verification report).
+      - `unique_plays`/`unique_visitors`/`unique_loads` → same names.
+      - CTA + form fields mirrored 1:1.
+
+    The pipeline upsert deliberately does NOT include the legacy
+    `play_count` / `load_count` / `hours_watched` columns, so existing
+    pre-cutover values on those columns are preserved (historical audit).
+    """
+    timestamp = entry.get("timestamp")
+    if not timestamp:
+        return {}
+    # Extract calendar day from the bucket-start timestamp. Wistia
+    # returns ISO8601 like "2026-04-27 05:00:00.000Z" — the date
+    # portion is the canonical day (account-local-tz calendar day).
+    day = timestamp[:10] if isinstance(timestamp, str) and len(timestamp) >= 10 else None
+    if not day:
+        return {}
+    return {
+        "hashed_id": hashed_id,
+        "day": day,
+        "played_time_seconds": entry.get("played_time"),
+        "engagement_rate": entry.get("engagement_rate"),
+        "play_rate": entry.get("play_rate"),
+        "plays_filtered": entry.get("plays"),
+        "unique_plays": entry.get("unique_plays"),
+        "unique_visitors": entry.get("unique_visitors"),
+        "unique_loads": entry.get("unique_loads"),
+        "cta_impressions": entry.get("cta_impressions"),
+        "cta_conversions": entry.get("cta_conversions"),
+        "cta_conversion_rate": entry.get("cta_conversion_rate"),
+        "form_conversions": entry.get("form_conversions"),
     }

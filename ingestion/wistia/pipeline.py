@@ -1,19 +1,27 @@
 """Wistia ingestion orchestrator.
 
-Pipeline:
+Pipeline (post-2026-05-24 cutover):
   1. Refresh media inventory (`wistia_medias`) — paginate /v1/medias.json
      + project lookup + per-media lifetime stats. Idempotent on
      `hashed_id` PK.
-  2. For each media: pull /modern/stats/medias/{id}/by_date over a
-     window → idempotent upsert into `wistia_media_daily` keyed on
-     `(hashed_id, day)`.
+  2. For each media: pull /modern/analytics/medias/{id}/timeseries over
+     a window → idempotent upsert into `wistia_media_daily` keyed on
+     `(hashed_id, day)`. The NEW columns (played_time_seconds,
+     engagement_rate, plays_filtered, uniques, CTA/form) get populated;
+     the LEGACY columns (load_count, play_count, hours_watched) are
+     deliberately NOT touched, preserving pre-cutover audit values.
+
+Verification of why the cutover happened: docs/reports/wistia-watchtime-verify.md.
+The legacy by_date endpoint synthesizes hours_watched, producing FAKE
+daily engagement-rate variance. The timeseries endpoint returns real
+per-bucket variance for played_time + engagement_rate.
 
 Fail-soft per media — one media's stats failing doesn't abort the
 whole sync; errors collected in `SyncOutcome.errors` for the audit row.
 
 Used by both the daily cron (`api/wistia_sync_cron.py`, rolling
 14-day window) and any ad-hoc backfill (`scripts/backfill_wistia.py`,
-wide window).
+30-day window post-cutover).
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from ingestion.wistia.client import WistiaAPIError, WistiaClient
-from ingestion.wistia.parser import parse_by_date_entry, parse_media
+from ingestion.wistia.parser import parse_media, parse_timeseries_entry
 
 logger = logging.getLogger("ai_enablement.wistia.pipeline")
 
@@ -56,11 +64,13 @@ def sync_wistia(
 ) -> SyncOutcome:
     """One full pull: refresh inventory, then per-day stats per media.
 
-    `start_date` + `end_date` (inclusive, YYYY-MM-DD) bound the by_date
-    window. Cron passes a rolling 14-day window; backfill passes a
-    wide one.
+    `start_date` + `end_date` (INCLUSIVE on both, YYYY-MM-DD) bound the
+    per-day window. Cron passes a rolling 14-day window; backfill passes
+    a 30-day one. The client's `fetch_timeseries` converts to the new
+    endpoint's EXCLUSIVE end_date semantic internally — callers stay on
+    the inclusive convention.
 
-    `max_medias` caps how many medias get the by_date treatment (for
+    `max_medias` caps how many medias get the timeseries treatment (for
     --smoke / --limit). None = all of them.
     """
     outcome = SyncOutcome(
@@ -125,17 +135,23 @@ def sync_wistia(
     for media in target_medias:
         hid = media["hashed_id"]
         try:
-            entries = client.fetch_by_date(
+            entries = client.fetch_timeseries(
                 hid, start_date=start_iso, end_date=end_iso
             )
         except WistiaAPIError as e:
-            outcome.record_error(f"by_date {hid}", e)
+            outcome.record_error(f"timeseries {hid}", e)
             continue
         for entry in entries:
-            row = parse_by_date_entry(hid, entry)
+            row = parse_timeseries_entry(hid, entry)
             if not row:
                 continue
             try:
+                # Upsert only the timeseries-sourced columns. The legacy
+                # load_count / play_count / hours_watched columns are
+                # NOT in `row`, so pre-cutover values on existing rows
+                # are preserved (historical audit trail). New rows get
+                # the column defaults (0 for the legacy int columns,
+                # 0 for hours_watched).
                 db.table("wistia_media_daily").upsert(
                     row, on_conflict="hashed_id,day"
                 ).execute()

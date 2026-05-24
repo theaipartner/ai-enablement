@@ -208,11 +208,19 @@ class WistiaClient:
         start_date: str,
         end_date: str,
     ) -> list[dict[str, Any]]:
-        """GET /modern/stats/medias/{id}/by_date — per-day stats.
+        """DEPRECATED post-2026-05-24 cutover. Use `fetch_timeseries` instead.
+
+        GET /modern/stats/medias/{id}/by_date — per-day stats.
 
         Returns a list of {date, load_count, play_count, hours_watched},
         one entry per calendar day in [start_date, end_date] inclusive.
         Zero-activity days return zeros, not nulls.
+
+        **Why deprecated:** verification (docs/reports/wistia-watchtime-verify.md)
+        proved this endpoint synthesizes `hours_watched = play_count ×
+        per-media constant` — daily engagement-rate derivations come out
+        flat (fake). Method retained for reference + ad-hoc legacy queries;
+        pipeline + cron now use `fetch_timeseries`.
 
         REQUIRES `X-Wistia-API-Version` header — pinned to MODERN_API_VERSION.
         """
@@ -228,4 +236,58 @@ class WistiaClient:
         # than silently treating as zero.
         raise WistiaAPIError(
             f"by_date for {hashed_id} returned non-list: {type(result).__name__}"
+        )
+
+    def fetch_timeseries(
+        self,
+        hashed_id: str,
+        *,
+        start_date: str,
+        end_date: str,
+        granularity: str = "daily",
+    ) -> list[dict[str, Any]]:
+        """GET /modern/analytics/medias/{id}/timeseries — REAL per-day stats.
+
+        Post-2026-05-24 cutover from `fetch_by_date`. Returns a list of
+        per-bucket metric objects with REAL daily variance (vs the
+        synthesized values from by_date — see
+        docs/reports/wistia-watchtime-verify.md).
+
+        Per-bucket fields (granularity=daily):
+            timestamp (ISO8601 — date portion is the calendar day),
+            plays, unique_plays, unique_loads, unique_visitors,
+            played_time (SECONDS as integer), engagement_rate (0-1
+            float), play_rate (0-1 float), cta_impressions,
+            cta_conversions, cta_conversion_rate, form_conversions.
+
+        **CRITICAL date semantics — different from `fetch_by_date`:**
+        the new endpoint takes `end_date` as EXCLUSIVE. Callers pass
+        an INCLUSIVE end_date (matching the by_date convention they're
+        used to) and this method adds +1 day internally. Get this
+        wrong and you silently drop the latest day.
+
+        REQUIRES `X-Wistia-API-Version` header — pinned to MODERN_API_VERSION.
+        `granularity` accepts daily | weekly | monthly; we default to daily.
+        """
+        # Spec footgun: end_date is EXCLUSIVE on the new endpoint. Add
+        # a day so callers can keep passing an INCLUSIVE end_date (the
+        # convention every other source in this codebase uses).
+        from datetime import date as _date, timedelta as _td
+        inclusive_end = _date.fromisoformat(end_date)
+        exclusive_end_iso = (inclusive_end + _td(days=1)).isoformat()
+
+        result = self._request(
+            f"/analytics/medias/{hashed_id}/timeseries",
+            base=BASE_MODERN,
+            params={
+                "start_date": start_date,
+                "end_date": exclusive_end_iso,
+                "granularity": granularity,
+            },
+            extra_headers={"X-Wistia-API-Version": MODERN_API_VERSION},
+        )
+        if isinstance(result, list):
+            return result
+        raise WistiaAPIError(
+            f"timeseries for {hashed_id} returned non-list: {type(result).__name__}"
         )
