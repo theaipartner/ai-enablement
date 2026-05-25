@@ -1,19 +1,38 @@
-# Sales Dashboard (v1)
+# Sales Dashboard
 
 Admin-tier page at `/sales-dashboard`. Visualizes the Engine sheet
-(`Data Sheet - Overall Engine.csv` at repo root) — 9 sections, ~140
+(`Data Sheet - Overall Engine.csv` at repo root) — 9 sections, ~117
 metrics — against the seven ingested mirror tables. v1 reads
 DIRECTLY from those mirrors (no aggregation layer, no views).
 
-- Code: `app/(authenticated)/sales-dashboard/{layout,page}.tsx`,
-  `lib/db/sales-dashboard.ts`.
+**v1 shipped 2026-05-24** as a flat 9-column kanban.
+**v2 shipped 2026-05-24** retired the kanban in favour of a
+hero-overview + sales-only sidebar + per-section detail pages. The
+data layer is unchanged — catalog, fetchers, state contract are all v1.
+
+- Code split: `lib/db/sales-dashboard-shared.ts` (pure: catalog,
+  types, hero IDs, formatters — client-safe) +
+  `lib/db/sales-dashboard.ts` (server-only: fetchers + orchestrator
+  + admin client; re-exports everything from shared).
+- Routes under `app/(authenticated)/sales-dashboard/`:
+  - `layout.tsx` — admin-tier gate + two-column shell (240px sidebar + main).
+  - `page.tsx` — Overview (hero + status strip).
+  - `[section]/page.tsx` — Section detail (top-live + full catalog).
+  - `states/page.tsx` — Three-states reference.
+  - `sidebar.tsx` — sales-only client component (`usePathname()` for active).
+  - `header-pills.tsx` — WindowPill + PersonPill + SectionStatusPill.
+- Primitive: `components/sales/metric-card.tsx` — single chrome reused
+  across hero-lede / hero-support / top-live / grid sizes × live /
+  pending / not_connected / live_error states.
 - Auth: admin tier or higher. Reuses the existing
   `getCurrentUserAccessTier()` + `tierAtLeast(..., 'admin')` gate that
   guards `/cost-hub`. Non-admin tiers redirect to
   `/clients?error=insufficient_access`.
 - Nav: a "Sales" item in `components/top-nav.tsx`, visible only to
-  admin+ (Nabeel, Drake).
-- Spec: `docs/specs/sales-dashboard-v1.md`.
+  admin+ (Nabeel, Drake). The TopNav stays as the cross-page surface;
+  the sales sidebar only renders under `/sales-dashboard/*`.
+- Specs: `docs/specs/sales-dashboard-v1.md`, `docs/specs/sales-dashboard-v2.md`
+  + design mock `docs/specs/sales-dashboard-v2.html`.
 
 ## The three states (legend, also rendered on the page)
 
@@ -218,6 +237,139 @@ online (GoHighLevel ingestion lands, IG Analytics gets wired up, etc.):
 - **PENDING → LIVE promotions** as the schema-doc ambiguities resolve
   (is_setter_led, cash field canon, objection categorization, Close
   Smartview reproduction).
+
+## v2 — hero + sidebar restructure (2026-05-24)
+
+v2 retired the flat 9-column kanban in favour of three new surfaces.
+The catalog, fetchers, and state semantics in v1 are unchanged.
+
+### Three pages
+
+- **Overview** (`/sales-dashboard`) — hero with 3 lede + 4 support
+  cards over the 7 catalog-locked hero IDs, then a derived status
+  strip (LIVE / PENDING / NOT CONNECTED counts + sections-with-live +
+  coverage %). Hero IDs are the single source of truth in
+  `lib/db/sales-dashboard-shared.ts` `HERO_LEDE_IDS` + `HERO_SUPPORT_IDS`
+  — reach `getHeroMetrics()` to resolve them. Throws on catalog drift
+  (a hero ID that no longer exists in METRICS).
+- **Section detail** (`/sales-dashboard/[section]`) — slug from
+  `SECTION_SLUGS`; resolves to a `SectionId` or 404s via `notFound()`.
+  Two slots: a Top-Live row showing the first 3 LIVE metrics in
+  catalog order (3-up grid; replaced by an empty-section-stub
+  message when the section has zero live), and a Full Catalog grid
+  (4-up) showing every metric in catalog order through the same
+  `<MetricCard>` primitive.
+- **Three-states reference** (`/sales-dashboard/states`) — static
+  page; explains the LIVE / PENDING / NOT CONNECTED contract with
+  example cards + mapping-rules block. Linked from the sidebar's
+  Reference group; toggled via `INCLUDE_STATES_LINK` in the segment
+  layout.
+
+### Sidebar contract
+
+- Lives in `app/(authenticated)/sales-dashboard/sidebar.tsx`. Client
+  Component (`'use client'`) because of `usePathname()`. The rest of
+  the v2 page tree stays server-rendered.
+- Renders ONLY under `/sales-dashboard/*` — the global TopNav in
+  `app/(authenticated)/layout.tsx` is untouched, and other pages
+  (/clients, /calls, /cost-hub, etc.) see no sidebar.
+- 240px wide, sticky at `top: 64px` (the parent TopNav's height) with
+  `height: calc(100vh - 64px)` so it doesn't overlap the nav.
+- Per-section counts derive from `METRICS.filter(...).length` — never
+  hardcoded. The mock's 7/16/21/47/30/8/9/6/4 was illustrative; the
+  actual numbers track catalog changes automatically.
+- Active state: the link whose href matches `usePathname()` gets the
+  gold border-left + accent-fill background per the mock. Verifier
+  asserts via `data-active="true"` attribute.
+
+### `<MetricCard>` primitive
+
+`components/sales/metric-card.tsx`. Single chrome reused across four
+size variants × four state variants. Driven directly from
+`{ metric: MetricEntry, result: FetchResult, size: MetricCardSize }` —
+the state derives from the result (live/pending/not_connected/live_error)
+without per-component prop noise.
+
+| Size | Min height | Value font | Used by |
+|------|------------|-----------|---------|
+| `hero-lede` | 200px | 72px serif | Overview top row (3-up) |
+| `hero-support` | 168px | 56px serif | Overview second row (4-up) |
+| `top-live` | 160px | 44px serif | Section page Top-Live row (3-up) |
+| `grid` | 124px | 28px serif | Full Catalog grid (4-up) |
+
+State chrome reproduces the mock at `docs/specs/sales-dashboard-v2.html`
+`.metric-card.live/pending/not-connected`. Notable details:
+
+- **Live**: solid `--color-geg-bg-elev` background, full serif numeric.
+- **Pending**: `--color-geg-warn-fill` tinted background + warn-bordered
+  PENDING pill. No number — the slot is reserved.
+- **Not connected**: transparent background, dashed border, NOT CONNECTED
+  pill. Muted/faint chrome so the eye glides past.
+- **Live_error**: same elev background as live, but `border-left: 3px
+  solid var(--color-geg-neg)`, ERROR badge with the underlying message
+  in `title` for hover-tooltip.
+
+Hero variants suppress the per-card state-glyph dot (the chrome alone
+encodes state) and add a `--color-geg-accent`-colored section-tag in the
+top-left ("CLOSING", "FUNNELS", etc.). Grid variants render the dot.
+
+### Hero `cls_total_cash` decision (Decision 1)
+
+Spec allowed a v2.0 promotion of `cls_total_cash` to LIVE via either
+the sum of the three cash-collected cells OR a single-table sum over
+`airtable_full_closer_report.cash_collected`. **Shipped as PENDING.**
+Reason: the three cash-collected cells (`cls_cash_deposits` /
+`cls_cash_new` / `cls_cash_followup`) are all themselves PENDING
+because of the schema's flagged Airtable ambiguity (two competing
+currency fields — `amount_paid_today_currency` vs
+`amount_paid_today_number`). Summing them today would put an invented
+number on the hero. Promoting requires Drake/Aman to first resolve the
+cash-field canon — at which point the three component cells and
+`cls_total_cash` all promote together. The mock anticipates this
+exception via the warn-tinted hero treatment.
+
+To promote later: pick the canonical cash field (`fields_raw` JSON
+key or one of the two currency columns), wire each cash fetcher in
+`lib/db/sales-dashboard.ts` (mirror the `airtableCancelled` pattern),
+flip the four catalog entries to `status: 'live'`. Hero
+auto-promotes on the next request.
+
+### Deferred from v2.0 to v2.1
+
+- **Deltas + sparklines** on hero/grid cards. The mock fakes them; we
+  shipped values-only because there's no prior-window data layer. v2.1
+  extends each fetcher to return `{ value, priorValue }`.
+- **Section pulse rail** + **Engine coverage stacked-bar block** on
+  Overview — both depend on deltas (pulse) or are duplicative of the
+  status strip (coverage block). The status strip carries the LIVE /
+  PENDING / NC counts + sections-with-live + coverage % already.
+- **Window switcher**. The window pill is decorative chrome today —
+  no click handler.
+
+### Playwright verifier — sales v2
+
+`scripts/verify-sales-dashboard-v2-preview.ts`. Hits 6 routes
+(overview, advertising, content/all-NC, funnels, closing, states),
+full-page-screenshots each into `scripts/.preview/sales-v2/`, and
+runs structural assertions: sidebar contents + width, hero card
+titles by catalog ID, status-strip tokens, section page top-live
+suppression when 0 live, empty-section-stub when 0 live, ≥10 NOT
+CONNECTED tokens in the all-NC Content section.
+
+```bash
+# Local dev
+NEXT_PUBLIC_DISABLE_AUTH=true npx next dev -p 3033
+PREVIEW_URL=http://localhost:3033 npx --yes tsx scripts/verify-sales-dashboard-v2-preview.ts
+
+# Vercel preview deploy (set NEXT_PUBLIC_DISABLE_AUTH=true on the
+# Preview env only, never Production)
+PREVIEW_URL=https://ai-enablement-xxxx-drakeynes-projects.vercel.app \
+  npx --yes tsx scripts/verify-sales-dashboard-v2-preview.ts
+```
+
+Run after any visual change to the dashboard, after any v1 catalog
+edit (the assertions exercise catalog-derived state), or as part of
+post-deploy Drake-gate (c) verification.
 
 ## Smoke probe
 
