@@ -1,0 +1,1150 @@
+<!doctype html>
+<html lang="en" data-theme="gregory-editorial">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>Sales Engine — Gregory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  /* ----- Gregory tokens (mirrored from app/globals.css) ----- */
+  :root {
+    --color-geg-bg: #0b0a09;
+    --color-geg-bg-elev: #131211;
+    --color-geg-bg-elev-2: #1a1816;
+    --color-geg-border: rgba(245, 244, 239, 0.08);
+    --color-geg-border-strong: rgba(245, 244, 239, 0.14);
+    --color-geg-text: #edeae3;
+    --color-geg-text-2: rgba(237, 234, 227, 0.66);
+    --color-geg-text-3: rgba(237, 234, 227, 0.42);
+    --color-geg-text-faint: #6b6660;
+    --color-geg-text-dim: #4a4642;
+    --color-geg-accent: #a08850;
+    --color-geg-accent-strong: #b89a5c;
+    --color-geg-accent-dim: rgba(160, 136, 80, 0.16);
+    --color-geg-accent-border: rgba(160, 136, 80, 0.40);
+    --color-geg-accent-fill: rgba(160, 136, 80, 0.05);
+    --color-geg-pos: #7a9e6f;
+    --color-geg-pos-fill: rgba(122, 158, 111, 0.12);
+    --color-geg-pos-border: rgba(122, 158, 111, 0.40);
+    --color-geg-warn: #c9a657;
+    --color-geg-warn-fill: rgba(201, 166, 87, 0.12);
+    --color-geg-warn-border: rgba(201, 166, 87, 0.40);
+    --color-geg-neg: #c97766;
+    --color-geg-neg-fill: rgba(201, 119, 102, 0.12);
+    --color-geg-neg-border: rgba(201, 119, 102, 0.40);
+
+    --font-geg-serif: "Newsreader", "Tiempos Headline", Georgia, serif;
+    --font-geg-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    --font-prom-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--color-geg-bg);
+    color: var(--color-geg-text);
+    font-family: var(--font-prom-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* Type utilities (mirror globals.css) */
+  .geg-mono { font-family: var(--font-geg-mono); }
+  .geg-serif { font-family: var(--font-geg-serif); font-weight: 400; letter-spacing: -0.01em; }
+  .geg-display { font-family: var(--font-geg-serif); font-weight: 400; letter-spacing: -0.035em; line-height: 0.98; }
+  .geg-section-title { font-family: var(--font-geg-serif); font-weight: 400; font-size: 28px; line-height: 32px; letter-spacing: -0.018em; color: var(--color-geg-text); margin: 0; }
+  .geg-deck { font-family: var(--font-geg-serif); font-style: italic; color: var(--color-geg-text-2); }
+  .geg-numeric-serif { font-family: var(--font-geg-serif); font-feature-settings: "tnum", "lnum"; font-variant-numeric: tabular-nums lining-nums; letter-spacing: -0.02em; }
+  .geg-eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-geg-text-3); font-weight: 500; font-family: var(--font-prom-sans); }
+
+  /* Pill (mirror globals.css) */
+  .geg-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-geg-mono); font-size: 10px; font-weight: 500;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 3px 8px 3px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap;
+  }
+  .geg-pill-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .geg-pill--pos { color: var(--color-geg-pos); background: var(--color-geg-pos-fill); border-color: var(--color-geg-pos-border); }
+  .geg-pill--pos .geg-pill-dot { background: var(--color-geg-pos); }
+  .geg-pill--warn { color: var(--color-geg-warn); background: var(--color-geg-warn-fill); border-color: var(--color-geg-warn-border); }
+  .geg-pill--warn .geg-pill-dot { background: var(--color-geg-warn); }
+  .geg-pill--neg { color: var(--color-geg-neg); background: var(--color-geg-neg-fill); border-color: var(--color-geg-neg-border); }
+  .geg-pill--neg .geg-pill-dot { background: var(--color-geg-neg); }
+  .geg-pill--muted { color: var(--color-geg-text-2); background: rgba(255, 255, 255, 0.03); border-color: var(--color-geg-border-strong); }
+  .geg-pill--muted .geg-pill-dot { background: var(--color-geg-text-faint); }
+  .geg-pill--gold { color: var(--color-geg-accent); background: var(--color-geg-accent-fill); border-color: var(--color-geg-accent-border); }
+  .geg-pill--gold .geg-pill-dot { background: var(--color-geg-accent); }
+
+  /* ---------- Page shell ---------- */
+  .app {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar (sales-only, per spec) ---------- */
+  .sidebar {
+    background: var(--color-geg-bg-elev);
+    border-right: 1px solid var(--color-geg-border);
+    padding: 28px 0 40px;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sidebar-brand {
+    padding: 0 24px 24px;
+    border-bottom: 1px solid var(--color-geg-border);
+    margin-bottom: 18px;
+  }
+  .sidebar-brand .geg-eyebrow { color: var(--color-geg-accent); }
+  .sidebar-brand .geg-serif {
+    font-size: 24px; line-height: 1.05;
+    color: var(--color-geg-text);
+    margin-top: 6px;
+    letter-spacing: -0.015em;
+  }
+  .sidebar-group-label {
+    padding: 18px 24px 8px;
+    font-family: var(--font-geg-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-faint);
+  }
+  .sidebar-link {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 24px 9px 22px;
+    font-size: 13.5px;
+    color: var(--color-geg-text-2);
+    border-left: 2px solid transparent;
+    cursor: pointer;
+    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+    font-family: var(--font-geg-serif);
+    letter-spacing: -0.005em;
+  }
+  .sidebar-link:hover {
+    background: var(--color-geg-accent-fill);
+    color: var(--color-geg-text);
+  }
+  .sidebar-link.active {
+    color: var(--color-geg-text);
+    background: var(--color-geg-accent-fill);
+    border-left-color: var(--color-geg-accent);
+  }
+  .sidebar-link .count {
+    font-family: var(--font-geg-mono);
+    font-size: 10px;
+    color: var(--color-geg-text-faint);
+    letter-spacing: 0.06em;
+  }
+  .sidebar-link.active .count { color: var(--color-geg-accent); }
+  .sidebar-link.overview {
+    font-family: var(--font-prom-sans);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 11px;
+    font-weight: 500;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    color: var(--color-geg-text);
+  }
+  .sidebar-link.overview.active { color: var(--color-geg-accent); }
+
+  /* ---------- Main ---------- */
+  .main {
+    padding: 36px 56px 96px;
+    max-width: 1480px;
+  }
+
+  /* ---------- HeaderBand ---------- */
+  .header-band {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 26px;
+    border-bottom: 1px solid var(--color-geg-border-strong);
+    margin-bottom: 36px;
+  }
+  .header-band h1.geg-display {
+    font-size: 64px;
+    line-height: 64px;
+    margin: 8px 0 0;
+  }
+  .header-band .geg-eyebrow { color: var(--color-geg-text-3); }
+  .header-band .backlink {
+    display: inline-block;
+    margin-bottom: 12px;
+    color: var(--color-geg-text-3);
+    cursor: pointer;
+  }
+  .header-band .backlink:hover { color: var(--color-geg-accent); }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 8px;
+  }
+  .window-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border: 1px solid var(--color-geg-border-strong);
+    border-radius: 6px;
+    font-family: var(--font-geg-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-2);
+    cursor: pointer;
+  }
+  .window-pill:hover { border-color: var(--color-geg-accent-border); color: var(--color-geg-text); }
+  .window-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--color-geg-pos);
+    animation: geg-pulse 2s ease-in-out infinite;
+  }
+  @keyframes geg-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.55;transform:scale(.85)} }
+
+  /* ---------- Hero (Overview) ---------- */
+  .hero-lede {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--color-geg-border);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .hero-support {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--color-geg-border);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 16px;
+  }
+  .hero-card {
+    background: var(--color-geg-bg-elev);
+    padding: 24px 26px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 200px;
+    position: relative;
+  }
+  .hero-card.support { min-height: 168px; padding: 22px 24px 20px; }
+  .hero-card .card-eyebrow,
+  .top-card .card-eyebrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .hero-card .card-eyebrow .section-tag {
+    font-family: var(--font-geg-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-geg-accent);
+  }
+  .hero-card .card-eyebrow .delta {
+    font-family: var(--font-geg-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--color-geg-text-3);
+  }
+  .hero-card .delta.pos { color: var(--color-geg-pos); }
+  .hero-card .delta.neg { color: var(--color-geg-neg); }
+  .hero-card .metric-name {
+    font-family: var(--font-geg-serif);
+    font-size: 16px;
+    line-height: 20px;
+    color: var(--color-geg-text-2);
+    letter-spacing: -0.005em;
+  }
+  .hero-card.lede .metric-name { font-size: 17px; }
+  .hero-card .value {
+    font-family: var(--font-geg-serif);
+    font-feature-settings: "tnum", "lnum";
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.03em;
+    color: var(--color-geg-text);
+    font-size: 56px;
+    line-height: 56px;
+    margin-top: auto;
+  }
+  .hero-card.lede .value { font-size: 72px; line-height: 70px; }
+  .hero-card .value .unit { font-size: 0.5em; color: var(--color-geg-text-3); margin-left: 4px; letter-spacing: 0; }
+  .hero-card .source-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .hero-card .source {
+    font-family: var(--font-geg-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-3);
+  }
+  .hero-card .spark { opacity: 0.7; }
+
+  /* Engine status strip */
+  .status-strip {
+    margin-top: 22px;
+    padding: 14px 20px;
+    background: var(--color-geg-bg-elev);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    flex-wrap: wrap;
+    font-family: var(--font-geg-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-2);
+  }
+  .status-strip .status-item { display: inline-flex; align-items: center; gap: 8px; }
+  .status-strip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status-strip .note { margin-left: auto; color: var(--color-geg-text-3); font-style: italic; font-family: var(--font-geg-serif); text-transform: none; letter-spacing: 0; font-size: 13px; }
+
+  /* Overview rail (engine pulse + meta) */
+  .overview-rail {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 24px;
+  }
+  .rail-block {
+    background: var(--color-geg-bg-elev);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 10px;
+    padding: 22px 24px;
+  }
+  .rail-block .geg-section-title { font-size: 22px; line-height: 26px; }
+  .rail-block .rail-eyebrow { color: var(--color-geg-text-3); margin-bottom: 6px; }
+  .rail-list {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .rail-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 18px;
+    align-items: baseline;
+    padding: 10px 0;
+    border-top: 1px dashed rgba(160, 136, 80, 0.18);
+  }
+  .rail-row:first-child { border-top: none; padding-top: 4px; }
+  .rail-row .name { color: var(--color-geg-text); font-family: var(--font-geg-serif); font-size: 15px; }
+  .rail-row .name .sec { color: var(--color-geg-text-faint); font-family: var(--font-geg-mono); font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; margin-right: 8px; }
+  .rail-row .val { font-family: var(--font-geg-serif); font-feature-settings: "tnum", "lnum"; font-variant-numeric: tabular-nums; font-size: 16px; color: var(--color-geg-text); }
+  .rail-row .delta { font-family: var(--font-geg-mono); font-size: 10.5px; color: var(--color-geg-text-3); width: 64px; text-align: right; }
+  .rail-row .delta.pos { color: var(--color-geg-pos); }
+  .rail-row .delta.neg { color: var(--color-geg-neg); }
+
+  /* Coverage block */
+  .coverage-bar {
+    margin-top: 14px;
+    display: flex;
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--color-geg-border);
+  }
+  .coverage-bar > span { display: block; height: 100%; }
+  .coverage-bar .live { background: var(--color-geg-pos); }
+  .coverage-bar .pending { background: var(--color-geg-warn); }
+  .coverage-bar .nc { background: var(--color-geg-text-dim); }
+  .coverage-legend {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 18px;
+    font-family: var(--font-geg-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-2);
+  }
+  .coverage-legend .row { display: flex; align-items: center; gap: 10px; }
+  .coverage-legend .swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .coverage-legend .count { color: var(--color-geg-text); margin-left: auto; }
+
+  /* ---------- Section page (per-section detail) ---------- */
+  .section-top {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--color-geg-border);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 36px;
+  }
+  .section-top .top-card {
+    background: var(--color-geg-bg-elev);
+    padding: 22px 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 160px;
+  }
+  .section-top .top-card .metric-name {
+    font-family: var(--font-geg-serif);
+    font-size: 15.5px;
+    color: var(--color-geg-text-2);
+    line-height: 19px;
+  }
+  .section-top .top-card .value {
+    font-family: var(--font-geg-serif);
+    font-feature-settings: "tnum","lnum";
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.025em;
+    color: var(--color-geg-text);
+    font-size: 44px;
+    line-height: 46px;
+    margin-top: auto;
+  }
+  .section-top .top-card .value .unit { font-size: 0.5em; color: var(--color-geg-text-3); margin-left: 4px; }
+  .section-top .top-card .source { font-family: var(--font-geg-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-geg-text-3); }
+
+  /* The full catalog grid (all metrics in the section, all 3 states) */
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .metric-card {
+    background: var(--color-geg-bg-elev);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 6px;
+    padding: 14px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 124px;
+  }
+  .metric-card .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .metric-card .name {
+    font-family: var(--font-geg-serif);
+    font-size: 14px;
+    line-height: 18px;
+    color: var(--color-geg-text);
+    letter-spacing: -0.005em;
+  }
+  .metric-card .state-glyph {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-top: 7px; flex-shrink: 0;
+  }
+  .metric-card .body { display: flex; align-items: baseline; gap: 6px; margin-top: auto; min-height: 32px; }
+  .metric-card .value {
+    font-family: var(--font-geg-serif);
+    font-feature-settings: "tnum","lnum";
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.02em;
+    color: var(--color-geg-text);
+    font-size: 28px;
+    line-height: 32px;
+  }
+  .metric-card .value .unit { font-size: 0.55em; color: var(--color-geg-text-3); margin-left: 3px; }
+  .metric-card .delta { font-family: var(--font-geg-mono); font-size: 10px; color: var(--color-geg-text-3); }
+  .metric-card .delta.pos { color: var(--color-geg-pos); }
+  .metric-card .delta.neg { color: var(--color-geg-neg); }
+  .metric-card .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .metric-card .source {
+    font-family: var(--font-geg-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-3);
+  }
+  .metric-card .note {
+    font-family: var(--font-geg-serif);
+    font-style: italic;
+    font-size: 11.5px;
+    color: var(--color-geg-text-faint);
+    line-height: 14px;
+    margin-top: -2px;
+  }
+
+  /* State variants */
+  .metric-card.live .state-glyph { background: var(--color-geg-pos); }
+  .metric-card.pending {
+    background: var(--color-geg-warn-fill);
+    border-color: var(--color-geg-warn-border);
+  }
+  .metric-card.pending .state-glyph { background: var(--color-geg-warn); }
+  .metric-card.pending .name { color: var(--color-geg-text); }
+  .metric-card.pending .source { color: var(--color-geg-warn); }
+  .metric-card.not-connected {
+    background: transparent;
+    border-color: var(--color-geg-border);
+    border-style: dashed;
+  }
+  .metric-card.not-connected .state-glyph { background: var(--color-geg-text-faint); }
+  .metric-card.not-connected .name { color: var(--color-geg-text-2); }
+  .metric-card.not-connected .source { color: var(--color-geg-text-faint); }
+
+  /* Section subhead between groups */
+  .group-head {
+    margin: 28px 0 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    border-bottom: 1px dashed var(--color-geg-border);
+    padding-bottom: 8px;
+  }
+  .group-head:first-of-type { margin-top: 4px; }
+  .group-head .geg-mono {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-geg-text-3);
+  }
+  .group-head .name {
+    font-family: var(--font-geg-serif);
+    font-size: 17px;
+    color: var(--color-geg-text);
+    letter-spacing: -0.01em;
+  }
+  .group-head .count { color: var(--color-geg-text-faint); font-family: var(--font-geg-mono); font-size: 10px; letter-spacing: 0.1em; }
+
+  /* States reference page */
+  .states-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-top: 8px;
+  }
+  .states-card-wrap { display: flex; flex-direction: column; gap: 14px; }
+  .states-card-wrap .label { font-family: var(--font-geg-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--color-geg-text-2); display: flex; align-items: center; gap: 10px; }
+  .states-card-wrap .label .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .states-card-wrap .desc { color: var(--color-geg-text-2); font-family: var(--font-geg-serif); font-size: 14px; line-height: 1.5; }
+  .states-card-wrap .desc em { color: var(--color-geg-text); font-style: italic; }
+  .states-card-wrap .annot {
+    margin-top: 4px;
+    padding: 12px 14px;
+    background: var(--color-geg-bg-elev);
+    border-left: 2px solid var(--color-geg-accent);
+    border-radius: 0 6px 6px 0;
+    font-family: var(--font-geg-mono);
+    font-size: 10.5px;
+    line-height: 16px;
+    letter-spacing: 0.06em;
+    color: var(--color-geg-text-3);
+  }
+  .states-card-wrap .annot strong { color: var(--color-geg-text); font-weight: 500; }
+
+  .states-rules {
+    margin-top: 56px;
+    padding: 26px 28px;
+    background: var(--color-geg-bg-elev);
+    border: 1px solid var(--color-geg-border);
+    border-radius: 10px;
+  }
+  .states-rules h3 { margin: 0 0 12px; font-family: var(--font-geg-serif); font-size: 20px; letter-spacing: -0.01em; }
+  .states-rules ul { margin: 0; padding: 0; list-style: none; }
+  .states-rules li {
+    padding: 12px 0;
+    border-top: 1px dashed rgba(160, 136, 80, 0.18);
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 18px;
+    align-items: baseline;
+  }
+  .states-rules li:first-child { border-top: none; }
+  .states-rules li .k { font-family: var(--font-geg-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-geg-text-faint); }
+  .states-rules li .v { color: var(--color-geg-text-2); }
+  .states-rules li .v code { font-family: var(--font-geg-mono); font-size: 11.5px; color: var(--color-geg-pos); background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 3px; }
+
+  /* Utility */
+  [hidden] { display: none !important; }
+  .empty-section-stub {
+    margin-top: 40px;
+    padding: 28px 24px;
+    border: 1px dashed var(--color-geg-border-strong);
+    border-radius: 8px;
+    text-align: center;
+    color: var(--color-geg-text-3);
+    font-family: var(--font-geg-serif);
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+<!-- ============================ SIDEBAR ============================ -->
+<aside class="sidebar" data-screen-label="00 Sidebar">
+  <div class="sidebar-brand">
+    <div class="geg-eyebrow">SALES · ENGINE</div>
+    <div class="geg-serif">The Engine.</div>
+  </div>
+
+  <a class="sidebar-link overview active" data-view="overview">Overview</a>
+
+  <div class="sidebar-group-label">9 Engine sections</div>
+
+  <a class="sidebar-link" data-view="advertising">Advertising <span class="count">7</span></a>
+  <a class="sidebar-link" data-view="content">Content <span class="count">16</span></a>
+  <a class="sidebar-link" data-view="funnels">Funnels <span class="count">21</span></a>
+  <a class="sidebar-link" data-view="appointment-setting">Appointment Setting <span class="count">47</span></a>
+  <a class="sidebar-link" data-view="closing">Closing <span class="count">30</span></a>
+  <a class="sidebar-link" data-view="sales-data">Sales Data <span class="count">8</span></a>
+  <a class="sidebar-link" data-view="back-end-rev">Back-End Rev <span class="count">9</span></a>
+  <a class="sidebar-link" data-view="business-costs">Business Costs <span class="count">6</span></a>
+  <a class="sidebar-link" data-view="fulfillment">Fulfillment <span class="count">4</span></a>
+
+  <div class="sidebar-group-label">Reference</div>
+  <a class="sidebar-link" data-view="states">Three states</a>
+</aside>
+
+<!-- ============================ MAIN ============================ -->
+<main class="main">
+
+  <!-- ===================== VIEW: OVERVIEW ===================== -->
+  <section id="view-overview" data-screen-label="01 Overview">
+    <header class="header-band">
+      <div>
+        <div class="geg-eyebrow">SALES · ENGINE</div>
+        <h1 class="geg-display">Today.</h1>
+      </div>
+      <div class="header-actions">
+        <div class="window-pill"><span class="dot"></span>LAST 7 DAYS · ROLLING</div>
+        <div class="window-pill" style="background: var(--color-geg-bg-elev);">EST · NABEEL</div>
+      </div>
+    </header>
+
+    <!-- LEDE: 3 most-watched -->
+    <div class="hero-lede">
+      <div class="hero-card lede">
+        <div class="card-eyebrow">
+          <span class="section-tag">CLOSING</span>
+          <span class="delta pos">▲ 18.2% vs prior 7d</span>
+        </div>
+        <div class="metric-name">Total Cash Collected</div>
+        <div class="value">$47,820</div>
+        <div class="source-row">
+          <span class="source">Airtable · derived</span>
+          <svg class="spark" width="120" height="28" viewBox="0 0 120 28"><polyline fill="none" stroke="#a08850" stroke-width="1.5" points="2,22 22,18 42,20 62,14 82,12 102,8 118,5"/><circle cx="118" cy="5" r="2" fill="#a08850"/></svg>
+        </div>
+      </div>
+
+      <div class="hero-card lede">
+        <div class="card-eyebrow">
+          <span class="section-tag">CLOSING</span>
+          <span class="delta pos">▲ +2 vs prior 7d</span>
+        </div>
+        <div class="metric-name">Closed Deals</div>
+        <div class="value">6</div>
+        <div class="source-row">
+          <span class="source">Airtable · closer EOC</span>
+          <svg class="spark" width="120" height="28" viewBox="0 0 120 28"><polyline fill="none" stroke="#a08850" stroke-width="1.5" points="2,20 22,22 42,16 62,18 82,14 102,12 118,8"/><circle cx="118" cy="8" r="2" fill="#a08850"/></svg>
+        </div>
+      </div>
+
+      <div class="hero-card lede">
+        <div class="card-eyebrow">
+          <span class="section-tag">FUNNELS</span>
+          <span class="delta neg">▼ 5.3% vs prior 7d</span>
+        </div>
+        <div class="metric-name">Opt-Ins</div>
+        <div class="value">142</div>
+        <div class="source-row">
+          <span class="source">Typeform · all funnels</span>
+          <svg class="spark" width="120" height="28" viewBox="0 0 120 28"><polyline fill="none" stroke="#a08850" stroke-width="1.5" points="2,8 22,10 42,9 62,12 82,14 102,16 118,17"/><circle cx="118" cy="17" r="2" fill="#a08850"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUPPORTING: 4 more -->
+    <div class="hero-support">
+      <div class="hero-card support">
+        <div class="card-eyebrow">
+          <span class="section-tag">FUNNELS</span>
+          <span class="delta pos">▲ +5</span>
+        </div>
+        <div class="metric-name">Closer Bookings</div>
+        <div class="value">23</div>
+        <div class="source-row"><span class="source">Calendly</span><svg class="spark" width="80" height="22" viewBox="0 0 80 22"><polyline fill="none" stroke="#a08850" stroke-width="1.3" points="2,18 14,15 26,16 38,11 50,12 62,8 78,6"/></svg></div>
+      </div>
+      <div class="hero-card support">
+        <div class="card-eyebrow">
+          <span class="section-tag">ADVERTISING</span>
+          <span class="delta pos">▲ $1,210</span>
+        </div>
+        <div class="metric-name">Total Adspend</div>
+        <div class="value">$8,940</div>
+        <div class="source-row"><span class="source">Meta</span><svg class="spark" width="80" height="22" viewBox="0 0 80 22"><polyline fill="none" stroke="#a08850" stroke-width="1.3" points="2,14 14,12 26,14 38,10 50,11 62,7 78,5"/></svg></div>
+      </div>
+      <div class="hero-card support">
+        <div class="card-eyebrow">
+          <span class="section-tag">APPOINTMENT</span>
+          <span class="delta pos">▲ +44</span>
+        </div>
+        <div class="metric-name">Total Dials</div>
+        <div class="value">318</div>
+        <div class="source-row"><span class="source">Close · outbound</span><svg class="spark" width="80" height="22" viewBox="0 0 80 22"><polyline fill="none" stroke="#a08850" stroke-width="1.3" points="2,16 14,14 26,13 38,10 50,11 62,8 78,7"/></svg></div>
+      </div>
+      <div class="hero-card support">
+        <div class="card-eyebrow">
+          <span class="section-tag">FULFILLMENT</span>
+          <span class="delta pos">▲ +6</span>
+        </div>
+        <div class="metric-name">Calls Held</div>
+        <div class="value">38</div>
+        <div class="source-row"><span class="source">Fathom · client</span><svg class="spark" width="80" height="22" viewBox="0 0 80 22"><polyline fill="none" stroke="#a08850" stroke-width="1.3" points="2,15 14,13 26,11 38,12 50,9 62,8 78,6"/></svg></div>
+      </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="status-strip">
+      <span class="status-item"><span class="dot" style="background:var(--color-geg-pos);"></span>31 LIVE</span>
+      <span class="status-item"><span class="dot" style="background:var(--color-geg-warn);"></span>53 PENDING</span>
+      <span class="status-item"><span class="dot" style="background:var(--color-geg-text-faint);"></span>33 NOT CONNECTED</span>
+      <span class="note">7 of 9 sections have at least one live signal · Engine coverage 27%.</span>
+    </div>
+
+    <!-- Secondary rail: section pulse + coverage -->
+    <div class="overview-rail">
+      <div class="rail-block">
+        <div class="geg-eyebrow rail-eyebrow">Section pulse · 7d</div>
+        <h2 class="geg-section-title">Where the engine is moving.</h2>
+        <div class="rail-list">
+          <div class="rail-row"><span class="name"><span class="sec">ADV</span>Impressions</span><span class="val">421,038</span><span class="delta pos">▲ 12%</span></div>
+          <div class="rail-row"><span class="name"><span class="sec">ADV</span>CTR</span><span class="val">1.94%</span><span class="delta neg">▼ 0.12pt</span></div>
+          <div class="rail-row"><span class="name"><span class="sec">FUN</span>VSL Engagement Rate</span><span class="val">38.4%</span><span class="delta pos">▲ 1.8pt</span></div>
+          <div class="rail-row"><span class="name"><span class="sec">FUN</span>LP Visits</span><span class="val">1,802</span><span class="delta neg">▼ 4%</span></div>
+          <div class="rail-row"><span class="name"><span class="sec">APS</span>Setter Triages</span><span class="val">41</span><span class="delta pos">▲ +9</span></div>
+          <div class="rail-row"><span class="name"><span class="sec">CLS</span>Avg Meeting Duration</span><span class="val">42m 18s</span><span class="delta pos">▲ +3m</span></div>
+        </div>
+      </div>
+
+      <div class="rail-block">
+        <div class="geg-eyebrow rail-eyebrow">Engine coverage</div>
+        <h2 class="geg-section-title">117 metrics · 31 live.</h2>
+        <div class="coverage-bar">
+          <span class="live" style="width:26.5%"></span>
+          <span class="pending" style="width:45.3%"></span>
+          <span class="nc" style="width:28.2%"></span>
+        </div>
+        <div class="coverage-legend">
+          <div class="row"><span class="swatch" style="background:var(--color-geg-pos)"></span>LIVE<span class="count">31</span></div>
+          <div class="row"><span class="swatch" style="background:var(--color-geg-warn)"></span>PENDING<span class="count">53</span></div>
+          <div class="row"><span class="swatch" style="background:var(--color-geg-text-dim)"></span>NOT CONNECTED<span class="count">33</span></div>
+          <div class="row"><span class="swatch" style="background:transparent;border:1px solid var(--color-geg-border-strong)"></span>SECTIONS<span class="count">9</span></div>
+        </div>
+        <div style="margin-top: 18px; padding-top: 16px; border-top: 1px dashed rgba(160, 136, 80, 0.18); font-family: var(--font-geg-serif); font-style: italic; color: var(--color-geg-text-2); font-size: 13px; line-height: 1.55;">
+          Largest unblock — wire <span style="color:var(--color-geg-text);font-style:normal;">Close Smartview semantics</span> for Appointment Setting: <span style="color:var(--color-geg-warn);font-style:normal;font-family:var(--font-geg-mono);font-size:11px;letter-spacing:.08em;">+34 PENDING → LIVE</span>.
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ===================== VIEW: SECTION (per-section dynamic) ===================== -->
+  <section id="view-section" data-screen-label="02 Section detail" hidden></section>
+
+  <!-- ===================== VIEW: STATES REFERENCE ===================== -->
+  <section id="view-states" data-screen-label="99 States reference" hidden>
+    <header class="header-band">
+      <div>
+        <a class="backlink geg-eyebrow" data-view="overview">← BACK TO OVERVIEW</a>
+        <div class="geg-eyebrow">SALES · REFERENCE</div>
+        <h1 class="geg-display">Three states.</h1>
+      </div>
+      <div class="header-actions">
+        <div class="window-pill">SPEC · v1</div>
+      </div>
+    </header>
+
+    <p class="geg-deck" style="max-width: 640px; font-size: 17px; margin: 0 0 36px;">Every metric card on the Engine resolves to exactly one of three states. Each maps onto an <span style="font-style:normal;color:var(--color-geg-text)">EmptyStateAwareSection</span> mode at composition time — never toggled defensively at runtime.</p>
+
+    <div class="states-grid">
+      <!-- LIVE -->
+      <div class="states-card-wrap">
+        <div class="label"><span class="dot" style="background:var(--color-geg-pos)"></span>LIVE</div>
+        <div class="metric-card live">
+          <div class="head">
+            <div class="name">Total Adspend</div>
+            <span class="state-glyph"></span>
+          </div>
+          <div class="body"><span class="value">$8,940<span class="unit">.32</span></span></div>
+          <div class="meta"><span class="source">META</span><span class="delta pos">▲ 15.6%</span></div>
+        </div>
+        <div class="desc">Single-source query against one mirror table resolved to a real number. Full serif numeric, source line, optional sparkline or delta.</div>
+        <div class="annot"><strong>EmptyStateAwareSection</strong><br>mode = <code>'show'</code></div>
+      </div>
+
+      <!-- PENDING -->
+      <div class="states-card-wrap">
+        <div class="label"><span class="dot" style="background:var(--color-geg-warn)"></span>PENDING</div>
+        <div class="metric-card pending">
+          <div class="head">
+            <div class="name">Cost per opt-in / CPL</div>
+            <span class="state-glyph"></span>
+          </div>
+          <div class="body"><span class="geg-pill geg-pill--warn"><span class="geg-pill-dot"></span>PENDING</span></div>
+          <div class="meta"><span class="source">META × TYPEFORM</span></div>
+          <div class="note">Cross-source join — Meta spend ÷ Typeform submits not yet wired.</div>
+        </div>
+        <div class="desc">Source(s) are ingested but the metric needs a cross-source join, a derived ratio, or a flagged schema ambiguity to land. <em>The slot is meaningful — leave it visible so we know what's incoming.</em></div>
+        <div class="annot"><strong>EmptyStateAwareSection</strong><br>mode = <code>'stub'</code></div>
+      </div>
+
+      <!-- NOT CONNECTED -->
+      <div class="states-card-wrap">
+        <div class="label"><span class="dot" style="background:var(--color-geg-text-faint)"></span>NOT CONNECTED</div>
+        <div class="metric-card not-connected">
+          <div class="head">
+            <div class="name">IG Follower Count</div>
+            <span class="state-glyph"></span>
+          </div>
+          <div class="body"><span class="geg-pill geg-pill--muted"><span class="geg-pill-dot"></span>NOT CONNECTED</span></div>
+          <div class="meta"><span class="source">IG ANALYTICS</span></div>
+        </div>
+        <div class="desc">Upstream source has no ingestion path today. Muted/dashed chrome so the eye glides past — present in the catalog only so coverage gaps are auditable, not so the CSM reads them.</div>
+        <div class="annot"><strong>EmptyStateAwareSection</strong><br>mode = <code>'stub'</code> · dashed border<br>(or <code>'hide'</code> if the whole row is dead)</div>
+      </div>
+    </div>
+
+    <div class="states-rules">
+      <h3>Mapping rules</h3>
+      <ul>
+        <li><span class="k">Status source</span><span class="v">Catalog declaration in <code>lib/db/sales-dashboard.ts</code> METRICS — one of <code>'live'</code> / <code>'pending'</code> / <code>'not_connected'</code>. Resolved at SSR time, never client-toggled.</span></li>
+        <li><span class="k">Visual weight</span><span class="v">Live = solid elev surface, full serif numeric. Pending = warn-tinted card, no number. Not-connected = dashed transparent surface, no number. Weight drops monotonically so the eye lands on live values first.</span></li>
+        <li><span class="k">Hero treatment</span><span class="v">Hero cards on the Overview are <em>always live</em> — if any of Nabeel's seven daily numbers ever flips off live, the hero card shows the live-error state (red glyph + error tooltip), never pending/not-connected.</span></li>
+        <li><span class="k">Section page</span><span class="v">All three states sit side-by-side in catalog order — no grouping. The visual hierarchy alone tells the reader which is which.</span></li>
+        <li><span class="k">Error</span><span class="v">A fourth runtime state: <code>live_error</code>. A live fetcher threw — render red border-left + <code>ERROR</code> badge with the message in a tooltip. Per-section error handling per § NFRs.</span></li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+</div>
+
+<!-- ===================== METRIC CATALOG (mirrors lib/db/sales-dashboard.ts) ===================== -->
+<script id="catalog" type="application/json">
+[
+  {"id":"adv_total_adspend","section":"ADVERTISING","title":"Total Adspend","status":"live","source":"Meta","value":"$8,940.32","delta":"▲ 15.6%","deltaDir":"pos"},
+  {"id":"adv_frequency","section":"ADVERTISING","title":"Frequency","status":"live","source":"Meta","value":"1.84","delta":"▲ 0.06","deltaDir":"pos"},
+  {"id":"adv_impressions","section":"ADVERTISING","title":"Total Impressions","status":"live","source":"Meta","value":"421,038","delta":"▲ 12.4%","deltaDir":"pos"},
+  {"id":"adv_unique_link_clicks","section":"ADVERTISING","title":"Unique Link Clicks","status":"live","source":"Meta","value":"4,210","delta":"▲ 8.1%","deltaDir":"pos"},
+  {"id":"adv_cost_per_impression","section":"ADVERTISING","title":"Cost per Impression","status":"live","source":"Meta","value":"$0.0212","delta":"▲ 2.1%","deltaDir":"neg"},
+  {"id":"adv_cost_per_uniq_click","section":"ADVERTISING","title":"Cost per Unique Link Click","status":"live","source":"Meta","value":"$2.12","delta":"▼ 4.2%","deltaDir":"pos"},
+  {"id":"adv_ctr","section":"ADVERTISING","title":"Click Through Rate","status":"live","source":"Meta","value":"1.94%","delta":"▼ 0.12pt","deltaDir":"neg"},
+
+  {"id":"con_ig_views","section":"CONTENT","title":"IG Views","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_followers","section":"CONTENT","title":"IG Follower Count","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_followers_gained","section":"CONTENT","title":"IG Followers Gained","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_followers_lost","section":"CONTENT","title":"IG Followers Lost","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_interactions","section":"CONTENT","title":"IG Interactions","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_profile_visits","section":"CONTENT","title":"IG Profile Visits","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_reels_posted","section":"CONTENT","title":"IG Reels Posted","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_posts_posted","section":"CONTENT","title":"IG Posts Posted","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_stories_posted","section":"CONTENT","title":"IG Stories Posted","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_ig_trial_reels_posted","section":"CONTENT","title":"IG Trial Reels Posted","status":"not_connected","source":"IG Analytics"},
+  {"id":"con_yt_impressions","section":"CONTENT","title":"YT Impressions","status":"not_connected","source":"YT Analytics"},
+  {"id":"con_yt_views","section":"CONTENT","title":"YT Views","status":"not_connected","source":"YT Analytics"},
+  {"id":"con_yt_watch_time","section":"CONTENT","title":"YT Watch Time","status":"not_connected","source":"YT Analytics"},
+  {"id":"con_yt_subscribers","section":"CONTENT","title":"YT Subscribers","status":"not_connected","source":"YT Analytics"},
+  {"id":"con_yt_long_posted","section":"CONTENT","title":"YT Long-Form Posted","status":"not_connected","source":"YT Analytics"},
+  {"id":"con_yt_shorts_posted","section":"CONTENT","title":"YT Shorts Posted","status":"not_connected","source":"YT Analytics"},
+
+  {"id":"fun_lp_visits","section":"FUNNELS","title":"Landing Page Visits","status":"live","source":"Microsoft Clarity","value":"1,802","delta":"▼ 4%","deltaDir":"neg","note":"Latest 3-day snapshot (Clarity API constraint)"},
+  {"id":"fun_lp_time_avg","section":"FUNNELS","title":"Avg Time on Landing Page","status":"live","source":"Microsoft Clarity","value":"42s","delta":"▲ +6s","deltaDir":"pos","note":"Latest 3-day snapshot"},
+  {"id":"fun_vsl_engagement_rate","section":"FUNNELS","title":"VSL Engagement Rate","status":"live","source":"Wistia","value":"38.4%","delta":"▲ 1.8pt","deltaDir":"pos"},
+  {"id":"fun_vsl_avg_view_duration","section":"FUNNELS","title":"VSL Avg View Duration","status":"live","source":"Wistia","value":"2m 14s","delta":"▲ +12s","deltaDir":"pos"},
+  {"id":"fun_typeform_engagement","section":"FUNNELS","title":"Typeform Engagement","status":"pending","source":"Typeform"},
+  {"id":"fun_typeform_completion_rate","section":"FUNNELS","title":"Typeform Completion Rate","status":"pending","source":"Typeform"},
+  {"id":"fun_typeform_submits","section":"FUNNELS","title":"Typeform Submits (\"Leads\")","status":"live","source":"Typeform","value":"142","delta":"▼ 5.3%","deltaDir":"neg","note":"All active funnels"},
+  {"id":"fun_qualified_optins","section":"FUNNELS","title":"Qualified Opt-Ins","status":"pending","source":"Typeform"},
+  {"id":"fun_non_qualified_optins","section":"FUNNELS","title":"Non-Qualified Opt-Ins","status":"pending","source":"Typeform"},
+  {"id":"fun_total_closer_bookings","section":"FUNNELS","title":"Total Closer Bookings","status":"live","source":"Calendly","value":"23","delta":"▲ +5","deltaDir":"pos"},
+  {"id":"fun_closer_booking_next_day","section":"FUNNELS","title":"Closer Booking · Next Day","status":"live","source":"Calendly","value":"11","delta":"▲ +3","deltaDir":"pos"},
+  {"id":"fun_closer_booking_two_days","section":"FUNNELS","title":"Closer Booking · 2d Out","status":"live","source":"Calendly","value":"6","delta":"▲ +2","deltaDir":"pos"},
+  {"id":"fun_typ_time_avg","section":"FUNNELS","title":"Avg Time on Thank-You Page","status":"live","source":"Microsoft Clarity","value":"1m 02s","delta":"—","deltaDir":"flat","note":"Latest 3-day snapshot"},
+  {"id":"fun_typ_engagement_rate","section":"FUNNELS","title":"TYP Engagement Rate","status":"live","source":"Wistia","value":"54.2%","delta":"▲ 2.1pt","deltaDir":"pos"},
+  {"id":"fun_typ_avg_view_duration","section":"FUNNELS","title":"TYP Avg View Duration","status":"live","source":"Wistia","value":"1m 38s","delta":"▲ +9s","deltaDir":"pos"},
+  {"id":"fun_cost_per_optin","section":"FUNNELS","title":"Cost per opt-in / CPL","status":"pending","source":"Meta × Typeform"},
+  {"id":"fun_cost_per_mql","section":"FUNNELS","title":"Cost per MQL","status":"pending","source":"Meta × Typeform"},
+  {"id":"fun_cost_per_direct_book","section":"FUNNELS","title":"Cost per Direct Book","status":"pending","source":"Meta × Calendly"},
+  {"id":"fun_lp_conversion_rate","section":"FUNNELS","title":"LP Conversion Rate","status":"pending","source":"Clarity × Typeform"},
+  {"id":"fun_link_click_to_mql","section":"FUNNELS","title":"Link Click to MQL","status":"pending","source":"Meta × Typeform"},
+  {"id":"fun_qualified_lead_to_book","section":"FUNNELS","title":"Qualified Lead to Direct Book","status":"pending","source":"Typeform × Calendly"},
+
+  {"id":"aps_first_msg_responses","section":"APPOINTMENT SETTING","title":"First Message Responses","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_total_closer_triages","section":"APPOINTMENT SETTING","title":"Total Closer Triages","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_closer_triages_next_day","section":"APPOINTMENT SETTING","title":"Closer Triages for Next Day Calls","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_closer_triages_two_days","section":"APPOINTMENT SETTING","title":"Closer Triages for Two Days Out","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_avg_time_to_closer_dial","section":"APPOINTMENT SETTING","title":"Avg Time to Closer Dial","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_avg_closer_triage_duration","section":"APPOINTMENT SETTING","title":"Avg Closer Triage Call Duration","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_closer_dqs","section":"APPOINTMENT SETTING","title":"Closer DQs after Triage","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_closer_triage_downsells","section":"APPOINTMENT SETTING","title":"Closer Triage Downsells","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_closer_confirmed_meetings","section":"APPOINTMENT SETTING","title":"Closer Confirmed Meetings","status":"live","source":"Airtable","value":"19","delta":"▲ +4","deltaDir":"pos","note":"By Airtable record-create time"},
+  {"id":"aps_hand_downs","section":"APPOINTMENT SETTING","title":"Hand Downs","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_total_setter_triages","section":"APPOINTMENT SETTING","title":"Total Setter Triages","status":"live","source":"Airtable","value":"41","delta":"▲ +9","deltaDir":"pos","note":"By Airtable record-create time"},
+  {"id":"aps_setter_triages_fresh","section":"APPOINTMENT SETTING","title":"Setter Triages from fresh opt-ins","status":"pending","source":"Airtable × Typeform"},
+  {"id":"aps_setter_triages_old","section":"APPOINTMENT SETTING","title":"Setter Triages from old opt-ins","status":"pending","source":"Airtable × Typeform"},
+  {"id":"aps_setter_triages_handdowns","section":"APPOINTMENT SETTING","title":"Setter Triages from hand downs","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_total_setter_meetings","section":"APPOINTMENT SETTING","title":"Total Setter Meetings","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_meetings_fresh","section":"APPOINTMENT SETTING","title":"Setter Meetings from fresh opt-ins","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_meetings_old","section":"APPOINTMENT SETTING","title":"Setter Meetings from old opt-ins","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_meetings_handdowns","section":"APPOINTMENT SETTING","title":"Setter Meetings from hand downs","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_hand_offs_completed","section":"APPOINTMENT SETTING","title":"Hand Offs Completed","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_dials_fresh","section":"APPOINTMENT SETTING","title":"Setter Dials to fresh opt-ins","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_dials_old","section":"APPOINTMENT SETTING","title":"Setter Dials to old opt-ins","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_dials_noshows","section":"APPOINTMENT SETTING","title":"Setter Dials to No Shows","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_setter_dials_handdowns","section":"APPOINTMENT SETTING","title":"Setter Dials to hand downs","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_avg_time_to_setter_dial","section":"APPOINTMENT SETTING","title":"Avg time to setter dial","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_avg_setter_triage_duration","section":"APPOINTMENT SETTING","title":"Avg setter triage duration","status":"pending","source":"Airtable (no duration field)"},
+  {"id":"aps_setter_dqs","section":"APPOINTMENT SETTING","title":"Setter DQs after Triage","status":"live","source":"Airtable","value":"8","delta":"▼ -1","deltaDir":"pos","note":"By Airtable record-create time"},
+  {"id":"aps_setter_triage_downsells","section":"APPOINTMENT SETTING","title":"Setter Triage Downsells","status":"live","source":"Airtable","value":"3","delta":"▲ +1","deltaDir":"pos","note":"By Airtable record-create time"},
+  {"id":"aps_total_dials","section":"APPOINTMENT SETTING","title":"Total Dials","status":"live","source":"Close calls","value":"318","delta":"▲ +44","deltaDir":"pos"},
+  {"id":"aps_total_triage_dqs","section":"APPOINTMENT SETTING","title":"Total Triage DQs","status":"pending","source":"Close + Airtable"},
+  {"id":"aps_total_triage_downsells","section":"APPOINTMENT SETTING","title":"Total Triage Downsells","status":"pending","source":"Close + Airtable"},
+  {"id":"aps_total_booked_meetings","section":"APPOINTMENT SETTING","title":"Total Booked Meetings","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_tier1_booked","section":"APPOINTMENT SETTING","title":"Tier 1 Booked Meetings","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_tier2_booked","section":"APPOINTMENT SETTING","title":"Tier 2 Booked Meetings","status":"pending","source":"Close Smartviews"},
+  {"id":"aps_gamma_avg_time","section":"APPOINTMENT SETTING","title":"Pre-Call Gamma Avg Time Spent","status":"not_connected","source":"Gamma"},
+  {"id":"aps_hand_down_rate","section":"APPOINTMENT SETTING","title":"Hand Down Rate","status":"pending","source":"Derived"},
+  {"id":"aps_hand_off_completion_rate","section":"APPOINTMENT SETTING","title":"Hand Off Completion Rate","status":"pending","source":"Derived"},
+  {"id":"aps_dq_rate","section":"APPOINTMENT SETTING","title":"DQ Rate","status":"pending","source":"Derived"},
+  {"id":"aps_downsell_rate","section":"APPOINTMENT SETTING","title":"Downsell Rate","status":"pending","source":"Derived"},
+  {"id":"aps_cost_per_downsell","section":"APPOINTMENT SETTING","title":"Cost per Downsell","status":"pending","source":"Meta × Airtable"},
+  {"id":"aps_first_msg_response_rate","section":"APPOINTMENT SETTING","title":"First Message Response Rate","status":"pending","source":"Derived"},
+  {"id":"aps_triage_rate","section":"APPOINTMENT SETTING","title":"Triage Rate","status":"pending","source":"Derived"},
+  {"id":"aps_cost_per_first_msg_response","section":"APPOINTMENT SETTING","title":"Cost per First Message Response","status":"pending","source":"Meta × Close"},
+  {"id":"aps_cost_per_triage","section":"APPOINTMENT SETTING","title":"Cost per Triage","status":"pending","source":"Meta × Airtable"},
+  {"id":"aps_convo_to_book_rate","section":"APPOINTMENT SETTING","title":"Conversation to Book Rate","status":"pending","source":"Derived"},
+  {"id":"aps_cost_per_booked_meeting","section":"APPOINTMENT SETTING","title":"Cost Per Booked Meeting","status":"pending","source":"Meta × Calendly"},
+  {"id":"aps_meeting_rate","section":"APPOINTMENT SETTING","title":"Meeting Rate","status":"pending","source":"Derived"},
+  {"id":"aps_direct_book_to_meeting","section":"APPOINTMENT SETTING","title":"Direct Booking to Meeting","status":"pending","source":"Derived"},
+
+  {"id":"cls_new_scheduled","section":"CLOSING","title":"New Scheduled Meetings","status":"live","source":"Calendly","value":"31","delta":"▲ +6","deltaDir":"pos"},
+  {"id":"cls_new_rescheduled","section":"CLOSING","title":"New Rescheduled Meetings","status":"live","source":"Calendly","value":"4","delta":"▲ +1","deltaDir":"pos"},
+  {"id":"cls_follow_up_meetings","section":"CLOSING","title":"Follow Up Meetings","status":"pending","source":"Calendly (event-type unmapped)"},
+  {"id":"cls_showed","section":"CLOSING","title":"Showed Meetings (new meetings)","status":"live","source":"Airtable closer EOC","value":"22","delta":"▲ +4","deltaDir":"pos"},
+  {"id":"cls_ccmi","section":"CLOSING","title":"CCMI (new meetings)","status":"pending","source":"Airtable (semantic unclear)"},
+  {"id":"cls_no_shows","section":"CLOSING","title":"No Shows / Ghosts","status":"live","source":"Airtable closer EOC","value":"6","delta":"▼ -2","deltaDir":"pos"},
+  {"id":"cls_reschedules","section":"CLOSING","title":"Reschedules","status":"live","source":"Airtable closer EOC","value":"3","delta":"—","deltaDir":"flat"},
+  {"id":"cls_cancelled","section":"CLOSING","title":"Cancelled Meetings","status":"live","source":"Airtable closer EOC","value":"2","delta":"▼ -1","deltaDir":"pos"},
+  {"id":"cls_obj_shopping","section":"CLOSING","title":"Shopping Around Objections","status":"pending","source":"Airtable (no structured field)"},
+  {"id":"cls_obj_think_fear","section":"CLOSING","title":"Think About It / Fear Objections","status":"pending","source":"Airtable (no structured field)"},
+  {"id":"cls_obj_spouse","section":"CLOSING","title":"Spouse Objections","status":"pending","source":"Airtable (no structured field)"},
+  {"id":"cls_follow_up_looms","section":"CLOSING","title":"Follow Up Looms Sent","status":"pending","source":"Close Smartviews"},
+  {"id":"cls_avg_meeting_duration","section":"CLOSING","title":"Avg Meeting Duration","status":"live","source":"Fathom calls","value":"42m 18s","delta":"▲ +3m","deltaDir":"pos"},
+  {"id":"cls_total_deposits","section":"CLOSING","title":"Total Deposits","status":"pending","source":"Airtable (count vs sum ambiguous)"},
+  {"id":"cls_closed_new","section":"CLOSING","title":"Closed Deals — New Meetings","status":"live","source":"Airtable closer EOC","value":"5","delta":"▲ +2","deltaDir":"pos"},
+  {"id":"cls_closed_followup","section":"CLOSING","title":"Closed Deals — Follow Up Meetings","status":"live","source":"Airtable closer EOC","value":"1","delta":"—","deltaDir":"flat"},
+  {"id":"cls_closed_direct_led","section":"CLOSING","title":"Closed Deals — Direct Booking Led","status":"pending","source":"Airtable (is_setter_led provisional)"},
+  {"id":"cls_closed_setter_led","section":"CLOSING","title":"Closed Deals — Setter Led","status":"pending","source":"Airtable (is_setter_led provisional)"},
+  {"id":"cls_closed_total","section":"CLOSING","title":"Total Closed Deals","status":"live","source":"Airtable closer EOC","value":"6","delta":"▲ +2","deltaDir":"pos"},
+  {"id":"cls_cash_deposits","section":"CLOSING","title":"Cash Collected — Deposits","status":"pending","source":"Airtable (cash field ambiguous)"},
+  {"id":"cls_cash_new","section":"CLOSING","title":"Cash Collected — New Calls","status":"pending","source":"Airtable (cash field ambiguous)"},
+  {"id":"cls_cash_followup","section":"CLOSING","title":"Cash Collected — Follow Up Calls","status":"pending","source":"Airtable (cash field ambiguous)"},
+  {"id":"cls_cash_direct_led","section":"CLOSING","title":"Cash Collected — Direct Booking Led","status":"pending","source":"Airtable"},
+  {"id":"cls_cash_setter_led","section":"CLOSING","title":"Cash Collected — Setter Led","status":"pending","source":"Airtable"},
+  {"id":"cls_total_cash","section":"CLOSING","title":"Total Cash Collected","status":"pending","source":"Derived"},
+  {"id":"cls_total_contracted","section":"CLOSING","title":"Total Contracted Revenue","status":"pending","source":"Derived"},
+  {"id":"cls_show_rate_new","section":"CLOSING","title":"Show Rate on New Calls","status":"pending","source":"Derived"},
+  {"id":"cls_one_call_close_rate","section":"CLOSING","title":"One-Call Close Rate","status":"pending","source":"Derived"},
+  {"id":"cls_overall_close_rate","section":"CLOSING","title":"Overall Close Rate","status":"pending","source":"Derived"},
+  {"id":"cls_aov","section":"CLOSING","title":"AOV","status":"pending","source":"Derived"},
+
+  {"id":"sd_downsell_roas","section":"SALES DATA","title":"Downsell ROAS","status":"pending","source":"Derived"},
+  {"id":"sd_one_call_cash_roas","section":"SALES DATA","title":"One-Call Cash ROAS","status":"pending","source":"Derived"},
+  {"id":"sd_overall_cash_roas","section":"SALES DATA","title":"Overall Cash ROAS","status":"pending","source":"Derived"},
+  {"id":"sd_overall_revenue_roas","section":"SALES DATA","title":"Overall Revenue ROAS","status":"pending","source":"Derived"},
+  {"id":"sd_cash_per_booked_meeting","section":"SALES DATA","title":"Cash Per Booked Meeting","status":"pending","source":"Derived"},
+  {"id":"sd_cost_per_showed","section":"SALES DATA","title":"Cost Per Showed Meeting","status":"pending","source":"Derived"},
+  {"id":"sd_cost_per_sale","section":"SALES DATA","title":"Cost Per Sale","status":"pending","source":"Derived"},
+  {"id":"sd_lead_to_close_rate","section":"SALES DATA","title":"Lead to Close Rate","status":"pending","source":"Derived"},
+
+  {"id":"br_ghl_cash","section":"BACK END REV","title":"GoHighLevel Cash","status":"not_connected","source":"GoHighLevel"},
+  {"id":"br_wix_cash","section":"BACK END REV","title":"Wix Cash","status":"not_connected","source":"Wix"},
+  {"id":"br_base44_cash","section":"BACK END REV","title":"Base44 Cash","status":"not_connected","source":"Base44"},
+  {"id":"br_llc_cash","section":"BACK END REV","title":"LLC Cash","status":"not_connected","source":"Manual"},
+  {"id":"br_instantly_cash","section":"BACK END REV","title":"Instantly Cash","status":"not_connected","source":"Instantly"},
+  {"id":"br_payplan_cash","section":"BACK END REV","title":"Payplan Cash","status":"not_connected","source":"Manual"},
+  {"id":"br_upsell_cash","section":"BACK END REV","title":"Upsell Cash","status":"not_connected","source":"Manual"},
+  {"id":"br_referral_cash","section":"BACK END REV","title":"Referral Cash","status":"not_connected","source":"Manual"},
+  {"id":"br_client_sales_5pct","section":"BACK END REV","title":"Client Sales (5%)","status":"not_connected","source":"Manual"},
+
+  {"id":"bc_closer_costs","section":"BUSINESS COSTS","title":"Closer Costs","status":"not_connected","source":"Manual"},
+  {"id":"bc_setter_costs","section":"BUSINESS COSTS","title":"Setter Costs","status":"not_connected","source":"Manual"},
+  {"id":"bc_mgmt_costs","section":"BUSINESS COSTS","title":"Mgmt Costs","status":"not_connected","source":"Manual"},
+  {"id":"bc_fulfillment_costs","section":"BUSINESS COSTS","title":"Fulfillment Costs","status":"not_connected","source":"Manual"},
+  {"id":"bc_software_costs","section":"BUSINESS COSTS","title":"Software Costs","status":"not_connected","source":"Cost Hub (untagged)"},
+  {"id":"bc_other_costs","section":"BUSINESS COSTS","title":"Other Costs","status":"not_connected","source":"Manual"},
+
+  {"id":"ful_calls_held","section":"FULFILLMENT","title":"Calls Held","status":"live","source":"Fathom","value":"38","delta":"▲ +6","deltaDir":"pos"},
+  {"id":"ful_trustpilots","section":"FULFILLMENT","title":"TrustPilots Generated","status":"not_connected","source":"TrustPilot"},
+  {"id":"ful_pos_sentiment","section":"FULFILLMENT","title":"Positive Sentiment Call","status":"pending","source":"Call reviewer sentiment classifier"},
+  {"id":"ful_neg_sentiment","section":"FULFILLMENT","title":"Negative Sentiment Call","status":"pending","source":"Call reviewer sentiment classifier"}
+]
+</script>
+
+<script>
+(function () {
+  const CATALOG = JSON.parse(document.getElementById('catalog').textContent);
+  const SECTION_MAP = {
+    'advertising':         { id: 'ADVERTISING',          title: 'Advertising.',          eyebrow: 'SALES · ADVERTISING' },
+    'content':             { id: 'CONTENT',              title: 'Content.',              eyebrow: 'SALES · CONTENT' },
+    'funnels':             { id: 'FUNNELS',              title: 'Funnels.',              eyebrow: 'SALES · FUNNELS' },
+    'appointment-setting': { id: 'APPOINTMENT SETTING',  title: 'Appointment Setting.',  eyebrow: 'SALES · APPOINTMENT SETTING' },
+    'closing':             { id: 'CLOSING',              title: 'Closing.',              eyebrow: 'SALES · CLOSING' },
+    'sales-data':          { id: 'SALES DATA',           title: 'Sales Data.',           eyebrow: 'SALES · SALES DATA' },
+    'back-end-rev':        { id: 'BACK END REV',         title: 'Back-End Revenue.',     eyebrow: 'SALES · BACK END REV' },
+    'business-costs':      { id: 'BUSINESS COSTS',       title: 'Business Costs.',       eyebrow: 'SALES · BUSINESS COSTS' },
+    'fulfillment':         { id: 'FULFILLMENT',          title: 'Fulfillment.',          eyebrow: 'SALES · FULFILLMENT' },
+  };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function renderMetricCard(m) {
+    const cls = m.status === 'live' ? 'live' : (m.status === 'pending' ? 'pending' : 'not-connected');
+    let body, pill;
+    if (m.status === 'live') {
+      body = `<span class="value">${escapeHtml(m.value || '—')}</span>` + (m.delta ? `<span class="delta ${m.deltaDir || ''}">${escapeHtml(m.delta)}</span>` : '');
+    } else if (m.status === 'pending') {
+      body = `<span class="geg-pill geg-pill--warn"><span class="geg-pill-dot"></span>PENDING</span>`;
+    } else {
+      body = `<span class="geg-pill geg-pill--muted"><span class="geg-pill-dot"></span>NOT CONNECTED</span>`;
+    }
+    const note = m.note ? `<div class="note">${escapeHtml(m.note)}</div>` : '';
+    return `
+      <div class="metric-card ${cls}">
+        <div class="head">
+          <div class="name">${escapeHtml(m.title)}</div>
+          <span class="state-glyph"></span>
+        </div>
+        <div class="body">${body}</div>
+        <div class="meta"><span class="source">${escapeHtml(m.source)}</span></div>
+        ${note}
+      </div>`;
+  }
+
+  function renderSection(viewKey) {
+    const meta = SECTION_MAP[viewKey];
+    if (!meta) return '';
+    const metrics = CATALOG.filter(m => m.section === meta.id);
+    const live = metrics.filter(m => m.status === 'live');
+    const pending = metrics.filter(m => m.status === 'pending');
+    const nc = metrics.filter(m => m.status === 'not_connected');
+
+    // top 3 live (or fall back if none)
+    const top = live.slice(0, 3);
+
+    let topHtml = '';
+    if (top.length > 0) {
+      topHtml = `<div class="section-top">${top.map(m => `
+        <div class="top-card">
+          <div class="card-eyebrow"><span style="font-family:var(--font-geg-mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--color-geg-accent);">${escapeHtml(meta.id)}</span>${m.delta ? `<span class="delta ${m.deltaDir || ''}" style="font-family:var(--font-geg-mono);font-size:10.5px;color:var(--color-geg-text-3);">${escapeHtml(m.delta)}</span>` : ''}</div>
+          <div class="metric-name">${escapeHtml(m.title)}</div>
+          <div class="value">${escapeHtml(m.value || '—')}</div>
+          <div class="source">${escapeHtml(m.source)}</div>
+        </div>`).join('')}</div>`;
+    } else {
+      topHtml = `<div class="empty-section-stub">No live metrics in this section yet. Everything below is pending or not-connected — wire a source to light up this slot.</div>`;
+    }
+
+    const allCards = metrics.map(renderMetricCard).join('');
+
+    return `
+      <header class="header-band">
+        <div>
+          <a class="backlink geg-eyebrow" data-view="overview">← BACK TO OVERVIEW</a>
+          <div class="geg-eyebrow">${escapeHtml(meta.eyebrow)}</div>
+          <h1 class="geg-display">${escapeHtml(meta.title)}</h1>
+        </div>
+        <div class="header-actions">
+          <div class="window-pill"><span class="dot"></span>LAST 7 DAYS</div>
+          <div class="window-pill" style="background:var(--color-geg-bg-elev);">
+            <span style="color:var(--color-geg-pos);">${live.length} LIVE</span>
+            <span style="color:var(--color-geg-text-faint);">·</span>
+            <span style="color:var(--color-geg-warn);">${pending.length} PENDING</span>
+            <span style="color:var(--color-geg-text-faint);">·</span>
+            <span style="color:var(--color-geg-text-faint);">${nc.length} N/C</span>
+          </div>
+        </div>
+      </header>
+
+      ${top.length > 0 ? `
+        <div class="group-head"><span class="geg-mono">TOP LIVE</span><span class="name">The numbers that lead this section.</span><span class="count">${top.length} OF ${live.length} LIVE</span></div>
+      ` : ''}
+      ${topHtml}
+
+      <div class="group-head"><span class="geg-mono">FULL CATALOG</span><span class="name">All ${metrics.length} metrics · sheet order.</span><span class="count">${live.length} LIVE · ${pending.length} PENDING · ${nc.length} N/C</span></div>
+      <div class="metric-grid">${allCards}</div>
+    `;
+  }
+
+  function show(viewKey) {
+    document.querySelectorAll('[data-view]').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.sidebar-link[data-view]').forEach(el => {
+      if (el.getAttribute('data-view') === viewKey) el.classList.add('active');
+    });
+
+    const overview = document.getElementById('view-overview');
+    const states = document.getElementById('view-states');
+    const section = document.getElementById('view-section');
+    overview.hidden = true; states.hidden = true; section.hidden = true;
+
+    if (viewKey === 'overview') { overview.hidden = false; }
+    else if (viewKey === 'states') { states.hidden = false; }
+    else if (SECTION_MAP[viewKey]) {
+      section.innerHTML = renderSection(viewKey);
+      section.setAttribute('data-screen-label', '02 ' + SECTION_MAP[viewKey].id);
+      section.hidden = false;
+      // bind back-link in newly-rendered content
+      section.querySelectorAll('[data-view]').forEach(el => {
+        el.addEventListener('click', e => { e.preventDefault(); show(el.getAttribute('data-view')); window.scrollTo(0, 0); });
+      });
+    }
+    try { localStorage.setItem('greg_sales_view', viewKey); } catch(_) {}
+    window.scrollTo(0, 0);
+  }
+
+  // Initial bindings
+  document.querySelectorAll('[data-view]').forEach(el => {
+    el.addEventListener('click', e => { e.preventDefault(); show(el.getAttribute('data-view')); });
+  });
+
+  // Restore last view
+  let initial = 'overview';
+  try { const saved = localStorage.getItem('greg_sales_view'); if (saved && (saved === 'overview' || saved === 'states' || SECTION_MAP[saved])) initial = saved; } catch(_) {}
+  show(initial);
+})();
+</script>
+
+</body>
+</html>
