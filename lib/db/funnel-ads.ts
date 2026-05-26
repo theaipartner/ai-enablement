@@ -149,11 +149,15 @@ export async function getAdsAggregateLive(range: AdsRange): Promise<AdsAggMetric
 
   return [
     { id: 'impressions', label: 'Total impressions', value: totalImpressions, format: 'integer', trend: impressionsTrend },
-    { id: 'adspend', label: 'Total adspend', value: totalSpend, format: 'usd', trend: spendTrend },
+    // Adspend + Cost-per-unique-click render with exact dollars-and-
+    // cents (usd_precise) — compact-USD rounded sub-$1K values down
+    // to whole dollars (e.g. $4.83 → "$5"), which Drake wants
+    // suppressed for these two metrics.
+    { id: 'adspend', label: 'Total adspend', value: totalSpend, format: 'usd_precise', trend: spendTrend },
     { id: 'frequency', label: 'Frequency', value: frequency, format: 'decimal', trend: frequencyTrend },
     { id: 'unique-clicks', label: 'Unique link clicks', value: totalUniqueClicks, format: 'integer', trend: uniqueClicksTrend },
     { id: 'cpi', label: 'CPM', value: cpm, format: 'usd_precise', trend: cpmTrend },
-    { id: 'cpc-unique', label: 'Cost per unique click', value: cpcUnique, format: 'usd', trend: cpcUniqueTrend },
+    { id: 'cpc-unique', label: 'Cost per unique click', value: cpcUnique, format: 'usd_precise', trend: cpcUniqueTrend },
     { id: 'ctr', label: 'CTR', value: ctr, format: 'percent_0_100', trend: ctrTrend },
   ]
 }

@@ -138,9 +138,16 @@ function Num({ value, accent }: { value: string; accent?: boolean }) {
 function formatDuration(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '—'
   if (sec < 60) return `${Math.round(sec)}s`
-  const m = Math.floor(sec / 60)
-  const s = Math.round(sec % 60)
-  return s === 0 ? `${m}m` : `${m}m ${s}s`
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60)
+    const s = Math.round(sec % 60)
+    return s === 0 ? `${m}m` : `${m}m ${s}s`
+  }
+  // Speed-to-lead can be many hours; render as "Xh Ym" so a 1123-min
+  // value reads "18h 43m" instead of an opaque minutes total.
+  const h = Math.floor(sec / 3600)
+  const m = Math.round((sec - h * 3600) / 60)
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
 function formatEtTimestamp(iso: string): string {
@@ -505,11 +512,11 @@ export function PerRepCallActivityTable({
         >
           <SortableHeader label="Rep" sortKey="name" align="left" state={state} onToggle={onToggle} />
           <SortableHeader label="Calls" sortKey="totalCalls" state={state} onToggle={onToggle} />
-          <SortableHeader label=">90s" sortKey="over90s" state={state} onToggle={onToggle} />
+          <SortableHeader label="Connected" sortKey="over90s" state={state} onToggle={onToggle} />
           <SortableHeader label="Books" sortKey="bookings" state={state} onToggle={onToggle} />
-          <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
           <SortableHeader label="Downsell" sortKey="downsells" state={state} onToggle={onToggle} />
           <SortableHeader label="Follow-up" sortKey="followUps" state={state} onToggle={onToggle} />
+          <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
           <SortableHeader label="Missing" sortKey="missing" state={state} onToggle={onToggle} />
         </div>
 
@@ -521,9 +528,9 @@ export function PerRepCallActivityTable({
           <Num value={aggregate.totalCalls.toString()} accent />
           <Num value={aggregate.totalOver90s.toString()} />
           <Num value={aggregate.bookings.toString()} />
-          <Num value={aggregate.dqs.toString()} />
           <Num value={aggregate.downsells.toString()} />
           <Num value={aggregate.followUps.toString()} />
+          <Num value={aggregate.dqs.toString()} />
           <Num value={aggregate.missing.toString()} />
         </div>
 
@@ -569,9 +576,9 @@ export function PerRepCallActivityTable({
                       <Num value={r.totalCalls.toString()} accent />
                       <Num value={r.totalOver90s.toString()} />
                       <Num value={r.bookings.toString()} />
-                      <Num value={r.dqs.toString()} />
                       <Num value={r.downsells.toString()} />
                       <Num value={r.followUps.toString()} />
+                      <Num value={r.dqs.toString()} />
                       <Num value={r.missing.toString()} />
                     </div>
                   </RepLinkPreservingParams>

@@ -104,10 +104,12 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
     title: 'Meta.',
     href: '/sales-dashboard/funnel/ads',
     status: 'live',
-    hero: { id: 'adspend', label: 'Total adspend', value: adSpend, format: 'usd' },
+    hero: { id: 'adspend', label: 'Total adspend', value: adSpend, format: 'usd_precise' },
     metrics: [
       { id: 'impressions', label: 'Impressions', value: impressions, format: 'integer' },
-      { id: 'cpc-unique', label: 'Cost / unique click', value: getMetricValue(ads, 'cpc-unique'), format: 'usd' },
+      // Exact dollars-and-cents for cost/click — compact-USD's whole-
+      // dollar rounding made sub-$1K values look quantized.
+      { id: 'cpc-unique', label: 'Cost / unique click', value: getMetricValue(ads, 'cpc-unique'), format: 'usd_precise' },
       { id: 'ctr', label: 'CTR', value: ctr, format: 'percent_0_100' },
     ],
     footer: adSpend > 0

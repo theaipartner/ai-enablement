@@ -209,12 +209,17 @@ function renderMetricValue(value: number, format: AdsAggMetric['format']): strin
   if (format === 'usd') return compactUsd(value)
   if (format === 'count') return compactCount(value)
   if (format === 'integer' && Math.abs(value) >= 100_000) return compactCount(value)
-  // CPM renders as dollars-and-cents on this page, not the engine-sheet
-  // 4-decimal "per-impression" scale.
-  if (format === 'usd_precise') {
-    return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  }
+  // CPM, adspend, and cost/click render as dollars-and-cents on this
+  // page (the daily table values are typically $100-$5000 — compact
+  // rounding to whole dollars was lossy).
+  if (format === 'usd_precise') return formatUsdExact(value)
   return formatMetricValue(value, format)
+}
+
+// Exact dollars-and-cents ($X,XXX.XX). Drake's preference for adspend
+// and cost-per-unique-click everywhere in the Meta Ads UI.
+function formatUsdExact(value: number): string {
+  return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function EmptyDailyNote() {
@@ -299,12 +304,12 @@ function DailyTable({ rows }: { rows: AdsDailyRow[] }) {
             >
               {formatMonthDay(r.day)}
             </span>
-            <Num value={r.spend != null ? compactUsd(r.spend) : '—'} />
+            <Num value={r.spend != null ? formatUsdExact(r.spend) : '—'} />
             <Num value={r.impressions != null ? compactCount(r.impressions) : '—'} />
             <Num value={r.uniqueClicks != null ? compactCount(r.uniqueClicks) : '—'} />
             <Num value={r.ctr != null ? `${r.ctr.toFixed(2)}%` : '—'} />
             <Num value={r.frequency != null ? r.frequency.toFixed(2) : '—'} />
-            <Num value={r.cpcUnique != null ? compactUsd(r.cpcUnique) : '—'} accent />
+            <Num value={r.cpcUnique != null ? formatUsdExact(r.cpcUnique) : '—'} accent />
           </div>
         ))
       )}
