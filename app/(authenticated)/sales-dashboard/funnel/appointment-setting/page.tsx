@@ -327,7 +327,7 @@ function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
             color: 'var(--color-geg-text-faint)',
           }}
         >
-          {fmr.cohortSize} leads · {fmr.cohortEverReplied} ever replied · {fmr.cohortWithin24h} within 24h
+          {fmr.cohortSize} leads · {fmr.cohortEverReplied} ever replied · {fmr.cohortWithin24h} within 24h · since May 24 ET
         </div>
       </div>
     </div>
@@ -436,7 +436,7 @@ function CallActivityTable({
   drill: CallActivityDrillRow[]
   showAllCalls: boolean
 }) {
-  const COLS = '1.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr'
+  const COLS = '1.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 0.9fr'
   return (
     <div style={{ padding: '18px 22px', background: 'var(--color-geg-bg-elev)', border: '1px solid var(--color-geg-border)', borderRadius: 10 }}>
       <SectionHeading>{label}</SectionHeading>
@@ -449,6 +449,7 @@ function CallActivityTable({
           <ColH label="DQs" />
           <ColH label="Downsell" />
           <ColH label="Follow-up" />
+          <ColH label="Missing" />
         </div>
 
         {/* Aggregate row — italicized, at the top */}
@@ -462,6 +463,7 @@ function CallActivityTable({
           <Num value={aggregate.dqs.toString()} />
           <Num value={aggregate.downsells.toString()} />
           <Num value={aggregate.followUps.toString()} />
+          <Num value={aggregate.missing.toString()} />
         </div>
 
         {rows.length === 0 ? (
@@ -504,6 +506,7 @@ function CallActivityTable({
                       <Num value={r.dqs.toString()} />
                       <Num value={r.downsells.toString()} />
                       <Num value={r.followUps.toString()} />
+                      <Num value={r.missing.toString()} />
                     </div>
                   </RepLinkPreservingParams>
                   {isSelected ? (
@@ -596,12 +599,31 @@ function CallActivityDrillExpander({
             >
               <span
                 className="geg-serif"
-                style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 title={c.leadId}
               >
                 {c.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
+                {c.noMatchingCall ? (
+                  <span
+                    className="geg-mono"
+                    title="No call to match — EOC was filled but no over-90s call by this rep is in Close for this lead in this window"
+                    style={{
+                      fontSize: 9,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      padding: '1px 6px',
+                      borderRadius: 4,
+                      border: '1px solid var(--color-geg-border)',
+                      color: 'var(--color-geg-text-faint)',
+                      background: 'var(--color-geg-bg)',
+                      cursor: 'help',
+                    }}
+                  >
+                    no call
+                  </span>
+                ) : null}
               </span>
-              <Num value={formatDuration(c.durationSec)} accent />
+              <Num value={c.noMatchingCall ? '—' : formatDuration(c.durationSec)} accent />
               <span
                 className="geg-mono"
                 style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}

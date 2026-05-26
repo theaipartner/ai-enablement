@@ -150,8 +150,9 @@ function etHourOfDay(iso: string): number {
 export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
   const sb = createAdminClient()
 
-  // Cohort: leads created since May 1, 2026 ET. Paginate to avoid
-  // PostgREST's default page limit.
+  // Cohort: leads created since May 24, 2026 00:00 ET (see
+  // FMR_COHORT_START_UTC_ISO). Paginate to avoid PostgREST's default
+  // page limit.
   const leads: Array<{ close_id: string; date_created: string }> = []
   {
     let from = 0
@@ -279,6 +280,91 @@ const PRIMARY_ROLE_OVERRIDE: Record<string, 'setter' | 'closer'> = {
 const EXCLUDED_REP_IDS = new Set<string>([
   'user_DFKbypchBYDyzLMdsg3ujzxWZyxTMKbsysYRc9LGAch', // Nabeel Junaid
 ])
+
+// Manual setter registry — covers setters whose Close user_id isn't
+// yet flowing into our mirror (Close-members ingestion gap). Each
+// entry creates a synthetic per-rep row keyed by `userId`. Once the
+// real Close user_id flows in, drop the entry here and re-add the
+// real id if needed elsewhere. The synthetic ids are namespaced with
+// `_manual_` so they never collide with real Close `user_xxx` ids.
+const MANUAL_SETTERS: Array<{ name: string; userId: string }> = [
+  { name: 'Victoria Ochoa', userId: '_manual_victoria_ochoa' },
+]
+
+// Used by the per-rep drill: fetch every display name this rep is
+// known by in Close + first-name aliases + manual-setter entry (when
+// the rep's Close user_id is synthetic). Returns the full set the
+// drill matches against airtable_setter_triage_calls.setter_names.
+async function buildKnownNamesForUser(
+  sb: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<Set<string>> {
+  const names = new Set<string>()
+
+  // Manual-setter entry — match by synthetic user_id.
+  const manual = MANUAL_SETTERS.find((m) => m.userId === userId)
+  if (manual) {
+    names.add(manual.name)
+    const first = manual.name.trim().split(/\s+/)[0]
+    if (first) names.add(first)
+  }
+
+  // Real Close display names from outbound calls' raw_payload.
+  let from = 0
+  for (;;) {
+    const { data, error } = await sb
+      .from('close_calls' as never)
+      .select('raw_payload')
+      .eq('user_id', userId)
+      .not('raw_payload', 'is', null)
+      .range(from, from + 199)
+    if (error) throw new Error(`close_calls name lookup failed: ${error.message}`)
+    const rows = (data ?? []) as unknown as Array<{ raw_payload: { user_name?: string } | null }>
+    if (rows.length === 0) break
+    for (const r of rows) {
+      const nm = r.raw_payload?.user_name
+      if (!nm) continue
+      names.add(nm)
+      const first = nm.trim().split(/\s+/)[0]
+      if (first && first !== nm) names.add(first)
+    }
+    if (rows.length < 200) break
+    from += 200
+  }
+  return names
+}
+
+// Augments a name→userId / userId→name pair of maps and a setter set
+// with:
+//   1. First-name aliases — when a Close user_name has multiple
+//      tokens (e.g. "Connor Malewicz"), also register the first
+//      token ("Connor") so Airtable forms that abbreviate to first-
+//      name resolve correctly. Skips if the first-name already maps
+//      somewhere else (avoids cross-rep collisions).
+//   2. Manual setters from MANUAL_SETTERS — their synthetic user_id
+//      is added to the setter set so resolveRole() classifies them.
+function augmentSetterLookup(
+  userIdByName: Map<string, string>,
+  nameByUser: Map<string, string>,
+  setterSet: Set<string>,
+): void {
+  // First-name aliases. Snapshot entries first so we don't iterate
+  // and mutate the same map.
+  const entries = Array.from(nameByUser.entries())
+  for (const [uid, fullName] of entries) {
+    const parts = fullName.trim().split(/\s+/)
+    if (parts.length < 2) continue
+    const first = parts[0]
+    if (!userIdByName.has(first)) userIdByName.set(first, uid)
+  }
+  // Manual setters — only registered if their name isn't already in
+  // the lookup (so a real Close match wins over the manual override).
+  for (const m of MANUAL_SETTERS) {
+    if (!userIdByName.has(m.name)) userIdByName.set(m.name, m.userId)
+    if (!nameByUser.has(m.userId)) nameByUser.set(m.userId, m.name)
+    setterSet.add(m.userId)
+  }
+}
 
 function resolveRole(userId: string, closerSet: Set<string>, setterSet: Set<string>): 'setter' | 'closer' | null {
   if (EXCLUDED_REP_IDS.has(userId)) return null
@@ -944,6 +1030,11 @@ export type CallActivityRepRow = {
   dqs: number
   downsells: number
   followUps: number
+  // Over-90s calls with no matching form outcome — i.e. the EOC
+  // wasn't filled out (yet). max(0, totalOver90s - sum of outcomes)
+  // so it never goes negative even when a form's event falls in
+  // window but the call is outside, or vice versa.
+  missing: number
 }
 
 export type CallActivityResult = {
@@ -955,13 +1046,18 @@ export type CallActivityResult = {
 }
 
 export type CallActivityDrillRow = {
-  callId: string                       // close_calls.close_id — React key
+  callId: string                       // close_calls.close_id — React key (or "form:<recordId>" for form-only rows)
   leadId: string
   prospectName: string | null
-  callAt: string                       // ISO UTC of this call
-  durationSec: number                  // call duration, > 90 (filtered upstream)
+  callAt: string                       // ISO UTC — call's activity_at or form's event_date_time
+  durationSec: number                  // call duration, > 90 (filtered upstream). 0 for form-only rows.
   bookingStatus: string | null
   bucket: TriageCallDrillRow['bucket']
+  // True when this row came from a form whose lead has NO over-90s
+  // call by this rep in window — i.e. the EOC was filled but the
+  // call didn't make it into Close (or was under 90s). Surfaced as a
+  // hover badge in the UI for audit.
+  noMatchingCall?: boolean
 }
 
 export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
@@ -1024,6 +1120,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
   }
 
+  // First-name aliases + manual-setter overrides — handles Airtable
+  // setter_names like "Connor" (Close has "Connor Malewicz") and
+  // setters whose Close user_id isn't yet ingested.
+  augmentSetterLookup(userIdByName, nameByUser, setterUsers)
+
   // Outcomes from Airtable form — attributed to whoever filled it
   // (setter_names → user_id via name lookup).
   //
@@ -1037,15 +1138,21 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const outcomesByUser = new Map<string, Outcomes>()
   let totalForms = 0
   {
-    type FormRow = { lead_id: string | null; booking_status: string | null; setter_names: string[] | null; airtable_created_at: string }
+    // Filter by `event_date_time` (when the call actually happened),
+    // NOT `airtable_created_at` (when the form was submitted). A form
+    // can be filled hours/days after the event; using submit time
+    // mis-attributes those events to the wrong calendar day. Rows
+    // with null event_date_time are excluded by gte/lt naturally
+    // (Postgres null comparisons return null = false).
+    type FormRow = { lead_id: string | null; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null }
     const allRows: FormRow[] = []
     let from = 0
     for (;;) {
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('lead_id, booking_status, setter_names, airtable_created_at')
-        .gte('airtable_created_at', range.startUtcIso)
-        .lt('airtable_created_at', range.endUtcIso)
+        .select('lead_id, booking_status, setter_names, event_date_time')
+        .gte('event_date_time', range.startUtcIso)
+        .lt('event_date_time', range.endUtcIso)
         .range(from, from + 999)
       if (error) throw new Error(`airtable_setter_triage_calls read failed: ${error.message}`)
       const rows = (page ?? []) as unknown as FormRow[]
@@ -1056,14 +1163,14 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
     totalForms = allRows.length
 
-    // Dedupe by lead_id (latest airtable_created_at wins). Drop rows
+    // Dedupe by lead_id (latest event_date_time wins). Drop rows
     // with no lead_id — those are empty/junk submissions Airtable's
     // own views also exclude.
     const latestByLead = new Map<string, FormRow>()
     for (const r of allRows) {
       if (!r.lead_id) continue
       const existing = latestByLead.get(r.lead_id)
-      if (!existing || r.airtable_created_at > existing.airtable_created_at) {
+      if (!existing || (r.event_date_time ?? '') > (existing.event_date_time ?? '')) {
         latestByLead.set(r.lead_id, r)
       }
     }
@@ -1091,6 +1198,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     if (!role) return
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
     const o = outcomesByUser.get(userId) ?? newOutcomes()
+    const matched = o.bookings + o.dqs + o.downsells + o.followUps
     const row: CallActivityRepRow = {
       userId,
       name: nameByUser.get(userId) ?? null,
@@ -1100,6 +1208,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       dqs: o.dqs,
       downsells: o.downsells,
       followUps: o.followUps,
+      missing: Math.max(0, v.over90s - matched),
     }
     if (role === 'setter') setters.push(row)
     else closers.push(row)
@@ -1117,7 +1226,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
-  let calls = 0, over90s = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0
+  let calls = 0, over90s = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
   for (const r of rows) {
     calls += r.totalCalls
     over90s += r.totalOver90s
@@ -1125,6 +1234,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     dqs += r.dqs
     downsells += r.downsells
     followUps += r.followUps
+    missing += r.missing
   }
   return {
     userId: null,
@@ -1135,6 +1245,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     dqs,
     downsells,
     followUps,
+    missing,
   }
 }
 
@@ -1181,15 +1292,20 @@ export async function getCallActivityForUser(
       from += 1000
     }
   }
-  if (calls.length === 0) return []
 
-  // Distinct lead ids for prospect-name + outcome lookups.
-  const leadIds = Array.from(new Set(calls.map((c) => c.leadId)))
+  // Names this rep is known by — close display name + first-name
+  // alias + manual-setter entry (when their Close user_id isn't
+  // ingested yet). Used to match airtable_setter_triage_calls.
+  // setter_names for the form-only drill section.
+  const knownNames = await buildKnownNamesForUser(sb, userId)
 
-  // Lead display names.
+  // Distinct lead ids from calls for prospect-name + outcome lookups.
+  const callLeadIds = Array.from(new Set(calls.map((c) => c.leadId)))
+
+  // Lead display names for call-derived rows.
   const leadName = new Map<string, string | null>()
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
+  for (let i = 0; i < callLeadIds.length; i += 100) {
+    const chunk = callLeadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
       .select('close_id, display_name')
@@ -1202,13 +1318,13 @@ export async function getCallActivityForUser(
 
   // Outcomes per lead from Airtable form (most recent row wins).
   const outcomeByLead = new Map<string, { bookingStatus: string | null; prospectName: string | null }>()
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
+  for (let i = 0; i < callLeadIds.length; i += 100) {
+    const chunk = callLeadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('lead_id, booking_status, prospect_name, airtable_created_at')
+      .select('lead_id, booking_status, prospect_name, event_date_time')
       .in('lead_id', chunk)
-      .order('airtable_created_at', { ascending: false })
+      .order('event_date_time', { ascending: false })
     if (error) throw new Error(`airtable (drill) read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{ lead_id: string; booking_status: string | null; prospect_name: string | null }>) {
       if (!r.lead_id) continue
@@ -1218,8 +1334,56 @@ export async function getCallActivityForUser(
     }
   }
 
+  // Form-only rows: forms filled by this rep (setter_names overlap)
+  // whose event_date_time is in window AND whose lead has no over-90s
+  // call by this rep. Surfaced with `noMatchingCall: true` so the UI
+  // can show the audit badge.
+  const callLeadIdSet = new Set(callLeadIds)
+  type FormRow = {
+    record_id: string
+    lead_id: string | null
+    prospect_name: string | null
+    booking_status: string | null
+    setter_names: string[] | null
+    event_date_time: string | null
+  }
+  const formOnlyRows: CallActivityDrillRow[] = []
+  if (knownNames.size > 0) {
+    let from = 0
+    for (;;) {
+      const { data, error } = await sb
+        .from('airtable_setter_triage_calls' as never)
+        .select('record_id, lead_id, prospect_name, booking_status, setter_names, event_date_time')
+        .gte('event_date_time', range.startUtcIso)
+        .lt('event_date_time', range.endUtcIso)
+        .range(from, from + 999)
+      if (error) throw new Error(`airtable_setter_triage_calls (form-only drill) read failed: ${error.message}`)
+      const rows = (data ?? []) as unknown as FormRow[]
+      if (rows.length === 0) break
+      for (const r of rows) {
+        const names = r.setter_names ?? []
+        if (!names.some((n) => knownNames.has(n))) continue
+        if (r.lead_id && callLeadIdSet.has(r.lead_id)) continue
+        formOnlyRows.push({
+          callId: `form:${r.record_id}`,
+          leadId: r.lead_id ?? '',
+          prospectName: r.prospect_name,
+          callAt: r.event_date_time ?? '',
+          durationSec: 0,
+          bookingStatus: r.booking_status,
+          bucket: classifyBookingStatus(r.booking_status),
+          noMatchingCall: true,
+        })
+      }
+      if (rows.length < 1000) break
+      from += 1000
+    }
+  }
+
   // Compose. Form prospect_name wins over close_leads.display_name.
-  return calls.map((c) => {
+  // Form-only rows appended at the end so the call-driven rows
+  // (sorted desc by activity_at upstream) remain at the top.
+  const callRows = calls.map((c) => {
     const form = outcomeByLead.get(c.leadId)
     return {
       callId: c.callId,
@@ -1229,8 +1393,9 @@ export async function getCallActivityForUser(
       durationSec: c.durationSec,
       bookingStatus: form?.bookingStatus ?? null,
       bucket: classifyBookingStatus(form?.bookingStatus ?? null),
-    }
+    } as CallActivityDrillRow
   })
+  return [...callRows, ...formOnlyRows]
 }
 
 export type TriageCallDrillRow = {
@@ -1304,6 +1469,10 @@ export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageM
     from += 1000
   }
 
+  // First-name aliases + manual-setter overrides. Same rationale as
+  // getCallActivityMetrics.
+  augmentSetterLookup(userIdByName, nameByUser, setterUsers)
+
   // Outcomes side: Airtable form rows in window. Each row's setter
   // is mapped back to a Close user_id by name.
   type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number }
@@ -1311,15 +1480,17 @@ export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageM
   const outcomesByUser = new Map<string, Outcomes>()
   let totalForms = 0
   let formFrom = 0
+  // Filter by event_date_time (call's actual date), not the form's
+  // submit timestamp. See note in getCallActivityMetrics for rationale.
   for (;;) {
     const { data: page, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('record_id, booking_status, setter_names, airtable_created_at')
-      .gte('airtable_created_at', range.startUtcIso)
-      .lt('airtable_created_at', range.endUtcIso)
+      .select('record_id, booking_status, setter_names, event_date_time')
+      .gte('event_date_time', range.startUtcIso)
+      .lt('event_date_time', range.endUtcIso)
       .range(formFrom, formFrom + 999)
     if (error) throw new Error(`airtable_setter_triage_calls read failed: ${error.message}`)
-    const rows = (page ?? []) as unknown as Array<{ record_id: string; booking_status: string | null; setter_names: string[] | null; airtable_created_at: string }>
+    const rows = (page ?? []) as unknown as Array<{ record_id: string; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null }>
     if (rows.length === 0) break
     totalForms += rows.length
     for (const r of rows) {
@@ -1410,42 +1581,24 @@ export async function getTriageCallsForUser(
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
-  // Find this user's display name from close_calls.raw_payload.
-  // Could match multiple names if the user has had a name change;
-  // collect the set.
-  const knownNames = new Set<string>()
-  let from = 0
-  for (;;) {
-    const { data: page, error } = await sb
-      .from('close_calls' as never)
-      .select('raw_payload')
-      .eq('user_id', userId)
-      .not('raw_payload', 'is', null)
-      .range(from, from + 199)
-    if (error) throw new Error(`close_calls name lookup failed: ${error.message}`)
-    const rows = (page ?? []) as unknown as Array<{ raw_payload: { user_name?: string } | null }>
-    if (rows.length === 0) break
-    for (const r of rows) {
-      const nm = r.raw_payload?.user_name
-      if (nm) knownNames.add(nm)
-    }
-    if (rows.length < 200) break
-    from += 200
-  }
+  // Resolve every name this rep is known by — close display name +
+  // first-name alias + manual-setter entry. Drives the setter_names
+  // overlap filter on Airtable form rows.
+  const knownNames = await buildKnownNamesForUser(sb, userId)
   if (knownNames.size === 0) return []
 
-  // Pull all Airtable rows in window; filter in JS by setter_names
-  // overlap with knownNames (Postgres array overlap via .ov() is
-  // possible but JS is fine for the form's small size).
+  // Pull all Airtable rows whose event happened in window; filter in
+  // JS by setter_names overlap with knownNames. Date filter matches
+  // the aggregate side — see note in getCallActivityMetrics.
   const out: TriageCallDrillRow[] = []
   let af = 0
   for (;;) {
     const { data: page, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('record_id, prospect_name, booking_status, setter_names, event_date_time, airtable_created_at')
-      .gte('airtable_created_at', range.startUtcIso)
-      .lt('airtable_created_at', range.endUtcIso)
-      .order('airtable_created_at', { ascending: false })
+      .select('record_id, prospect_name, booking_status, setter_names, event_date_time')
+      .gte('event_date_time', range.startUtcIso)
+      .lt('event_date_time', range.endUtcIso)
+      .order('event_date_time', { ascending: false })
       .range(af, af + 999)
     if (error) throw new Error(`airtable_setter_triage_calls drill read failed: ${error.message}`)
     const rows = (page ?? []) as unknown as Array<{
@@ -1454,7 +1607,6 @@ export async function getTriageCallsForUser(
       booking_status: string | null
       setter_names: string[] | null
       event_date_time: string | null
-      airtable_created_at: string
     }>
     if (rows.length === 0) break
     for (const r of rows) {
@@ -1463,7 +1615,7 @@ export async function getTriageCallsForUser(
       out.push({
         recordId: r.record_id,
         prospectName: r.prospect_name,
-        occurredAtIso: r.event_date_time ?? r.airtable_created_at,
+        occurredAtIso: r.event_date_time ?? '',
         bookingStatus: r.booking_status,
         bucket: classifyBookingStatus(r.booking_status),
       })
