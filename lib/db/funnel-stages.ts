@@ -35,6 +35,9 @@ export type FunnelBox = {
   title: string
   href: string | null
   status: FunnelBoxStatus
+  // Optional hero metric rendered above the metric grid (big number).
+  // Used on the Ads box to feature total adspend at the top.
+  hero?: AggMetric
   // Six (or fewer) metric tiles inside the box. AggMetric is the
   // shared shape used by every stage-detail MetricsGrid.
   metrics: AggMetric[]
@@ -88,24 +91,23 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   const impressions = typeof impressionsMetric?.value === 'number' ? impressionsMetric.value : 0
   const adSpend = typeof adspendMetric?.value === 'number' ? adspendMetric.value : 0
 
-  // Volume-weighted CTR for the Ads box (impressions → unique clicks).
-  // Pulled from getAdsAggregateLive's existing math; it returns
-  // `ctr` as percent_0_100.
-  const ctrMetric = ads.find((m) => m.id === 'ctr')
-  const ctr = typeof ctrMetric?.value === 'number' ? ctrMetric.value : null
+  // Volume-weighted CTR (unique link clicks / impressions). Comes from
+  // getAdsAggregateLive — `percent_0_100`.
+  const ctr = getMetricValue(ads, 'ctr')
 
+  // Ads box layout: hero adspend on top (rendered with exact dollars-
+  // and-cents in page.tsx), then three tiles below — Impressions,
+  // Cost / unique click, CTR.
   const adsBox: FunnelBox = {
     id: 'ads',
     eyebrow: 'PULSE · ADS',
     title: 'Meta.',
     href: '/sales-dashboard/funnel/ads',
     status: 'live',
+    hero: { id: 'adspend', label: 'Total adspend', value: adSpend, format: 'usd' },
     metrics: [
       { id: 'impressions', label: 'Impressions', value: impressions, format: 'integer' },
-      { id: 'adspend', label: 'Adspend', value: adSpend, format: 'usd' },
-      { id: 'cpm', label: 'CPM', value: getMetricValue(ads, 'cpi'), format: 'usd_precise' },
       { id: 'cpc-unique', label: 'Cost / unique click', value: getMetricValue(ads, 'cpc-unique'), format: 'usd' },
-      { id: 'frequency', label: 'Frequency', value: getMetricValue(ads, 'frequency'), format: 'decimal' },
       { id: 'ctr', label: 'CTR', value: ctr, format: 'percent_0_100' },
     ],
     footer: adSpend > 0

@@ -128,6 +128,9 @@ export async function getAdsAggregateLive(range: AdsRange): Promise<AdsAggMetric
   const totalUniqueClicks = sum(rows, 'unique_link_clicks')
   const cpm = totalImpressions > 0 ? (totalSpend / totalImpressions) * 1000 : null
   const cpcUnique = totalUniqueClicks > 0 ? totalSpend / totalUniqueClicks : null
+  // CTR = unique link clicks / impressions. Drake's spec — not Meta's
+  // native ctr (which uses link_clicks-all). Renders 0..100.
+  const ctr = totalImpressions > 0 ? (totalUniqueClicks / totalImpressions) * 100 : null
   const frequency = avg(rows, 'frequency')
 
   // Per-day series for the in-cell sparkline. Rows are already in
@@ -138,6 +141,11 @@ export async function getAdsAggregateLive(range: AdsRange): Promise<AdsAggMetric
   const uniqueClicksTrend = rows.map((r) => numericOrZero(r.unique_link_clicks))
   const cpmTrend = rows.map((r) => numericOrZero(r.cpm))
   const cpcUniqueTrend = rows.map((r) => numericOrZero(r.cost_per_unique_link_click))
+  const ctrTrend = rows.map((r) => {
+    const imp = numericOrZero(r.impressions)
+    const uc = numericOrZero(r.unique_link_clicks)
+    return imp > 0 ? (uc / imp) * 100 : 0
+  })
 
   return [
     { id: 'impressions', label: 'Total impressions', value: totalImpressions, format: 'integer', trend: impressionsTrend },
@@ -146,6 +154,7 @@ export async function getAdsAggregateLive(range: AdsRange): Promise<AdsAggMetric
     { id: 'unique-clicks', label: 'Unique link clicks', value: totalUniqueClicks, format: 'integer', trend: uniqueClicksTrend },
     { id: 'cpi', label: 'CPM', value: cpm, format: 'usd_precise', trend: cpmTrend },
     { id: 'cpc-unique', label: 'Cost per unique click', value: cpcUnique, format: 'usd', trend: cpcUniqueTrend },
+    { id: 'ctr', label: 'CTR', value: ctr, format: 'percent_0_100', trend: ctrTrend },
   ]
 }
 

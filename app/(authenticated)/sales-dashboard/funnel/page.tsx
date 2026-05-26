@@ -94,7 +94,7 @@ function ActivityBox({ box }: { box: FunnelBox }) {
       {box.status === 'stub' ? (
         <StubBody footer={box.footer} />
       ) : (
-        <LiveBody metrics={box.metrics} footer={box.footer} />
+        <LiveBody hero={box.hero} metrics={box.metrics} footer={box.footer} />
       )}
     </>
   )
@@ -153,9 +153,10 @@ function BoxHeader({ eyebrow, title, clickable }: { eyebrow: string; title: stri
   )
 }
 
-function LiveBody({ metrics, footer }: { metrics: AggMetric[]; footer?: string }) {
+function LiveBody({ hero, metrics, footer }: { hero?: AggMetric; metrics: AggMetric[]; footer?: string }) {
   return (
     <>
+      {hero ? <HeroTile metric={hero} /> : null}
       <div
         style={{
           display: 'grid',
@@ -182,6 +183,50 @@ function LiveBody({ metrics, footer }: { metrics: AggMetric[]; footer?: string }
         </div>
       ) : null}
     </>
+  )
+}
+
+function HeroTile({ metric }: { metric: AggMetric }) {
+  const display = metric.value == null ? '—' : renderHeroValue(metric.value, metric.format)
+  return (
+    <div
+      style={{
+        padding: '20px 22px 22px',
+        background: 'var(--color-geg-bg)',
+        border: '1px solid var(--color-geg-border)',
+        borderRadius: 10,
+        marginBottom: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.16em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-3)',
+        }}
+      >
+        {metric.label}
+      </div>
+      <div
+        className="geg-numeric-serif"
+        style={{
+          fontSize: 44,
+          lineHeight: '52px',
+          letterSpacing: '-0.022em',
+          color: 'var(--color-geg-text)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {display}
+      </div>
+    </div>
   )
 }
 
@@ -289,6 +334,15 @@ function FooterNote({ adSpend }: { adSpend: number }) {
       {adSpend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} drives cost-per math.
     </div>
   )
+}
+
+// Hero rendering — exact dollars-and-cents for USD so the headline
+// shows e.g. "$1,234.56" rather than the compact "$1.2K" tiles use.
+function renderHeroValue(value: number, format: MetricFormatExt): string {
+  if (format === 'usd' || format === 'usd_precise') {
+    return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+  return renderValue(value, format)
 }
 
 function renderValue(value: number, format: MetricFormatExt): string {
