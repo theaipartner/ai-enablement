@@ -206,6 +206,40 @@ class CloseClient:
         """Full lead object including all `custom.cf_*` keys."""
         return self._request("GET", f"/lead/{lead_id}/")
 
+    def iter_users(
+        self,
+        *,
+        page_size: int = 100,
+        max_pages: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every Close user in the org, paginating via _skip/_limit.
+
+        Used by the daily Close-users sync cron to populate
+        `team_members.close_user_id` by email match.
+        """
+        skip = 0
+        page_count = 0
+        while True:
+            params: dict[str, Any] = {"_skip": skip, "_limit": page_size}
+            resp = self._request("GET", "/user/", params=params)
+            data = resp.get("data", [])
+            for user in data:
+                yield user
+            page_count += 1
+            if not resp.get("has_more"):
+                return
+            if not data:
+                return
+            if max_pages is not None and page_count >= max_pages:
+                return
+            if page_count >= PAGINATION_SAFETY_MAX_PAGES:
+                logger.warning(
+                    "close.users_pagination_safety_hit page_count=%d skip=%d",
+                    page_count, skip,
+                )
+                return
+            skip += len(data)
+
     def iter_activities_for_lead(
         self,
         lead_id: str,

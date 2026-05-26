@@ -115,6 +115,11 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 300,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/close_users_sync_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
@@ -131,6 +136,7 @@
     { "path": "/api/typeform_sync_cron", "schedule": "*/15 * * * *" },
     { "path": "/api/typeform_insights_cron", "schedule": "7,22,37,52 * * * *" },
     { "path": "/api/clarity_sync_cron", "schedule": "0 10 * * *" },
-    { "path": "/api/airtable_sync_cron", "schedule": "*/15 * * * *" }
+    { "path": "/api/airtable_sync_cron", "schedule": "*/15 * * * *" },
+    { "path": "/api/close_users_sync_cron", "schedule": "30 11 * * *" }
   ]
 }

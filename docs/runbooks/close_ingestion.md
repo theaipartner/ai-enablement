@@ -226,6 +226,53 @@ All upserts key on `close_id`. Re-running any subset (one lead, all leads, all o
 
 Soft-deletion in Close (which is rare) is NOT mirrored — a lead deleted in Close stays in `close_leads` until manually purged. If this becomes a problem, the polling cron can be extended to track deletions via Event Log.
 
+## Close users sync (daily cron, populates `team_members.close_user_id`)
+
+Daily cron at **11:30 UTC** that paginates Close's `/user/` endpoint and writes each user's `id` into the matching active `team_members` row keyed by email.
+
+**Why this exists:** before this cron, the appointment-setting dashboard inferred who's a setter/closer from `close_leads.closer_owner_id`/`setter_owner_id` (only ~30% coverage) plus hardcoded override + manual-setter maps. The clean state is `team_members.close_user_id` as the canonical bridge; this cron keeps that column current as Sales onboards new reps.
+
+**What it does per tick:**
+
+1. `GET /user/` (paginated, `_skip`/`_limit=100`) — fetches every Close user in the org.
+2. For each user with a Close `id` + `email`:
+   - Look up the active (`archived_at IS NULL`) `team_members` row by `email` match.
+   - **Match + `close_user_id` is null** → UPDATE the row with the Close id. Log INFO.
+   - **Match + `close_user_id` already equals Close's id** → skip (most common path).
+   - **Match + `close_user_id` set to a DIFFERENT id** → log WARNING with both ids. This indicates drift (rare; usually a re-paired Close user) and surfaces in the cron's audit payload as `drift_warnings` for manual review.
+   - **No match** → append to `unmatched_close_users` in the audit. The cron does NOT auto-create team_members rows; sales onboarding adds the row manually first, then the cron fills the close_user_id.
+3. Audit row written to `webhook_deliveries.source='close_users_sync'`.
+
+**When a new sales rep joins:**
+
+1. Drake (or whoever) manually adds the `team_members` row first (`role='sales'`, `sales_role` set as appropriate, `close_user_id` left null).
+2. Within 24 hours, the daily cron picks up their Close user_id from the email match.
+3. The appointment-setting dashboard sees them on the next page load.
+
+Step 1 is intentional — we don't want the cron to create team_members rows from raw Close membership because Close may contain users who shouldn't be in our agency registry (test accounts, paused users, integrations like Aircall).
+
+**Why polling, not webhook:** user-create / user-update events happen 1-2 times/month at this team's volume. A daily polling cron is idempotent, simpler to maintain, and recovers from missed deliveries automatically. Revisit if onboarding cadence sharply increases or real-time user attribution becomes load-bearing.
+
+**Manual trigger:**
+
+```bash
+curl -i -X POST -H "Authorization: Bearer $CRON_SECRET" \
+  https://ai-enablement-sigma.vercel.app/api/close_users_sync_cron
+```
+
+**Audit query** (find recent unmatched Close users):
+
+```sql
+select
+  received_at,
+  payload->'unmatched_close_users' as unmatched,
+  payload->'drift_warnings' as drift
+from webhook_deliveries
+where source = 'close_users_sync'
+order by received_at desc
+limit 5;
+```
+
 ## Out of scope (future specs)
 
 - **Triage ingestion** — lives in Airtable forms, not Close. Will be its own ingestion spec.
