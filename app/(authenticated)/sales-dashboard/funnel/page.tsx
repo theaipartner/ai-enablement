@@ -4,6 +4,7 @@ import {
   getFunnelActivity,
   resolveFunnelRange,
   type FunnelBox,
+  type PulseTile,
 } from '@/lib/db/funnel-stages'
 import {
   compactCount,
@@ -14,18 +15,17 @@ import {
   parseEtDateString,
   todayEtDate,
 } from '@/lib/db/funnel-window'
-import type { AggMetric, MetricFormatExt } from '@/lib/db/funnel-mocks'
+import type { MetricFormatExt } from '@/lib/db/funnel-mocks'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from './landing-pages/date-range-picker'
 
 // Sales Dashboard — Funnel (Pulse-style activity view).
 //
 // Four stacked boxes — Ads, Landing Page, Appointment Setting,
-// Closing — each an INDEPENDENT activity snapshot for the selected
-// range. No funnel shape, no cross-stage conversion percentages, no
-// bottleneck calculation. Stages are activity-in-period (today's
-// shows are leads who booked days ago) so cross-stage rates would
-// mix cohorts. Cohort attribution is future work.
+// Closing — each an independent activity snapshot for the selected
+// range. Below the four boxes sits a non-clickable ROAS strip with
+// two tiles (cash landed + revenue), separated visually so it reads
+// as a roll-up rather than another funnel stage.
 //
 // Default range = yesterday ET. Meta lands the morning after, so
 // yesterday is the most-recent fully-populated day across every
@@ -71,6 +71,8 @@ export default async function SalesDashboardFunnelPage({
         ))}
       </div>
 
+      <RoasStrip tiles={result.roas} />
+
       <FooterNote adSpend={result.adSpend} />
     </div>
   )
@@ -94,7 +96,7 @@ function ActivityBox({ box }: { box: FunnelBox }) {
       {box.status === 'stub' ? (
         <StubBody footer={box.footer} />
       ) : (
-        <LiveBody hero={box.hero} metrics={box.metrics} footer={box.footer} />
+        <LiveBody tiles={box.tiles} footer={box.footer} />
       )}
     </>
   )
@@ -153,10 +155,11 @@ function BoxHeader({ eyebrow, title, clickable }: { eyebrow: string; title: stri
   )
 }
 
-function LiveBody({ hero, metrics, footer }: { hero?: AggMetric; metrics: AggMetric[]; footer?: string }) {
+function LiveBody({ tiles, footer }: { tiles: PulseTile[]; footer?: string }) {
+  // Always 3-column layout. 6 tiles → 3×2 (Appt Setting); 5 tiles →
+  // 3+2 with the last row left-aligned (LP); 3-4 tiles → single row.
   return (
     <>
-      {hero ? <HeroTile metric={hero} /> : null}
       <div
         style={{
           display: 'grid',
@@ -164,8 +167,8 @@ function LiveBody({ hero, metrics, footer }: { hero?: AggMetric; metrics: AggMet
           gap: 12,
         }}
       >
-        {metrics.map((m) => (
-          <MetricTile key={m.id} metric={m} />
+        {tiles.map((t) => (
+          <MetricTile key={t.id} tile={t} />
         ))}
       </div>
       {footer ? (
@@ -183,50 +186,6 @@ function LiveBody({ hero, metrics, footer }: { hero?: AggMetric; metrics: AggMet
         </div>
       ) : null}
     </>
-  )
-}
-
-function HeroTile({ metric }: { metric: AggMetric }) {
-  const display = metric.value == null ? '—' : renderHeroValue(metric.value, metric.format)
-  return (
-    <div
-      style={{
-        padding: '20px 22px 22px',
-        background: 'var(--color-geg-bg)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 10,
-        marginBottom: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.16em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-        }}
-      >
-        {metric.label}
-      </div>
-      <div
-        className="geg-numeric-serif"
-        style={{
-          fontSize: 44,
-          lineHeight: '52px',
-          letterSpacing: '-0.022em',
-          color: 'var(--color-geg-text)',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}
-      >
-        {display}
-      </div>
-    </div>
   )
 }
 
@@ -272,31 +231,40 @@ function StubBody({ footer }: { footer?: string }) {
   )
 }
 
-function MetricTile({ metric }: { metric: AggMetric }) {
-  const display = metric.value == null ? '—' : renderValue(metric.value, metric.format)
+function MetricTile({ tile }: { tile: PulseTile }) {
+  const display = tile.value == null ? '—' : renderValue(tile.value, tile.format)
+  const isHighlight = !!tile.highlight
   return (
     <div
       style={{
+        position: 'relative',
         padding: '14px 16px 12px',
         background: 'var(--color-geg-bg)',
-        border: '1px solid var(--color-geg-border)',
+        border: isHighlight ? '1px solid var(--color-geg-accent)' : '1px solid var(--color-geg-border)',
+        boxShadow: isHighlight ? 'inset 0 0 0 1px var(--color-geg-accent)' : undefined,
         borderRadius: 8,
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
-        minHeight: 84,
+        minHeight: 92,
       }}
     >
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-        }}
-      >
-        {metric.label}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        <div
+          className="geg-mono"
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: isHighlight ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {tile.label}
+        </div>
+        {tile.secondary ? <SecondaryBadge secondary={tile.secondary} /> : null}
       </div>
       <div
         className="geg-numeric-serif"
@@ -304,7 +272,7 @@ function MetricTile({ metric }: { metric: AggMetric }) {
           fontSize: 22,
           lineHeight: '26px',
           letterSpacing: '-0.02em',
-          color: 'var(--color-geg-text)',
+          color: isHighlight ? 'var(--color-geg-accent)' : 'var(--color-geg-text)',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -312,6 +280,76 @@ function MetricTile({ metric }: { metric: AggMetric }) {
         }}
       >
         {display}
+      </div>
+      {tile.caption ? (
+        <div
+          className="geg-mono"
+          style={{
+            marginTop: 2,
+            fontSize: 9,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--color-geg-text-faint)',
+          }}
+        >
+          {tile.caption}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SecondaryBadge({ secondary }: { secondary: NonNullable<PulseTile['secondary']> }) {
+  const display = secondary.value == null ? '—' : renderValue(secondary.value, secondary.format)
+  return (
+    <div
+      className="geg-mono"
+      style={{
+        fontSize: 9.5,
+        letterSpacing: '0.06em',
+        color: 'var(--color-geg-text-faint)',
+        whiteSpace: 'nowrap',
+        display: 'inline-flex',
+        gap: 4,
+        alignItems: 'baseline',
+      }}
+      title={`${secondary.label}: ${display}`}
+    >
+      <span style={{ textTransform: 'uppercase' }}>{secondary.label}</span>
+      <span style={{ color: 'var(--color-geg-text-2)' }}>{display}</span>
+    </div>
+  )
+}
+
+// ROAS strip — two tiles below the four boxes. Visually distinct
+// from the boxes (no card wrapper, muted padding) so it reads as a
+// roll-up summary, not a fifth stage.
+function RoasStrip({ tiles }: { tiles: PulseTile[] }) {
+  if (tiles.length === 0) return null
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.18em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-3)',
+          marginBottom: 10,
+        }}
+      >
+        ROAS
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 12,
+        }}
+      >
+        {tiles.map((t) => (
+          <MetricTile key={t.id} tile={t} />
+        ))}
       </div>
     </div>
   )
@@ -336,21 +374,12 @@ function FooterNote({ adSpend }: { adSpend: number }) {
   )
 }
 
-// Hero rendering — exact dollars-and-cents for USD so the headline
-// shows e.g. "$1,234.56" rather than the compact "$1.2K" tiles use.
-function renderHeroValue(value: number, format: MetricFormatExt): string {
-  if (format === 'usd' || format === 'usd_precise') {
-    return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  }
-  return renderValue(value, format)
-}
-
 function renderValue(value: number, format: MetricFormatExt): string {
   if (format === 'usd') return compactUsd(value)
   if (format === 'count') return compactCount(value)
   if (format === 'integer' && Math.abs(value) >= 100_000) return compactCount(value)
-  // CPM as $XX.XX (dollars-and-cents) instead of the engine-sheet
-  // 4-decimal "per-impression" rendering.
+  // Dollars-and-cents for usd_precise (Adspend, Cost/click, every
+  // Pulse cost-per badge).
   if (format === 'usd_precise') {
     return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
