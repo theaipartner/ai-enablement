@@ -424,6 +424,125 @@ function mergeSalesIdentity(
   })
 }
 
+// How far before a form's airtable_created_at to search for a
+// matching close_call. Captures the typical "fill the form within
+// 48h of the call" pattern. Past that, accept the form's claimed
+// event_date_time and tag as "no call to match" in the drill.
+const FORM_MATCH_LOOKBACK_HOURS = 48
+
+export type FormMatchInput = {
+  recordId: string
+  leadId: string | null
+  // setter's Close user_id, resolved upstream from setter_names →
+  // userIdByName. Null if the form's setter name didn't resolve
+  // (e.g., name typo or rep not yet in team_members / close_calls).
+  setterUserId: string | null
+  airtableCreatedAt: string  // ISO UTC
+  eventDateTime: string | null  // ISO UTC, may be null on junk rows
+}
+
+export type FormMatchResult = FormMatchInput & {
+  // The day the form is attributed to. Always set — falls back to
+  // event_date_time, then airtable_created_at, so per-rep windowing
+  // never drops a form for missing data.
+  effectiveDateIso: string
+  // close_calls.close_id of the matched call, if any. When set, the
+  // form's outcome attaches to that specific call in the drill.
+  matchedCallId: string | null
+  matchedCallActivityAt: string | null
+}
+
+// Batch-match each form to its most-recent close_call by lead_id +
+// setter user_id + duration > 90 + activity_at within the lookback
+// window of the form's airtable_created_at. Direction-agnostic
+// (inbound matches just as well as outbound — the call happened
+// either way). One DB read for the whole batch, in-memory match.
+async function matchFormsToCalls(
+  sb: ReturnType<typeof createAdminClient>,
+  forms: FormMatchInput[],
+): Promise<FormMatchResult[]> {
+  if (forms.length === 0) return []
+
+  // Build the lead-id list + the bracket of activity_at to fetch.
+  const leadIds = new Set<string>()
+  let minLookback = Infinity
+  let maxAnchor = -Infinity
+  for (const f of forms) {
+    if (f.leadId) leadIds.add(f.leadId)
+    const anchorMs = new Date(f.airtableCreatedAt).getTime()
+    if (Number.isFinite(anchorMs)) {
+      minLookback = Math.min(minLookback, anchorMs - FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000)
+      maxAnchor = Math.max(maxAnchor, anchorMs)
+    }
+  }
+  if (leadIds.size === 0 || !Number.isFinite(minLookback)) {
+    // No leads or no anchorable timestamps — every form falls back.
+    return forms.map((f) => ({
+      ...f,
+      effectiveDateIso: f.eventDateTime ?? f.airtableCreatedAt,
+      matchedCallId: null,
+      matchedCallActivityAt: null,
+    }))
+  }
+
+  // Pull every long call to any of these leads in the bracket.
+  // Paginate; lead_ids.size is bounded by the form set so practical
+  // sizes stay well under PostgREST's lead-id chunk limit.
+  type CallRow = { close_id: string; lead_id: string; user_id: string; activity_at: string; duration: number | null }
+  const calls: CallRow[] = []
+  const leadIdArr = Array.from(leadIds)
+  const CHUNK = 100
+  for (let i = 0; i < leadIdArr.length; i += CHUNK) {
+    const chunk = leadIdArr.slice(i, i + CHUNK)
+    let from = 0
+    for (;;) {
+      const { data, error } = await sb
+        .from('close_calls' as never)
+        .select('close_id, lead_id, user_id, activity_at, duration')
+        .in('lead_id', chunk)
+        .gt('duration', 90)
+        .gte('activity_at', new Date(minLookback).toISOString())
+        .lte('activity_at', new Date(maxAnchor).toISOString())
+        .range(from, from + 999)
+      if (error) throw new Error(`close_calls (form match) read failed: ${error.message}`)
+      const rows = (data ?? []) as unknown as CallRow[]
+      if (rows.length === 0) break
+      calls.push(...rows)
+      if (rows.length < 1000) break
+      from += 1000
+    }
+  }
+
+  // Group calls by lead_id for fast per-form filtering.
+  const callsByLead = new Map<string, CallRow[]>()
+  for (const c of calls) {
+    if (!callsByLead.has(c.lead_id)) callsByLead.set(c.lead_id, [])
+    callsByLead.get(c.lead_id)!.push(c)
+  }
+
+  return forms.map((f) => {
+    if (!f.leadId || !f.setterUserId) {
+      return { ...f, effectiveDateIso: f.eventDateTime ?? f.airtableCreatedAt, matchedCallId: null, matchedCallActivityAt: null }
+    }
+    const anchorMs = new Date(f.airtableCreatedAt).getTime()
+    const earliestMs = anchorMs - FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000
+    const candidates = (callsByLead.get(f.leadId) ?? []).filter((c) => {
+      if (c.user_id !== f.setterUserId) return false
+      const t = new Date(c.activity_at).getTime()
+      return t >= earliestMs && t <= anchorMs
+    })
+    if (candidates.length === 0) {
+      return { ...f, effectiveDateIso: f.eventDateTime ?? f.airtableCreatedAt, matchedCallId: null, matchedCallActivityAt: null }
+    }
+    // Most recent wins (per Drake — multi-call leads accept the
+    // imperfection that two calls in the lookback could disagree
+    // on attribution).
+    candidates.sort((a, b) => (a.activity_at < b.activity_at ? 1 : -1))
+    const best = candidates[0]
+    return { ...f, effectiveDateIso: best.activity_at, matchedCallId: best.close_id, matchedCallActivityAt: best.activity_at }
+  })
+}
+
 function resolveRole(userId: string, closerSet: Set<string>, setterSet: Set<string>): 'setter' | 'closer' | null {
   if (EXCLUDED_REP_IDS.has(userId)) return null
   const inCloser = closerSet.has(userId)
@@ -1148,12 +1267,15 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const nameByUser = new Map<string, string>()
   const userIdByName = new Map<string, string>()
   {
+    // No direction filter — both inbound and outbound count toward
+    // the rep's call activity (engagement on the phone is engagement
+    // either way). Speed-to-lead stays outbound-only because it's
+    // semantically "how fast did the rep dial."
     let from = 0
     for (;;) {
       const { data: page, error } = await sb
         .from('close_calls' as never)
         .select('user_id, duration, raw_payload')
-        .eq('direction', 'outbound')
         .not('user_id', 'is', null)
         .gte('activity_at', range.startUtcIso)
         .lt('activity_at', range.endUtcIso)
@@ -1188,34 +1310,34 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // for close_calls-only users (Connor → Connor Malewicz).
   mergeSalesIdentity(userIdByName, nameByUser, closerUsers, setterUsers, salesId)
 
-  // Outcomes from Airtable form — attributed to whoever filled it
-  // (setter_names → user_id via name lookup).
-  //
-  // Dedupe by lead_id, keeping the most-recent form per lead. Mirrors
-  // what Airtable's default view shows: when a lead has multiple forms
-  // (e.g., one setter marks Confirmed-Booked, another later marks DQ),
-  // only the latest outcome counts. Rows missing lead_id are dropped
-  // — those are typically empty/junk submissions.
+  // Outcomes from Airtable form — attributed to the form's
+  // effective_date (matched call's activity_at, else event_date_time).
+  // Pull a wider window by airtable_created_at so we catch forms
+  // submitted up to FORM_MATCH_LOOKBACK_HOURS after the call window.
+  // Range padding: extend BACKWARD by 0 (the form's call has to be
+  // within the range), FORWARD by lookback (a call at range-end could
+  // have a form filed up to lookback hours later).
   type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number }
   const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0 })
   const outcomesByUser = new Map<string, Outcomes>()
+  // Per-rep set of close_call ids that a form matched. Used by the
+  // per-rep "missing" calc — every over-90s call without an entry
+  // here is missing its EOC. Distinct from outcome counts because
+  // form-only outcomes (no matched call) shouldn't reduce missing.
+  const matchedCallIdsByUser = new Map<string, Set<string>>()
   let totalForms = 0
   {
-    // Filter by `event_date_time` (when the call actually happened),
-    // NOT `airtable_created_at` (when the form was submitted). A form
-    // can be filled hours/days after the event; using submit time
-    // mis-attributes those events to the wrong calendar day. Rows
-    // with null event_date_time are excluded by gte/lt naturally
-    // (Postgres null comparisons return null = false).
-    type FormRow = { lead_id: string | null; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null }
+    type FormRow = { record_id: string; lead_id: string | null; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null; airtable_created_at: string }
     const allRows: FormRow[] = []
+    const formWindowStartIso = range.startUtcIso
+    const formWindowEndIso = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
     let from = 0
     for (;;) {
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('lead_id, booking_status, setter_names, event_date_time')
-        .gte('event_date_time', range.startUtcIso)
-        .lt('event_date_time', range.endUtcIso)
+        .select('record_id, lead_id, booking_status, setter_names, event_date_time, airtable_created_at')
+        .gte('airtable_created_at', formWindowStartIso)
+        .lt('airtable_created_at', formWindowEndIso)
         .range(from, from + 999)
       if (error) throw new Error(`airtable_setter_triage_calls read failed: ${error.message}`)
       const rows = (page ?? []) as unknown as FormRow[]
@@ -1224,27 +1346,61 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (rows.length < 1000) break
       from += 1000
     }
-    totalForms = allRows.length
 
-    // Dedupe by lead_id (latest event_date_time wins). Drop rows
-    // with no lead_id — those are empty/junk submissions Airtable's
-    // own views also exclude.
-    const latestByLead = new Map<string, FormRow>()
+    // Resolve each form's setter user_id, then batch-match to calls.
+    // setter_names is an array — take the first that resolves.
+    const matchInputs: FormMatchInput[] = allRows.map((r) => {
+      let setterUserId: string | null = null
+      for (const nm of (r.setter_names ?? [])) {
+        const uid = userIdByName.get(nm)
+        if (uid) { setterUserId = uid; break }
+      }
+      return {
+        recordId: r.record_id,
+        leadId: r.lead_id,
+        setterUserId,
+        airtableCreatedAt: r.airtable_created_at,
+        eventDateTime: r.event_date_time,
+      }
+    })
+    const matched = await matchFormsToCalls(sb, matchInputs)
+    const matchByRecord = new Map(matched.map((m) => [m.recordId, m]))
+
+    // Filter to forms whose effective_date falls in the range.
+    const inRangeRows: FormRow[] = []
     for (const r of allRows) {
+      const m = matchByRecord.get(r.record_id)
+      if (!m) continue
+      if (m.effectiveDateIso < range.startUtcIso) continue
+      if (m.effectiveDateIso >= range.endUtcIso) continue
+      inRangeRows.push(r)
+    }
+    totalForms = inRangeRows.length
+
+    // Dedupe by lead_id (latest effective_date wins). Drop rows with
+    // no lead_id — empty/junk submissions Airtable's own views also
+    // exclude.
+    const latestByLead = new Map<string, FormRow>()
+    for (const r of inRangeRows) {
       if (!r.lead_id) continue
       const existing = latestByLead.get(r.lead_id)
-      if (!existing || (r.event_date_time ?? '') > (existing.event_date_time ?? '')) {
-        latestByLead.set(r.lead_id, r)
-      }
+      const rDate = matchByRecord.get(r.record_id)?.effectiveDateIso ?? r.event_date_time ?? ''
+      const eDate = existing ? (matchByRecord.get(existing.record_id)?.effectiveDateIso ?? existing.event_date_time ?? '') : ''
+      if (!existing || rDate > eDate) latestByLead.set(r.lead_id, r)
     }
     latestByLead.forEach((r) => {
       const bucket = classifyBookingStatus(r.booking_status)
       if (bucket === 'unclassified') return
+      const m = matchByRecord.get(r.record_id)
       for (const nm of (r.setter_names ?? [])) {
         const uid = userIdByName.get(nm)
         if (!uid) continue
         if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
         outcomesByUser.get(uid)![bucket]++
+        if (m?.matchedCallId) {
+          if (!matchedCallIdsByUser.has(uid)) matchedCallIdsByUser.set(uid, new Set())
+          matchedCallIdsByUser.get(uid)!.add(m.matchedCallId)
+        }
       }
     })
   }
@@ -1261,7 +1417,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     if (!role) return
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
     const o = outcomesByUser.get(userId) ?? newOutcomes()
-    const matched = o.bookings + o.dqs + o.downsells + o.followUps
+    const matchedCalls = matchedCallIdsByUser.get(userId)?.size ?? 0
     const row: CallActivityRepRow = {
       userId,
       name: nameByUser.get(userId) ?? null,
@@ -1271,7 +1427,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       dqs: o.dqs,
       downsells: o.downsells,
       followUps: o.followUps,
-      missing: Math.max(0, v.over90s - matched),
+      missing: Math.max(0, v.over90s - matchedCalls),
     }
     if (role === 'setter') setters.push(row)
     else closers.push(row)
@@ -1323,7 +1479,8 @@ export async function getCallActivityForUser(
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
-  // Every outbound call by this rep in window with duration > 90s.
+  // Every call by this rep in window with duration > 90s — both
+  // directions count (rep is on the phone either way).
   type RawCall = { callId: string; leadId: string; activityAt: string; durationSec: number }
   const calls: RawCall[] = []
   {
@@ -1332,7 +1489,6 @@ export async function getCallActivityForUser(
       const { data: page, error } = await sb
         .from('close_calls' as never)
         .select('close_id, lead_id, activity_at, duration')
-        .eq('direction', 'outbound')
         .eq('user_id', userId)
         .gt('duration', 90)
         .gte('activity_at', range.startUtcIso)
@@ -1379,29 +1535,12 @@ export async function getCallActivityForUser(
     }
   }
 
-  // Outcomes per lead from Airtable form (most recent row wins).
-  const outcomeByLead = new Map<string, { bookingStatus: string | null; prospectName: string | null }>()
-  for (let i = 0; i < callLeadIds.length; i += 100) {
-    const chunk = callLeadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('airtable_setter_triage_calls' as never)
-      .select('lead_id, booking_status, prospect_name, event_date_time')
-      .in('lead_id', chunk)
-      .order('event_date_time', { ascending: false })
-    if (error) throw new Error(`airtable (drill) read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ lead_id: string; booking_status: string | null; prospect_name: string | null }>) {
-      if (!r.lead_id) continue
-      if (!outcomeByLead.has(r.lead_id)) {
-        outcomeByLead.set(r.lead_id, { bookingStatus: r.booking_status, prospectName: r.prospect_name })
-      }
-    }
-  }
-
-  // Form-only rows: forms filled by this rep (setter_names overlap)
-  // whose event_date_time is in window AND whose lead has no over-90s
-  // call by this rep. Surfaced with `noMatchingCall: true` so the UI
-  // can show the audit badge.
-  const callLeadIdSet = new Set(callLeadIds)
+  // Forms filled by this rep — pull airtable_created_at within
+  // [range start, range end + 48h] so we catch forms submitted after
+  // the call window for in-range calls. setter_names overlap filter
+  // narrows to forms this rep is on. Then matchFormsToCalls assigns
+  // each form an effective_date (matched call's activity_at, else
+  // event_date_time).
   type FormRow = {
     record_id: string
     lead_id: string | null
@@ -1409,55 +1548,105 @@ export async function getCallActivityForUser(
     booking_status: string | null
     setter_names: string[] | null
     event_date_time: string | null
+    airtable_created_at: string
   }
-  const formOnlyRows: CallActivityDrillRow[] = []
+  const repForms: FormRow[] = []
   if (knownNames.size > 0) {
+    const formWindowStart = range.startUtcIso
+    const formWindowEnd = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
     let from = 0
     for (;;) {
       const { data, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, prospect_name, booking_status, setter_names, event_date_time')
-        .gte('event_date_time', range.startUtcIso)
-        .lt('event_date_time', range.endUtcIso)
+        .select('record_id, lead_id, prospect_name, booking_status, setter_names, event_date_time, airtable_created_at')
+        .gte('airtable_created_at', formWindowStart)
+        .lt('airtable_created_at', formWindowEnd)
         .range(from, from + 999)
-      if (error) throw new Error(`airtable_setter_triage_calls (form-only drill) read failed: ${error.message}`)
+      if (error) throw new Error(`airtable_setter_triage_calls (drill) read failed: ${error.message}`)
       const rows = (data ?? []) as unknown as FormRow[]
       if (rows.length === 0) break
       for (const r of rows) {
         const names = r.setter_names ?? []
-        if (!names.some((n) => knownNames.has(n))) continue
-        if (r.lead_id && callLeadIdSet.has(r.lead_id)) continue
-        formOnlyRows.push({
-          callId: `form:${r.record_id}`,
-          leadId: r.lead_id ?? '',
-          prospectName: r.prospect_name,
-          callAt: r.event_date_time ?? '',
-          durationSec: 0,
-          bookingStatus: r.booking_status,
-          bucket: classifyBookingStatus(r.booking_status),
-          noMatchingCall: true,
-        })
+        if (names.some((n) => knownNames.has(n))) repForms.push(r)
       }
       if (rows.length < 1000) break
       from += 1000
     }
   }
 
-  // Compose. Form prospect_name wins over close_leads.display_name.
-  // Form-only rows appended at the end so the call-driven rows
-  // (sorted desc by activity_at upstream) remain at the top.
-  const callRows = calls.map((c) => {
-    const form = outcomeByLead.get(c.leadId)
+  // Match each form to its call (lead_id + this user_id, > 90s, any
+  // direction, 48h lookback). Most recent wins. effective_date drives
+  // window filtering.
+  const matchInputs: FormMatchInput[] = repForms.map((r) => ({
+    recordId: r.record_id,
+    leadId: r.lead_id,
+    setterUserId: userId,
+    airtableCreatedAt: r.airtable_created_at,
+    eventDateTime: r.event_date_time,
+  }))
+  const matched = await matchFormsToCalls(sb, matchInputs)
+  const matchByRecord = new Map(matched.map((m) => [m.recordId, m]))
+
+  // Forms whose effective_date falls in range — drives both the
+  // outcome attached to in-range calls (when matchedCallId is set)
+  // and the form-only "no call" tail (when matchedCallId is null).
+  const inRangeForms = repForms.filter((r) => {
+    const m = matchByRecord.get(r.record_id)
+    if (!m) return false
+    return m.effectiveDateIso >= range.startUtcIso && m.effectiveDateIso < range.endUtcIso
+  })
+
+  // Build a callId → form map for fast lookup when composing call rows.
+  // Most-recent form per call (last write wins on duplicate matches).
+  const formByCallId = new Map<string, FormRow>()
+  for (const r of inRangeForms) {
+    const m = matchByRecord.get(r.record_id)
+    if (!m?.matchedCallId) continue
+    formByCallId.set(m.matchedCallId, r)
+  }
+
+  // Prospect-name + display-name lookup keyed by lead.
+  const formProspectByLead = new Map<string, string | null>()
+  for (const r of inRangeForms) {
+    if (r.lead_id && !formProspectByLead.has(r.lead_id) && r.prospect_name) {
+      formProspectByLead.set(r.lead_id, r.prospect_name)
+    }
+  }
+
+  // Call rows: every in-range call, outcome from its matched form (or
+  // "Missing" if no form matched THIS call specifically).
+  const callRows: CallActivityDrillRow[] = calls.map((c) => {
+    const form = formByCallId.get(c.callId)
     return {
       callId: c.callId,
       leadId: c.leadId,
-      prospectName: form?.prospectName ?? leadName.get(c.leadId) ?? null,
+      prospectName: form?.prospect_name ?? formProspectByLead.get(c.leadId) ?? leadName.get(c.leadId) ?? null,
       callAt: c.activityAt,
       durationSec: c.durationSec,
-      bookingStatus: form?.bookingStatus ?? null,
-      bucket: classifyBookingStatus(form?.bookingStatus ?? null),
-    } as CallActivityDrillRow
+      bookingStatus: form?.booking_status ?? null,
+      bucket: classifyBookingStatus(form?.booking_status ?? null),
+    }
   })
+
+  // Form-only rows: in-range forms whose matched_call_id is null
+  // (genuine engagement gap — EOC filed but no qualifying call exists
+  // in Close for this rep+lead+48h window).
+  const formOnlyRows: CallActivityDrillRow[] = []
+  for (const r of inRangeForms) {
+    const m = matchByRecord.get(r.record_id)
+    if (m?.matchedCallId) continue
+    formOnlyRows.push({
+      callId: `form:${r.record_id}`,
+      leadId: r.lead_id ?? '',
+      prospectName: r.prospect_name,
+      callAt: m?.effectiveDateIso ?? r.event_date_time ?? '',
+      durationSec: 0,
+      bookingStatus: r.booking_status,
+      bucket: classifyBookingStatus(r.booking_status),
+      noMatchingCall: true,
+    })
+  }
+
   return [...callRows, ...formOnlyRows]
 }
 
