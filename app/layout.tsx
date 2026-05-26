@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Instrument_Serif, Inter, Newsreader, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -14,36 +13,45 @@ const geistMono = localFont({
   weight: "100 900",
 });
 
-// Editorial-dark fonts hoisted to root so both Gregory's editorial theme
-// and (post-merge) the Promethean theme can reference the same CSS
-// variables. Google Fonts requests are deduped by Next.js.
-const prometheanSerif = Instrument_Serif({
-  subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
+// Vendored via @fontsource* to avoid Google Fonts fetches at compile time
+// (WSL network to fonts.googleapis.com is flaky). Same CSS variables
+// preserved so consumers don't change.
+const prometheanSerif = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-italic.woff2", weight: "400", style: "italic" },
+  ],
   variable: "--font-prom-serif",
   display: "swap",
 });
-const prometheanSans = Inter({
-  subsets: ["latin"],
+const prometheanSans = localFont({
+  src: [
+    { path: "../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2", weight: "100 900", style: "normal" },
+    { path: "../node_modules/@fontsource-variable/inter/files/inter-latin-wght-italic.woff2", weight: "100 900", style: "italic" },
+  ],
   variable: "--font-prom-sans",
   display: "swap",
 });
-
-// Calls-redesign editorial fonts — Newsreader for serif display +
-// JetBrains Mono for IDs/dates/eyebrows. Exposed as --font-geg-serif and
-// --font-geg-mono so the gregory-editorial theme references them
-// without colliding with the Promethean variables above.
-const gregoryEditorialSerif = Newsreader({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  style: ["normal", "italic"],
+const gregoryEditorialSerif = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-400-italic.woff2", weight: "400", style: "italic" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-500-italic.woff2", weight: "500", style: "italic" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-600-normal.woff2", weight: "600", style: "normal" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-600-italic.woff2", weight: "600", style: "italic" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-700-normal.woff2", weight: "700", style: "normal" },
+    { path: "../node_modules/@fontsource/newsreader/files/newsreader-latin-700-italic.woff2", weight: "700", style: "italic" },
+  ],
   variable: "--font-geg-serif",
   display: "swap",
 });
-const gregoryEditorialMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const gregoryEditorialMono = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-geg-mono",
   display: "swap",
 });

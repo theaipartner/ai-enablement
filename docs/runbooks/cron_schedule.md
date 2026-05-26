@@ -22,6 +22,13 @@ November) and **EST = UTC−5** (rest of year).
 | `/api/faq_digest_cron` | `0 19 * * 5` | Fridays 15:00 EDT / 14:00 EST | Weekly FAQ digest DM to Scott |
 | `/api/ella_daily_digest_cron` | `30 20 * * *` | daily 16:30 EDT / 15:30 EST | Daily Ella-flags digest DM to Scott + Drake |
 | `/api/ella_unanswered_flagger_cron` | `*/15 * * * *` | every 15 min (TZ-independent) | Posts flagged messages unanswered >2h to #unanswered-channels |
+| `/api/typeform_insights_cron` | `7,22,37,52 * * * *` | every 15 min (offset by 7 from top of hour, TZ-independent) | Snapshots Typeform `/insights/{form_id}/summary` lifetime totals into `typeform_form_insights_snapshots`. Daily starts derived downstream by taking the delta between bracketing snapshots. |
+
+Note: the table above is partial — several other recently-added
+sync crons (`meta_sheet_sync_cron`, `wistia_sync_cron`,
+`typeform_sync_cron`, `clarity_sync_cron`, `airtable_sync_cron`) are
+scheduled in `vercel.json` but haven't been backfilled into this
+table yet. Adding them is a separate doc-hygiene pass.
 
 The three interval crons (`* * * * *`, `*/30 * * * *`, `*/15 * * * *`)
 have no meaningful ET translation — they fire on a fixed cadence

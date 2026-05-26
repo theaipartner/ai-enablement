@@ -1,47 +1,68 @@
 import { notFound } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { MetricCard } from '@/components/sales/metric-card'
+import { SectionTrend } from '@/components/sales/section-trend'
+import { AdvertisingSection } from '@/components/sales/sections/advertising'
+import { AppointmentSettingSection } from '@/components/sales/sections/appointment-setting'
+import { BusinessCostsSection } from '@/components/sales/sections/business-costs'
+import { ClosingSection } from '@/components/sales/sections/closing'
+import { ContentSection } from '@/components/sales/sections/content'
+import { FulfillmentSection } from '@/components/sales/sections/fulfillment'
+import { FunnelsSection } from '@/components/sales/sections/funnels'
+import { RevenueSection } from '@/components/sales/sections/revenue'
 import {
   METRICS,
   SECTION_DISPLAY,
   SECTION_SLUGS,
   fetchSalesDashboardData,
+  parseWindow,
   type SectionId,
 } from '@/lib/db/sales-dashboard'
-import { SectionStatusPill, WindowPill } from '../header-pills'
+import { SectionStatusPill } from '../header-pills'
+import { WindowSwitcher } from '../window-switcher'
 
-// Sales Dashboard v2 — Section detail.
+// Sales Dashboard — Section detail.
 //
-// Two slots, both rendered through the same MetricCard primitive:
-// (1) Top-Live row — first 3 LIVE metrics in catalog order, 3-up.
-//     Sections with zero LIVE show an italic empty-section-stub
-//     instead. (2) Full catalog grid — every metric in the section in
-//     catalog order, 4-up. The three states sit side-by-side; the
-//     visual contract handles all weight distinction.
+// Decision-driven per section (not a catalog grid). The router
+// dispatches by sectionId to a per-section content component:
 //
-// Spec: docs/specs/sales-dashboard-v2.md § Slot order — Section page.
-// `EmptyStateAwareSection` is referenced in the spec but its built-in
-// H2 title chrome doesn't match the mock's mono-eyebrow group-head;
-// the visibility contract (show / stub when zero) is implemented
-// directly. Surfaced as a judgment call in the report.
+//   ADVERTISING         → AdvertisingSection
+//   CONTENT             → ContentSection (NC stub)
+//   FUNNELS             → FunnelsSection
+//   APPOINTMENT SETTING → AppointmentSettingSection
+//   CLOSING             → ClosingSection
+//   SALES DATA          → RevenueSection (view='sales')
+//   BACK END REV        → RevenueSection (view='backend')
+//   BUSINESS COSTS      → BusinessCostsSection
+//   FULFILLMENT         → FulfillmentSection
+//
+// Every section also gets the SectionTrend lead-indicator band at the
+// top (when the section has one) and an optional full-catalog grid at
+// the bottom for completeness — collapsed visual weight so the section-
+// specific content above stays primary.
 
 export const dynamic = 'force-dynamic'
 
-type SectionRouteParams = { params: { section: string } }
+type SectionRouteParams = {
+  params: { section: string }
+  searchParams?: { window?: string | string[] }
+}
 
 export default async function SalesDashboardSectionPage({
   params,
+  searchParams,
 }: SectionRouteParams) {
   const sectionId: SectionId | undefined = SECTION_SLUGS[params.section]
   if (!sectionId) notFound()
 
-  const data = await fetchSalesDashboardData()
+  const window = parseWindow(searchParams?.window)
+  const data = await fetchSalesDashboardData(window)
 
   const metrics = METRICS.filter((m) => m.section === sectionId)
-  const live = metrics.filter((m) => m.status === 'live')
-  const pending = metrics.filter((m) => m.status === 'pending')
-  const nc = metrics.filter((m) => m.status === 'not_connected')
-  const topLive = live.slice(0, 3)
+  const stateOf = (m: typeof METRICS[number]): string => data[m.id]?.state ?? m.status
+  const live = metrics.filter((m) => stateOf(m) === 'live')
+  const pending = metrics.filter((m) => stateOf(m) === 'pending')
+  const nc = metrics.filter((m) => stateOf(m) === 'not_connected')
   const display = SECTION_DISPLAY[sectionId]
 
   return (
@@ -49,157 +70,118 @@ export default async function SalesDashboardSectionPage({
       <HeaderBand
         eyebrow={display.eyebrow}
         title={display.title}
-        backlink={{ href: '/sales-dashboard', label: 'BACK TO OVERVIEW' }}
+        backlink={{ href: '/sales-dashboard', label: 'BACK TO PULSE' }}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <WindowPill />
+            <WindowSwitcher />
             <SectionStatusPill live={live.length} pending={pending.length} nc={nc.length} />
           </div>
         }
       />
 
-      {/* TOP LIVE — first 3 live in catalog order */}
-      {topLive.length > 0 ? (
-        <>
-          <GroupHead
-            eyebrow="TOP LIVE"
-            title="The numbers that lead this section."
-            count={`${topLive.length} OF ${live.length} LIVE`}
-            firstOfType
-          />
-          <TopLiveRow>
-            {topLive.map((m) => (
-              <MetricCard key={m.id} metric={m} result={data[m.id]} size="top-live" />
-            ))}
-          </TopLiveRow>
-        </>
-      ) : (
-        <div
-          className="geg-serif"
+      <SectionTrend sectionId={sectionId} metrics={METRICS} data={data} />
+
+      <SectionDispatch sectionId={sectionId} window={window} />
+
+      <FullCatalogTail metrics={metrics} data={data} />
+    </div>
+  )
+}
+
+function SectionDispatch({
+  sectionId,
+  window,
+}: {
+  sectionId: SectionId
+  window: ReturnType<typeof parseWindow>
+}) {
+  switch (sectionId) {
+    case 'ADVERTISING':
+      return <AdvertisingSection window={window} />
+    case 'CONTENT':
+      return <ContentSection />
+    case 'FUNNELS':
+      return <FunnelsSection window={window} />
+    case 'APPOINTMENT SETTING':
+      return <AppointmentSettingSection window={window} />
+    case 'CLOSING':
+      return <ClosingSection window={window} />
+    case 'SALES DATA':
+      return <RevenueSection window={window} view="sales" />
+    case 'BACK END REV':
+      return <RevenueSection window={window} view="backend" />
+    case 'BUSINESS COSTS':
+      return <BusinessCostsSection window={window} />
+    case 'FULFILLMENT':
+      return <FulfillmentSection window={window} />
+    default:
+      return null
+  }
+}
+
+function FullCatalogTail({
+  metrics,
+  data,
+}: {
+  metrics: typeof METRICS
+  data: Awaited<ReturnType<typeof fetchSalesDashboardData>>
+}) {
+  if (metrics.length === 0) return null
+  return (
+    <section
+      style={{
+        marginTop: 32,
+        paddingTop: 18,
+        borderTop: '1px dashed var(--color-geg-border)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <span
+          className="geg-mono"
           style={{
-            marginTop: 40,
-            padding: '28px 24px',
-            border: '1px dashed var(--color-geg-border-strong)',
-            borderRadius: 8,
-            textAlign: 'center',
-            color: 'var(--color-geg-text-3)',
-            fontStyle: 'italic',
+            fontSize: 10,
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--color-geg-text-faint)',
           }}
         >
-          No live metrics in this section yet. Everything below is pending or not-connected — wire a source to light up this slot.
-        </div>
-      )}
-
-      {/* FULL CATALOG — every metric, catalog order */}
-      <GroupHead
-        eyebrow="FULL CATALOG"
-        title={`All ${metrics.length} metrics · sheet order.`}
-        count={`${live.length} LIVE · ${pending.length} PENDING · ${nc.length} N/C`}
-      />
-      <MetricGrid>
+          FULL CATALOG · REFERENCE
+        </span>
+        <span
+          className="geg-serif"
+          style={{ fontSize: 13, color: 'var(--color-geg-text-3)', fontStyle: 'italic' }}
+        >
+          {metrics.length} metrics in sheet order — drilldown grid.
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          gap: 10,
+        }}
+      >
         {metrics.map((m) => (
-          <MetricCard key={m.id} metric={m} result={data[m.id]} size="grid" sectionTagOverride={null} />
+          <MetricCard
+            key={m.id}
+            metric={m}
+            result={data[m.id]}
+            size="grid"
+            sectionTagOverride={null}
+          />
         ))}
-      </MetricGrid>
-    </div>
+      </div>
+    </section>
   )
 }
 
-function GroupHead({
-  eyebrow,
-  title,
-  count,
-  firstOfType,
-}: {
-  eyebrow: string
-  title: string
-  count: string
-  firstOfType?: boolean
-}) {
-  return (
-    <div
-      style={{
-        margin: firstOfType ? '4px 0 14px' : '28px 0 14px',
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: 12,
-        borderBottom: '1px dashed var(--color-geg-border)',
-        paddingBottom: 8,
-      }}
-    >
-      <span
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.18em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-        }}
-      >
-        {eyebrow}
-      </span>
-      <span
-        className="geg-serif"
-        style={{
-          fontSize: 17,
-          color: 'var(--color-geg-text)',
-          letterSpacing: '-0.01em',
-        }}
-      >
-        {title}
-      </span>
-      <span
-        className="geg-mono"
-        style={{
-          marginLeft: 'auto',
-          color: 'var(--color-geg-text-faint)',
-          fontSize: 10,
-          letterSpacing: '0.1em',
-        }}
-      >
-        {count}
-      </span>
-    </div>
-  )
-}
-
-function TopLiveRow({ children }: { children: React.ReactNode }) {
-  // Same hairline-divider trick as the hero rows on Overview.
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
-        gap: 1,
-        background: 'var(--color-geg-border)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 10,
-        overflow: 'hidden',
-        marginBottom: 36,
-      }}
-    >
-      {children}
-    </div>
-  )
-}
-
-function MetricGrid({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: 12,
-      }}
-    >
-      {children}
-    </div>
-  )
-}
-
-// Pre-render the 9 section slugs so /sales-dashboard/[slug] is
-// generated at build time (and stays SSR'd at request time given
-// `dynamic = 'force-dynamic'`). Unknown slugs still 404 via notFound().
 export function generateStaticParams(): { section: string }[] {
   return Object.keys(SECTION_SLUGS).map((section) => ({ section }))
 }

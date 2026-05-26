@@ -8,10 +8,10 @@ This runbook covers source endpoint, auth, the no-backfill model, the daily cron
 
 Mirrors Microsoft Clarity page metrics into `clarity_metrics_daily`. **One** API endpoint, **one** call per cron tick, **nine** metric blocks per response, **~200** rows upserted per tick (split across 8-9 distinct paths × 9 metrics).
 
-Source for three Engine-sheet FUNNELS rows:
-- **Landing Page Visits** (row 25; `Traffic.totalSessionCount` for `/lp`)
-- **Avg Time on Landing Page** (row 26; `EngagementTime.active_time` for `/lp`)
-- **Avg Time on Thank-You Page** (row 37; `EngagementTime.active_time` for `/confirmation`)
+Source for three Engine-sheet FUNNELS rows (paths updated 2026-05-25 after Zain's project rename — see `ingestion/clarity/__init__.py` for canonical values):
+- **Landing Page Visits** (row 25; `Traffic.totalSessionCount` for `/lp-vsl`)
+- **Avg Time on Landing Page** (row 26; `EngagementTime.active_time` for `/lp-vsl`)
+- **Avg Time on Thank-You Page** (row 37; `EngagementTime.active_time` for `/lp-confirmation`)
 
 Row 37 was originally mis-tagged "Wistia" on the Engine sheet; discovery confirmed Clarity has per-URL time-on-page. **Drake to re-tag the sheet** (not in scope here; flagged in the report).
 

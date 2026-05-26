@@ -65,10 +65,32 @@ export type MetricEntry = {
 }
 
 export type FetchResult =
-  | { state: 'live'; value: number | null }
+  | {
+      state: 'live'
+      value: number | null
+      // Phase 1: prior-period value (same window-length, immediately
+      // preceding) so the card can render a comparative delta. Optional
+      // because fetchers haven't all wired it yet — when absent, the
+      // card renders the value alone.
+      prior?: number | null
+      // Phase 1: short trailing series (daily points, typically 14) so
+      // the card can render a sparkline beneath the value.
+      series?: number[]
+    }
   | { state: 'live_error'; message: string }
   | { state: 'pending' }
   | { state: 'not_connected' }
+
+// Direction of "good" for a metric. Costs, no-shows, cancellations and
+// DQs are lower-is-better; everything else higher-is-better. Used by
+// the delta pill to pick green vs red.
+export function isHigherBetter(title: string): boolean {
+  const t = title.toLowerCase()
+  if (/\b(cost per|cost-per|cpm|cpc|cpl|spend|adspend|ad spend|budget)\b/.test(t)) return false
+  if (/(no.?show|cancel|disqualif|\bdq\b|churn|refund|chargeback|reschedule)/.test(t)) return false
+  if (/(time to|wait time|response time)/.test(t)) return false
+  return true
+}
 
 // ---------------------------------------------------------------------------
 // Section ordering + display constants
@@ -140,7 +162,152 @@ export const SECTION_SIDEBAR_LABEL: Record<SectionId, string> = {
   'FULFILLMENT': 'Fulfillment',
 }
 
-export const DASHBOARD_WINDOW_LABEL = 'Last 7 days · rolling'
+// ---------------------------------------------------------------------------
+// Time window (v2.1) — user-selectable 1d / 7d / 30d, threaded through
+// every server-side fetch via ?window= URL param.
+// ---------------------------------------------------------------------------
+
+export type Window = '1d' | '7d' | '30d'
+
+export const WINDOW_OPTIONS: Window[] = ['1d', '7d', '30d']
+
+export const DEFAULT_WINDOW: Window = '7d'
+
+export const WINDOW_DAYS: Record<Window, number> = {
+  '1d': 1,
+  '7d': 7,
+  '30d': 30,
+}
+
+// Windows are anchored to the start of the period, not rolling. So
+// 1d = since 00:00 today, 7d = since Monday this week, 30d = since the
+// 1st of this month. As the period progresses, totals climb live.
+export const WINDOW_LABELS: Record<Window, string> = {
+  '1d': 'Since start of today',
+  '7d': 'Since start of this week',
+  '30d': 'Since start of this month',
+}
+
+export const WINDOW_SHORT_LABELS: Record<Window, string> = {
+  '1d': 'TODAY',
+  '7d': 'WEEK',
+  '30d': 'MONTH',
+}
+
+// Parse an arbitrary searchParams.window value into a Window. Anything
+// unrecognized falls back to DEFAULT_WINDOW so bad URLs never crash.
+export function parseWindow(raw: string | string[] | undefined): Window {
+  const v = Array.isArray(raw) ? raw[0] : raw
+  if (v === '1d' || v === '7d' || v === '30d') return v
+  return DEFAULT_WINDOW
+}
+
+// Legacy label kept for any callers that still import this constant.
+export const DASHBOARD_WINDOW_LABEL = WINDOW_LABELS[DEFAULT_WINDOW]
+
+// ---------------------------------------------------------------------------
+// Monthly goal + projection — defaults that the client-side editor
+// (MoneyFlow) reads on first mount. Both are dollar amounts for cash
+// collected. Goal = where Nabeel wants to land. Projection = where the
+// historical run-rate says we'll land. The editor persists overrides
+// to localStorage; once a real backend is wired we'll move these to
+// a Supabase row keyed by month + tenant.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_MONTHLY_GOAL = 611_000
+export const DEFAULT_MONTHLY_PROJECTION = 540_000
+
+// Prorate a monthly $ target down to the selected window: 30d window
+// = full month, 7d = 7/30 of it, 1d = 1/30. Calendar-day anchored,
+// not period-elapsed; matches the "since start of period" framing.
+export function prorateTarget(monthlyTarget: number, window: Window): number {
+  return monthlyTarget * (WINDOW_DAYS[window] / 30)
+}
+
+// Compact USD format that drops trailing cents and abbreviates at
+// every order of magnitude so values fit in narrow dashboard cells:
+//   $1,234,567 → $1.23M
+//   $752,470   → $752K
+//   $84,320    → $84.3K
+//   $4,200     → $4.2K
+//   $824       → $824
+export function compactUsd(value: number): string {
+  const abs = Math.abs(value)
+  const sign = value < 0 ? '−' : ''
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 100_000) return `${sign}$${Math.round(abs / 1_000)}K`
+  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`
+  return `${sign}$${Math.round(abs).toLocaleString('en-US')}`
+}
+
+// Compact integer for high-cardinality counts (impressions, clicks
+// etc.). Aggressive — at the funnel scale (impressions in the 6-7
+// digit range) commas don't fit either, so abbreviate at 10K too.
+//   3,463,200 → 3.46M
+//   840,000   → 840K
+//   84,320    → 84K
+//   8,432     → 8.4K
+//   824       → 824
+export function compactCount(value: number): string {
+  const abs = Math.abs(value)
+  const sign = value < 0 ? '−' : ''
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 10_000) return `${sign}${Math.round(abs / 1_000)}K`
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`
+  return `${sign}${Math.round(abs).toLocaleString('en-US')}`
+}
+
+// MoneyFlow shape — declared in shared so the client MoneyFlow
+// component can import the type without crossing the `'server-only'`
+// boundary that lives in sales-dashboard-mocks.ts. The mocks module
+// re-uses this type when building the data.
+export type MoneyFlow = {
+  cashCollected: number
+  futureCash: number
+  refunds: number
+  expenses: number
+  netProfit: number
+  priorCashCollected: number
+  cashSeries: number[]
+}
+
+// ---------------------------------------------------------------------------
+// Funnel stages (Phase 2 — Overview) — the conversion path the engine
+// actually pushes leads through. Stage IDs are catalog IDs so the
+// funnel + the cards share one source of truth. Labels are short for
+// the funnel chrome; the catalog title is also surfaced on hover.
+// ---------------------------------------------------------------------------
+
+export type FunnelStage = {
+  id: string
+  label: string
+}
+
+export const FUNNEL_STAGES: FunnelStage[] = [
+  { id: 'adv_impressions', label: 'Impressions' },
+  { id: 'fun_lp_visits', label: 'LP Visits' },
+  { id: 'fun_typeform_submits', label: 'Submits' },
+  { id: 'fun_total_closer_bookings', label: 'Bookings' },
+  { id: 'cls_showed', label: 'Showed' },
+  { id: 'cls_closed_total', label: 'Closed' },
+  { id: 'cls_total_cash', label: 'Cash' },
+]
+
+// ---------------------------------------------------------------------------
+// Section lead-indicators — the one metric per section that headlines
+// the section page's trend chart. Sections without a sensible single
+// indicator (CONTENT — all NC) omit themselves; the section page
+// gracefully drops the trend block in that case.
+// ---------------------------------------------------------------------------
+
+export const SECTION_LEAD_INDICATOR: Partial<Record<SectionId, string>> = {
+  'ADVERTISING': 'adv_total_adspend',
+  'FUNNELS': 'fun_typeform_submits',
+  'APPOINTMENT SETTING': 'aps_total_setter_triages',
+  'CLOSING': 'cls_closed_total',
+  'SALES DATA': 'cls_total_cash',
+  'BACK END REV': 'cls_total_cash',
+}
 
 // ---------------------------------------------------------------------------
 // Hero metrics — Overview page
@@ -360,6 +527,21 @@ export const METRICS: MetricEntry[] = [
 // ---------------------------------------------------------------------------
 // Formatter (pure — safe on either side of the server/client boundary)
 // ---------------------------------------------------------------------------
+
+// Infer a sensible format from a metric title when the catalog doesn't
+// declare one (pending metrics). Used by the card layer to keep mock
+// values readable and as a graceful fallback in any future state where
+// a metric ships before its format is finalized.
+export function inferredFormat(title: string): MetricFormat {
+  const t = title.toLowerCase()
+  if (/(cash collected|total cash|contracted revenue|revenue|gross sales)/.test(t)) return 'usd'
+  if (/\b(aov|average order|per order|per deal|per appointment|cost per|cost-per)\b/.test(t)) return 'usd'
+  if (/(spend|cpm|cpc|cpl|adspend|ad spend)/.test(t)) return 'usd'
+  if (/(rate|ratio|share|%|percentage|conversion)/.test(t)) return 'percent_0_100'
+  if (/(duration|time watched|engagement time|avg.*time|active time)/.test(t)) return 'duration_seconds'
+  if (/(roas|multiple|score|index)/.test(t)) return 'decimal'
+  return 'integer'
+}
 
 export function formatMetricValue(value: number | null, format: MetricFormat | undefined): string {
   if (value === null || value === undefined) return '—'

@@ -1,41 +1,35 @@
 'use client'
 
-// Sales Dashboard v2 — sales-only left sidebar.
+// Sales Dashboard — sales-only left sidebar.
 //
-// Renders inside the `/sales-dashboard/*` segment layout only (not in
-// the global app shell). Client component because it consumes
-// usePathname() for active-state highlighting; the rest of the page
-// tree stays server-rendered.
-//
-// Spec: docs/specs/sales-dashboard-v2.md § Sidebar.
+// Two primary views post-2026-05-25: Funnel (the activity Pulse view
+// — the page IS the dashboard now) and Revenue (the money page).
+// The old curated-overview "Pulse" home and the People per-rep page
+// were removed; per-rep detail still lives on the existing detail
+// pages but isn't a nav-level destination.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  METRICS,
-  SECTION_ORDER,
-  SECTION_SIDEBAR_LABEL,
-  SLUG_BY_SECTION,
-} from '@/lib/db/sales-dashboard-shared'
 
 const TOPNAV_HEIGHT = 64
 
+type NavItem = { href: string; label: string }
+
+const NAV: NavItem[] = [
+  { href: '/sales-dashboard/funnel', label: 'Funnel' },
+  { href: '/sales-dashboard/revenue', label: 'Revenue' },
+]
+
 export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {
+  // `includeStatesLink` is held for backward compat with the segment
+  // layout — its toggle is unused under the four-item structure.
+  void includeStatesLink
+
   const pathname = usePathname() ?? ''
 
-  // Per-section counts derive from METRICS — never hardcode the mock's
-  // 7/16/21/47/30/8/9/6/4. The instant a catalog row lands, the
-  // sidebar tracks.
-  const countBySection: Record<string, number> = {}
-  for (const m of METRICS) {
-    countBySection[m.section] = (countBySection[m.section] ?? 0) + 1
-  }
-
-  const isOverviewActive = pathname === '/sales-dashboard'
-  const isStatesActive = pathname === '/sales-dashboard/states'
-
-  function isSectionActive(slug: string): boolean {
-    return pathname === `/sales-dashboard/${slug}`
+  function isActive(href: string): boolean {
+    if (href === '/sales-dashboard') return pathname === '/sales-dashboard'
+    return pathname === href || pathname.startsWith(`${href}/`)
   }
 
   return (
@@ -51,7 +45,6 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
         overflowY: 'auto',
       }}
     >
-      {/* Brand block */}
       <div
         style={{
           padding: '0 24px 24px',
@@ -76,59 +69,16 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
         </div>
       </div>
 
-      {/* Overview */}
-      <SidebarLink
-        href="/sales-dashboard"
-        label="Overview"
-        active={isOverviewActive}
-        variant="overview"
-      />
-
-      <GroupLabel>9 Engine sections</GroupLabel>
-
-      {SECTION_ORDER.map((section) => {
-        const slug = SLUG_BY_SECTION[section]
-        return (
-          <SidebarLink
-            key={section}
-            href={`/sales-dashboard/${slug}`}
-            label={SECTION_SIDEBAR_LABEL[section]}
-            count={countBySection[section]}
-            active={isSectionActive(slug)}
-            variant="section"
-          />
-        )
-      })}
-
-      {includeStatesLink ? (
-        <>
-          <GroupLabel>Reference</GroupLabel>
-          <SidebarLink
-            href="/sales-dashboard/states"
-            label="Three states"
-            active={isStatesActive}
-            variant="section"
-          />
-        </>
-      ) : null}
+      {NAV.map((item) => (
+        <SidebarLink
+          key={item.href}
+          href={item.href}
+          label={item.label}
+          active={isActive(item.href)}
+          variant="overview"
+        />
+      ))}
     </aside>
-  )
-}
-
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="geg-mono"
-      style={{
-        padding: '18px 24px 8px',
-        fontSize: 9.5,
-        letterSpacing: '0.18em',
-        textTransform: 'uppercase',
-        color: 'var(--color-geg-text-faint)',
-      }}
-    >
-      {children}
-    </div>
   )
 }
 

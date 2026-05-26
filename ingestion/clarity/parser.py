@@ -94,6 +94,7 @@ def _derive_url_and_path(raw_url: Any) -> tuple[str, str]:
 def parse_response(
     metric_blocks: list[dict[str, Any]],
     snapshot_date: date,
+    metric_name_suffix: str = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Flatten the Clarity metric-block array into per-row upsert dicts.
 
@@ -158,17 +159,18 @@ def parse_response(
                     break
             url_value, url_path = _derive_url_and_path(raw_url)
 
-            key = (metric_name, url_value)
+            full_metric = metric_name + metric_name_suffix
+            key = (full_metric, url_value)
             if key in seen_keys:
                 warnings.append(
-                    f"duplicate (metric={metric_name!r}, url={url_value[:60]!r}) "
+                    f"duplicate (metric={full_metric!r}, url={url_value[:60]!r}) "
                     f"within one response; last-wins"
                 )
             seen_keys.add(key)
 
             parsed = {
                 "snapshot_date": snapshot_date.isoformat(),
-                "metric_name": metric_name,
+                "metric_name": metric_name + metric_name_suffix,
                 "url": url_value,
                 "url_path": url_path,
                 "total_session_count": _to_int(row.get("totalSessionCount")),

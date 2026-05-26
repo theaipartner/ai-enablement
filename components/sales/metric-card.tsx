@@ -28,7 +28,10 @@ import {
   type FetchResult,
   type MetricEntry,
   formatMetricValue,
+  inferredFormat,
+  isHigherBetter,
 } from '@/lib/db/sales-dashboard-shared'
+import { Sparkline } from './sparkline'
 
 export type MetricCardSize = 'hero-lede' | 'hero-support' | 'top-live' | 'grid'
 
@@ -239,7 +242,9 @@ function renderValueBlock(
     size === 'hero-lede' ? '70px' : size === 'hero-support' ? '56px' : size === 'top-live' ? '46px' : '32px'
   const letterSpacing =
     size === 'hero-lede' ? '-0.03em' : size === 'hero-support' ? '-0.03em' : size === 'top-live' ? '-0.025em' : '-0.02em'
-  return (
+  const isGrid = size === 'grid'
+
+  const valueNode = (
     <span
       className="geg-numeric-serif"
       style={{
@@ -249,7 +254,109 @@ function renderValueBlock(
         color: 'var(--color-geg-text)',
       }}
     >
-      {formatMetricValue(result.value, metric.format)}
+      {formatMetricValue(result.value, metric.format ?? inferredFormat(metric.title))}
+    </span>
+  )
+
+  const deltaNode = result.value !== null && result.value !== undefined && result.prior !== null && result.prior !== undefined
+    ? <DeltaPill current={result.value} prior={result.prior} higherBetter={isHigherBetter(metric.title)} compact={isGrid} />
+    : null
+
+  const sparkSize = size === 'hero-lede'
+    ? { w: 120, h: 28 }
+    : size === 'hero-support'
+      ? { w: 96, h: 24 }
+      : size === 'top-live'
+        ? { w: 84, h: 22 }
+        : { w: 64, h: 18 }
+  const sparkNode = result.series && result.series.length > 1
+    ? <Sparkline data={result.series} width={sparkSize.w} height={sparkSize.h} stroke="var(--color-geg-text-3)" />
+    : null
+
+  if (isGrid) {
+    // Grid: value on its own line, delta + spark on a tight second line.
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {valueNode}
+        {(deltaNode || sparkNode) && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            {deltaNode}
+            {sparkNode}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Hero / top-live: value + (delta column + sparkline) side-by-side.
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, justifyContent: 'space-between' }}>
+      {valueNode}
+      {(deltaNode || sparkNode) && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 6,
+            paddingBottom: 6,
+          }}
+        >
+          {deltaNode}
+          {sparkNode}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DeltaPill({
+  current,
+  prior,
+  higherBetter,
+  compact,
+}: {
+  current: number
+  prior: number
+  higherBetter: boolean
+  compact?: boolean
+}) {
+  if (prior === 0) {
+    return (
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: compact ? 9 : 10,
+          letterSpacing: '0.08em',
+          color: 'var(--color-geg-text-faint)',
+        }}
+      >
+        —
+      </span>
+    )
+  }
+  const pct = (current - prior) / prior
+  const isPositive = pct >= 0
+  const isGood = isPositive === higherBetter
+  const color = pct === 0
+    ? 'var(--color-geg-text-faint)'
+    : isGood
+      ? 'var(--color-geg-pos)'
+      : 'var(--color-geg-neg)'
+  const arrow = pct === 0 ? '·' : isPositive ? '▲' : '▼'
+  const display = `${arrow} ${Math.abs(pct * 100).toFixed(1)}%`
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        fontSize: compact ? 10 : 11,
+        letterSpacing: '0.04em',
+        color,
+        fontWeight: 500,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {display}
     </span>
   )
 }

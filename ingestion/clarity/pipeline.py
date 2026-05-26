@@ -25,6 +25,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ingestion.clarity.client import ClarityAPIError, ClarityClient
 from ingestion.clarity.parser import parse_response
@@ -52,18 +53,28 @@ def sync_clarity_metrics_daily(
     *,
     num_of_days: int = 3,
     snapshot_date: date | None = None,
+    metric_name_suffix: str = "",
 ) -> SyncOutcome:
     """One full sync tick: fetch → parse → upsert. Returns SyncOutcome.
 
     `num_of_days` defaults to 3 for the self-healing window. Re-pulls
     are safe (idempotent).
 
-    `snapshot_date` defaults to today UTC. Override for tests or
-    historical synthesis (e.g. running the smoke against a fixed date
-    so test fixtures stay stable).
+    `snapshot_date` defaults to today in **ET** (America/New_York).
+    Clarity itself returns aggregates in the caller's timezone (Vercel
+    runs us-east-1 → ET) and the dashboard renders ET-anchored dates,
+    so stamping snapshot_date in ET keeps the label aligned with what
+    the data actually represents. Override for tests or historical
+    synthesis.
+
+    `metric_name_suffix` is appended to every metric_name on parsed
+    rows. Use ``""`` (default) for the canonical rolling-3 snapshot
+    (so Traffic, EngagementTime, etc. land under their bare names
+    for backward compat); pass ``"_1d"`` or ``"_2d"`` to capture
+    the numOfDays=1 / numOfDays=2 variants as sibling rows.
     """
     if snapshot_date is None:
-        snapshot_date = datetime.now(timezone.utc).date()
+        snapshot_date = datetime.now(ZoneInfo("America/New_York")).date()
 
     outcome = SyncOutcome(snapshot_date=snapshot_date.isoformat())
 
@@ -76,7 +87,7 @@ def sync_clarity_metrics_daily(
 
     outcome.metric_blocks_seen = len(metric_blocks)
 
-    rows, warnings = parse_response(metric_blocks, snapshot_date)
+    rows, warnings = parse_response(metric_blocks, snapshot_date, metric_name_suffix)
     outcome.rows_parsed = len(rows)
     outcome.warnings.extend(warnings)
 

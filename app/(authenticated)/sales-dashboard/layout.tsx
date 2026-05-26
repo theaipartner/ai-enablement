@@ -49,6 +49,12 @@ export default async function SalesDashboardLayout({
           padding: '36px 56px 96px',
           maxWidth: 1480,
           width: '100%',
+          // CSS grid + 1fr: without min-width:0 the child column won't
+          // shrink below its content's intrinsic min-content size,
+          // which causes the whole page to overflow when a child block
+          // has wide internal min-content (the funnel chevron stack
+          // was the trigger).
+          minWidth: 0,
         }}
       >
         {children}

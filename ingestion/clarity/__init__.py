@@ -12,9 +12,11 @@ Ingestion is mirror-everything — all paths, all 9 metric blocks, both
 time fields. These constants ONLY label which paths the named metrics
 target; changing them never requires re-ingesting.
 
-Drake's confirmed paths from discovery (`docs/reports/clarity-discovery.md`):
-  * /lp           — landing page (15 sessions / 18 users / 3 days)
-  * /confirmation — thank-you page after the booking funnel
+Current Clarity project (Zain swapped 2026-05-25):
+  * /lp-vsl          — landing page + VSL (the main LP)
+  * /lp-schedule     — Calendly booking page
+  * /lp-confirmation — thank-you / call-confirmed page
+  * /lp-dq           — disqualified path
 
 To change later: edit the three constants below + the aggregation
 queries that reference them. No ingestion / schema change needed.
@@ -22,12 +24,12 @@ queries that reference them. No ingestion / schema change needed.
 
 # Path that counts as THE landing page. Aggregation reads
 # total_session_count + active_time for url_path = this value.
-LANDING_PAGE_PATH: str = "/lp"
+LANDING_PAGE_PATH: str = "/lp-vsl"
 
 # Path that counts as THE thank-you page. Aggregation reads
 # active_time for url_path = this value. Resolves the Engine sheet's
 # original row-37 "Wistia" mis-tag — confirmed Clarity metric.
-THANK_YOU_PAGE_PATH: str = "/confirmation"
+THANK_YOU_PAGE_PATH: str = "/lp-confirmation"
 
 # Which EngagementTime field is the canonical "time on page".
 # Must be one of {'active_time', 'total_time'}.
