@@ -264,15 +264,6 @@ const STATUS_NEW_OPTIN = 'stat_ZIoyCWBDoWtYQ8EhrO6heT1XMIj4JeIbni74EsAyLiX'
 const STATUS_UNCONFIRMED_BOOKING = 'stat_VXEKegQ4HN87CtntYn7SCwO0ooqHMFKBlp0tJIq6KKs'
 const QUALIFYING_INITIAL_STATUSES = new Set([STATUS_NEW_OPTIN, STATUS_UNCONFIRMED_BOOKING])
 
-// Explicit primary-role override for dual-role users. The global-
-// owner-id sets show some users wearing both hats (typically Aman,
-// who closes but occasionally sets); routing them on auto-detect
-// alone misclassifies their operational role. Keep this list short
-// and explicit; the rest fall back to the global-set membership.
-const PRIMARY_ROLE_OVERRIDE: Record<string, 'setter' | 'closer'> = {
-  'user_8bvDMahhN45SVVqq8MJ6KEPdxl3eGBGpPZIUAQwBZ93': 'closer', // Aman Ali
-}
-
 // User IDs to exclude from the speed-to-lead + triage tables. Used
 // for non-operational reps (leadership, automation accounts) whose
 // occasional calls show up in the data but aren't part of the
@@ -281,35 +272,85 @@ const EXCLUDED_REP_IDS = new Set<string>([
   'user_DFKbypchBYDyzLMdsg3ujzxWZyxTMKbsysYRc9LGAch', // Nabeel Junaid
 ])
 
-// Manual setter registry — covers setters whose Close user_id isn't
-// yet flowing into our mirror (Close-members ingestion gap). Each
-// entry creates a synthetic per-rep row keyed by `userId`. Once the
-// real Close user_id flows in, drop the entry here and re-add the
-// real id if needed elsewhere. The synthetic ids are namespaced with
-// `_manual_` so they never collide with real Close `user_xxx` ids.
-const MANUAL_SETTERS: Array<{ name: string; userId: string }> = [
-  { name: 'Victoria Ochoa', userId: '_manual_victoria_ochoa' },
-]
+// Canonical sales identity loaded from team_members. Replaces the
+// older PRIMARY_ROLE_OVERRIDE + MANUAL_SETTERS constants; the source
+// of truth is now `team_members.sales_role` + `close_user_id`. Rows
+// without close_user_id are skipped (no Close presence yet — they
+// won't appear in close_calls and we have no signal to attribute).
+export type SalesIdentity = {
+  closerUserIds: Set<string>
+  setterUserIds: Set<string>
+  // close_user_id ⇄ name maps. Includes first-name aliases so
+  // Airtable setter_names like ["Connor"] resolve to "Connor
+  // Malewicz"'s close_user_id.
+  userIdByName: Map<string, string>
+  nameByUser: Map<string, string>
+  // close_user_id → every name we know this rep by (full + first).
+  // Drill-side lookup for matching setter_names overlap.
+  knownNamesByUserId: Map<string, Set<string>>
+}
 
-// Used by the per-rep drill: fetch every display name this rep is
-// known by in Close + first-name aliases + manual-setter entry (when
-// the rep's Close user_id is synthetic). Returns the full set the
-// drill matches against airtable_setter_triage_calls.setter_names.
+async function loadSalesIdentity(sb: ReturnType<typeof createAdminClient>): Promise<SalesIdentity> {
+  const { data, error } = await sb
+    .from('team_members' as never)
+    .select('id, full_name, close_user_id, sales_role, archived_at')
+    .not('close_user_id', 'is', null)
+    .is('archived_at', null)
+  if (error) throw new Error(`team_members sales identity read failed: ${error.message}`)
+
+  const out: SalesIdentity = {
+    closerUserIds: new Set(),
+    setterUserIds: new Set(),
+    userIdByName: new Map(),
+    nameByUser: new Map(),
+    knownNamesByUserId: new Map(),
+  }
+  for (const r of (data ?? []) as unknown as Array<{ full_name: string; close_user_id: string; sales_role: string | null }>) {
+    if (r.sales_role === 'closer') out.closerUserIds.add(r.close_user_id)
+    else if (r.sales_role === 'setter') out.setterUserIds.add(r.close_user_id)
+    // 'other' / null sales_role: still register name lookups so
+    // attribution works, but don't claim a setter/closer slot.
+    if (r.full_name) {
+      out.nameByUser.set(r.close_user_id, r.full_name)
+      out.userIdByName.set(r.full_name, r.close_user_id)
+      const names = new Set<string>([r.full_name])
+      const first = r.full_name.trim().split(/\s+/)[0]
+      if (first && first !== r.full_name) {
+        names.add(first)
+        if (!out.userIdByName.has(first)) out.userIdByName.set(first, r.close_user_id)
+      }
+      out.knownNamesByUserId.set(r.close_user_id, names)
+    }
+  }
+  return out
+}
+
+// Used by the per-rep drill: every name this rep is known by — first
+// resolved from team_members (full + first-name token); falls back to
+// close_calls.raw_payload.user_name if team_members has no entry.
 async function buildKnownNamesForUser(
   sb: ReturnType<typeof createAdminClient>,
   userId: string,
 ): Promise<Set<string>> {
   const names = new Set<string>()
 
-  // Manual-setter entry — match by synthetic user_id.
-  const manual = MANUAL_SETTERS.find((m) => m.userId === userId)
-  if (manual) {
-    names.add(manual.name)
-    const first = manual.name.trim().split(/\s+/)[0]
-    if (first) names.add(first)
+  // team_members entry first — authoritative.
+  const { data: tm } = await sb
+    .from('team_members' as never)
+    .select('full_name')
+    .eq('close_user_id', userId)
+    .is('archived_at', null)
+    .maybeSingle()
+  const tmName = (tm as { full_name?: string } | null)?.full_name
+  if (tmName) {
+    names.add(tmName)
+    const first = tmName.trim().split(/\s+/)[0]
+    if (first && first !== tmName) names.add(first)
   }
 
-  // Real Close display names from outbound calls' raw_payload.
+  // Augment with whatever display names Close has surfaced — covers
+  // edge cases (rename in Close, dual aliases) and serves as the
+  // only signal for users not yet in team_members.
   let from = 0
   for (;;) {
     const { data, error } = await sb
@@ -336,20 +377,23 @@ async function buildKnownNamesForUser(
 
 // Augments a name→userId / userId→name pair of maps and a setter set
 // with:
-//   1. First-name aliases — when a Close user_name has multiple
-//      tokens (e.g. "Connor Malewicz"), also register the first
-//      token ("Connor") so Airtable forms that abbreviate to first-
-//      name resolve correctly. Skips if the first-name already maps
-//      somewhere else (avoids cross-rep collisions).
-//   2. Manual setters from MANUAL_SETTERS — their synthetic user_id
-//      is added to the setter set so resolveRole() classifies them.
-function augmentSetterLookup(
+// Merges a SalesIdentity (loaded from team_members) into the
+// name/user lookup pair and the setter / closer sets. team_members
+// data wins over whatever close_calls.raw_payload surfaced, and
+// also adds rows for setters who have no close_calls activity (e.g.
+// brand-new hires whose first Close call hasn't landed yet).
+//
+// Also registers first-name aliases from any close_calls user_name
+// not already in team_members — so users outside team_members still
+// get the "Connor → Connor Malewicz" behavior we relied on before.
+function mergeSalesIdentity(
   userIdByName: Map<string, string>,
   nameByUser: Map<string, string>,
+  closerSet: Set<string>,
   setterSet: Set<string>,
+  salesId: SalesIdentity,
 ): void {
-  // First-name aliases. Snapshot entries first so we don't iterate
-  // and mutate the same map.
+  // First-name aliases for close_calls names not yet in team_members.
   const entries = Array.from(nameByUser.entries())
   for (const [uid, fullName] of entries) {
     const parts = fullName.trim().split(/\s+/)
@@ -357,19 +401,31 @@ function augmentSetterLookup(
     const first = parts[0]
     if (!userIdByName.has(first)) userIdByName.set(first, uid)
   }
-  // Manual setters — only registered if their name isn't already in
-  // the lookup (so a real Close match wins over the manual override).
-  for (const m of MANUAL_SETTERS) {
-    if (!userIdByName.has(m.name)) userIdByName.set(m.name, m.userId)
-    if (!nameByUser.has(m.userId)) nameByUser.set(m.userId, m.name)
-    setterSet.add(m.userId)
-  }
+  // Authoritative team_members overrides come last — full name and
+  // first-name token win over any close_calls-derived value.
+  salesId.nameByUser.forEach((name, uid) => {
+    nameByUser.set(uid, name)
+  })
+  salesId.userIdByName.forEach((uid, name) => {
+    userIdByName.set(name, uid)
+  })
+  // team_members sales_role wins over close_leads owner inference.
+  // Force-add to the declared role's set and remove from the other
+  // — otherwise resolveRole()'s "dual-role default → closer" path
+  // misclassifies a team_members-declared setter who happens to be
+  // listed as closer_owner on any lead.
+  salesId.closerUserIds.forEach((uid) => {
+    closerSet.add(uid)
+    setterSet.delete(uid)
+  })
+  salesId.setterUserIds.forEach((uid) => {
+    setterSet.add(uid)
+    closerSet.delete(uid)
+  })
 }
 
 function resolveRole(userId: string, closerSet: Set<string>, setterSet: Set<string>): 'setter' | 'closer' | null {
   if (EXCLUDED_REP_IDS.has(userId)) return null
-  const override = PRIMARY_ROLE_OVERRIDE[userId]
-  if (override) return override
   const inCloser = closerSet.has(userId)
   const inSetter = setterSet.has(userId)
   if (inSetter && !inCloser) return 'setter'
@@ -1064,7 +1120,13 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
-  // Global role index — same source as triage/speed.
+  // Sales identity from team_members — authoritative source for
+  // sales_role + Close user_id ⇄ name mapping. Merged into the
+  // close_leads owner inference further down.
+  const salesId = await loadSalesIdentity(sb)
+
+  // Global role index — same source as triage/speed. Acts as a
+  // fallback for users not yet in team_members.
   const { data: ownerRows, error: ownerErr } = await sb
     .from('close_leads' as never)
     .select('closer_owner_id, setter_owner_id')
@@ -1120,10 +1182,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
   }
 
-  // First-name aliases + manual-setter overrides — handles Airtable
-  // setter_names like "Connor" (Close has "Connor Malewicz") and
-  // setters whose Close user_id isn't yet ingested.
-  augmentSetterLookup(userIdByName, nameByUser, setterUsers)
+  // Merge team_members identity in: authoritative names + roles +
+  // any setter who has no close_calls activity yet (e.g. Victoria,
+  // whose first call hasn't been mirrored). Adds first-name aliases
+  // for close_calls-only users (Connor → Connor Malewicz).
+  mergeSalesIdentity(userIdByName, nameByUser, closerUsers, setterUsers, salesId)
 
   // Outcomes from Airtable form — attributed to whoever filled it
   // (setter_names → user_id via name lookup).
@@ -1420,7 +1483,12 @@ export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageM
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
-  // Global role index (same source as speed-to-lead).
+  // team_members sales identity — authoritative; merged into the
+  // close_leads owner fallback below.
+  const salesId = await loadSalesIdentity(sb)
+
+  // Global role index (same source as speed-to-lead). Acts as a
+  // fallback for users not yet in team_members.
   const { data: ownerRows, error: ownerErr } = await sb
     .from('close_leads' as never)
     .select('closer_owner_id, setter_owner_id')
@@ -1469,9 +1537,9 @@ export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageM
     from += 1000
   }
 
-  // First-name aliases + manual-setter overrides. Same rationale as
+  // Merge team_members identity in. Same rationale as
   // getCallActivityMetrics.
-  augmentSetterLookup(userIdByName, nameByUser, setterUsers)
+  mergeSalesIdentity(userIdByName, nameByUser, closerUsers, setterUsers, salesId)
 
   // Outcomes side: Airtable form rows in window. Each row's setter
   // is mapped back to a Close user_id by name.
@@ -1660,6 +1728,11 @@ export async function getAppointmentSettingMetrics(arg: Window | DateRange): Pro
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
+  // team_members sales identity — authoritative source for
+  // setter/closer classification. Merged into the close_leads
+  // owner fallback below.
+  const salesId = await loadSalesIdentity(sb)
+
   // Build the global role index from close_leads owner fields.
   // Used as a FALLBACK when the call's specific lead doesn't have
   // owner_id set (majority of leads — only ~30% have owner_ids
@@ -1667,7 +1740,8 @@ export async function getAppointmentSettingMetrics(arg: Window | DateRange): Pro
   // globally will have all their unattributed calls counted as
   // setter dials; same for closer-only. Users in BOTH sets fall
   // back to "unknown" when the lead is unowned (we can't infer
-  // which hat they're wearing).
+  // which hat they're wearing). team_members entries (with
+  // sales_role explicitly set) win over close_leads inference.
   const { data: ownerRows, error: ownerErr } = await sb
     .from('close_leads' as never)
     .select('closer_owner_id, setter_owner_id')
@@ -1680,6 +1754,11 @@ export async function getAppointmentSettingMetrics(arg: Window | DateRange): Pro
     if (r.closer_owner_id) closerUsers.add(r.closer_owner_id)
     if (r.setter_owner_id) setterUsers.add(r.setter_owner_id)
   }
+  // team_members sales_role wins over close_leads owner inference
+  // — force-add to the declared role's set and remove from the
+  // other so resolveRole()'s dual-role default doesn't misclassify.
+  salesId.closerUserIds.forEach((uid) => { closerUsers.add(uid); setterUsers.delete(uid) })
+  salesId.setterUserIds.forEach((uid) => { setterUsers.add(uid); closerUsers.delete(uid) })
 
   // Pull every outbound call in the window + raw_payload so we can
   // resolve user_id → user_name in the same pass.
