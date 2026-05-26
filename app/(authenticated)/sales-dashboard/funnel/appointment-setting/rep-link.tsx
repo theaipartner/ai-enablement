@@ -21,10 +21,6 @@ export function RepLinkPreservingParams({
     const sp = new URLSearchParams(params.toString())
     if (userId === null) sp.delete('rep')
     else sp.set('rep', userId)
-    // Switching reps (or collapsing) resets the see-more state on
-    // both drill lists so a new rep doesn't inherit the old toggle.
-    sp.delete('showAllSpeed')
-    sp.delete('showAllTriage')
     const qs = sp.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }

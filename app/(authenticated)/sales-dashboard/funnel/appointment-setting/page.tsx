@@ -21,9 +21,11 @@ import {
 } from '@/lib/db/funnel-window'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from '../landing-pages/date-range-picker'
-import { RepLinkPreservingParams } from './rep-link'
-import { SeeMoreToggle } from './see-more-toggle'
 import { CallerFilter } from './caller-filter'
+import {
+  PerRepCallActivityTable,
+  SpeedToLeadDrillTable,
+} from './_components/sortable-tables'
 
 // Funnel · Appointment Setting — consolidated detail page.
 //
@@ -48,8 +50,6 @@ export default async function FunnelApptSettingPage({
     start?: string | string[]
     end?: string | string[]
     rep?: string | string[]
-    showAllSpeed?: string | string[]
-    showAllTriage?: string | string[]
     speedCaller?: string | string[]
   }
 }) {
@@ -57,8 +57,6 @@ export default async function FunnelApptSettingPage({
   const todayEt = todayEtDate()
   const selectedRepRaw = Array.isArray(searchParams?.rep) ? searchParams?.rep[0] : searchParams?.rep
   const selectedRep = typeof selectedRepRaw === 'string' && selectedRepRaw.startsWith('user_') ? selectedRepRaw : null
-  const showAllSpeed = !!(Array.isArray(searchParams?.showAllSpeed) ? searchParams.showAllSpeed[0] : searchParams?.showAllSpeed)
-  const showAllTriage = !!(Array.isArray(searchParams?.showAllTriage) ? searchParams.showAllTriage[0] : searchParams?.showAllTriage)
   const speedCallerRaw = Array.isArray(searchParams?.speedCaller) ? searchParams?.speedCaller[0] : searchParams?.speedCaller
   const speedCaller = typeof speedCallerRaw === 'string' && speedCallerRaw.startsWith('user_') ? speedCallerRaw : null
 
@@ -92,7 +90,6 @@ export default async function FunnelApptSettingPage({
         <SpeedToLeadSection
           cohort={speedCohort}
           activeCaller={speedCaller}
-          showAllRows={showAllSpeed}
         />
       </StageSection>
 
@@ -105,7 +102,6 @@ export default async function FunnelApptSettingPage({
           totalFormsInWindow={activity.totalFormsInWindow}
           selectedRep={selectedRep}
           drill={drill}
-          showAllCalls={showAllTriage}
         />
       </StageSection>
     </StageDetailLayout>
@@ -368,7 +364,6 @@ function CallActivityStacked({
   totalFormsInWindow,
   selectedRep,
   drill,
-  showAllCalls,
 }: {
   setters: CallActivityRepRow[]
   closers: CallActivityRepRow[]
@@ -377,26 +372,23 @@ function CallActivityStacked({
   totalFormsInWindow: number
   selectedRep: string | null
   drill: CallActivityDrillRow[]
-  showAllCalls: boolean
 }) {
   return (
     <div>
       <div style={{ display: 'grid', gap: 14 }}>
-        <CallActivityTable
+        <PerRepCallActivityTable
           label="Setters"
           aggregate={settersAggregate}
           rows={setters}
           selectedRep={selectedRep}
           drill={drill}
-          showAllCalls={showAllCalls}
         />
-        <CallActivityTable
+        <PerRepCallActivityTable
           label="Closers"
           aggregate={closersAggregate}
           rows={closers}
           selectedRep={selectedRep}
           drill={drill}
-          showAllCalls={showAllCalls}
         />
       </div>
       <div
@@ -421,237 +413,10 @@ function CallActivityStacked({
   )
 }
 
-function CallActivityTable({
-  label,
-  aggregate,
-  rows,
-  selectedRep,
-  drill,
-  showAllCalls,
-}: {
-  label: string
-  aggregate: CallActivityRepRow
-  rows: CallActivityRepRow[]
-  selectedRep: string | null
-  drill: CallActivityDrillRow[]
-  showAllCalls: boolean
-}) {
-  const COLS = '1.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 0.9fr'
-  return (
-    <div style={{ padding: '18px 22px', background: 'var(--color-geg-bg-elev)', border: '1px solid var(--color-geg-border)', borderRadius: 10 }}>
-      <SectionHeading>{label}</SectionHeading>
-      <div style={{ marginTop: 12 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '6px 0 8px', borderBottom: '1px solid var(--color-geg-border)' }}>
-          <ColH label="Rep" align="left" />
-          <ColH label="Calls" />
-          <ColH label=">90s" />
-          <ColH label="Books" />
-          <ColH label="DQs" />
-          <ColH label="Downsell" />
-          <ColH label="Follow-up" />
-          <ColH label="Missing" />
-        </div>
-
-        {/* Aggregate row — italicized, at the top */}
-        <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '11px 0', borderBottom: '1px solid var(--color-geg-border)', alignItems: 'center' }}>
-          <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-2)', fontStyle: 'italic', letterSpacing: '-0.002em' }}>
-            All {label.toLowerCase()}
-          </span>
-          <Num value={aggregate.totalCalls.toString()} accent />
-          <Num value={aggregate.totalOver90s.toString()} />
-          <Num value={aggregate.bookings.toString()} />
-          <Num value={aggregate.dqs.toString()} />
-          <Num value={aggregate.downsells.toString()} />
-          <Num value={aggregate.followUps.toString()} />
-          <Num value={aggregate.missing.toString()} />
-        </div>
-
-        {rows.length === 0 ? (
-          <BlankNote>No {label.toLowerCase()} activity in this range.</BlankNote>
-        ) : (
-          <>
-            {rows.slice(0, 10).map((r) => {
-              const isSelected = selectedRep === r.userId
-              return (
-                <div key={r.userId ?? 'agg'}>
-                  <RepLinkPreservingParams userId={isSelected ? null : r.userId}>
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: COLS,
-                        gap: 10,
-                        padding: '11px 12px',
-                        margin: '0 -12px',
-                        borderBottom: '1px dashed var(--color-geg-border)',
-                        alignItems: 'center',
-                        background: isSelected ? 'var(--color-geg-bg)' : 'transparent',
-                        borderRadius: isSelected ? 6 : 0,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span
-                        className="geg-serif"
-                        style={{
-                          fontSize: 14,
-                          color: 'var(--color-geg-text)',
-                          letterSpacing: '-0.002em',
-                          fontWeight: isSelected ? 600 : 400,
-                        }}
-                      >
-                        {isSelected ? '▼ ' : '▸ '}{r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
-                      </span>
-                      <Num value={r.totalCalls.toString()} accent />
-                      <Num value={r.totalOver90s.toString()} />
-                      <Num value={r.bookings.toString()} />
-                      <Num value={r.dqs.toString()} />
-                      <Num value={r.downsells.toString()} />
-                      <Num value={r.followUps.toString()} />
-                      <Num value={r.missing.toString()} />
-                    </div>
-                  </RepLinkPreservingParams>
-                  {isSelected ? (
-                    <CallActivityDrillExpander
-                      calls={drill}
-                      repName={r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
-                      showAll={showAllCalls}
-                    />
-                  ) : null}
-                </div>
-              )
-            })}
-            {rows.length > 10 ? (
-              <div
-                className="geg-mono"
-                style={{ marginTop: 10, fontSize: 10, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)', textAlign: 'right' }}
-              >
-                Showing top 10 of {rows.length} reps. See more in the People page (TBD).
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function CallActivityDrillExpander({
-  calls,
-  repName,
-  showAll,
-}: {
-  calls: CallActivityDrillRow[]
-  repName: string
-  showAll: boolean
-}) {
-  const slice = showAll ? calls : calls.slice(0, 10)
-  const hasMore = calls.length > 10
-  return (
-    <div
-      style={{
-        margin: '0 -12px 8px',
-        padding: '14px 16px 16px',
-        background: 'var(--color-geg-bg)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 8,
-      }}
-    >
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-          marginBottom: 10,
-        }}
-      >
-        {repName} · per-call detail · calls over 90s · showing {slice.length} of {calls.length} (most recent first)
-      </div>
-      {calls.length === 0 ? (
-        <BlankNote>No calls over 90s in this range for this rep.</BlankNote>
-      ) : (
-        <div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1.6fr 0.8fr 1.4fr 1.2fr',
-              gap: 10,
-              padding: '6px 0 8px',
-              borderBottom: '1px solid var(--color-geg-border)',
-            }}
-          >
-            <ColH label="Prospect" align="left" />
-            <ColH label="Duration" />
-            <ColH label="Outcome" align="left" />
-            <ColH label="Time called (ET)" align="left" />
-          </div>
-          {slice.map((c) => (
-            <div
-              key={c.callId}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1.6fr 0.8fr 1.4fr 1.2fr',
-                gap: 10,
-                padding: '8px 0',
-                borderBottom: '1px dashed var(--color-geg-border)',
-                alignItems: 'center',
-              }}
-            >
-              <span
-                className="geg-serif"
-                style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                title={c.leadId}
-              >
-                {c.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
-                {c.noMatchingCall ? (
-                  <span
-                    className="geg-mono"
-                    title="No call to match — EOC was filled but no over-90s call by this rep is in Close for this lead in this window"
-                    style={{
-                      fontSize: 9,
-                      letterSpacing: '0.08em',
-                      textTransform: 'uppercase',
-                      padding: '1px 6px',
-                      borderRadius: 4,
-                      border: '1px solid var(--color-geg-border)',
-                      color: 'var(--color-geg-text-faint)',
-                      background: 'var(--color-geg-bg)',
-                      cursor: 'help',
-                    }}
-                  >
-                    no call
-                  </span>
-                ) : null}
-              </span>
-              <Num value={c.noMatchingCall ? '—' : formatDuration(c.durationSec)} accent />
-              <span
-                className="geg-mono"
-                style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
-              >
-                {c.bookingStatus ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>Missing</span>}
-              </span>
-              <span
-                className="geg-mono"
-                style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
-              >
-                {formatEtTimestamp(c.callAt)}
-              </span>
-            </div>
-          ))}
-          {hasMore ? (
-            <div style={{ marginTop: 10, textAlign: 'right' }}>
-              <SeeMoreToggle
-                paramKey="showAllTriage"
-                isExpanded={showAll}
-                label={showAll ? '✕ Show top 10' : `See all ${calls.length} →`}
-              />
-            </div>
-          ) : null}
-        </div>
-      )}
-    </div>
-  )
-}
+// CallActivityTable + CallActivityDrillExpander moved to
+// ./_components/sortable-tables.tsx (client component) so column sort
+// + scrollable list could land. Server-side now just forwards the
+// already-fetched rows + drill into PerRepCallActivityTable.
 
 // ---------------------------------------------------------------------------
 // Speed-to-Lead section — per-lead, NOT split by caller. Top stats
@@ -662,14 +427,10 @@ function CallActivityDrillExpander({
 function SpeedToLeadSection({
   cohort,
   activeCaller,
-  showAllRows,
 }: {
   cohort: SpeedToLeadCohortResult
   activeCaller: string | null
-  showAllRows: boolean
 }) {
-  const slice = showAllRows ? cohort.rows : cohort.rows.slice(0, 10)
-  const hasMore = cohort.rows.length > 10
   return (
     <div>
       {/* Top-line stats + filter */}
@@ -705,94 +466,8 @@ function SpeedToLeadSection({
         </div>
       </div>
 
-      {/* Drill table */}
       <div style={{ marginTop: 14 }}>
-        {cohort.rows.length === 0 ? (
-          <BlankNote>No leads in cohort{activeCaller ? ' for this caller' : ''}.</BlankNote>
-        ) : (
-          <div style={{ padding: '14px 16px', background: 'var(--color-geg-bg-elev)', border: '1px solid var(--color-geg-border)', borderRadius: 10 }}>
-            <div
-              className="geg-mono"
-              style={{
-                fontSize: 10,
-                letterSpacing: '0.14em',
-                textTransform: 'uppercase',
-                color: 'var(--color-geg-text-3)',
-                marginBottom: 10,
-              }}
-            >
-              showing {slice.length} of {cohort.rows.length} leads · most recent first call first
-            </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1.5fr 1.1fr 0.9fr 0.8fr 1.2fr',
-                gap: 10,
-                padding: '6px 0 8px',
-                borderBottom: '1px solid var(--color-geg-border)',
-              }}
-            >
-              <ColH label="Prospect" align="left" />
-              <ColH label="Created (ET)" align="left" />
-              <ColH label="Time to call" align="left" />
-              <ColH label="Over 90s" align="left" />
-              <ColH label="Caller" align="left" />
-            </div>
-            {slice.map((r) => (
-              <div
-                key={r.leadId}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1.5fr 1.1fr 0.9fr 0.8fr 1.2fr',
-                  gap: 10,
-                  padding: '8px 0',
-                  borderBottom: '1px dashed var(--color-geg-border)',
-                  alignItems: 'center',
-                }}
-              >
-                <span
-                  className="geg-serif"
-                  style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={r.leadId}
-                >
-                  {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
-                </span>
-                <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-                  {formatEtTimestamp(r.leadCreatedAt)}
-                </span>
-                <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-                  {r.speedSec !== null ? formatDuration(r.speedSec) : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>}
-                </span>
-                <span
-                  className="geg-mono"
-                  style={{
-                    fontSize: 11,
-                    letterSpacing: '0.04em',
-                    color: r.firstCallOver90s
-                      ? 'var(--color-geg-pos)'
-                      : r.firstCallAt
-                        ? 'var(--color-geg-neg)'
-                        : 'var(--color-geg-text-faint)',
-                  }}
-                >
-                  {r.firstCallAt ? (r.firstCallOver90s ? 'Yes' : 'No') : '—'}
-                </span>
-                <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-                  {r.callerName ?? (r.callerUserId ? r.callerUserId.slice(0, 13) + '…' : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>—</span>)}
-                </span>
-              </div>
-            ))}
-            {hasMore ? (
-              <div style={{ marginTop: 10, textAlign: 'right' }}>
-                <SeeMoreToggle
-                  paramKey="showAllSpeed"
-                  isExpanded={showAllRows}
-                  label={showAllRows ? '✕ Show top 10' : `See all ${cohort.rows.length} →`}
-                />
-              </div>
-            ) : null}
-          </div>
-        )}
+        <SpeedToLeadDrillTable rows={cohort.rows} activeCaller={activeCaller} />
       </div>
     </div>
   )
@@ -837,95 +512,6 @@ function StatCell({ label, value, subtext }: { label: string; value: string; sub
           {subtext}
         </div>
       ) : null}
-    </div>
-  )
-}
-
-function formatEtTimestamp(iso: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(new Date(iso))
-}
-
-// ---------------------------------------------------------------------------
-// Shared cells
-// ---------------------------------------------------------------------------
-
-function UserCell({ userId, name }: { userId: string | null; name?: string | null }) {
-  if (userId === null) {
-    return (
-      <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-2)', fontStyle: 'italic' }}>
-        aggregate
-      </span>
-    )
-  }
-  if (name) {
-    return (
-      <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text)', letterSpacing: '-0.002em' }}>
-        {name}
-      </span>
-    )
-  }
-  // Fallback for users whose raw_payload didn't surface a full name
-  // (typically users that haven't made calls in the window).
-  const short = userId.startsWith('user_') ? userId.slice(0, 13) + '…' : userId
-  return (
-    <span className="geg-mono" style={{ fontSize: 12, color: 'var(--color-geg-text-3)', letterSpacing: '0.02em' }}>
-      {short}
-    </span>
-  )
-}
-
-function Num({ value, accent }: { value: string; accent?: boolean }) {
-  return (
-    <span
-      className="geg-numeric-serif"
-      style={{
-        fontSize: 14,
-        color: accent ? 'var(--color-geg-text)' : 'var(--color-geg-text-2)',
-        letterSpacing: '-0.01em',
-        textAlign: 'right',
-      }}
-    >
-      {value}
-    </span>
-  )
-}
-
-function ColH({ label, align }: { label: string; align?: 'left' | 'right' }) {
-  return (
-    <span
-      className="geg-mono"
-      style={{
-        fontSize: 10,
-        letterSpacing: '0.14em',
-        textTransform: 'uppercase',
-        color: 'var(--color-geg-text-faint)',
-        textAlign: align ?? 'right',
-      }}
-    >
-      {label}
-    </span>
-  )
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}>
-      {children}
-    </div>
-  )
-}
-
-function BlankNote({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="geg-serif" style={{ padding: '20px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}>
-      {children}
     </div>
   )
 }
