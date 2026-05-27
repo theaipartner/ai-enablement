@@ -104,9 +104,25 @@ const STATUS_LOOKBACK_MS = STATUS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
 //   0: 12am–4am  ·  1: 4am–8am  ·  2: 8am–12pm
 //   3: 12pm–4pm  ·  4: 4pm–8pm  ·  5: 8pm–12am
 //
-// Per block: two response rates side by side
-//   - everReplied = lead has ≥1 inbound SMS at ANY time
-//   - within24h   = first inbound landed within 24h of date_created
+// Per block: two response rates side by side. Both use a UNIFIED
+// "response" definition (Drake 2026-05-27): the prospect counts as
+// having responded if EITHER channel triggers — an inbound SMS at
+// any point, OR the FIRST outbound dial to that lead was answered
+// (duration >= 90s, the existing call-connected threshold). Only
+// one needs to be true. The intuition: if speed-to-lead is good and
+// a setter dials immediately, a pickup IS a response — they're
+// replying to the first message in a different channel.
+//
+//   - everReplied = lead has (≥1 inbound SMS) OR (first outbound
+//                   dial duration >= 90s), at ANY time
+//   - within24h   = either of those channels happened within 24h of
+//                   date_created. Per-channel: a slow dial that
+//                   eventually got picked up flips everReplied but
+//                   NOT within24h.
+//
+// "First outbound dial" is the chronologically first dial to that
+// lead — not "any dial that was answered." The metric measures
+// responsiveness to initial outreach, not eventual reachability.
 //
 // Denominator = all leads in the cohort that fell in this block,
 // whether or not we ever texted them. Matches the Close-UI calc:
@@ -116,6 +132,12 @@ const STATUS_LOOKBACK_MS = STATUS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
 // Aligned with APPT_SETTING_MIN_ET_DATE — same floor across the page.
 const FMR_COHORT_START_UTC_ISO = '2026-05-24T04:00:00Z'
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
+
+// "Connected" threshold for treating a first dial as a response. Same
+// 90s bar used by /sales-dashboard/calls and the per-rep tables. Close
+// counts dial-attempt time inside `duration`, so anything below this
+// would otherwise let unanswered rings count as responses.
+const FMR_DIAL_CONNECTED_SEC = 90
 
 export type FmrTimeBlock = {
   blockIndex: 0 | 1 | 2 | 3 | 4 | 5
@@ -201,7 +223,51 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
     }
   }
 
-  // Bucket each lead.
+  // First-outbound-dial scan — track the FIRST outbound call per lead
+  // (chronologically) regardless of duration, plus that call's
+  // duration so we can apply the 90s connection threshold downstream.
+  // Pulling by ascending activity_at + only keeping the first per
+  // lead gives us exactly "the first dial we made."
+  const firstOutboundDialByLead = new Map<
+    string,
+    { activity_at: string; duration: number }
+  >()
+  {
+    let from = 0
+    const PAGE = 1000
+    for (;;) {
+      const { data, error } = await sb
+        .from('close_calls' as never)
+        .select('lead_id, activity_at, duration')
+        .eq('direction', 'outbound')
+        .gte('activity_at', FMR_COHORT_START_UTC_ISO)
+        .order('activity_at', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(`close_calls outbound read failed: ${error.message}`)
+      const rows = (data ?? []) as unknown as Array<{
+        lead_id: string | null
+        activity_at: string
+        duration: number | null
+      }>
+      if (rows.length === 0) break
+      for (const r of rows) {
+        if (!r.lead_id) continue
+        if (!firstOutboundDialByLead.has(r.lead_id)) {
+          firstOutboundDialByLead.set(r.lead_id, {
+            activity_at: r.activity_at,
+            duration: r.duration ?? 0,
+          })
+        }
+      }
+      if (rows.length < PAGE) break
+      from += PAGE
+    }
+  }
+
+  // Bucket each lead. everReplied / within24h now use the UNIFIED
+  // response definition: SMS reply OR first-dial-answered (>=90s).
+  // Per-channel within-24h check — a slow dial that eventually got
+  // picked up still counts as everReplied but NOT within24h.
   const totals = [0, 0, 0, 0, 0, 0]
   const everCounts = [0, 0, 0, 0, 0, 0]
   const within24Counts = [0, 0, 0, 0, 0, 0]
@@ -209,13 +275,37 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
     const hour = etHourOfDay(lead.date_created)
     const block = Math.floor(hour / 4) as 0 | 1 | 2 | 3 | 4 | 5
     totals[block]++
+
+    const leadCreatedMs = new Date(lead.date_created).getTime()
     const inboundAt = earliestInboundByLead.get(lead.close_id)
-    if (inboundAt) {
+    const firstDial = firstOutboundDialByLead.get(lead.close_id)
+    const firstDialAnswered =
+      firstDial && firstDial.duration >= FMR_DIAL_CONNECTED_SEC
+        ? firstDial.activity_at
+        : null
+
+    // Ever responded: either signal at any time.
+    if (inboundAt || firstDialAnswered) {
       everCounts[block]++
-      const deltaMs = new Date(inboundAt).getTime() - new Date(lead.date_created).getTime()
-      if (deltaMs >= 0 && deltaMs <= ONE_DAY_MS) {
-        within24Counts[block]++
-      }
+    }
+
+    // Within 24h: either signal landed within 24h of lead creation.
+    const smsWithin24h = !!(
+      inboundAt &&
+      (() => {
+        const delta = new Date(inboundAt).getTime() - leadCreatedMs
+        return delta >= 0 && delta <= ONE_DAY_MS
+      })()
+    )
+    const dialAnsweredWithin24h = !!(
+      firstDialAnswered &&
+      (() => {
+        const delta = new Date(firstDialAnswered).getTime() - leadCreatedMs
+        return delta >= 0 && delta <= ONE_DAY_MS
+      })()
+    )
+    if (smsWithin24h || dialAnsweredWithin24h) {
+      within24Counts[block]++
     }
   }
 

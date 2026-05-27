@@ -312,8 +312,8 @@ function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
       {/* Legend + cohort footer */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, marginTop: 14 }}>
         <div style={{ display: 'flex', gap: 18, alignItems: 'center' }}>
-          <LegendSwatch color="var(--color-geg-accent)" label="Ever replied" />
-          <LegendSwatch color="var(--color-geg-text-3)" label="Replied within 24h" opacity={0.65} />
+          <LegendSwatch color="var(--color-geg-accent)" label="Ever responded" />
+          <LegendSwatch color="var(--color-geg-text-3)" label="Responded within 24h" opacity={0.65} />
         </div>
         <div
           className="geg-mono"
@@ -322,8 +322,9 @@ function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
             letterSpacing: '0.06em',
             color: 'var(--color-geg-text-faint)',
           }}
+          title="A response is an inbound SMS OR the first outbound dial answered (>= 90s) — either channel counts."
         >
-          {fmr.cohortSize} leads · {fmr.cohortEverReplied} ever replied · {fmr.cohortWithin24h} within 24h · since May 24 ET
+          {fmr.cohortSize} leads · {fmr.cohortEverReplied} responded · {fmr.cohortWithin24h} within 24h · since May 24 ET
         </div>
       </div>
     </div>
