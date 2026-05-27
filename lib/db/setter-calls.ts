@@ -22,6 +22,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // just a denormalized link). For ~55 rows the round-trip cost is
 // negligible.
 
+// Review fields stitched in from setter_call_reviews (nullable until
+// the Sonnet reviewer has processed the transcript).
+export type SetterCallReviewSummary = {
+  lead_score: number
+  should_be_dqd: boolean
+  booked: boolean
+  sentiment: string
+}
+
 export type SetterCallListRow = {
   close_call_id: string
   activity_at: string
@@ -34,7 +43,7 @@ export type SetterCallListRow = {
   direction: string | null
   confidence: number | null
   speaker_count: number | null
-  has_review: boolean                     // true once setter_call_reviews lands (V2)
+  review: SetterCallReviewSummary | null  // null = transcript only, no Sonnet review yet
   deepgram_cost_usd: number | null
 }
 
@@ -137,6 +146,33 @@ export async function listSetterCalls(
     }
   }
 
+  // 4. Resolve review summary fields (one query, IN over transcript IDs).
+  //    Null entries are expected during the window where transcription
+  //    has landed but the Sonnet review hasn't — list page renders
+  //    "Pending" in those cells.
+  const transcriptIds = rows.map((r) => r.close_call_id)
+  const reviewMap = new Map<string, SetterCallReviewSummary>()
+  if (transcriptIds.length > 0) {
+    const { data: reviews } = await supabase
+      .from('setter_call_reviews' as never)
+      .select('close_call_id, lead_score, should_be_dqd, booked, sentiment')
+      .in('close_call_id' as never, transcriptIds)
+    for (const r of (reviews ?? []) as unknown as Array<{
+      close_call_id: string
+      lead_score: number
+      should_be_dqd: boolean
+      booked: boolean
+      sentiment: string
+    }>) {
+      reviewMap.set(r.close_call_id, {
+        lead_score: r.lead_score,
+        should_be_dqd: r.should_be_dqd,
+        booked: r.booked,
+        sentiment: r.sentiment,
+      })
+    }
+  }
+
   // Apply setter filter (JS-side — the close_calls.user_id lives one
   // join away from the transcript row, so PostgREST can't filter on it
   // directly in a single query without a view). Cheap at current volume.
@@ -160,8 +196,7 @@ export async function listSetterCalls(
       direction: r.close_calls?.direction ?? null,
       confidence: r.confidence,
       speaker_count: r.speaker_count,
-      // V2: flip true once setter_call_reviews row exists.
-      has_review: false,
+      review: reviewMap.get(r.close_call_id) ?? null,
       deepgram_cost_usd: r.deepgram_cost_usd,
     }
   })
@@ -180,6 +215,32 @@ export type SetterCallWord = {
   confidence?: number
 }
 
+// Full review row — used on the detail page (the list page only needs
+// the summary fields in SetterCallReviewSummary).
+export type SetterCallReviewItem = {
+  point: string
+  evidence: string
+}
+
+export type SetterCallReviewFull = {
+  sentiment: string
+  lead_score: number
+  lead_score_reason: string
+  should_be_dqd: boolean
+  dq_reason: string | null
+  booked: boolean
+  no_book_reason: string | null
+  setter_strengths: SetterCallReviewItem[]
+  setter_weaknesses: SetterCallReviewItem[]
+  lead_attributes: string[]
+  setter_words: number | null
+  prospect_words: number | null
+  talk_ratio_setter: number | null
+  model: string
+  prompt_version: string
+  reviewed_at: string
+}
+
 export type SetterCallDetail = SetterCallListRow & {
   transcript_text: string
   words: SetterCallWord[]
@@ -191,6 +252,9 @@ export type SetterCallDetail = SetterCallListRow & {
   recording_expires_at: string | null
   // Direct link to view this call inside Close's web app.
   close_app_url: string
+  // null when the Sonnet review hasn't run yet — the page renders a
+  // "review pending" placeholder in that case.
+  full_review: SetterCallReviewFull | null
 }
 
 export async function getSetterCallById(
@@ -283,6 +347,32 @@ export async function getSetterCallById(
   // pointing at app.close.com which is what humans use to play audio).
   const close_app_url = `https://app.close.com/lead/${leadId ?? ''}/`
 
+  // 5. Pull the review row, if any.
+  const { data: reviewRow } = await supabase
+    .from('setter_call_reviews' as never)
+    .select(`
+      sentiment, lead_score, lead_score_reason,
+      should_be_dqd, dq_reason, booked, no_book_reason,
+      setter_strengths, setter_weaknesses, lead_attributes,
+      setter_words, prospect_words, talk_ratio_setter,
+      model, prompt_version, reviewed_at
+    `)
+    .eq('close_call_id' as never, closeCallId)
+    .maybeSingle()
+
+  const full_review = reviewRow
+    ? (reviewRow as unknown as SetterCallReviewFull)
+    : null
+
+  const review_summary: SetterCallReviewSummary | null = full_review
+    ? {
+        lead_score: full_review.lead_score,
+        should_be_dqd: full_review.should_be_dqd,
+        booked: full_review.booked,
+        sentiment: full_review.sentiment,
+      }
+    : null
+
   return {
     close_call_id: row.close_call_id,
     activity_at: row.close_calls?.activity_at ?? '',
@@ -295,7 +385,7 @@ export async function getSetterCallById(
     direction: row.close_calls?.direction ?? null,
     confidence: row.confidence,
     speaker_count: row.speaker_count,
-    has_review: false,
+    review: review_summary,
     deepgram_cost_usd: row.deepgram_cost_usd,
     transcript_text: row.transcript_text,
     words: row.words ?? [],
@@ -304,5 +394,6 @@ export async function getSetterCallById(
     transcribed_at: row.transcribed_at,
     recording_expires_at,
     close_app_url,
+    full_review,
   }
 }

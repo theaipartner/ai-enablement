@@ -121,6 +121,11 @@ function EmptyState() {
   )
 }
 
+// Column template — kept in one place so header + rows stay in sync.
+const CALLS_GRID =
+  '150px 70px 60px 1fr 1fr 80px 70px 1fr'
+//  when    score  dq    setter  prospect  dur    dir    sentiment
+
 function CallsTable({ rows }: { rows: SetterCallListRow[] }) {
   return (
     <section
@@ -135,8 +140,8 @@ function CallsTable({ rows }: { rows: SetterCallListRow[] }) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '180px 180px 160px 100px 110px 90px 1fr',
-          gap: 0,
+          gridTemplateColumns: CALLS_GRID,
+          gap: 12,
           padding: '14px 20px',
           borderBottom: '1px solid var(--color-geg-border)',
           background: 'var(--color-geg-bg)',
@@ -148,12 +153,13 @@ function CallsTable({ rows }: { rows: SetterCallListRow[] }) {
         }}
       >
         <div>When</div>
+        <div>Score</div>
+        <div>DQ</div>
         <div>Setter</div>
         <div>Prospect</div>
         <div>Duration</div>
         <div>Direction</div>
-        <div>Speakers</div>
-        <div style={{ textAlign: 'right' }}>Cost</div>
+        <div>Sentiment</div>
       </div>
       {rows.map((row) => (
         <CallRow key={row.close_call_id} row={row} />
@@ -178,20 +184,34 @@ function CallRow({ row }: { row: SetterCallListRow }) {
       href={`/sales-dashboard/calls/${encodeURIComponent(row.close_call_id)}`}
       style={{
         display: 'grid',
-        gridTemplateColumns: '180px 180px 160px 100px 110px 90px 1fr',
-        gap: 0,
+        gridTemplateColumns: CALLS_GRID,
+        gap: 12,
         padding: '14px 20px',
         borderBottom: '1px solid var(--color-geg-border)',
         color: 'var(--color-geg-text)',
         textDecoration: 'none',
         fontSize: 13,
         transition: 'background 80ms ease',
+        alignItems: 'center',
       }}
-      // Hover affordance — uses CSS var so the row matches sidebar accent.
       className="setter-call-row"
     >
       <div className="geg-mono" style={{ color: 'var(--color-geg-text-2)', fontSize: 12 }}>
         {when}
+      </div>
+      <div>
+        {row.review ? (
+          <ScoreChip score={row.review.lead_score} />
+        ) : (
+          <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 11 }}>—</span>
+        )}
+      </div>
+      <div>
+        {row.review?.should_be_dqd ? (
+          <DqChip />
+        ) : (
+          <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 11 }}>·</span>
+        )}
       </div>
       <div>
         {row.setter_name ?? <span style={{ color: 'var(--color-geg-text-faint)' }}>Unknown user</span>}
@@ -224,20 +244,89 @@ function CallRow({ row }: { row: SetterCallListRow }) {
       >
         {row.direction ?? '—'}
       </div>
-      <div className="geg-mono" style={{ fontSize: 12, color: 'var(--color-geg-text-3)' }}>
-        {row.speaker_count ?? '—'}
-      </div>
       <div
-        className="geg-mono"
         style={{
-          fontSize: 11,
-          color: 'var(--color-geg-text-faint)',
-          textAlign: 'right',
+          fontSize: 12,
+          lineHeight: 1.4,
+          color: 'var(--color-geg-text-2)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
         }}
+        title={row.review?.sentiment ?? undefined}
       >
-        {row.deepgram_cost_usd != null ? `$${row.deepgram_cost_usd.toFixed(4)}` : '—'}
+        {row.review?.sentiment ?? (
+          <span
+            style={{
+              color: 'var(--color-geg-text-faint)',
+              fontStyle: 'italic',
+              fontSize: 11,
+            }}
+          >
+            Review pending
+          </span>
+        )}
       </div>
     </Link>
+  )
+}
+
+function ScoreChip({ score }: { score: number }) {
+  // 0-3 red, 4-6 neutral, 7-10 green — same color contract as the
+  // detail page ScorePill.
+  const tone =
+    score <= 3
+      ? { color: 'var(--color-geg-neg)', bg: 'var(--color-geg-neg-fill)', border: 'var(--color-geg-neg-border)' }
+      : score <= 6
+        ? { color: 'var(--color-geg-text-2)', bg: 'var(--color-geg-bg)', border: 'var(--color-geg-border)' }
+        : { color: 'var(--color-geg-pos)', bg: 'var(--color-geg-pos-fill)', border: 'var(--color-geg-pos-border)' }
+  return (
+    <span
+      className="geg-mono"
+      title={`Lead score ${score}/10`}
+      style={{
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 4,
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+        color: tone.color,
+        fontSize: 12,
+        fontWeight: 500,
+        letterSpacing: '0.04em',
+        minWidth: 24,
+        textAlign: 'center',
+      }}
+    >
+      {score}
+    </span>
+  )
+}
+
+function DqChip() {
+  return (
+    <span
+      className="geg-mono"
+      title="Setter call review flagged this lead for DQ — verify before acting"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 6px',
+        borderRadius: 4,
+        border: '1px solid var(--color-geg-neg-border)',
+        background: 'var(--color-geg-neg-fill)',
+        color: 'var(--color-geg-neg)',
+        fontSize: 9,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        fontWeight: 500,
+      }}
+    >
+      DQ
+    </span>
   )
 }
 

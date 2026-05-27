@@ -1,27 +1,24 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { HeaderBand } from '@/components/gregory/header-band'
 import {
   getSetterCallById,
   type SetterCallDetail,
+  type SetterCallReviewItem,
   type SetterCallWord,
 } from '@/lib/db/setter-calls'
-import { PersonPill } from '../../header-pills'
+import { TranscriptSection } from './transcript-section'
 
 // Sales Dashboard · Calls · Detail.
 //
-// Renders the diarized transcript + call metadata. Speakers come from
-// Deepgram's diarize=true output: integer speaker labels (0, 1) that
-// we render as alternating "Speaker 1 / Speaker 2" blocks. The setter
-// IS one of those two — we don't (yet) auto-resolve which integer
-// maps to setter vs prospect; the conventional reading is "whoever
-// opens the call is the setter" but Deepgram doesn't guarantee that
-// and one Connor smoke had spk0 opening with "Hello?" before the
-// prospect joined.
+// Mirrors the CS /calls/[id] page shape — two-column gold-bordered
+// grid with Data box (left) and Call Review box (right). Header
+// surfaces three pills: lead score (always), booked/not-booked
+// (always), and DQ (only when should_be_dqd=true). Transcript is
+// collapsed under a "Show transcript" toggle below the grid.
 //
-// The AI Review block is a placeholder until setter_call_reviews
-// lands. When that table is built (deferred until Drake picks a
-// golden set), this page wires in the structured fields.
+// "Review is the main focus" — the right column is wider and carries
+// the structured analysis. Drake reads this to coach setters and
+// triage lead quality.
 
 export const dynamic = 'force-dynamic'
 
@@ -30,36 +27,40 @@ export default async function SetterCallDetailPage({
 }: {
   params: { close_id: string }
 }) {
-  // Next.js URL-encodes acti_* ids transparently; decode just in case.
   const id = decodeURIComponent(params.close_id)
   const detail = await getSetterCallById(id)
   if (!detail) notFound()
 
   return (
-    <div>
-      <HeaderBand
-        eyebrow="SALES · CALLS · DETAIL"
-        title={detail.prospect_name ?? 'Unknown prospect'}
-        actions={<PersonPill label="EST · Nabeel" />}
-      />
-
+    <div style={{ padding: '4px 8px 28px' }}>
       <BackLink />
+      <HeaderBlock detail={detail} />
 
       <div
         style={{
-          marginTop: 24,
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) 320px',
-          gap: 24,
+          gridTemplateColumns: '380px 1fr',
+          gap: 20,
+          paddingTop: 24,
           alignItems: 'start',
         }}
       >
-        <TranscriptBlock detail={detail} />
-        <MetaSidebar detail={detail} />
+        <DataBox detail={detail} />
+        <ReviewBox detail={detail} />
       </div>
+
+      <TranscriptSection
+        transcriptText={detail.transcript_text}
+        words={detail.words}
+        speakerCount={detail.speaker_count}
+      />
     </div>
   )
 }
+
+// ----------------------------------------------------------------------
+// Header — eyebrow + title + pill row
+// ----------------------------------------------------------------------
 
 function BackLink() {
   return (
@@ -67,10 +68,10 @@ function BackLink() {
       href="/sales-dashboard/calls"
       className="geg-mono"
       style={{
-        marginTop: 14,
         display: 'inline-block',
-        fontSize: 11,
-        letterSpacing: '0.12em',
+        marginTop: 4,
+        fontSize: 10,
+        letterSpacing: '0.16em',
         textTransform: 'uppercase',
         color: 'var(--color-geg-text-3)',
         textDecoration: 'none',
@@ -81,280 +82,555 @@ function BackLink() {
   )
 }
 
-// ----------------------------------------------------------------------
-// Transcript — group consecutive words by speaker
-// ----------------------------------------------------------------------
-
-type Segment = {
-  speaker: number | null
-  start: number
-  end: number
-  text: string
-}
-
-function groupBySpeaker(words: SetterCallWord[]): Segment[] {
-  if (words.length === 0) return []
-  const segments: Segment[] = []
-  let cur: Segment | null = null
-  for (const w of words) {
-    const spk = typeof w.speaker === 'number' ? w.speaker : null
-    const token = w.punctuated_word ?? w.word ?? ''
-    if (!cur || cur.speaker !== spk) {
-      // Flush + start new segment
-      if (cur) segments.push(cur)
-      cur = { speaker: spk, start: w.start, end: w.end, text: token }
-    } else {
-      cur.end = w.end
-      // Space-join except for the punctuation glue case (Deepgram
-      // tokenizes punctuation onto the previous word already).
-      cur.text += token ? ` ${token}` : ''
-    }
-  }
-  if (cur) segments.push(cur)
-  return segments
-}
-
-function TranscriptBlock({ detail }: { detail: SetterCallDetail }) {
-  const segments = groupBySpeaker(detail.words)
-
+function HeaderBlock({ detail }: { detail: SetterCallDetail }) {
+  const review = detail.full_review
   return (
-    <section
+    <header
       style={{
-        padding: '24px 28px 28px',
-        background: 'var(--color-geg-bg-elev)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 10,
+        padding: '20px 0 22px',
+        borderBottom: '1px solid var(--color-geg-border)',
       }}
     >
+      <div className="geg-eyebrow">SALES · CALL · DETAIL</div>
       <div
-        className="geg-mono"
         style={{
-          fontSize: 10,
-          letterSpacing: '0.18em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-          marginBottom: 14,
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 16,
+          flexWrap: 'wrap',
+          marginTop: 8,
         }}
       >
-        Transcript · {segments.length} turns · {detail.speaker_count ?? '?'} speakers
-      </div>
-
-      {segments.length === 0 ? (
-        <p style={{ color: 'var(--color-geg-text-faint)', fontSize: 13 }}>
-          No diarized words available. The raw transcript:
-          <br />
-          <br />
-          <span style={{ color: 'var(--color-geg-text-2)' }}>{detail.transcript_text}</span>
-        </p>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {segments.map((seg, i) => (
-            <SpeakerTurn key={i} segment={seg} />
-          ))}
-        </div>
-      )}
-
-      <ReviewPlaceholder />
-    </section>
-  )
-}
-
-function SpeakerTurn({ segment }: { segment: Segment }) {
-  const label =
-    segment.speaker === null
-      ? 'Speaker ?'
-      : `Speaker ${segment.speaker + 1}`
-  // Alternate the accent color subtly by parity. Speaker 1 = accent,
-  // Speaker 2 = neutral. Three+ speakers (rare) cycle through both.
-  const accent = segment.speaker !== null && segment.speaker % 2 === 0
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 16 }}>
-      <div>
-        <div
-          className="geg-mono"
+        <h1
+          className="geg-serif"
           style={{
-            fontSize: 10,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: accent ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)',
             fontWeight: 500,
+            fontSize: 34,
+            lineHeight: 1.1,
+            letterSpacing: '-0.012em',
+            color: 'var(--color-geg-text)',
+            margin: 0,
           }}
         >
-          {label}
-        </div>
-        <div
-          className="geg-mono"
-          style={{
-            fontSize: 10,
-            color: 'var(--color-geg-text-faint)',
-            marginTop: 4,
-          }}
-        >
-          {formatTimestamp(segment.start)}
-        </div>
-      </div>
-      <div
-        style={{
-          fontSize: 14,
-          lineHeight: 1.55,
-          color: 'var(--color-geg-text)',
-        }}
-      >
-        {segment.text}
-      </div>
-    </div>
-  )
-}
-
-function ReviewPlaceholder() {
-  return (
-    <div
-      style={{
-        marginTop: 32,
-        padding: '18px 20px',
-        border: '1px dashed var(--color-geg-border)',
-        borderRadius: 8,
-        color: 'var(--color-geg-text-3)',
-        fontSize: 12,
-      }}
-    >
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.16em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-faint)',
-          marginBottom: 6,
-        }}
-      >
-        AI Review — coming soon
-      </div>
-      Sentiment · setter strengths / weaknesses · lead score · DQ flag will appear here
-      once the review prompt is tuned against the golden set.
-    </div>
-  )
-}
-
-// ----------------------------------------------------------------------
-// Sidebar — call metadata
-// ----------------------------------------------------------------------
-
-function MetaSidebar({ detail }: { detail: SetterCallDetail }) {
-  const date = new Date(detail.activity_at)
-  const whenLong = date.toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZoneName: 'short',
-  })
-  const expiresAt = detail.recording_expires_at
-    ? new Date(detail.recording_expires_at)
-    : null
-  const isPlayable = expiresAt ? expiresAt > new Date() : false
-
-  return (
-    <aside
-      style={{
-        padding: '20px 22px',
-        background: 'var(--color-geg-bg-elev)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-      }}
-    >
-      <MetaRow label="Setter" value={detail.setter_name ?? '—'} sub={detail.setter_role ?? undefined} />
-      <MetaRow label="Prospect" value={detail.prospect_name ?? '—'} />
-      <MetaRow label="When" value={whenLong} />
-      <MetaRow label="Direction" value={detail.direction ?? '—'} />
-      <MetaRow label="Duration" value={formatDurationLong(detail.duration_s)} />
-      <MetaRow
-        label="Transcription"
-        value={`${detail.model} · ${detail.confidence != null ? (detail.confidence * 100).toFixed(1) + '%' : '—'} confidence`}
-        sub={`request ${detail.deepgram_request_id.slice(0, 8)}…`}
-      />
-      <MetaRow
-        label="Cost"
-        value={detail.deepgram_cost_usd != null ? `$${detail.deepgram_cost_usd.toFixed(4)}` : '—'}
-      />
-
-      {/* Close playback — only useful within the 30-day window. */}
-      <div
-        style={{
-          marginTop: 4,
-          padding: '12px 14px',
-          background: 'var(--color-geg-bg)',
-          borderRadius: 6,
-          fontSize: 12,
-        }}
-      >
-        <div
-          className="geg-mono"
-          style={{
-            fontSize: 9,
-            letterSpacing: '0.16em',
-            textTransform: 'uppercase',
-            color: 'var(--color-geg-text-faint)',
-            marginBottom: 6,
-          }}
-        >
-          Audio
-        </div>
-        {isPlayable ? (
-          <a
-            href={detail.close_app_url}
-            target="_blank"
-            rel="noopener noreferrer"
+          {detail.prospect_name ?? 'Unknown prospect'}.
+        </h1>
+        {review ? (
+          <div style={{ display: 'inline-flex', gap: 8, alignItems: 'baseline' }}>
+            <ScorePill score={review.lead_score} />
+            <BookedPill booked={review.booked} />
+            {review.should_be_dqd ? <DqPill reason={review.dq_reason ?? ''} /> : null}
+          </div>
+        ) : (
+          <span
+            className="geg-mono"
             style={{
-              color: 'var(--color-geg-accent)',
-              textDecoration: 'none',
-              fontSize: 12,
+              fontSize: 10,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--color-geg-text-faint)',
+              padding: '4px 10px',
+              border: '1px dashed var(--color-geg-border)',
+              borderRadius: 999,
             }}
           >
-            Open in Close →
-          </a>
-        ) : (
-          <span style={{ color: 'var(--color-geg-text-faint)' }}>
-            Recording expired{expiresAt ? ` ${formatRelative(expiresAt)}` : ''}
+            Review pending
           </span>
         )}
       </div>
-    </aside>
-  )
-}
-
-function MetaRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div>
       <div
         className="geg-mono"
         style={{
-          fontSize: 9,
-          letterSpacing: '0.16em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-faint)',
-          marginBottom: 4,
+          marginTop: 12,
+          fontSize: 12,
+          color: 'var(--color-geg-text-2)',
+          letterSpacing: '0.02em',
         }}
       >
-        {label}
+        {formatStarted(detail.activity_at)}
+        <Dot />
+        {formatDurationLong(detail.duration_s)}
+        <Dot />
+        {detail.setter_name ?? 'Unknown setter'}
+        {detail.setter_role ? (
+          <span
+            style={{ color: 'var(--color-geg-text-faint)', marginLeft: 6 }}
+          >
+            · {detail.setter_role}
+          </span>
+        ) : null}
+        <Dot />
+        {detail.direction ?? '—'}
       </div>
-      <div style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>{value}</div>
-      {sub ? (
-        <div
-          className="geg-mono"
-          style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', marginTop: 2 }}
-        >
-          {sub}
-        </div>
-      ) : null}
+    </header>
+  )
+}
+
+function Dot() {
+  return (
+    <span style={{ color: 'var(--color-geg-text-faint)', margin: '0 10px' }}>·</span>
+  )
+}
+
+// ----------------------------------------------------------------------
+// Pills — score / booked / DQ
+// ----------------------------------------------------------------------
+
+function ScorePill({ score }: { score: number }) {
+  // 0-3 → red, 4-6 → neutral, 7-10 → green. Stays mono-cap to match
+  // the rest of the chrome.
+  const tone =
+    score <= 3
+      ? { color: 'var(--color-geg-neg)', bg: 'var(--color-geg-neg-fill)', border: 'var(--color-geg-neg-border)' }
+      : score <= 6
+        ? { color: 'var(--color-geg-text-2)', bg: 'var(--color-geg-bg-elev)', border: 'var(--color-geg-border)' }
+        : { color: 'var(--color-geg-pos)', bg: 'var(--color-geg-pos-fill)', border: 'var(--color-geg-pos-border)' }
+  return (
+    <span
+      className="geg-mono"
+      title={`Lead score ${score}/10`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        borderRadius: 999,
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+        color: tone.color,
+        fontSize: 10,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        fontWeight: 500,
+      }}
+    >
+      <span style={{ fontSize: 13, letterSpacing: '0.04em' }}>{score}</span>
+      <span style={{ opacity: 0.7 }}>/ 10</span>
+    </span>
+  )
+}
+
+function BookedPill({ booked }: { booked: boolean }) {
+  const tone = booked
+    ? { color: 'var(--color-geg-pos)', bg: 'var(--color-geg-pos-fill)', border: 'var(--color-geg-pos-border)', label: 'Booked' }
+    : { color: 'var(--color-geg-text-3)', bg: 'transparent', border: 'var(--color-geg-border)', label: 'Not booked' }
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        borderRadius: 999,
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+        color: tone.color,
+        fontSize: 10,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        fontWeight: 500,
+      }}
+    >
+      {tone.label}
+    </span>
+  )
+}
+
+function DqPill({ reason }: { reason: string }) {
+  return (
+    <span
+      className="geg-mono"
+      title={reason || 'Flagged DQ — see review'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        borderRadius: 999,
+        border: '1px solid var(--color-geg-neg-border)',
+        background: 'var(--color-geg-neg-fill)',
+        color: 'var(--color-geg-neg)',
+        fontSize: 10,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        fontWeight: 500,
+      }}
+    >
+      DQ flagged
+    </span>
+  )
+}
+
+// ----------------------------------------------------------------------
+// Data box
+// ----------------------------------------------------------------------
+
+function DataBox({ detail }: { detail: SetterCallDetail }) {
+  const review = detail.full_review
+  const expiresAt = detail.recording_expires_at ? new Date(detail.recording_expires_at) : null
+  const isPlayable = expiresAt ? expiresAt > new Date() : false
+
+  // Talk ratio prefers the review row's stored value (computed off
+  // the diarized words at review time). When the review hasn't run
+  // yet, we'd need to recompute here — for V1 we just show "—".
+  const talkRatio =
+    review?.setter_words != null && review?.prospect_words != null
+      ? `${review.setter_words} / ${review.prospect_words} words (${Math.round((review.talk_ratio_setter ?? 0) * 100)}% setter)`
+      : '—'
+
+  return (
+    <div className="geg-gold-box" style={{ flexShrink: 0 }}>
+      <div className="geg-gold-box-header">
+        <h3>Data</h3>
+      </div>
+      <div className="geg-gold-box-body">
+        <DataRow k="Setter" v={detail.setter_name ?? '—'} />
+        <DataRow k="Prospect" v={detail.prospect_name ?? '—'} />
+        <DataRow k="Direction" v={detail.direction ?? '—'} />
+        <DataRow
+          k="Duration"
+          v={<span className="geg-mono">{formatDurationLong(detail.duration_s)}</span>}
+          mono
+        />
+        <DataRow k="Talk time" v={<span className="geg-mono" style={{ fontSize: 12 }}>{talkRatio}</span>} mono />
+        <DataRow
+          k="Recording"
+          v={
+            isPlayable ? (
+              <a
+                href={detail.close_app_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: 'var(--color-geg-accent)',
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontWeight: 500,
+                }}
+              >
+                Open in Close <span className="geg-mono">→</span>
+              </a>
+            ) : (
+              <span style={{ color: 'var(--color-geg-text-3)' }}>
+                Expired{expiresAt ? ` ${formatRelative(expiresAt)}` : ''}
+              </span>
+            )
+          }
+        />
+        <DataRow
+          k="Transcribed"
+          v={
+            <span className="geg-mono" style={{ fontSize: 11 }}>
+              {detail.model} ·{' '}
+              {detail.confidence != null
+                ? `${(detail.confidence * 100).toFixed(1)}%`
+                : '—'}
+            </span>
+          }
+          mono
+        />
+      </div>
     </div>
+  )
+}
+
+function DataRow({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
+  return (
+    <div
+      className="geg-data-row"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '110px 1fr',
+        gap: 12,
+        padding: '8px 0',
+        fontSize: 13,
+        alignItems: 'baseline',
+        borderTop: '1px dashed rgba(160, 136, 80, 0.18)',
+      }}
+    >
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-faint)',
+        }}
+      >
+        {k}
+      </span>
+      <span
+        style={{
+          color: mono ? 'var(--color-geg-text-2)' : 'var(--color-geg-text)',
+          fontSize: mono ? 12 : 13,
+          letterSpacing: mono ? '0.02em' : undefined,
+        }}
+      >
+        {v}
+      </span>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------------
+// Review box
+// ----------------------------------------------------------------------
+
+function ReviewBox({ detail }: { detail: SetterCallDetail }) {
+  const review = detail.full_review
+  return (
+    <div className="geg-gold-box" style={{ height: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 16,
+          paddingBottom: 14,
+          marginBottom: 16,
+          borderBottom: '1px solid var(--color-geg-accent-border)',
+        }}
+      >
+        <h3
+          className="geg-serif"
+          style={{
+            fontWeight: 500,
+            fontSize: 22,
+            margin: 0,
+            letterSpacing: '-0.01em',
+            color: 'var(--color-geg-text)',
+          }}
+        >
+          Call review.
+        </h3>
+        {review ? (
+          <div
+            className="geg-mono"
+            style={{
+              fontSize: 10,
+              color: 'var(--color-geg-text-faint)',
+              letterSpacing: '0.02em',
+            }}
+          >
+            {review.prompt_version} ·{' '}
+            <b style={{ color: 'var(--color-geg-text-2)', fontWeight: 400 }}>
+              {formatStarted(review.reviewed_at)}
+            </b>
+          </div>
+        ) : null}
+      </div>
+
+      {review === null ? (
+        <p
+          style={{
+            color: 'var(--color-geg-text-2)',
+            fontSize: 13,
+            fontStyle: 'italic',
+            margin: 0,
+          }}
+        >
+          Sonnet review hasn&apos;t run for this call yet — usually within a minute of
+          the transcript landing. Refresh shortly.
+        </p>
+      ) : (
+        <>
+          <ReviewSection title="Sentiment">
+            <p
+              className="geg-serif"
+              style={{
+                fontSize: 15,
+                lineHeight: 1.55,
+                color: 'var(--color-geg-text)',
+                margin: 0,
+              }}
+            >
+              {review.sentiment}
+            </p>
+          </ReviewSection>
+
+          <ReviewSection title={`Why this score · ${review.lead_score} / 10`}>
+            <p
+              style={{
+                fontSize: 13.5,
+                lineHeight: 1.55,
+                color: 'var(--color-geg-text)',
+                margin: 0,
+              }}
+            >
+              {review.lead_score_reason}
+            </p>
+          </ReviewSection>
+
+          <ReviewSection
+            title="Setter strengths"
+            count={review.setter_strengths.length}
+          >
+            <ReviewList items={review.setter_strengths} />
+          </ReviewSection>
+
+          <ReviewSection
+            title="Setter weaknesses"
+            count={review.setter_weaknesses.length}
+          >
+            <ReviewList items={review.setter_weaknesses} />
+          </ReviewSection>
+
+          {review.lead_attributes.length > 0 ? (
+            <ReviewSection title="Lead attributes">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {review.lead_attributes.map((attr) => (
+                  <AttributePill key={attr} value={attr} />
+                ))}
+              </div>
+            </ReviewSection>
+          ) : null}
+
+          {review.booked === false && review.no_book_reason ? (
+            <ReviewSection title="Why didn't book">
+              <p
+                style={{
+                  fontSize: 13.5,
+                  lineHeight: 1.55,
+                  color: 'var(--color-geg-text)',
+                  margin: 0,
+                  paddingLeft: 12,
+                  borderLeft: '2px solid var(--color-geg-neg-border)',
+                }}
+              >
+                {review.no_book_reason}
+              </p>
+            </ReviewSection>
+          ) : null}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ReviewSection({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count?: number
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <h4
+        className="geg-mono"
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: '0.16em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-2)',
+          margin: '0 0 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        {title}
+        {count !== undefined ? (
+          <span style={{ color: 'var(--color-geg-accent)', fontWeight: 500 }}>
+            {count}
+          </span>
+        ) : null}
+      </h4>
+      {children}
+    </div>
+  )
+}
+
+function ReviewList({ items }: { items: SetterCallReviewItem[] }) {
+  if (items.length === 0) {
+    return (
+      <p
+        style={{
+          fontSize: 12,
+          color: 'var(--color-geg-text-faint)',
+          fontStyle: 'italic',
+          margin: 0,
+        }}
+      >
+        None surfaced.
+      </p>
+    )
+  }
+  return (
+    <ul
+      style={{
+        listStyle: 'none',
+        margin: 0,
+        padding: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+      }}
+    >
+      {items.map((item, idx) => (
+        <li
+          key={idx}
+          style={{
+            paddingLeft: 12,
+            borderLeft: '1px solid var(--color-geg-accent-border)',
+          }}
+        >
+          <p
+            style={{
+              color: 'var(--color-geg-text)',
+              fontSize: 13.5,
+              lineHeight: 1.55,
+              margin: '0 0 6px',
+            }}
+          >
+            {item.point}
+          </p>
+          <p
+            style={{
+              color: 'var(--color-geg-text-2)',
+              fontSize: 12,
+              lineHeight: 1.55,
+              fontStyle: 'italic',
+              margin: 0,
+            }}
+          >
+            {item.evidence}
+          </p>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function AttributePill({ value }: { value: string }) {
+  // value is "key:value" — split for visual separation.
+  const colon = value.indexOf(':')
+  const [k, v] = colon > -1 ? [value.slice(0, colon), value.slice(colon + 1)] : [value, '']
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 5,
+        padding: '3px 8px',
+        borderRadius: 4,
+        background: 'var(--color-geg-bg)',
+        border: '1px solid var(--color-geg-border)',
+        fontSize: 11,
+        color: 'var(--color-geg-text-2)',
+        letterSpacing: '0.04em',
+      }}
+    >
+      <span style={{ color: 'var(--color-geg-text-faint)' }}>{k}</span>
+      {v ? <span>{v}</span> : null}
+    </span>
   )
 }
 
@@ -362,23 +638,33 @@ function MetaRow({ label, value, sub }: { label: string; value: string; sub?: st
 // Formatters
 // ----------------------------------------------------------------------
 
+function formatStarted(iso: string): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
 function formatDurationLong(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds - m * 60)
   return `${m}m ${s}s`
 }
 
-function formatTimestamp(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds - m * 60)
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
 function formatRelative(date: Date): string {
-  const now = new Date()
-  const diffMs = date.getTime() - now.getTime()
+  const diffMs = date.getTime() - Date.now()
   const diffDays = Math.round(diffMs / 86400000)
   if (diffDays < 0) return `${Math.abs(diffDays)}d ago`
   if (diffDays === 0) return 'today'
   return `in ${diffDays}d`
 }
+
+// Silence unused-warning for SetterCallWord re-export — referenced by
+// TranscriptSection's `words` prop type.
+export type { SetterCallWord }
