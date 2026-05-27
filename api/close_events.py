@@ -69,6 +69,7 @@ from ingestion.close.pipeline import (
     upsert_opportunity_from_payload,
     upsert_sms_from_payload,
 )
+from agents.setter_call_reviewer import ReviewError, review_call
 from ingestion.setter_calls import (
     EligibilityError,
     RecordingFetchError,
@@ -433,7 +434,18 @@ def _maybe_transcribe(db: Any, close_call_id: str) -> dict[str, Any]:
             "close_webhook.setter_call_ok close_id=%s duration_s=%s",
             close_call_id, row.get("duration_s"),
         )
-        return {"attempted": True, "status": "ok"}
+        # Transcription succeeded → kick off the Sonnet review. Same
+        # error-tolerance contract: review failures don't fail the
+        # webhook, they get logged and the safety-net cron / next
+        # webhook fire heals the gap. review_call is idempotent on
+        # close_call_id (skips when a review already exists), so
+        # re-firing the same webhook event is safe.
+        review_result = _maybe_review(db, close_call_id)
+        return {
+            "attempted": True,
+            "status": "ok",
+            "review": review_result,
+        }
     except EligibilityError as e:
         # Expected steady-state: most call activity events are for
         # calls that don't qualify (short, no-answer, no recording yet).
@@ -452,6 +464,38 @@ def _maybe_transcribe(db: Any, close_call_id: str) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover — defensive
         logger.exception(
             "close_webhook.setter_call_unexpected close_id=%s",
+            close_call_id,
+        )
+        return {"attempted": True, "status": "unexpected_error", "error": str(exc)[:200]}
+
+
+def _maybe_review(db: Any, close_call_id: str) -> dict[str, Any]:
+    """Fire Sonnet review after a successful transcription.
+
+    Same fail-soft contract as `_maybe_transcribe` — never raises into
+    the webhook handler. review_call's own idempotency means re-firing
+    on a webhook retry is a no-op.
+
+    Adds ~5-8s of webhook latency on first-time reviews; subsequent
+    fires (when the review already exists) are sub-second.
+    """
+    try:
+        row = review_call(close_call_id, db=db)
+        logger.info(
+            "close_webhook.setter_review_ok close_id=%s score=%s dq=%s booked=%s",
+            close_call_id, row.get("lead_score"),
+            row.get("should_be_dqd"), row.get("booked"),
+        )
+        return {"attempted": True, "status": "ok"}
+    except ReviewError as e:
+        logger.warning(
+            "close_webhook.setter_review_failed close_id=%s err=%s",
+            close_call_id, e,
+        )
+        return {"attempted": True, "status": "failed", "error": str(e)[:200]}
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception(
+            "close_webhook.setter_review_unexpected close_id=%s",
             close_call_id,
         )
         return {"attempted": True, "status": "unexpected_error", "error": str(exc)[:200]}

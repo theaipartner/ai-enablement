@@ -51,6 +51,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from agents.setter_call_reviewer import (  # noqa: E402
+    ReviewError,
+    find_pending_reviews,
+    review_call,
+)
 from ingestion.setter_calls import (  # noqa: E402
     EligibilityError,
     RecordingFetchError,
@@ -180,18 +185,65 @@ def run_sweep() -> dict[str, Any]:
                 close_id,
             )
 
+    # Review sweep — picks up anything that has a transcript but no
+    # review (live webhook missed it, transient Sonnet failure, prompt
+    # iteration left the existing rows un-reviewed, etc.). Capped at
+    # the same per-run number so a backfill never blocks the cron's
+    # 300s function budget.
+    review_pending = find_pending_reviews(db, limit=_MAX_CALLS_PER_RUN)
+    review_succeeded: list[str] = []
+    review_failed: list[dict[str, str]] = []
+    review_cost_usd = 0.0
+    for close_id in review_pending:
+        try:
+            row = review_call(close_id, db=db)
+            review_succeeded.append(close_id)
+            cost = row.get("sonnet_cost_usd") or 0
+            try:
+                review_cost_usd += float(cost)
+            except (TypeError, ValueError):
+                pass
+            logger.info(
+                "setter_calls_sweep_cron.review_ok close_id=%s score=%s cost=$%s",
+                close_id, row.get("lead_score"), cost,
+            )
+        except ReviewError as e:
+            review_failed.append({"close_id": close_id, "error": str(e)[:200]})
+            logger.warning(
+                "setter_calls_sweep_cron.review_fail close_id=%s err=%s",
+                close_id, e,
+            )
+        except Exception as exc:
+            review_failed.append(
+                {"close_id": close_id, "error": f"unexpected: {exc}"[:200]}
+            )
+            logger.exception(
+                "setter_calls_sweep_cron.review_unexpected close_id=%s",
+                close_id,
+            )
+
     elapsed_s = (datetime.now(timezone.utc) - started_at).total_seconds()
     result = {
         "status": "ok",
-        "discovered": len(pending),
-        "succeeded": len(succeeded),
-        "skipped": len(skipped),
-        "failed": len(failed),
-        "total_cost_usd": round(total_cost_usd, 6),
+        # Transcription pass
+        "transcripts_discovered": len(pending),
+        "transcripts_succeeded": len(succeeded),
+        "transcripts_skipped": len(skipped),
+        "transcripts_failed": len(failed),
+        "transcripts_cost_usd": round(total_cost_usd, 6),
+        # Review pass
+        "reviews_discovered": len(review_pending),
+        "reviews_succeeded": len(review_succeeded),
+        "reviews_failed": len(review_failed),
+        "reviews_cost_usd": round(review_cost_usd, 6),
+        # Totals + detail
+        "total_cost_usd": round(total_cost_usd + review_cost_usd, 6),
         "elapsed_s": round(elapsed_s, 1),
         "succeeded_ids": succeeded,
+        "review_succeeded_ids": review_succeeded,
         "skipped_detail": skipped,
         "failed_detail": failed,
+        "review_failed_detail": review_failed,
     }
     _mark_audit_processed(db, audit_id, result)
     return result
