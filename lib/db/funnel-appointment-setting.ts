@@ -1392,19 +1392,62 @@ export async function getSpeedToLeadCohort(
 // Outcomes attributed to whoever filled the form (setter_names).
 // ---------------------------------------------------------------------------
 
+// Session grouping — multiple over-90s calls to the same lead by the
+// same rep within SESSION_GAP_MS of each other count as ONE session.
+// Setter disconnects and redials a few minutes later → same session →
+// one EOC form → one drill row. Drake 2026-05-27.
+const SESSION_GAP_MS = 3 * 60 * 60 * 1000  // 3 hours
+
+type CallForSession = { callId: string; activityAt: string }
+type CallSession = {
+  callIds: string[]             // ordered by activityAt ascending
+  firstActivityAt: string
+  lastActivityAt: string
+  sessionKey: string            // `${leadId}|${firstActivityAt}` — unique per rep/lead/session
+}
+
+// Group a per-rep, per-lead list of >90s calls into sessions. Calls
+// whose activityAt is within SESSION_GAP_MS of the previous call in
+// the chain land in the same session. Start-to-start comparison.
+function groupCallsIntoSessions(leadId: string, calls: CallForSession[]): CallSession[] {
+  if (calls.length === 0) return []
+  const sorted = [...calls].sort((a, b) => (a.activityAt < b.activityAt ? -1 : 1))
+  const out: CallSession[] = []
+  let curIds: string[] = [sorted[0].callId]
+  let curFirst = sorted[0].activityAt
+  let curLast = sorted[0].activityAt
+  for (let i = 1; i < sorted.length; i++) {
+    const c = sorted[i]
+    const gap = new Date(c.activityAt).getTime() - new Date(curLast).getTime()
+    if (gap <= SESSION_GAP_MS) {
+      curIds.push(c.callId)
+      curLast = c.activityAt
+    } else {
+      out.push({ callIds: curIds, firstActivityAt: curFirst, lastActivityAt: curLast, sessionKey: `${leadId}|${curFirst}` })
+      curIds = [c.callId]
+      curFirst = c.activityAt
+      curLast = c.activityAt
+    }
+  }
+  out.push({ callIds: curIds, firstActivityAt: curFirst, lastActivityAt: curLast, sessionKey: `${leadId}|${curFirst}` })
+  return out
+}
+
 export type CallActivityRepRow = {
   userId: string | null
   name: string | null
   totalCalls: number
-  // Close calls in window with duration > 90s. Used as the engagement
-  // proxy for the "missing" calc below.
+  // Close calls in window with duration > 90s. Raw count, not used
+  // for Connected or Missing (both use session count below) — exposed
+  // here for downstream consumers (pulse-history, funnel-stages).
   totalOver90s: number
   // Drill-entry count == what the Connected column shows. Equals
-  // `totalOver90s + in-range form-only rows` for this rep. Form-only
-  // rows are triage forms attributed to this rep whose underlying
-  // call was <= 90s (the setter still filled an EOC, so it's real
-  // engagement even though the call is below the 90s engagement
-  // proxy). Drake 2026-05-27.
+  // `over-90s sessions + in-range form-only rows`. A session is one
+  // or more chained >90s calls to the same lead within 3h of each
+  // other (setter redials after disconnect → still one engagement).
+  // Form-only rows are triage forms attributed to this rep whose
+  // underlying call was <=90s (setter still filed an EOC, real
+  // engagement). Drake 2026-05-27.
   totalConnected: number
   // Forms where the setter logged outcome = "Re-confirm" — i.e. the
   // call was a re-confirmation of a lead that already had a booking.
@@ -1415,10 +1458,11 @@ export type CallActivityRepRow = {
   dqs: number
   downsells: number
   followUps: number
-  // Over-90s calls with no matching form outcome — i.e. the EOC
-  // wasn't filled out (yet). max(0, totalOver90s - sum of outcomes)
-  // so it never goes negative even when a form's event falls in
-  // window but the call is outside, or vice versa.
+  // Sessions with no EOC form filed — the engagement proxy fired
+  // (over-90s call(s) to the same lead in 3h) but no form matched
+  // any call in the session. max(0, sessions - matchedSessions) so
+  // it never goes negative when a form's effective_date falls
+  // outside the range or the form was filed without a matching call.
   missing: number
 }
 
@@ -1443,6 +1487,11 @@ export type CallActivityDrillRow = {
   // call didn't make it into Close (or was under 90s). Surfaced as a
   // hover badge in the UI for audit.
   noMatchingCall?: boolean
+  // Number of >90s calls in the session this row represents. 1 for
+  // ordinary single-call rows (the default); > 1 means the setter
+  // dialed the same lead multiple times within 3h and we collapsed
+  // them into one row (UI shows a "×N" tag).
+  groupedCallCount?: number
 }
 
 export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
@@ -1472,10 +1521,17 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Pull all calls in window — per-rep volume + calls over 90s.
   // Speed-to-lead lives in its own section now; we only need the
   // call-level stats here.
+  //
+  // We also retain (user_id, lead_id, close_id, activity_at) tuples for
+  // every over-90s call so we can group them into sessions below —
+  // multiple calls to the same lead within 3h chain into one session
+  // and count as a single Connected entry / a single expected EOC.
   type Vol = { calls: number; over90s: number }
   const volumeByUser = new Map<string, Vol>()
   const nameByUser = new Map<string, string>()
   const userIdByName = new Map<string, string>()
+  // (userId, leadId) → list of >90s calls in window
+  const over90sByUserLead = new Map<string, Map<string, CallForSession[]>>()
   {
     // No direction filter on the volume aggregate — both inbound and
     // outbound count toward the rep's call activity (engagement on
@@ -1484,14 +1540,16 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     for (;;) {
       const { data: page, error } = await sb
         .from('close_calls' as never)
-        .select('user_id, activity_at, duration, raw_payload')
+        .select('close_id, user_id, lead_id, activity_at, duration, raw_payload')
         .not('user_id', 'is', null)
         .gte('activity_at', range.startUtcIso)
         .lt('activity_at', range.endUtcIso)
         .range(from, from + 999)
       if (error) throw new Error(`close_calls read failed: ${error.message}`)
       const rows = (page ?? []) as unknown as Array<{
+        close_id: string
         user_id: string
+        lead_id: string | null
         activity_at: string
         duration: number | null
         raw_payload: { user_name?: string } | null
@@ -1501,7 +1559,15 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
         if (!volumeByUser.has(r.user_id)) volumeByUser.set(r.user_id, { calls: 0, over90s: 0 })
         const v = volumeByUser.get(r.user_id)!
         v.calls++
-        if ((r.duration ?? 0) > 90) v.over90s++
+        if ((r.duration ?? 0) > 90) {
+          v.over90s++
+          if (r.lead_id) {
+            if (!over90sByUserLead.has(r.user_id)) over90sByUserLead.set(r.user_id, new Map())
+            const perLead = over90sByUserLead.get(r.user_id)!
+            if (!perLead.has(r.lead_id)) perLead.set(r.lead_id, [])
+            perLead.get(r.lead_id)!.push({ callId: r.close_id, activityAt: r.activity_at })
+          }
+        }
 
         const nm = r.raw_payload?.user_name
         if (nm && !nameByUser.has(r.user_id)) {
@@ -1513,6 +1579,24 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       from += 1000
     }
   }
+
+  // Group into sessions per (user, lead). Build two per-user maps:
+  //   sessionCountByUser: number of sessions (== Connected base)
+  //   sessionKeyByCallId: close_id → sessionKey, for matching forms
+  //     back to a specific session in the loop below.
+  const sessionCountByUser = new Map<string, number>()
+  const sessionKeyByCallIdPerUser = new Map<string, Map<string, string>>()
+  over90sByUserLead.forEach((leadMap, userId) => {
+    let total = 0
+    const callIdMap = new Map<string, string>()
+    leadMap.forEach((calls, leadId) => {
+      const sessions = groupCallsIntoSessions(leadId, calls)
+      total += sessions.length
+      for (const s of sessions) for (const cid of s.callIds) callIdMap.set(cid, s.sessionKey)
+    })
+    sessionCountByUser.set(userId, total)
+    sessionKeyByCallIdPerUser.set(userId, callIdMap)
+  })
 
   // Merge team_members identity in: authoritative names + roles +
   // any setter who has no close_calls activity yet (e.g. Victoria,
@@ -1530,13 +1614,13 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number; reconfirms: number }
   const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0, reconfirms: 0 })
   const outcomesByUser = new Map<string, Outcomes>()
-  // Per-rep set of close_call ids that a form matched. Used by the
-  // per-rep "missing" calc — every over-90s call without an entry
-  // here is missing its EOC. Distinct from outcome counts because
-  // form-only outcomes (no matched call) shouldn't reduce missing.
-  const matchedCallIdsByUser = new Map<string, Set<string>>()
+  // Per-rep set of session keys that at least one form matched. Used
+  // by the "missing" calc — every session without an entry here is
+  // missing its EOC. (Sessions, not calls, because multiple chained
+  // calls share one EOC.)
+  const matchedSessionsByUser = new Map<string, Set<string>>()
   // Per-rep count of form-only rows (in-range forms whose underlying
-  // call wasn't a >90s close_call). Added to over90s to produce the
+  // call wasn't a >90s close_call). Added to sessions to produce the
   // Connected column; matches the drill table's row count.
   const formOnlyByUser = new Map<string, number>()
   let totalForms = 0
@@ -1610,8 +1694,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
       outcomesByUser.get(uid)![bucket]++
       if (m?.matchedCallId) {
-        if (!matchedCallIdsByUser.has(uid)) matchedCallIdsByUser.set(uid, new Set())
-        matchedCallIdsByUser.get(uid)!.add(m.matchedCallId)
+        const sessionKey = sessionKeyByCallIdPerUser.get(uid)?.get(m.matchedCallId)
+        if (sessionKey) {
+          if (!matchedSessionsByUser.has(uid)) matchedSessionsByUser.set(uid, new Set())
+          matchedSessionsByUser.get(uid)!.add(sessionKey)
+        }
       }
     })
 
@@ -1641,20 +1728,21 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     if (!role) return
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
     const o = outcomesByUser.get(userId) ?? newOutcomes()
-    const matchedCalls = matchedCallIdsByUser.get(userId)?.size ?? 0
+    const sessions = sessionCountByUser.get(userId) ?? 0
+    const matchedSessions = matchedSessionsByUser.get(userId)?.size ?? 0
     const formOnly = formOnlyByUser.get(userId) ?? 0
     const row: CallActivityRepRow = {
       userId,
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
       totalOver90s: v.over90s,
-      totalConnected: v.over90s + formOnly,
+      totalConnected: sessions + formOnly,
       reconfirms: o.reconfirms,
       bookings: o.bookings,
       dqs: o.dqs,
       downsells: o.downsells,
       followUps: o.followUps,
-      missing: Math.max(0, v.over90s - matchedCalls),
+      missing: Math.max(0, sessions - matchedSessions),
     }
     if (role === 'setter') setters.push(row)
     else closers.push(row)
@@ -1727,10 +1815,11 @@ export async function getCallActivityForUser(
         .order('activity_at', { ascending: false })
         .range(from, from + 999)
       if (error) throw new Error(`close_calls (drill) read failed: ${error.message}`)
-      const rows = (page ?? []) as unknown as Array<{ close_id: string; lead_id: string; activity_at: string; duration: number | null }>
+      const rows = (page ?? []) as unknown as Array<{ close_id: string; lead_id: string | null; activity_at: string; duration: number | null }>
       if (rows.length === 0) break
       for (const r of rows) {
         if (r.duration == null) continue
+        if (!r.lead_id) continue   // null-lead calls can't be grouped into a session keyed by leadId
         calls.push({
           callId: r.close_id,
           leadId: r.lead_id,
@@ -1858,18 +1947,51 @@ export async function getCallActivityForUser(
     }
   }
 
-  // Call rows: every in-range call, outcome from its matched form (or
-  // "Missing" if no form matched THIS call specifically).
-  const callRows: CallActivityDrillRow[] = calls.map((c) => {
-    const form = formByCallId.get(c.callId)
+  // Group calls into sessions per lead — calls within 3h of the
+  // previous chain into one session. Drake 2026-05-27: setter
+  // disconnects + redials a few min later is still one engagement,
+  // gets one EOC form, should be one drill row.
+  const callByCallId = new Map<string, typeof calls[number]>()
+  for (const c of calls) callByCallId.set(c.callId, c)
+  const callsByLead = new Map<string, typeof calls>()
+  for (const c of calls) {
+    if (!callsByLead.has(c.leadId)) callsByLead.set(c.leadId, [])
+    callsByLead.get(c.leadId)!.push(c)
+  }
+  const sessions: { session: CallSession; leadId: string }[] = []
+  callsByLead.forEach((leadCalls, leadId) => {
+    for (const s of groupCallsIntoSessions(leadId, leadCalls.map((c) => ({ callId: c.callId, activityAt: c.activityAt })))) {
+      sessions.push({ session: s, leadId })
+    }
+  })
+
+  // One drill row per session. Representative call = the call the
+  // form is matched to (so outcome + timestamp + duration all align),
+  // else the most recent call in the session.
+  const callRows: CallActivityDrillRow[] = sessions.map(({ session, leadId }) => {
+    // If any call in the session has a matched form, use the form
+    // with the latest airtable_created_at as the row's outcome.
+    // Default representative = most recent call in the session.
+    let form: FormRow | undefined
+    let repCallId = session.callIds[session.callIds.length - 1]
+    for (const cid of session.callIds) {
+      const f = formByCallId.get(cid)
+      if (!f) continue
+      if (!form || f.airtable_created_at > form.airtable_created_at) {
+        form = f
+        repCallId = cid
+      }
+    }
+    const c = callByCallId.get(repCallId)!
     return {
       callId: c.callId,
-      leadId: c.leadId,
-      prospectName: form?.prospect_name ?? formProspectByLead.get(c.leadId) ?? leadName.get(c.leadId) ?? null,
+      leadId,
+      prospectName: form?.prospect_name ?? formProspectByLead.get(leadId) ?? leadName.get(leadId) ?? null,
       callAt: c.activityAt,
       durationSec: c.durationSec,
       bookingStatus: form?.booking_status ?? null,
       bucket: classifyBookingStatus(form?.booking_status ?? null),
+      groupedCallCount: session.callIds.length,
     }
   })
 

@@ -166,10 +166,10 @@ function ReconfirmsCell({ reconfirms }: { reconfirms: number }) {
 // the Dials column (visually adjacent) and signals "of dials, this %
 // connected". When totalCalls is 0 the rate is suppressed (—).
 //
-// `totalConnected` = drill row count for this rep: over-90s calls +
-// form-only rows (calls <=90s where the setter still filled an EOC).
-// Drake 2026-05-27 — a sub-90s call that produced a triage form is
-// real engagement, so it counts here.
+// `totalConnected` = drill row count for this rep: over-90s sessions
+// (chained calls to one lead within 3h) + form-only rows (calls
+// <=90s where the setter still filled an EOC). A "session" collapses
+// disconnect-and-redial sequences into one engagement entry.
 function ConnectedCell({ totalCalls, totalConnected }: { totalCalls: number; totalConnected: number }) {
   const pct = totalCalls > 0 ? Math.round((totalConnected / totalCalls) * 100) : null
   return (
@@ -183,7 +183,7 @@ function ConnectedCell({ totalCalls, totalConnected }: { totalCalls: number; tot
       title={
         pct === null
           ? 'No dials in this range'
-          : `${totalConnected} of ${totalCalls} dials connected (${pct}%). Connected = over-90s calls + sub-90s calls with a triage form filed.`
+          : `${totalConnected} of ${totalCalls} dials connected (${pct}%). Connected = over-90s sessions (chained calls within 3h count as one) + sub-90s calls with a triage form filed.`
       }
     >
       {pct !== null ? (
@@ -451,14 +451,14 @@ export function CallActivityDrillTable({
           marginBottom: 10,
         }}
       >
-        {repName} · per-call detail · calls over 90s + form-only rows · {calls.length} {state.dir === null ? 'most recent first' : `sorted ${state.dir}`}
+        {repName} · per-session detail · over-90s sessions + form-only rows · {calls.length} {state.dir === null ? 'most recent first' : `sorted ${state.dir}`}
       </div>
       {calls.length === 0 ? (
         <div
           className="geg-serif"
           style={{ padding: '20px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}
         >
-          No calls over 90s in this range for this rep.
+          No over-90s sessions in this range for this rep.
         </div>
       ) : (
         <>
@@ -548,6 +548,24 @@ function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
             }}
           >
             no call
+          </span>
+        ) : (c.groupedCallCount ?? 1) > 1 ? (
+          <span
+            className="geg-mono"
+            title={`${c.groupedCallCount} over-90s calls to this lead within 3h — collapsed into one session. Duration + outcome are from the matched-form call (or the most recent call if no form matched).`}
+            style={{
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              padding: '1px 6px',
+              borderRadius: 4,
+              border: '1px solid var(--color-geg-border)',
+              color: 'var(--color-geg-text-faint)',
+              background: 'var(--color-geg-bg)',
+              cursor: 'help',
+            }}
+          >
+            ×{c.groupedCallCount}
           </span>
         ) : null}
       </span>
