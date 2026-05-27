@@ -107,7 +107,7 @@ export default async function FunnelLandingPagesPage({
       }
       personPill={<PersonPill label="EST · Nabeel" />}
     >
-      <MetricsGrid metrics={buildLpMetrics(clarity, metaUniqueClicks, calendly)} columns={3} />
+      <MetricsGrid metrics={buildLpMetrics(clarity, metaUniqueClicks, typeform)} columns={3} />
 
       <VideoSection
         eyebrow="VSL ON LANDING PAGE"
@@ -175,10 +175,12 @@ function formatMonthDay(etDate: string): string {
 // ---------------------------------------------------------------------------
 
 // LP-detail metric grid — time-on-page (Clarity) + LP conversion
-// (Meta unique-clicks → Calendly closer bookings). The headline tile
-// above shows LP visits (Meta unique link clicks) so we don't repeat
-// it here. LP conversion fills the 3rd slot of the 3-column grid,
-// directly under the headline.
+// (Meta unique-clicks → Typeform submits). The headline tile above
+// shows LP visits (Meta unique link clicks) so we don't repeat it
+// here. LP conversion fills the 3rd slot of the 3-column grid,
+// directly under the headline. Drake 2026-05-27 — conversion is
+// submits/visits, not bookings/visits (bookings come later in the
+// funnel and have their own conversion view).
 function buildLpMetrics(
   c: {
     avgTimeOnLpSec: number | null
@@ -187,10 +189,10 @@ function buildLpMetrics(
     canonicalTypPath: string
   },
   metaUniqueClicks: number,
-  calendly: CalendlyBookings,
+  typeform: TypeformMetrics,
 ): AggMetric[] {
   const lpConversion =
-    metaUniqueClicks > 0 ? (calendly.total / metaUniqueClicks) * 100 : null
+    metaUniqueClicks > 0 ? (typeform.submits / metaUniqueClicks) * 100 : null
   return [
     {
       id: 'avg-time',
@@ -211,7 +213,7 @@ function buildLpMetrics(
       label: 'LP conversion',
       value: lpConversion,
       format: 'percent_0_100',
-      note: `Closer bookings ÷ Meta unique link clicks`,
+      note: `Typeform submits ÷ Meta unique link clicks`,
     },
   ]
 }
