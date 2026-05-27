@@ -20,10 +20,12 @@ import { PersonPill } from '../header-pills'
 
 export const dynamic = 'force-dynamic'
 
+const PAGE_SIZE = 50
+
 export default async function SalesDashboardCallsPage({
   searchParams,
 }: {
-  searchParams?: { setter?: string | string[] }
+  searchParams?: { setter?: string | string[]; page?: string | string[] }
 }) {
   // Optional setter filter via ?setter=user_xxx — deep-linked from the
   // funnel/appointment-setting per-rep table. Strict prefix check
@@ -36,9 +38,25 @@ export default async function SalesDashboardCallsPage({
       ? setterParamRaw
       : null
 
-  const rows = await listSetterCalls({
+  const pageParamRaw = Array.isArray(searchParams?.page)
+    ? searchParams?.page[0]
+    : searchParams?.page
+  const requestedPage = Number.parseInt(pageParamRaw ?? '1', 10)
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1
+
+  // V1 pagination: fetch all eligible rows, slice in JS. Cheap at
+  // current volume (<200 transcripts). Move to DB-level limit/offset
+  // when the list grows past ~1000 rows.
+  const allRows = await listSetterCalls({
     setterCloseUserId: setterFilter ?? undefined,
   })
+  const total = allRows.length
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  // Clamp page to a valid index — direct URL-bar entries of page=99
+  // shouldn't blank the table.
+  const safePage = Math.min(page, pageCount)
+  const start = (safePage - 1) * PAGE_SIZE
+  const rows = allRows.slice(start, start + PAGE_SIZE)
 
   return (
     <div>
@@ -66,9 +84,107 @@ export default async function SalesDashboardCallsPage({
       {rows.length === 0 ? (
         <EmptyState />
       ) : (
-        <CallsTable rows={rows} />
+        <>
+          <CallsTable rows={rows} />
+          <Pagination
+            page={safePage}
+            pageCount={pageCount}
+            total={total}
+            start={start}
+            shown={rows.length}
+            setterFilter={setterFilter}
+          />
+        </>
       )}
     </div>
+  )
+}
+
+function Pagination({
+  page,
+  pageCount,
+  total,
+  start,
+  shown,
+  setterFilter,
+}: {
+  page: number
+  pageCount: number
+  total: number
+  start: number
+  shown: number
+  setterFilter: string | null
+}) {
+  const buildHref = (nextPage: number) => {
+    const params = new URLSearchParams()
+    if (setterFilter) params.set('setter', setterFilter)
+    if (nextPage > 1) params.set('page', String(nextPage))
+    const qs = params.toString()
+    return qs ? `/sales-dashboard/calls?${qs}` : '/sales-dashboard/calls'
+  }
+  const hasPrev = page > 1
+  const hasNext = page < pageCount
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 16,
+      }}
+    >
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: 11,
+          color: 'var(--color-geg-text-3)',
+          letterSpacing: '0.08em',
+        }}
+      >
+        Showing {start + 1}–{start + shown} of {total}
+      </span>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <PageButton href={buildHref(page - 1)} disabled={!hasPrev}>
+          ← Previous
+        </PageButton>
+        <PageButton href={buildHref(page + 1)} disabled={!hasNext}>
+          See next {Math.min(PAGE_SIZE, total - start - shown)} →
+        </PageButton>
+      </div>
+    </div>
+  )
+}
+
+function PageButton({
+  href,
+  disabled,
+  children,
+}: {
+  href: string
+  disabled: boolean
+  children: React.ReactNode
+}) {
+  const style: React.CSSProperties = {
+    padding: '6px 12px',
+    fontSize: 11,
+    letterSpacing: '0.08em',
+    borderRadius: 6,
+    border: '1px solid var(--color-geg-border)',
+    color: disabled ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text)',
+    background: disabled ? 'transparent' : 'var(--color-geg-bg-elev)',
+    textDecoration: 'none',
+    fontFamily: 'var(--font-geg-mono, "JetBrains Mono", ui-monospace, monospace)',
+    pointerEvents: disabled ? 'none' : undefined,
+    opacity: disabled ? 0.55 : 1,
+  }
+  if (disabled) {
+    return <span style={style}>{children}</span>
+  }
+  return (
+    <Link href={href} style={style}>
+      {children}
+    </Link>
   )
 }
 
