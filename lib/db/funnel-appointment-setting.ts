@@ -282,18 +282,25 @@ export type SalesIdentity = {
   setterUserIds: Set<string>
   // close_user_id ⇄ name maps. Includes first-name aliases so
   // Airtable setter_names like ["Connor"] resolve to "Connor
-  // Malewicz"'s close_user_id.
+  // Malewicz"'s close_user_id (kept as a fallback for forms that
+  // pre-date the airtable_user_id registry).
   userIdByName: Map<string, string>
   nameByUser: Map<string, string>
   // close_user_id → every name we know this rep by (full + first).
   // Drill-side lookup for matching setter_names overlap.
   knownNamesByUserId: Map<string, Set<string>>
+  // airtable_user_id (`rec…`) → close_user_id. Authoritative match
+  // path: Airtable forms carry `setter_record_ids` which we resolve
+  // here before falling back to name lookups (names break when
+  // someone goes by a nickname — "Zach" vs "Zachary"). Populated
+  // when team_members.airtable_user_id is set.
+  userIdByAirtableId: Map<string, string>
 }
 
 async function loadSalesIdentity(sb: ReturnType<typeof createAdminClient>): Promise<SalesIdentity> {
   const { data, error } = await sb
     .from('team_members' as never)
-    .select('id, full_name, close_user_id, sales_role, archived_at')
+    .select('id, full_name, close_user_id, airtable_user_id, sales_role, archived_at')
     .not('close_user_id', 'is', null)
     .is('archived_at', null)
   if (error) throw new Error(`team_members sales identity read failed: ${error.message}`)
@@ -304,12 +311,16 @@ async function loadSalesIdentity(sb: ReturnType<typeof createAdminClient>): Prom
     userIdByName: new Map(),
     nameByUser: new Map(),
     knownNamesByUserId: new Map(),
+    userIdByAirtableId: new Map(),
   }
-  for (const r of (data ?? []) as unknown as Array<{ full_name: string; close_user_id: string; sales_role: string | null }>) {
+  for (const r of (data ?? []) as unknown as Array<{ full_name: string; close_user_id: string; airtable_user_id: string | null; sales_role: string | null }>) {
     if (r.sales_role === 'closer') out.closerUserIds.add(r.close_user_id)
     else if (r.sales_role === 'setter') out.setterUserIds.add(r.close_user_id)
-    // 'other' / null sales_role: still register name lookups so
-    // attribution works, but don't claim a setter/closer slot.
+    // 'other' / null sales_role: still register lookups so attribution
+    // works, but don't claim a setter/closer slot.
+    if (r.airtable_user_id) {
+      out.userIdByAirtableId.set(r.airtable_user_id, r.close_user_id)
+    }
     if (r.full_name) {
       out.nameByUser.set(r.close_user_id, r.full_name)
       out.userIdByName.set(r.full_name, r.close_user_id)
@@ -323,6 +334,27 @@ async function loadSalesIdentity(sb: ReturnType<typeof createAdminClient>): Prom
     }
   }
   return out
+}
+
+// Resolve an Airtable form's setter to a Close user_id. Tries the
+// authoritative path (setter_record_ids → airtable_user_id ⇒
+// close_user_id) before falling back to name match. Returns null
+// when neither path resolves — caller treats the form as unattributed.
+function resolveFormSetterUserId(
+  setterRecordIds: string[] | null | undefined,
+  setterNames: string[] | null | undefined,
+  salesId: SalesIdentity,
+  userIdByName: Map<string, string>,
+): string | null {
+  for (const recId of (setterRecordIds ?? [])) {
+    const uid = salesId.userIdByAirtableId.get(recId)
+    if (uid) return uid
+  }
+  for (const nm of (setterNames ?? [])) {
+    const uid = userIdByName.get(nm)
+    if (uid) return uid
+  }
+  return null
 }
 
 // Used by the per-rep drill: every name this rep is known by — first
@@ -1327,7 +1359,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const matchedCallIdsByUser = new Map<string, Set<string>>()
   let totalForms = 0
   {
-    type FormRow = { record_id: string; lead_id: string | null; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null; airtable_created_at: string }
+    type FormRow = { record_id: string; lead_id: string | null; booking_status: string | null; setter_names: string[] | null; setter_record_ids: string[] | null; event_date_time: string | null; airtable_created_at: string }
     const allRows: FormRow[] = []
     const formWindowStartIso = range.startUtcIso
     const formWindowEndIso = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
@@ -1335,7 +1367,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     for (;;) {
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, booking_status, setter_names, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, booking_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStartIso)
         .lt('airtable_created_at', formWindowEndIso)
         .range(from, from + 999)
@@ -1348,21 +1380,16 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
 
     // Resolve each form's setter user_id, then batch-match to calls.
-    // setter_names is an array — take the first that resolves.
-    const matchInputs: FormMatchInput[] = allRows.map((r) => {
-      let setterUserId: string | null = null
-      for (const nm of (r.setter_names ?? [])) {
-        const uid = userIdByName.get(nm)
-        if (uid) { setterUserId = uid; break }
-      }
-      return {
-        recordId: r.record_id,
-        leadId: r.lead_id,
-        setterUserId,
-        airtableCreatedAt: r.airtable_created_at,
-        eventDateTime: r.event_date_time,
-      }
-    })
+    // Prefer setter_record_ids (airtable_user_id → close_user_id) over
+    // setter_names — names break when reps go by nicknames (Zach vs
+    // Zachary McCarter).
+    const matchInputs: FormMatchInput[] = allRows.map((r) => ({
+      recordId: r.record_id,
+      leadId: r.lead_id,
+      setterUserId: resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName),
+      airtableCreatedAt: r.airtable_created_at,
+      eventDateTime: r.event_date_time,
+    }))
     const matched = await matchFormsToCalls(sb, matchInputs)
     const matchByRecord = new Map(matched.map((m) => [m.recordId, m]))
 
@@ -1392,15 +1419,17 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       const bucket = classifyBookingStatus(r.booking_status)
       if (bucket === 'unclassified') return
       const m = matchByRecord.get(r.record_id)
-      for (const nm of (r.setter_names ?? [])) {
-        const uid = userIdByName.get(nm)
-        if (!uid) continue
-        if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
-        outcomesByUser.get(uid)![bucket]++
-        if (m?.matchedCallId) {
-          if (!matchedCallIdsByUser.has(uid)) matchedCallIdsByUser.set(uid, new Set())
-          matchedCallIdsByUser.get(uid)!.add(m.matchedCallId)
-        }
+      // Use the same resolver as matchInputs above — airtable rec_id
+      // wins over name. A form attributes to exactly one rep (a real
+      // form has one setter; multi-setter forms get the first-resolved
+      // owner only, matching dedupe-by-lead semantics elsewhere).
+      const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+      if (!uid) return
+      if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
+      outcomesByUser.get(uid)![bucket]++
+      if (m?.matchedCallId) {
+        if (!matchedCallIdsByUser.has(uid)) matchedCallIdsByUser.set(uid, new Set())
+        matchedCallIdsByUser.get(uid)!.add(m.matchedCallId)
       }
     })
   }
@@ -1535,30 +1564,42 @@ export async function getCallActivityForUser(
     }
   }
 
+  // Pull this rep's airtable_user_id from team_members so the form
+  // filter can match by ID (more robust than name when reps go by
+  // nicknames).
+  const { data: tmRow } = await sb
+    .from('team_members' as never)
+    .select('airtable_user_id')
+    .eq('close_user_id', userId)
+    .is('archived_at', null)
+    .maybeSingle()
+  const repAirtableId = (tmRow as { airtable_user_id?: string | null } | null)?.airtable_user_id ?? null
+
   // Forms filled by this rep — pull airtable_created_at within
   // [range start, range end + 48h] so we catch forms submitted after
-  // the call window for in-range calls. setter_names overlap filter
-  // narrows to forms this rep is on. Then matchFormsToCalls assigns
-  // each form an effective_date (matched call's activity_at, else
-  // event_date_time).
+  // the call window for in-range calls. Filter is union of two
+  // signals: setter_record_ids contains the rep's airtable_user_id
+  // (authoritative), or setter_names overlaps with knownNames
+  // (fallback for old forms or reps without an airtable_user_id yet).
   type FormRow = {
     record_id: string
     lead_id: string | null
     prospect_name: string | null
     booking_status: string | null
     setter_names: string[] | null
+    setter_record_ids: string[] | null
     event_date_time: string | null
     airtable_created_at: string
   }
   const repForms: FormRow[] = []
-  if (knownNames.size > 0) {
+  if (knownNames.size > 0 || repAirtableId) {
     const formWindowStart = range.startUtcIso
     const formWindowEnd = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
     let from = 0
     for (;;) {
       const { data, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, prospect_name, booking_status, setter_names, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, prospect_name, booking_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStart)
         .lt('airtable_created_at', formWindowEnd)
         .range(from, from + 999)
@@ -1566,8 +1607,10 @@ export async function getCallActivityForUser(
       const rows = (data ?? []) as unknown as FormRow[]
       if (rows.length === 0) break
       for (const r of rows) {
-        const names = r.setter_names ?? []
-        if (names.some((n) => knownNames.has(n))) repForms.push(r)
+        const recIds = r.setter_record_ids ?? []
+        const matchById = repAirtableId !== null && recIds.includes(repAirtableId)
+        const matchByName = (r.setter_names ?? []).some((n) => knownNames.has(n))
+        if (matchById || matchByName) repForms.push(r)
       }
       if (rows.length < 1000) break
       from += 1000
