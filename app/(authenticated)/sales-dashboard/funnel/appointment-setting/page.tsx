@@ -453,19 +453,23 @@ function SpeedToLeadSection({
         <StatCell
           label="Avg speed to lead"
           value={cohort.avgSpeedToLeadSec !== null ? formatDuration(cohort.avgSpeedToLeadSec) : '—'}
-          subtext={`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
-          // Secondary metric: avg restricted to leads first-called
-          // within 3h of creation. Strips overnight outliers that
-          // would otherwise inflate the headline. Small font, top-
-          // right corner — context, not competition with the headline.
-          corner={
-            cohort.avgSpeedToLeadSecUnder3h !== null
-              ? {
-                  label: '< 3h',
-                  value: formatDuration(cohort.avgSpeedToLeadSecUnder3h),
-                  subtext: `${cohort.leadsUnder3h} of ${cohort.leadsCalled}`,
-                }
-              : null
+          subtext={
+            <>
+              <div>
+                {`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
+              </div>
+              {cohort.avgSpeedToLeadSecUnder3h !== null ? (
+                // Outlier-stripped avg (leads first-called within 3h
+                // of creation). Renders right under the cohort-size
+                // line per Drake's 2026-05-27 layout call — compact,
+                // no corner block.
+                <div
+                  title={`Avg restricted to leads first-called within 3h of creation (${cohort.leadsUnder3h} of ${cohort.leadsCalled})`}
+                >
+                  &lt; 3h STL: {formatDuration(cohort.avgSpeedToLeadSecUnder3h)}
+                </div>
+              ) : null}
+            </>
           }
         />
         <StatCell
@@ -494,24 +498,17 @@ function StatCell({
   label,
   value,
   subtext,
-  corner,
 }: {
   label: string
   value: string
-  subtext?: string
-  // Optional secondary metric anchored to the top-right of the cell.
-  // Used by Avg speed to lead to surface the <3h outlier-filtered avg
-  // alongside the headline.
-  corner?: { label: string; value: string; subtext?: string } | null
+  // ReactNode (not string) so callers can render multiple lines —
+  // Avg speed to lead uses this to surface the <3h outlier-filtered
+  // avg directly under "X leads called" without occupying the top-
+  // right corner.
+  subtext?: React.ReactNode
 }) {
   return (
-    <div
-      style={{
-        padding: '16px 18px 14px',
-        background: 'var(--color-geg-bg-elev)',
-        position: 'relative',
-      }}
-    >
+    <div style={{ padding: '16px 18px 14px', background: 'var(--color-geg-bg-elev)' }}>
       <div
         className="geg-mono"
         style={{
@@ -535,57 +532,6 @@ function StatCell({
       >
         {value}
       </div>
-      {corner ? (
-        <div
-          style={{
-            position: 'absolute',
-            top: 14,
-            right: 16,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 1,
-          }}
-          title={`${corner.label} avg — outliers (first call > 3h) removed`}
-        >
-          <span
-            className="geg-mono"
-            style={{
-              fontSize: 9,
-              letterSpacing: '0.14em',
-              textTransform: 'uppercase',
-              color: 'var(--color-geg-text-faint)',
-              lineHeight: 1,
-            }}
-          >
-            {corner.label}
-          </span>
-          <span
-            className="geg-numeric-serif"
-            style={{
-              fontSize: 14,
-              lineHeight: '16px',
-              letterSpacing: '-0.01em',
-              color: 'var(--color-geg-text-2)',
-            }}
-          >
-            {corner.value}
-          </span>
-          {corner.subtext ? (
-            <span
-              className="geg-mono"
-              style={{
-                fontSize: 9,
-                letterSpacing: '0.06em',
-                color: 'var(--color-geg-text-faint)',
-                lineHeight: 1,
-              }}
-            >
-              {corner.subtext}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
       {subtext ? (
         <div
           className="geg-mono"

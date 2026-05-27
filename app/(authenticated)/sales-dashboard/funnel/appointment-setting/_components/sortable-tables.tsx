@@ -136,6 +136,44 @@ function Num({ value, accent }: { value: string; accent?: boolean }) {
   )
 }
 
+// Connected-count cell with an inline connect-rate decoration on the
+// left. Rendered as `→{pct}% {count}` inside the existing Connected
+// column — no column widening, no new column. The arrow points from
+// the Dials column (visually adjacent) and signals "of dials, this %
+// connected". When totalCalls is 0 the rate is suppressed (—).
+function ConnectedCell({ totalCalls, totalOver90s }: { totalCalls: number; totalOver90s: number }) {
+  const pct = totalCalls > 0 ? Math.round((totalOver90s / totalCalls) * 100) : null
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        justifyContent: 'flex-end',
+        gap: 6,
+      }}
+      title={
+        pct === null
+          ? 'No dials in this range'
+          : `${totalOver90s} of ${totalCalls} dials connected (${pct}%)`
+      }
+    >
+      {pct !== null ? (
+        <span
+          className="geg-mono"
+          style={{
+            fontSize: 9.5,
+            letterSpacing: '0.04em',
+            color: 'var(--color-geg-text-faint)',
+          }}
+        >
+          →{pct}%
+        </span>
+      ) : null}
+      <Num value={totalOver90s.toString()} />
+    </span>
+  )
+}
+
 function formatDuration(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '—'
   if (sec < 60) return `${Math.round(sec)}s`
@@ -592,7 +630,7 @@ export function PerRepCallActivityTable({
           }}
         >
           <SortableHeader label="Rep" sortKey="name" align="left" state={state} onToggle={onToggle} />
-          <SortableHeader label="Calls" sortKey="totalCalls" state={state} onToggle={onToggle} />
+          <SortableHeader label="Dials" sortKey="totalCalls" state={state} onToggle={onToggle} />
           <SortableHeader label="Connected" sortKey="over90s" state={state} onToggle={onToggle} />
           <SortableHeader label="Books" sortKey="bookings" state={state} onToggle={onToggle} />
           <SortableHeader label="Downsell" sortKey="downsells" state={state} onToggle={onToggle} />
@@ -607,7 +645,7 @@ export function PerRepCallActivityTable({
             All {label.toLowerCase()}
           </span>
           <Num value={aggregate.totalCalls.toString()} accent />
-          <Num value={aggregate.totalOver90s.toString()} />
+          <ConnectedCell totalCalls={aggregate.totalCalls} totalOver90s={aggregate.totalOver90s} />
           <Num value={aggregate.bookings.toString()} />
           <Num value={aggregate.downsells.toString()} />
           <Num value={aggregate.followUps.toString()} />
@@ -655,7 +693,7 @@ export function PerRepCallActivityTable({
                         {isSelected ? '▼ ' : '▸ '}{r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
-                      <Num value={r.totalOver90s.toString()} />
+                      <ConnectedCell totalCalls={r.totalCalls} totalOver90s={r.totalOver90s} />
                       <Num value={r.bookings.toString()} />
                       <Num value={r.downsells.toString()} />
                       <Num value={r.followUps.toString()} />
