@@ -192,12 +192,17 @@ function CloserScheduledTable({
   drill: CloserScheduledDrillRow[]
   baseParams: URLSearchParams
 }) {
-  const COLS = '1.6fr 0.7fr 1.1fr 1.3fr 0.7fr 0.9fr'
+  // Closer / Calls / Direct / Setter / Follow up / Showed (→show%) /
+  // Closes (HT/DC) (→close%) / No shows / Upfront — 9 columns.
+  const COLS = '1.4fr 0.6fr 0.6fr 0.6fr 0.6fr 1.0fr 1.2fr 0.6fr 0.8fr'
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '6px 0 10px', borderBottom: '1px solid var(--color-geg-border)' }}>
         <ColH label="Closer" align="left" />
         <ColH label="Calls" />
+        <ColH label="Direct" />
+        <ColH label="Setter" />
+        <ColH label="Follow up" />
         <ColH label="Showed" />
         <ColH label="Closes (HT/DC)" />
         <ColH label="No shows" />
@@ -210,6 +215,9 @@ function CloserScheduledTable({
           All closers
         </span>
         <Num value={aggregate.calls} accent />
+        <Num value={aggregate.directCalls} />
+        <Num value={aggregate.setterCalls} />
+        <Num value={aggregate.followupCalls} />
         <ShowedCell calls={aggregate.calls} showed={aggregate.showed} />
         <ClosesCell showed={aggregate.showed} closed={aggregate.closed} ht={aggregate.closedHt} dc={aggregate.closedDc} />
         <Num value={aggregate.noShows} />
@@ -253,6 +261,9 @@ function CloserScheduledTable({
                     {isSelected ? '▼ ' : '▸ '}{c.closerName}
                   </span>
                   <Num value={c.calls} accent />
+                  <Num value={c.directCalls} />
+                  <Num value={c.setterCalls} />
+                  <Num value={c.followupCalls} />
                   <ShowedCell calls={c.calls} showed={c.showed} />
                   <ClosesCell showed={c.showed} closed={c.closed} ht={c.closedHt} dc={c.closedDc} />
                   <Num value={c.noShows} />
@@ -365,7 +376,12 @@ function RowLink({
 // Drill list for a single closer — one row per scheduled Calendly
 // event. Form-derived fields render "missing" until the closer submits
 // the EOC form and our match (name + date ±48h) connects them.
-const DRILL_COLS = '1.4fr 1fr 1fr 0.7fr 0.7fr 0.9fr 0.9fr'
+//
+// 7 columns: Prospect / Scheduled / Call type / Booked by / Showed /
+// Closed (type) / Upfront. "Closed" shows the close-type label
+// (High ticket / Digital college) when closed=yes, or "—" / missing
+// otherwise.
+const DRILL_COLS = '1.3fr 1fr 0.7fr 1fr 0.6fr 0.9fr 0.7fr'
 
 function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; closerName: string }) {
   return (
@@ -386,10 +402,10 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
             <ColH label="Prospect" align="left" />
             <ColH label="Scheduled (ET)" align="left" />
             <ColH label="Call type" align="left" />
+            <ColH label="Booked by" align="left" />
             <ColH label="Showed" align="left" />
             <ColH label="Closed" align="left" />
             <ColH label="Upfront" />
-            <ColH label="Plan" align="left" />
           </div>
           {calls.map((c) => (
             <div
@@ -399,10 +415,10 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
               <Cell text={c.prospectName ?? '—'} />
               <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
               <Cell text={callTypeLabel(c.callType)} mono />
+              <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
               <YesNoCell value={c.showed} />
-              <YesNoCell value={c.closed === null ? null : c.closed === 'yes' ? 'yes' : 'no'} />
+              <ClosedTypeCell closed={c.closed} closeType={c.closeType} />
               <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
-              <Cell text={c.contractPlan ?? ''} mono missing={!c.contractPlan} />
             </div>
           ))}
         </div>
@@ -412,10 +428,81 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
 }
 
 function callTypeLabel(t: CloserScheduledDrillRow['callType']): string {
-  if (t === 'direct') return 'AI Strategy Call'
-  if (t === 'setter') return 'Partnership (setter)'
-  if (t === 'rebook') return 'Sync (rebook)'
+  if (t === 'direct') return 'Direct'
+  if (t === 'setter') return 'Setter'
+  if (t === 'rebook') return 'Follow up'
   return t
+}
+
+// Booked-by cell:
+// - setter: setter name from the matched form (italic missing when
+//   form not yet filled)
+// - direct: ad attribution placeholder — "—" until we wire ad data
+// - rebook (follow-up): "—" (no booker concept)
+function BookedByCell({
+  callType,
+  bookedBy,
+}: {
+  callType: CloserScheduledDrillRow['callType']
+  bookedBy: string | null
+}) {
+  // Direct + follow-up: literal dash, not "missing" (we never expect
+  // a value here for these types).
+  if (callType !== 'setter') {
+    return (
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}
+        title={callType === 'direct' ? 'Ad attribution coming soon' : 'No booker (follow-up)'}
+      >
+        —
+      </span>
+    )
+  }
+  // Setter: render name when form matched; else "missing".
+  if (!bookedBy) return <MissingTag />
+  return (
+    <span
+      className="geg-mono"
+      style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.02em' }}
+    >
+      {bookedBy}
+    </span>
+  )
+}
+
+// Closed cell — shows the close TYPE (High ticket / Digital college)
+// when closed=yes. Otherwise: italic "missing" if no form, or "No"
+// if form says not closed.
+function ClosedTypeCell({
+  closed,
+  closeType,
+}: {
+  closed: 'yes' | 'no' | null
+  closeType: 'ht' | 'dc' | null
+}) {
+  if (closed === null) return <MissingTag />
+  if (closed === 'no') {
+    return (
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, color: 'var(--color-geg-neg)', letterSpacing: '0.04em' }}
+      >
+        No
+      </span>
+    )
+  }
+  // closed === 'yes'
+  const label = closeType === 'ht' ? 'High ticket' : closeType === 'dc' ? 'Digital college' : 'Closed'
+  return (
+    <span
+      className="geg-mono"
+      style={{ fontSize: 11, color: 'var(--color-geg-pos)', letterSpacing: '0.04em' }}
+      title={closeType ? `Closed · ${label}` : 'Closed (payment_plan_type unknown)'}
+    >
+      {label}
+    </span>
+  )
 }
 
 // Showed / closed cell — green Yes, red No, faint DQ, italic muted

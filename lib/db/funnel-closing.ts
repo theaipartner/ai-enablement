@@ -367,17 +367,28 @@ export type CloserScheduledDrillRow = {
   prospectName: string | null
   scheduledTime: string       // ISO UTC
   callType: CloserCallType
+  // For 'setter' bookings: the setter's name pulled from the matched
+  // form's `setter_names[0]`. Null when no form matched. For 'direct'
+  // bookings, the intent is the ad attribution — not wired yet,
+  // always null. For 'rebook' (follow-up), null.
+  bookedBy: string | null
   // Outcomes from the matched Airtable form. null = form not filled
   // (or unmatchable). Downstream UI renders null as "missing".
   showed: 'yes' | 'no' | 'dq' | null
   closed: 'yes' | 'no' | null
+  // Resolved close type from payment_plan_type when closed='yes'.
+  // null if the close happened but plan unknown, or not closed yet.
+  closeType: 'ht' | 'dc' | null
   upfront: number | null
-  contractPlan: string | null
 }
 
 export type CloserScheduledAggregate = {
   closerName: string
   calls: number        // total scheduled events for this closer in range
+  // Per-call-type breakdown for the new top-bar columns.
+  directCalls: number
+  setterCalls: number
+  followupCalls: number
   showed: number       // matched + showed='Yes'
   noShows: number      // matched + showed='No' (DQs excluded)
   closed: number       // matched + closed='Yes'
@@ -467,7 +478,8 @@ export async function getClosingScheduledList(
   if (events.length === 0) {
     const emptyAgg: CloserScheduledAggregate = {
       closerName: 'All closers',
-      calls: 0, showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
+      calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
+      showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
     }
     return { closers: [], aggregate: emptyAgg, drillByCloser: {} }
   }
@@ -504,7 +516,7 @@ export async function getClosingScheduledList(
     .from('airtable_full_closer_report' as never)
     .select(
       'record_id, prospect_name, date_time_of_call, showed, closed, ' +
-      'amount_paid_today_currency, payment_plan_type, closer_names',
+      'amount_paid_today_currency, payment_plan_type, closer_names, setter_names',
     )
     .gte('date_time_of_call', widenStartIso)
     .lt('date_time_of_call', widenEndIso)
@@ -518,6 +530,7 @@ export async function getClosingScheduledList(
     amount_paid_today_currency: number | string | null
     payment_plan_type: string | null
     closer_names: string[] | null
+    setter_names: string[] | null
   }>
 
   // Build a name → forms multimap for fast lookup. Keys are
@@ -565,7 +578,8 @@ export async function getClosingScheduledList(
     if (!agg) {
       agg = {
         closerName: name,
-        calls: 0, showed: 0, noShows: 0, closed: 0,
+        calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
+        showed: 0, noShows: 0, closed: 0,
         closedHt: 0, closedDc: 0, upfront: 0,
       }
       closerMap.set(name, agg)
@@ -578,6 +592,9 @@ export async function getClosingScheduledList(
     const closer = ev.host_user_name ?? '(no host)'
     const agg = bumpAgg(closer)
     agg.calls++
+    if (ev.callType === 'direct') agg.directCalls++
+    else if (ev.callType === 'setter') agg.setterCalls++
+    else if (ev.callType === 'rebook') agg.followupCalls++
 
     const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null }
     const form = matchForm(ev.start_time, invitee.name)
@@ -592,6 +609,17 @@ export async function getClosingScheduledList(
           : null
     const plan = form ? form.payment_plan_type : null
     const planClass = classifyPlan(plan)
+    const closeType: 'ht' | 'dc' | null =
+      closed === 'yes' ? planClass : null
+
+    // "Booked by" resolution per call type:
+    // - setter: first entry in form.setter_names (when form matched)
+    // - direct: ad attribution intent — not wired, always null for now
+    // - rebook (follow-up): null
+    const bookedBy: string | null =
+      ev.callType === 'setter' && form?.setter_names && form.setter_names.length > 0
+        ? form.setter_names[0]
+        : null
 
     if (showed === 'yes') agg.showed++
     if (showed === 'no') agg.noShows++
@@ -607,10 +635,11 @@ export async function getClosingScheduledList(
       prospectName: invitee.name,
       scheduledTime: ev.start_time,
       callType: ev.callType,
+      bookedBy,
       showed,
       closed,
+      closeType,
       upfront,
-      contractPlan: plan,
     })
   }
 
@@ -627,6 +656,9 @@ export async function getClosingScheduledList(
     (acc, c) => ({
       closerName: 'All closers',
       calls: acc.calls + c.calls,
+      directCalls: acc.directCalls + c.directCalls,
+      setterCalls: acc.setterCalls + c.setterCalls,
+      followupCalls: acc.followupCalls + c.followupCalls,
       showed: acc.showed + c.showed,
       noShows: acc.noShows + c.noShows,
       closed: acc.closed + c.closed,
@@ -634,7 +666,11 @@ export async function getClosingScheduledList(
       closedDc: acc.closedDc + c.closedDc,
       upfront: acc.upfront + c.upfront,
     }),
-    { closerName: 'All closers', calls: 0, showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0 },
+    {
+      closerName: 'All closers',
+      calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
+      showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
+    },
   )
 
   return { closers, aggregate, drillByCloser }
