@@ -1531,38 +1531,83 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Calendly event at dial time. Per Drake (2026-05-27): closers want
   // to know which dials are confirmation-style vs cold; reframes the
   // older "direct booking" idea into a broader "booked lead" check.
+  //
+  // Identity-match priority (Drake 2026-05-27 follow-up):
+  //   1. Email   (lead.contacts[].emails[].email ↔ invitee.email)
+  //   2. Phone   (lead.contacts[].phones[].phone ↔ invitee phone in
+  //              raw_payload.text_reminder_number or in the "Phone"
+  //              question of raw_payload.questions_and_answers)
+  //   3. Name    (lead.display_name ↔ invitee.name) — fuzzy fallback
+  //
+  // Phone normalization = digits-only (strips +, spaces, dashes).
+  // Names lowered + trimmed. First match wins (the loop short-circuits).
+  // Empirically (7d closer outbound cohort): email-and-phone catch
+  // the same 14 calls (Calendly invitees usually have both), name
+  // adds 15 more distinct matches → 29 total vs 15 name-only.
   // -----------------------------------------------------------------
   const confirmsByUser = new Map<string, number>()
   if (outboundCalls.length > 0) {
-    // 1. Resolve lead_id → display_name (in batches; up to ~500
-    //    distinct leads).
+    // 1. Resolve lead_id → { name, emails, phones } from close_leads.
+    //    contacts is a jsonb array of contact objects, each with
+    //    optional `emails[]` and `phones[]` sub-arrays. We extract
+    //    everything per lead (a lead can have multiple contacts).
     const leadIds = Array.from(new Set(outboundCalls.map((c) => c.leadId)))
-    const nameByLead = new Map<string, string>()
+    type LeadKeys = {
+      name: string | null
+      emails: string[]    // lowercased
+      phones: string[]    // digits-only
+    }
+    const keysByLead = new Map<string, LeadKeys>()
     for (let i = 0; i < leadIds.length; i += 200) {
       const chunk = leadIds.slice(i, i + 200)
       const { data, error } = await sb
         .from('close_leads' as never)
-        .select('close_id, display_name')
+        .select('close_id, display_name, contacts')
         .in('close_id', chunk)
-      if (error) throw new Error(`close_leads display_name read failed: ${error.message}`)
-      for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null }>) {
-        if (r.display_name) nameByLead.set(r.close_id, r.display_name)
+      if (error) throw new Error(`close_leads contacts read failed: ${error.message}`)
+      type ContactsBlob = Array<{
+        emails?: Array<{ email?: string | null }>
+        phones?: Array<{ phone?: string | null }>
+      }>
+      for (const r of (data ?? []) as unknown as Array<{
+        close_id: string
+        display_name: string | null
+        contacts: ContactsBlob | null
+      }>) {
+        const emails: string[] = []
+        const phones: string[] = []
+        for (const c of r.contacts ?? []) {
+          for (const em of c.emails ?? []) {
+            if (em?.email) emails.push(em.email.toLowerCase().trim())
+          }
+          for (const ph of c.phones ?? []) {
+            if (ph?.phone) {
+              const digits = ph.phone.replace(/[^0-9]/g, '')
+              if (digits.length >= 10) phones.push(digits)
+            }
+          }
+        }
+        keysByLead.set(r.close_id, {
+          name: r.display_name ? r.display_name.toLowerCase().trim() : null,
+          emails,
+          phones,
+        })
       }
     }
 
-    // 2. Pull Calendly events whose start_time is in/after the call
-    //    window and NOT canceled. Join to invitees for the name key.
-    //    Forward window = range_end + 60d covers all "future at dial
-    //    time" cases without bloating the read.
+    // 2. Pull Calendly events in [range_start, range_end + 60d] —
+    //    "future at dial time" cases. Build three lookup maps from
+    //    invitee identity to event start timestamps.
     const evWindowEndIso = new Date(
       new Date(range.endUtcIso).getTime() + 60 * 24 * 60 * 60 * 1000,
     ).toISOString()
-    const futureStartsByName = new Map<string, number[]>() // ms timestamps
+    const futureByEmail = new Map<string, number[]>()
+    const futureByPhone = new Map<string, number[]>()
+    const futureByName = new Map<string, number[]>()
     {
-      // First, get qualifying events
       let from = 0
       type EvRow = { uri: string; start_time: string }
-      const eventByUri = new Map<string, string>() // uri → start_time iso
+      const eventByUri = new Map<string, string>()
       for (;;) {
         const { data, error } = await sb
           .from('calendly_scheduled_events' as never)
@@ -1579,42 +1624,98 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
         from += 1000
       }
 
-      // Then invitees for those events
+      // Pull invitees for those events, including raw_payload so we
+      // can extract phone from text_reminder_number / Q&A.
       const uris = Array.from(eventByUri.keys())
+      type InvRow = {
+        event_uri: string
+        email: string | null
+        name: string | null
+        raw_payload: {
+          text_reminder_number?: string | null
+          questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
+        } | null
+      }
       for (let i = 0; i < uris.length; i += 200) {
         const chunk = uris.slice(i, i + 200)
         const { data, error } = await sb
           .from('calendly_invitees' as never)
-          .select('event_uri, name')
+          .select('event_uri, email, name, raw_payload')
           .in('event_uri', chunk)
         if (error) throw new Error(`calendly invitees read failed: ${error.message}`)
-        for (const r of (data ?? []) as unknown as Array<{ event_uri: string; name: string | null }>) {
-          if (!r.name) continue
+        for (const r of (data ?? []) as unknown as InvRow[]) {
           const startIso = eventByUri.get(r.event_uri)
           if (!startIso) continue
-          const key = r.name.toLowerCase().trim()
           const ts = new Date(startIso).getTime()
-          const arr = futureStartsByName.get(key) ?? []
-          arr.push(ts)
-          futureStartsByName.set(key, arr)
+
+          if (r.email) {
+            const k = r.email.toLowerCase().trim()
+            const arr = futureByEmail.get(k) ?? []
+            arr.push(ts)
+            futureByEmail.set(k, arr)
+          }
+          if (r.name) {
+            const k = r.name.toLowerCase().trim()
+            const arr = futureByName.get(k) ?? []
+            arr.push(ts)
+            futureByName.set(k, arr)
+          }
+          // Phone: try text_reminder_number first, then any "Phone"
+          // Q&A answer. Normalize to digits-only.
+          const phones: string[] = []
+          const trn = r.raw_payload?.text_reminder_number
+          if (trn) phones.push(trn)
+          for (const qa of r.raw_payload?.questions_and_answers ?? []) {
+            const q = (qa?.question ?? '').toLowerCase()
+            if (q.includes('phone') && qa?.answer) phones.push(qa.answer)
+          }
+          for (const raw of phones) {
+            const digits = raw.replace(/[^0-9]/g, '')
+            if (digits.length < 10) continue
+            const arr = futureByPhone.get(digits) ?? []
+            arr.push(ts)
+            futureByPhone.set(digits, arr)
+          }
         }
       }
-      futureStartsByName.forEach((arr) => arr.sort((a: number, b: number) => a - b))
+      futureByEmail.forEach((arr) => arr.sort((a: number, b: number) => a - b))
+      futureByPhone.forEach((arr) => arr.sort((a: number, b: number) => a - b))
+      futureByName.forEach((arr) => arr.sort((a: number, b: number) => a - b))
     }
 
-    // 3. For each outbound call, check if any future event existed
-    //    for that lead's name at call time.
+    // 3. Per call: check email → phone → name in priority order.
+    //    First match wins; short-circuit on hit. Per-key lists are
+    //    typically 1-3 entries so a linear scan is fine.
+    const hasFutureMatch = (starts: number[] | undefined, afterMs: number): boolean =>
+      starts ? starts.some((ts) => ts > afterMs) : false
     for (const call of outboundCalls) {
-      const leadName = nameByLead.get(call.leadId)
-      if (!leadName) continue
-      const key = leadName.toLowerCase().trim()
-      const futures = futureStartsByName.get(key)
-      if (!futures) continue
+      const keys = keysByLead.get(call.leadId)
+      if (!keys) continue
       const callMs = new Date(call.activityAt).getTime()
-      // Find the first future start strictly after the call. Linear
-      // scan is fine — typical list per lead is 1-2 events.
-      const anyFuture = futures.some((ts) => ts > callMs)
-      if (anyFuture) {
+
+      let matched = false
+      // (1) Email
+      for (const email of keys.emails) {
+        if (hasFutureMatch(futureByEmail.get(email), callMs)) {
+          matched = true
+          break
+        }
+      }
+      // (2) Phone fallback
+      if (!matched) {
+        for (const phone of keys.phones) {
+          if (hasFutureMatch(futureByPhone.get(phone), callMs)) {
+            matched = true
+            break
+          }
+        }
+      }
+      // (3) Name fallback
+      if (!matched && keys.name && hasFutureMatch(futureByName.get(keys.name), callMs)) {
+        matched = true
+      }
+
+      if (matched) {
         confirmsByUser.set(call.userId, (confirmsByUser.get(call.userId) ?? 0) + 1)
       }
     }
