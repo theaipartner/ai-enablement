@@ -2,11 +2,11 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import {
   getClosingActivity,
-  getCloserCallsForCloser,
+  getClosingScheduledList,
   CLOSING_FLOOR_ET,
   type CalendlyBookingActivity,
-  type CloserLeaderboardRow,
-  type CloserCallDrillRow,
+  type CloserScheduledAggregate,
+  type CloserScheduledDrillRow,
   type ClosingMoney,
 } from '@/lib/db/funnel-closing'
 import {
@@ -26,14 +26,15 @@ import { DateRangePicker } from '../landing-pages/date-range-picker'
 
 export const dynamic = 'force-dynamic'
 
-// Closing default end = TODAY (not yesterday). The closer form is
-// webhook-driven, so today's entries land in near-real-time; clamping
-// to yesterday would hide rows whose call already happened today.
-// The main Pulse page still defaults to yesterday because Meta lands
-// the morning after.
+// Default = TODAY (single-day window). Drake's call 2026-05-27 — the
+// closing page is now organized around scheduled-calls-for-today, so
+// the picker opens on today and the user can broaden the range
+// manually via the calendar picker. Earlier default was the full
+// since-floor window (cumulative); that's now achievable by clicking
+// "from May 22" in the picker.
 function resolveClosingRange(start: string | null, end: string | null) {
   const today = todayEtDate()
-  const s = start ?? CLOSING_FLOOR_ET
+  const s = start ?? today
   const e = end ?? today
   const sClamped = s < CLOSING_FLOOR_ET ? CLOSING_FLOOR_ET : s
   return dateRangeFromExplicit(sClamped, e)
@@ -55,10 +56,17 @@ export default async function FunnelClosedPage({
   const selectedCloserRaw = Array.isArray(searchParams?.closer) ? searchParams?.closer[0] : searchParams?.closer
   const selectedCloser = typeof selectedCloserRaw === 'string' && selectedCloserRaw.length > 0 ? selectedCloserRaw : null
 
-  const [data, drill] = await Promise.all([
+  // Old getClosingActivity stays — Calendly bookings section + Cash
+  // section still read from it. The leaderboard (replaced) reads from
+  // the new getClosingScheduledList which is keyed off scheduled
+  // Calendly events rather than form submissions.
+  const [data, scheduled] = await Promise.all([
     getClosingActivity(range),
-    selectedCloser ? getCloserCallsForCloser(range, selectedCloser) : Promise.resolve([] as CloserCallDrillRow[]),
+    getClosingScheduledList(range),
   ])
+  const drill = selectedCloser
+    ? scheduled.drillByCloser[selectedCloser] ?? []
+    : ([] as CloserScheduledDrillRow[])
 
   // Build a base query string for closer-link toggles that preserves
   // the active start/end params.
@@ -87,9 +95,9 @@ export default async function FunnelClosedPage({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, marginTop: 28 }}>
         <CalendlySection bookings={data.bookings} />
-        <CloserLeaderboardSection
-          closers={data.closers}
-          aggregate={data.aggregate}
+        <CloserScheduledSection
+          closers={scheduled.closers}
+          aggregate={scheduled.aggregate}
           selectedCloser={selectedCloser}
           drill={drill}
           baseParams={baseParams}
@@ -130,25 +138,33 @@ function Tile({ label, value }: { label: string; value: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// Section 2 — Per-closer leaderboard + click-to-drill
+// Section 2 — Per-closer scheduled-calls list (new 2026-05-27)
 // ---------------------------------------------------------------------------
+//
+// Replaces the old form-driven leaderboard. Each closer row shows their
+// Calendly-scheduled calls in range, with form-derived outcomes filled
+// in where the closer form matched (name + date ±48h). Unmatched rows
+// render "missing" until the form is submitted.
 
-function CloserLeaderboardSection({
+function CloserScheduledSection({
   closers,
   aggregate,
   selectedCloser,
   drill,
   baseParams,
 }: {
-  closers: CloserLeaderboardRow[]
-  aggregate: CloserLeaderboardRow
+  closers: CloserScheduledAggregate[]
+  aggregate: CloserScheduledAggregate
   selectedCloser: string | null
-  drill: CloserCallDrillRow[]
+  drill: CloserScheduledDrillRow[]
   baseParams: URLSearchParams
 }) {
   return (
-    <SectionBox eyebrow="PER CLOSER" title="Calls logged, showed, closed, money — click a row to drill.">
-      <LeaderboardTable
+    <SectionBox
+      eyebrow="PER CLOSER"
+      title="Scheduled calls in range · click a closer to drill."
+    >
+      <CloserScheduledTable
         closers={closers}
         aggregate={aggregate}
         selectedCloser={selectedCloser}
@@ -159,30 +175,33 @@ function CloserLeaderboardSection({
   )
 }
 
-function LeaderboardTable({
+// Top-bar columns: Closer / Calls / →show% Showed / →close% Closes (HT/DC) /
+// No shows / Upfront. The arrow-percentage cells follow the appointment-
+// setting convention — a small muted "→X%" on the left edge of the cell
+// signaling the rate from the prior column to this one.
+function CloserScheduledTable({
   closers,
   aggregate,
   selectedCloser,
   drill,
   baseParams,
 }: {
-  closers: CloserLeaderboardRow[]
-  aggregate: CloserLeaderboardRow
+  closers: CloserScheduledAggregate[]
+  aggregate: CloserScheduledAggregate
   selectedCloser: string | null
-  drill: CloserCallDrillRow[]
+  drill: CloserScheduledDrillRow[]
   baseParams: URLSearchParams
 }) {
-  const COLS = '1.6fr 0.7fr 0.7fr 0.7fr 0.8fr 0.9fr 0.9fr'
+  const COLS = '1.6fr 0.7fr 1.1fr 1.3fr 0.7fr 0.9fr'
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '6px 0 10px', borderBottom: '1px solid var(--color-geg-border)' }}>
         <ColH label="Closer" align="left" />
         <ColH label="Calls" />
         <ColH label="Showed" />
-        <ColH label="Closed" />
-        <ColH label="Close rate" />
+        <ColH label="Closes (HT/DC)" />
+        <ColH label="No shows" />
         <ColH label="Upfront" />
-        <ColH label="Contract" />
       </div>
 
       {/* Aggregate row (italic, all closers) */}
@@ -190,18 +209,17 @@ function LeaderboardTable({
         <span className="geg-serif" style={{ fontSize: 14, fontStyle: 'italic', color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em' }}>
           All closers
         </span>
-        <Num value={aggregate.callsLogged} accent />
-        <Num value={aggregate.showed} />
-        <Num value={aggregate.closed} />
-        <Num value={renderRate(aggregate.closeRate)} />
-        <Num value={compactUsd(aggregate.totalUpfront)} />
-        <Num value={compactUsd(aggregate.totalContract)} />
+        <Num value={aggregate.calls} accent />
+        <ShowedCell calls={aggregate.calls} showed={aggregate.showed} />
+        <ClosesCell showed={aggregate.showed} closed={aggregate.closed} ht={aggregate.closedHt} dc={aggregate.closedDc} />
+        <Num value={aggregate.noShows} />
+        <Num value={compactUsd(aggregate.upfront)} />
       </div>
 
       {/* Per-closer rows */}
       {closers.length === 0 ? (
         <div className="geg-serif" style={{ padding: '20px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}>
-          No closer-form rows in this range.
+          No scheduled closer calls in this range.
         </div>
       ) : (
         closers.map((c) => {
@@ -234,12 +252,11 @@ function LeaderboardTable({
                   >
                     {isSelected ? '▼ ' : '▸ '}{c.closerName}
                   </span>
-                  <Num value={c.callsLogged} accent />
-                  <Num value={c.showed} />
-                  <Num value={c.closed} />
-                  <Num value={renderRate(c.closeRate)} />
-                  <Num value={compactUsd(c.totalUpfront)} />
-                  <Num value={compactUsd(c.totalContract)} />
+                  <Num value={c.calls} accent />
+                  <ShowedCell calls={c.calls} showed={c.showed} />
+                  <ClosesCell showed={c.showed} closed={c.closed} ht={c.closedHt} dc={c.closedDc} />
+                  <Num value={c.noShows} />
+                  <Num value={compactUsd(c.upfront)} />
                 </div>
               </RowLink>
               {isSelected ? <CloserDrill calls={drill} closerName={c.closerName} /> : null}
@@ -248,6 +265,80 @@ function LeaderboardTable({
         })
       )}
     </div>
+  )
+}
+
+// "Showed" cell with an inline →show% (calls → showed rate) on the
+// left edge. Mirrors the per-rep ConnectedCell in appointment-setting.
+function ShowedCell({ calls, showed }: { calls: number; showed: number }) {
+  const pct = calls > 0 ? Math.round((showed / calls) * 100) : null
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        justifyContent: 'flex-end',
+        gap: 6,
+      }}
+      title={pct === null ? 'No scheduled calls' : `${showed} of ${calls} showed (${pct}%)`}
+    >
+      {pct !== null ? (
+        <span
+          className="geg-mono"
+          style={{ fontSize: 9.5, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)' }}
+        >
+          →{pct}%
+        </span>
+      ) : null}
+      <Num value={showed} />
+    </span>
+  )
+}
+
+// "Closes" cell with an inline →close% (showed → closed rate) on the
+// left, and a small HT/DC split on the right of the count.
+function ClosesCell({
+  showed,
+  closed,
+  ht,
+  dc,
+}: {
+  showed: number
+  closed: number
+  ht: number
+  dc: number
+}) {
+  const pct = showed > 0 ? Math.round((closed / showed) * 100) : null
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        justifyContent: 'flex-end',
+        gap: 6,
+      }}
+      title={
+        pct === null
+          ? 'No showed calls'
+          : `${closed} of ${showed} showed closed (${pct}%) · ${ht} HT / ${dc} DC`
+      }
+    >
+      {pct !== null ? (
+        <span
+          className="geg-mono"
+          style={{ fontSize: 9.5, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)' }}
+        >
+          →{pct}%
+        </span>
+      ) : null}
+      <Num value={closed} />
+      <span
+        className="geg-mono"
+        style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}
+      >
+        {ht}HT / {dc}DC
+      </span>
+    </span>
   )
 }
 
@@ -271,49 +362,94 @@ function RowLink({
   )
 }
 
-function CloserDrill({ calls, closerName }: { calls: CloserCallDrillRow[]; closerName: string }) {
+// Drill list for a single closer — one row per scheduled Calendly
+// event. Form-derived fields render "missing" until the closer submits
+// the EOC form and our match (name + date ±48h) connects them.
+const DRILL_COLS = '1.4fr 1fr 1fr 0.7fr 0.7fr 0.9fr 0.9fr'
+
+function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; closerName: string }) {
   return (
     <div style={{ margin: '0 -12px 10px', padding: '14px 16px 16px', background: 'var(--color-geg-bg)', border: '1px solid var(--color-geg-border)', borderRadius: 8 }}>
       <div
         className="geg-mono"
         style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 10 }}
       >
-        {closerName} · per-call detail · {calls.length} {calls.length === 1 ? 'row' : 'rows'} (most recent first)
+        {closerName} · scheduled calls · {calls.length} {calls.length === 1 ? 'row' : 'rows'} (most recent first)
       </div>
       {calls.length === 0 ? (
         <div className="geg-serif" style={{ padding: '14px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}>
-          No calls in this range for this closer.
+          No scheduled calls in this range for this closer.
         </div>
       ) : (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr 0.7fr 0.7fr 0.9fr 0.9fr 0.9fr', gap: 10, padding: '6px 0 8px', borderBottom: '1px solid var(--color-geg-border)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '6px 0 8px', borderBottom: '1px solid var(--color-geg-border)' }}>
             <ColH label="Prospect" align="left" />
-            <ColH label="Call time (ET)" align="left" />
+            <ColH label="Scheduled (ET)" align="left" />
             <ColH label="Call type" align="left" />
             <ColH label="Showed" align="left" />
             <ColH label="Closed" align="left" />
             <ColH label="Upfront" />
-            <ColH label="Contract" />
             <ColH label="Plan" align="left" />
           </div>
           {calls.map((c) => (
             <div
-              key={c.recordId}
-              style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr 0.7fr 0.7fr 0.9fr 0.9fr 0.9fr', gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}
+              key={c.eventUri}
+              style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}
             >
               <Cell text={c.prospectName ?? '—'} />
-              <Cell text={c.dateTimeOfCall ? formatEtTimestamp(c.dateTimeOfCall) : '—'} mono />
-              <Cell text={c.callType ?? '—'} mono />
-              <Cell text={c.showed ?? '—'} mono />
-              <Cell text={c.closed ?? '—'} mono />
-              <NumStr value={c.amountUpfront == null ? '—' : compactUsd(c.amountUpfront)} />
-              <NumStr value={c.contractValue == null ? '—' : compactUsd(c.contractValue)} />
-              <Cell text={c.paymentPlan ?? '—'} mono />
+              <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
+              <Cell text={callTypeLabel(c.callType)} mono />
+              <YesNoCell value={c.showed} />
+              <YesNoCell value={c.closed === null ? null : c.closed === 'yes' ? 'yes' : 'no'} />
+              <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
+              <Cell text={c.contractPlan ?? ''} mono missing={!c.contractPlan} />
             </div>
           ))}
         </div>
       )}
     </div>
+  )
+}
+
+function callTypeLabel(t: CloserScheduledDrillRow['callType']): string {
+  if (t === 'direct') return 'AI Strategy Call'
+  if (t === 'setter') return 'Partnership (setter)'
+  if (t === 'rebook') return 'Sync (rebook)'
+  return t
+}
+
+// Showed / closed cell — green Yes, red No, faint DQ, italic muted
+// "missing" when the form hasn't been submitted yet.
+function YesNoCell({ value }: { value: 'yes' | 'no' | 'dq' | null }) {
+  if (value === null) return <MissingTag />
+  const text = value === 'yes' ? 'Yes' : value === 'no' ? 'No' : 'DQ'
+  const color =
+    value === 'yes'
+      ? 'var(--color-geg-pos)'
+      : value === 'no'
+        ? 'var(--color-geg-neg)'
+        : 'var(--color-geg-text-faint)'
+  return (
+    <span className="geg-mono" style={{ fontSize: 11, color, letterSpacing: '0.04em' }}>
+      {text}
+    </span>
+  )
+}
+
+function MissingTag() {
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        fontSize: 10,
+        fontStyle: 'italic',
+        color: 'var(--color-geg-text-faint)',
+        letterSpacing: '0.04em',
+      }}
+      title="No EOC form submitted yet — value will populate once the closer files the form."
+    >
+      missing
+    </span>
   )
 }
 
@@ -427,7 +563,7 @@ function Num({ value, accent }: { value: number | string; accent?: boolean }) {
   )
 }
 
-function NumStr({ value }: { value: string }) {
+function NumStr({ value }: { value: React.ReactNode }) {
   return (
     <span className="geg-numeric-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.01em', textAlign: 'right' }}>
       {value}
@@ -452,7 +588,10 @@ function ColH({ label, align }: { label: string; align?: 'left' | 'right' }) {
   )
 }
 
-function Cell({ text, mono }: { text: string; mono?: boolean }) {
+function Cell({ text, mono, missing }: { text: string; mono?: boolean; missing?: boolean }) {
+  if (missing || text === '') {
+    return <MissingTag />
+  }
   const isDash = text === '—'
   return (
     <span
@@ -483,7 +622,3 @@ function formatEtTimestamp(iso: string): string {
   }).format(new Date(iso))
 }
 
-function renderRate(r: number | null): string {
-  if (r == null) return '—'
-  return `${(r * 100).toFixed(1)}%`
-}

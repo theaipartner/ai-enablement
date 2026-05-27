@@ -336,3 +336,306 @@ export async function getCloserCallsForCloser(range: DateRange, closerName: stri
   })
   return out
 }
+
+// ===========================================================================
+// Scheduled-list aggregator (2026-05-27)
+// ===========================================================================
+//
+// New surface — replaces the "leaderboard from form data" view with one
+// keyed off Calendly scheduled events. Why: the form is sparsely filled
+// (closers don't always submit the EOC) so the old leaderboard
+// undercounts what the closer team actually shows up to. The new view
+// pulls every scheduled closer event in range, attributes by Calendly
+// host, and joins to the form when present — letting the closer team
+// see "scheduled calls" as the load-bearing number with form-derived
+// outcomes filling in as forms get submitted.
+//
+// Event categorization (case-insensitive name prefix):
+//   - "ai partner strategy call"  → 'direct' — round-robin from funnel
+//   - "partnership call"          → 'setter' — setter-booked
+//   - "ai partner sync"           → 'rebook' — follow-up (not in use yet)
+//
+// Form match: name (case+trim) + date-of-call within ±48h of event
+// start_time. ~25% match rate today given form-fill discipline; the
+// unmatched rows render with form fields blank ("missing" downstream).
+// Improve later via a fuzzier match or by making form-fill mandatory.
+
+export type CloserCallType = 'direct' | 'setter' | 'rebook'
+
+export type CloserScheduledDrillRow = {
+  eventUri: string
+  prospectName: string | null
+  scheduledTime: string       // ISO UTC
+  callType: CloserCallType
+  // Outcomes from the matched Airtable form. null = form not filled
+  // (or unmatchable). Downstream UI renders null as "missing".
+  showed: 'yes' | 'no' | 'dq' | null
+  closed: 'yes' | 'no' | null
+  upfront: number | null
+  contractPlan: string | null
+}
+
+export type CloserScheduledAggregate = {
+  closerName: string
+  calls: number        // total scheduled events for this closer in range
+  showed: number       // matched + showed='Yes'
+  noShows: number      // matched + showed='No' (DQs excluded)
+  closed: number       // matched + closed='Yes'
+  closedHt: number     // payment_plan_type implies high-ticket
+  closedDc: number     // payment_plan_type implies digital college
+  upfront: number      // sum of amount_paid_today_currency on matched forms
+}
+
+export type CloserScheduledResult = {
+  closers: CloserScheduledAggregate[]
+  aggregate: CloserScheduledAggregate
+  drillByCloser: Record<string, CloserScheduledDrillRow[]>
+}
+
+const FORM_MATCH_WINDOW_SEC = 48 * 60 * 60
+
+function categorizeEventName(name: string): CloserCallType | null {
+  const n = name.toLowerCase().trim()
+  if (n.startsWith('ai partner strategy call')) return 'direct'
+  if (n.startsWith('partnership call')) return 'setter'
+  if (n.startsWith('ai partner sync')) return 'rebook'
+  return null
+}
+
+function normalizeShowed(raw: string | null): 'yes' | 'no' | 'dq' | null {
+  if (!raw) return null
+  const v = raw.toLowerCase()
+  if (v === 'yes') return 'yes'
+  if (v === 'no') return 'no'
+  if (v.startsWith('other')) return 'dq'
+  return null
+}
+
+function normalizeClosed(raw: string | null): 'yes' | 'no' | null {
+  if (!raw) return null
+  const v = raw.toLowerCase()
+  if (v === 'yes') return 'yes'
+  if (v === 'no') return 'no'
+  return null
+}
+
+function classifyPlan(plan: string | null): 'ht' | 'dc' | null {
+  if (!plan) return null
+  const v = plan.toLowerCase()
+  if (v.includes('ticket')) return 'ht'
+  if (v.includes('college')) return 'dc'
+  return null
+}
+
+export async function getClosingScheduledList(
+  range: DateRange,
+): Promise<CloserScheduledResult> {
+  const sb = createAdminClient()
+
+  // 1. Closer-event scheduled events whose start_time falls in range.
+  //    Pull a wider lookback so we catch events created before range
+  //    but starting in range (rare for partnership calls but possible
+  //    for AI Strategy with long lead time).
+  const { data: eventData, error: eventErr } = await sb
+    .from('calendly_scheduled_events' as never)
+    .select('uri, name, start_time, host_user_name, status')
+    .gte('start_time', range.startUtcIso)
+    .lt('start_time', range.endUtcIso)
+    .order('start_time', { ascending: true })
+    .range(0, 2999)
+  if (eventErr) throw new Error(`calendly_scheduled_events read failed: ${eventErr.message}`)
+  const allEvents = (eventData ?? []) as unknown as Array<{
+    uri: string
+    name: string
+    start_time: string
+    host_user_name: string | null
+    status: string | null
+  }>
+  // Categorize + drop non-closer events. Also drop canceled events
+  // from the per-closer "calls" count (they didn't happen).
+  const events = allEvents
+    .map((e) => ({ ...e, callType: categorizeEventName(e.name) }))
+    .filter((e) => e.callType !== null && e.status !== 'canceled') as Array<{
+      uri: string
+      name: string
+      start_time: string
+      host_user_name: string | null
+      status: string | null
+      callType: CloserCallType
+    }>
+
+  if (events.length === 0) {
+    const emptyAgg: CloserScheduledAggregate = {
+      closerName: 'All closers',
+      calls: 0, showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
+    }
+    return { closers: [], aggregate: emptyAgg, drillByCloser: {} }
+  }
+
+  // 2. Invitees for those events (prospect name).
+  const eventUris = events.map((e) => e.uri)
+  const inviteeByEvent = new Map<string, { name: string | null; email: string | null }>()
+  for (let i = 0; i < eventUris.length; i += 200) {
+    const chunk = eventUris.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('calendly_invitees' as never)
+      .select('event_uri, name, email')
+      .in('event_uri', chunk)
+    if (error) throw new Error(`calendly_invitees read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{
+      event_uri: string
+      name: string | null
+      email: string | null
+    }>) {
+      // Keep the first invitee per event (1:1 in practice).
+      if (!inviteeByEvent.has(r.event_uri)) {
+        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email })
+      }
+    }
+  }
+
+  // 3. Closer forms covering the event window (±48h on either side for
+  //    matching). Pull as a single windowed read; small table.
+  const widenStartMs = new Date(range.startUtcIso).getTime() - FORM_MATCH_WINDOW_SEC * 1000
+  const widenEndMs = new Date(range.endUtcIso).getTime() + FORM_MATCH_WINDOW_SEC * 1000
+  const widenStartIso = new Date(widenStartMs).toISOString()
+  const widenEndIso = new Date(widenEndMs).toISOString()
+  const { data: formData, error: formErr } = await sb
+    .from('airtable_full_closer_report' as never)
+    .select(
+      'record_id, prospect_name, date_time_of_call, showed, closed, ' +
+      'amount_paid_today_currency, payment_plan_type, closer_names',
+    )
+    .gte('date_time_of_call', widenStartIso)
+    .lt('date_time_of_call', widenEndIso)
+  if (formErr) throw new Error(`airtable_full_closer_report read failed: ${formErr.message}`)
+  const forms = (formData ?? []) as unknown as Array<{
+    record_id: string
+    prospect_name: string | null
+    date_time_of_call: string | null
+    showed: string | null
+    closed: string | null
+    amount_paid_today_currency: number | string | null
+    payment_plan_type: string | null
+    closer_names: string[] | null
+  }>
+
+  // Build a name → forms multimap for fast lookup. Keys are
+  // case-insensitive trimmed names.
+  const formsByName = new Map<string, typeof forms>()
+  for (const f of forms) {
+    if (!f.prospect_name) continue
+    const key = f.prospect_name.toLowerCase().trim()
+    const arr = formsByName.get(key) ?? []
+    arr.push(f)
+    formsByName.set(key, arr)
+  }
+
+  // 4. For each event, find the matching form (if any). Best match =
+  //    name-case-insensitive equal AND date_time_of_call closest to
+  //    event.start_time within ±48h.
+  function matchForm(
+    eventStartIso: string,
+    inviteeName: string | null,
+  ): (typeof forms)[number] | null {
+    if (!inviteeName) return null
+    const key = inviteeName.toLowerCase().trim()
+    const candidates = formsByName.get(key)
+    if (!candidates) return null
+    const eventMs = new Date(eventStartIso).getTime()
+    let best: (typeof forms)[number] | null = null
+    let bestDelta = Number.POSITIVE_INFINITY
+    for (const c of candidates) {
+      if (!c.date_time_of_call) continue
+      const delta = Math.abs(new Date(c.date_time_of_call).getTime() - eventMs)
+      if (delta <= FORM_MATCH_WINDOW_SEC * 1000 && delta < bestDelta) {
+        best = c
+        bestDelta = delta
+      }
+    }
+    return best
+  }
+
+  // 5. Build per-closer aggregates + drill rows.
+  const closerMap = new Map<string, CloserScheduledAggregate>()
+  const drillByCloser: Record<string, CloserScheduledDrillRow[]> = {}
+
+  function bumpAgg(name: string): CloserScheduledAggregate {
+    let agg = closerMap.get(name)
+    if (!agg) {
+      agg = {
+        closerName: name,
+        calls: 0, showed: 0, noShows: 0, closed: 0,
+        closedHt: 0, closedDc: 0, upfront: 0,
+      }
+      closerMap.set(name, agg)
+      drillByCloser[name] = []
+    }
+    return agg
+  }
+
+  for (const ev of events) {
+    const closer = ev.host_user_name ?? '(no host)'
+    const agg = bumpAgg(closer)
+    agg.calls++
+
+    const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null }
+    const form = matchForm(ev.start_time, invitee.name)
+
+    const showed = form ? normalizeShowed(form.showed) : null
+    const closed = form ? normalizeClosed(form.closed) : null
+    const upfront =
+      form && typeof form.amount_paid_today_currency === 'number'
+        ? form.amount_paid_today_currency
+        : form && typeof form.amount_paid_today_currency === 'string'
+          ? Number(form.amount_paid_today_currency) || null
+          : null
+    const plan = form ? form.payment_plan_type : null
+    const planClass = classifyPlan(plan)
+
+    if (showed === 'yes') agg.showed++
+    if (showed === 'no') agg.noShows++
+    if (closed === 'yes') {
+      agg.closed++
+      if (planClass === 'ht') agg.closedHt++
+      if (planClass === 'dc') agg.closedDc++
+    }
+    if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
+
+    drillByCloser[closer].push({
+      eventUri: ev.uri,
+      prospectName: invitee.name,
+      scheduledTime: ev.start_time,
+      callType: ev.callType,
+      showed,
+      closed,
+      upfront,
+      contractPlan: plan,
+    })
+  }
+
+  // 6. Sort drill rows per closer (most recent first).
+  for (const name of Object.keys(drillByCloser)) {
+    drillByCloser[name].sort((a, b) =>
+      a.scheduledTime < b.scheduledTime ? 1 : a.scheduledTime > b.scheduledTime ? -1 : 0,
+    )
+  }
+
+  // 7. Closer list sorted by calls desc; aggregate "All closers" sums.
+  const closers = Array.from(closerMap.values()).sort((a, b) => b.calls - a.calls)
+  const aggregate: CloserScheduledAggregate = closers.reduce<CloserScheduledAggregate>(
+    (acc, c) => ({
+      closerName: 'All closers',
+      calls: acc.calls + c.calls,
+      showed: acc.showed + c.showed,
+      noShows: acc.noShows + c.noShows,
+      closed: acc.closed + c.closed,
+      closedHt: acc.closedHt + c.closedHt,
+      closedDc: acc.closedDc + c.closedDc,
+      upfront: acc.upfront + c.upfront,
+    }),
+    { closerName: 'All closers', calls: 0, showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0 },
+  )
+
+  return { closers, aggregate, drillByCloser }
+}
