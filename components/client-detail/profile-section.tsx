@@ -15,7 +15,7 @@
 import type { ClientDetail } from '@/lib/db/clients'
 import { Section } from './section'
 import { EditableField } from './editable-field'
-import { updateClientProfileFieldAction } from '@/app/(authenticated)/clients/[id]/actions'
+import { updateClientProfileFieldAction } from '@/app/(authenticated)/(fulfillment)/clients/[id]/actions'
 
 type ProfileShape = {
   niche?: unknown

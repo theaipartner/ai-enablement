@@ -22,7 +22,7 @@ import { TRUSTPILOT_OPTIONS } from '@/lib/client-vocab'
 import { cn } from '@/lib/utils'
 import { Section, Subsection } from './section'
 import { EditableField } from './editable-field'
-import { updateClientField } from '@/app/(authenticated)/clients/[id]/actions'
+import { updateClientField } from '@/app/(authenticated)/(fulfillment)/clients/[id]/actions'
 
 const GHL_OPTIONS = [
   { value: 'never_adopted', label: 'Never adopted' },

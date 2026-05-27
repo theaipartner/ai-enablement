@@ -35,7 +35,7 @@ import {
   updateClientCsmStandingAction,
   updateClientField,
   updateClientJourneyStageAction,
-} from '@/app/(authenticated)/clients/[id]/actions'
+} from '@/app/(authenticated)/(fulfillment)/clients/[id]/actions'
 
 type ConcernShape = {
   text: string

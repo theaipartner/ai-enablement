@@ -20,9 +20,7 @@ type NavItem = {
 // post-@-mention-split passive path is observation-only (digest +
 // unanswered-flagger only), so the per-run audit page had no purpose.
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { href: '/clients', label: 'Clients', requiredTier: 'csm' },
-  { href: '/calls', label: 'Calls', requiredTier: 'csm' },
-  { href: '/teams', label: 'Teams', requiredTier: 'head_csm' },
+  { href: '/clients', label: 'Fulfillment', requiredTier: 'csm' },
   { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
   { href: '/sales-dashboard', label: 'Sales', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
@@ -46,9 +44,20 @@ export function TopNav({
   }
 
   function isActive(href: string): boolean {
-    if (href === '/clients') return pathname === '/clients' || pathname.startsWith('/clients/')
-    if (href === '/calls') return pathname === '/calls' || pathname.startsWith('/calls/')
-    if (href === '/teams') return pathname === '/teams' || pathname.startsWith('/teams/')
+    // Fulfillment is the top-nav umbrella for the (fulfillment) route group:
+    // /clients, /calls, /teams, /dashboard all light up the same tab.
+    if (href === '/clients') {
+      return (
+        pathname === '/clients' ||
+        pathname.startsWith('/clients/') ||
+        pathname === '/calls' ||
+        pathname.startsWith('/calls/') ||
+        pathname === '/teams' ||
+        pathname.startsWith('/teams/') ||
+        pathname === '/dashboard' ||
+        pathname.startsWith('/dashboard/')
+      )
+    }
     if (href === '/tasks') return pathname === '/tasks' || pathname.startsWith('/tasks/')
     if (href === '/cost-hub') return pathname === '/cost-hub' || pathname.startsWith('/cost-hub/')
     if (href === '/sales-dashboard') return pathname === '/sales-dashboard' || pathname.startsWith('/sales-dashboard/')

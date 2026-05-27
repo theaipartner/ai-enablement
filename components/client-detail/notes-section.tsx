@@ -10,7 +10,7 @@
 import type { ClientDetail } from '@/lib/db/clients'
 import { Section } from './section'
 import { EditableField } from './editable-field'
-import { updateClientField } from '@/app/(authenticated)/clients/[id]/actions'
+import { updateClientField } from '@/app/(authenticated)/(fulfillment)/clients/[id]/actions'
 
 export function NotesSection({ client }: { client: ClientDetail }) {
   return (

@@ -19,8 +19,8 @@ import {
   updateClientAlternateEmailsAction,
   updateClientField,
   updateClientStatusAction,
-} from '@/app/(authenticated)/clients/[id]/actions'
-import { PrimaryCsmField } from '@/app/(authenticated)/clients/[id]/primary-csm-field'
+} from '@/app/(authenticated)/(fulfillment)/clients/[id]/actions'
+import { PrimaryCsmField } from '@/app/(authenticated)/(fulfillment)/clients/[id]/primary-csm-field'
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
