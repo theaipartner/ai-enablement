@@ -18,6 +18,9 @@ type NavItem = { href: string; label: string }
 const NAV: NavItem[] = [
   { href: '/sales-dashboard/funnel', label: 'Funnel' },
   { href: '/sales-dashboard/revenue', label: 'Revenue' },
+  // Calls = setter/closer-setter call recordings transcribed via Deepgram,
+  // rendered raw for V1 (AI review layer comes after golden-set selection).
+  { href: '/sales-dashboard/calls', label: 'Calls' },
 ]
 
 export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {
