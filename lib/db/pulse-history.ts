@@ -159,13 +159,14 @@ export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
     map.set('bookings', { yesterday: last(trend), avg7d: mean(trend), trend7d: trend })
   }
   {
-    // LP conversion = bookings / visits * 100. Denominator now Meta
-    // unique link clicks (per the visits source swap). Volume-weighted
-    // 7d avg.
-    const trend = ratioDaily((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100)
+    // LP conversion = submits / visits * 100. Drake 2026-05-27 —
+    // bookings come later in the funnel and have their own tile; LP's
+    // job is to drive Typeform submits. Denominator is Meta unique
+    // link clicks (per the visits source swap). Volume-weighted 7d avg.
+    const trend = ratioDaily((d) => d.typeform.submits, (d) => d.ads.uniqueLinkClicks, 100)
     map.set('lp-conversion', {
-      yesterday: lastRatio((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100),
-      avg7d: ratio7d((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100),
+      yesterday: lastRatio((d) => d.typeform.submits, (d) => d.ads.uniqueLinkClicks, 100),
+      avg7d: ratio7d((d) => d.typeform.submits, (d) => d.ads.uniqueLinkClicks, 100),
       trend7d: trend,
     })
   }

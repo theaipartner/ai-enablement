@@ -162,15 +162,17 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   // ─── Landing Page ──────────────────────────────────────────────────────
   // Funnel-volume counts with cost-per attribution rendered as the
   // corner badge on each tile. Five tiles: Visits / Submits / Qualified /
-  // Bookings / Conversion (visits → bookings %).
+  // Bookings / Conversion (visits → submits %).
   //
   // 2026-05-27: LP visits switched from Clarity to Meta unique link
   // clicks (Drake — keeps a single source of truth for "people who
   // clicked through to the LP" and aligns with the Meta-side
-  // cost / unique-click metric).
+  // cost / unique-click metric). LP conversion is submits / visits
+  // (Drake 2026-05-27 evening — bookings come later in the funnel
+  // and have their own tile; LP's job is to drive Typeform submits).
   const lpVisits = getMetricValue(ads, 'unique-clicks') ?? 0
   const lpBookings = calendly.total
-  const lpConversion = lpVisits > 0 ? (lpBookings / lpVisits) * 100 : null
+  const lpConversion = lpVisits > 0 ? (typeform.submits / lpVisits) * 100 : null
   const lpBox: FunnelBox = {
     id: 'landing-page',
     eyebrow: 'PULSE · LANDING PAGE',
@@ -188,7 +190,7 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
         secondary: { label: 'cost / booking', value: costPer(adSpend, lpBookings), format: 'usd_precise' } },
       { id: 'lp-conversion', label: 'LP conversion', value: lpConversion, format: 'percent_0_100' },
     ],
-    footer: `Visits = Meta unique link clicks  ·  qualified = budget ≥ $2,000 on Typeform  ·  conversion = bookings / visits`,
+    footer: `Visits = Meta unique link clicks  ·  qualified = budget ≥ $2,000 on Typeform  ·  conversion = submits / visits`,
   }
 
   // ─── Appointment Setting ───────────────────────────────────────────────
