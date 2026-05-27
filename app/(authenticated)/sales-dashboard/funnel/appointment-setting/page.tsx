@@ -451,32 +451,35 @@ function SpeedToLeadSection({
         }}
       >
         <StatCell
-          label="Avg speed to lead"
-          value={cohort.avgSpeedToLeadSec !== null ? formatDuration(cohort.avgSpeedToLeadSec) : '—'}
+          label="Avg speed to lead (< 3h)"
+          value={cohort.avgSpeedToLeadSecUnder3h !== null ? formatDuration(cohort.avgSpeedToLeadSecUnder3h) : '—'}
           subtext={
             <>
               <div>
                 {`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
               </div>
-              {cohort.avgSpeedToLeadSecUnder3h !== null ? (
+              {cohort.avgSpeedToLeadSec !== null ? (
                 <div
-                  title={`Avg restricted to leads first-called within 3h of creation (${cohort.leadsUnder3h} of ${cohort.leadsCalled})`}
+                  title={`All-time avg includes every called lead in the cohort, with a 24h outlier cap on individual contributions. ${cohort.leadsCalled - cohort.leadsUnder3h} leads were first-called more than 3 hours after creation.`}
                 >
-                  &lt; 3h STL: {formatDuration(cohort.avgSpeedToLeadSecUnder3h)}
+                  All-time STL: {formatDuration(cohort.avgSpeedToLeadSec)}{' '}
+                  <span style={{ color: 'var(--color-geg-text-faint)' }}>
+                    · {cohort.leadsCalled - cohort.leadsUnder3h} outside 3h
+                  </span>
                 </div>
               ) : null}
             </>
           }
         />
         <StatCell
-          label="Connected rate"
-          value={cohort.connectedRate !== null ? `${(cohort.connectedRate * 100).toFixed(0)}%` : '—'}
-          subtext={`${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`}
-        />
-        <StatCell
           label="Avg intensity"
           value={cohort.avgIntensity !== null ? `${cohort.avgIntensity.toFixed(1)}×` : '—'}
           subtext={`mean dials per called lead`}
+        />
+        <StatCell
+          label="Connected rate"
+          value={cohort.connectedRate !== null ? `${(cohort.connectedRate * 100).toFixed(0)}%` : '—'}
+          subtext={`${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`}
         />
         <StatCell
           label="Cohort size"
