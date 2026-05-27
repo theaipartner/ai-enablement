@@ -2,21 +2,33 @@
 
 // Sales Dashboard — sales-only left sidebar.
 //
-// Two primary views post-2026-05-25: Funnel (the activity Pulse view
-// — the page IS the dashboard now) and Revenue (the money page).
-// The old curated-overview "Pulse" home and the People per-rep page
-// were removed; per-rep detail still lives on the existing detail
-// pages but isn't a nav-level destination.
+// Three primary views post-2026-05-27: Pulse (the activity view —
+// renamed from Funnel — with an inline sub-list of the four funnel
+// stages for fast access), Revenue, and Calls.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useState } from 'react'
 
 const TOPNAV_HEIGHT = 64
 
-type NavItem = { href: string; label: string }
+type NavItem = {
+  href: string
+  label: string
+  children?: NavItem[]
+}
 
 const NAV: NavItem[] = [
-  { href: '/sales-dashboard/funnel', label: 'Funnel' },
+  {
+    href: '/sales-dashboard/funnel',
+    label: 'Pulse',
+    children: [
+      { href: '/sales-dashboard/funnel/ads', label: 'Ads' },
+      { href: '/sales-dashboard/funnel/landing-pages', label: 'Landing page' },
+      { href: '/sales-dashboard/funnel/appointment-setting', label: 'Appointment setting' },
+      { href: '/sales-dashboard/funnel/closed', label: 'Closing' },
+    ],
+  },
   { href: '/sales-dashboard/revenue', label: 'Revenue' },
   // Calls = setter/closer-setter call recordings transcribed via Deepgram,
   // rendered raw for V1 (AI review layer comes after golden-set selection).
@@ -72,16 +84,92 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
         </div>
       </div>
 
-      {NAV.map((item) => (
-        <SidebarLink
-          key={item.href}
-          href={item.href}
-          label={item.label}
-          active={isActive(item.href)}
-          variant="overview"
-        />
-      ))}
+      {NAV.map((item) =>
+        item.children && item.children.length > 0 ? (
+          <SidebarGroup
+            key={item.href}
+            item={item}
+            isActive={isActive}
+            anyChildActive={item.children.some((c) => isActive(c.href))}
+          />
+        ) : (
+          <SidebarLink
+            key={item.href}
+            href={item.href}
+            label={item.label}
+            active={isActive(item.href)}
+            variant="overview"
+          />
+        ),
+      )}
     </aside>
+  )
+}
+
+// Parent row with chevron toggle + a collapsible list of children.
+// Auto-expanded when the user is already on the parent or any child
+// route; otherwise collapsed by default, toggled by clicking the
+// chevron. The label itself stays a Link to the parent route.
+function SidebarGroup({
+  item,
+  isActive,
+  anyChildActive,
+}: {
+  item: NavItem
+  isActive: (href: string) => boolean
+  anyChildActive: boolean
+}) {
+  const parentActive = isActive(item.href)
+  const autoOpen = parentActive || anyChildActive
+  const [manuallyOpen, setManuallyOpen] = useState<boolean | null>(null)
+  const open = manuallyOpen ?? autoOpen
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'stretch' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <SidebarLink
+            href={item.href}
+            label={item.label}
+            active={parentActive}
+            variant="overview"
+          />
+        </div>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`${open ? 'Collapse' : 'Expand'} ${item.label} sub-pages`}
+          onClick={() => setManuallyOpen(!open)}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0 22px 0 8px',
+            cursor: 'pointer',
+            color: 'var(--color-geg-text-faint)',
+            fontSize: 10,
+            display: 'flex',
+            alignItems: 'center',
+            transition: 'transform 120ms ease, color 100ms ease',
+            transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
+          }}
+        >
+          ▾
+        </button>
+      </div>
+      {open ? (
+        <div style={{ paddingBottom: 4 }}>
+          {item.children!.map((c) => (
+            <SidebarLink
+              key={c.href}
+              href={c.href}
+              label={c.label}
+              active={isActive(c.href)}
+              variant="child"
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -96,7 +184,7 @@ function SidebarLink({
   label: string
   count?: number
   active: boolean
-  variant: 'overview' | 'section'
+  variant: 'overview' | 'section' | 'child'
 }) {
   const baseStyles: React.CSSProperties = {
     display: 'flex',
@@ -121,7 +209,19 @@ function SidebarLink({
     padding: '12px 24px 12px 22px',
     color: active ? 'var(--color-geg-accent)' : 'var(--color-geg-text)',
   }
-  const merged = variant === 'overview' ? { ...baseStyles, ...overviewStyles } : baseStyles
+  const childStyles: React.CSSProperties = {
+    fontFamily: 'var(--font-geg-serif), Newsreader, Georgia, serif',
+    fontSize: 12.5,
+    letterSpacing: '-0.003em',
+    padding: '6px 24px 6px 40px',
+    color: active ? 'var(--color-geg-text)' : 'var(--color-geg-text-3)',
+  }
+  const merged =
+    variant === 'overview'
+      ? { ...baseStyles, ...overviewStyles }
+      : variant === 'child'
+        ? { ...baseStyles, ...childStyles }
+        : baseStyles
 
   return (
     <Link href={href} style={merged} data-active={active ? 'true' : 'false'}>
