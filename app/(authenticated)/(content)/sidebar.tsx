@@ -1,11 +1,9 @@
 'use client'
 
-// CEO — left sidebar.
+// Content — left sidebar.
 //
-// Same shape as the Fulfillment sidebar
-// (app/(authenticated)/(fulfillment)/sidebar.tsx) which itself mirrors
-// the Sales sidebar. Single item for now (Cost Hub); more land here
-// as the CEO surface grows.
+// Single item for now (Dashboard placeholder); mirrors the CEO /
+// Fulfillment sidebar pattern.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -20,11 +18,10 @@ type NavItem = {
 }
 
 const NAV: NavItem[] = [
-  { href: '/control-center', label: 'Control Center', requiredTier: 'admin' },
-  { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
+  { href: '/content/dashboard', label: 'Dashboard', requiredTier: 'admin' },
 ]
 
-export function CeoSidebar({ accessTier }: { accessTier: AccessTier }) {
+export function ContentSidebar({ accessTier }: { accessTier: AccessTier }) {
   const pathname = usePathname() ?? ''
 
   function isActive(href: string): boolean {
@@ -52,7 +49,7 @@ export function CeoSidebar({ accessTier }: { accessTier: AccessTier }) {
         }}
       >
         <div className="geg-eyebrow" style={{ color: 'var(--color-geg-accent)' }}>
-          CEO
+          CONTENT
         </div>
         <div
           className="geg-serif"
@@ -64,7 +61,7 @@ export function CeoSidebar({ accessTier }: { accessTier: AccessTier }) {
             letterSpacing: '-0.015em',
           }}
         >
-          The Backend.
+          The Studio.
         </div>
       </div>
 

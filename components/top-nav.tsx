@@ -21,8 +21,9 @@ type NavItem = {
 // unanswered-flagger only), so the per-run audit page had no purpose.
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/clients', label: 'Fulfillment', requiredTier: 'csm' },
-  { href: '/cost-hub', label: 'CEO', requiredTier: 'admin' },
+  { href: '/control-center', label: 'CEO', requiredTier: 'admin' },
   { href: '/sales-dashboard', label: 'Sales', requiredTier: 'admin' },
+  { href: '/content', label: 'Content', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
 
@@ -59,8 +60,18 @@ export function TopNav({
       )
     }
     if (href === '/tasks') return pathname === '/tasks' || pathname.startsWith('/tasks/')
-    if (href === '/cost-hub') return pathname === '/cost-hub' || pathname.startsWith('/cost-hub/')
+    // CEO is the top-nav umbrella for the (ceo) route group:
+    // /control-center and /cost-hub both light up the same tab.
+    if (href === '/control-center') {
+      return (
+        pathname === '/control-center' ||
+        pathname.startsWith('/control-center/') ||
+        pathname === '/cost-hub' ||
+        pathname.startsWith('/cost-hub/')
+      )
+    }
     if (href === '/sales-dashboard') return pathname === '/sales-dashboard' || pathname.startsWith('/sales-dashboard/')
+    if (href === '/content') return pathname === '/content' || pathname.startsWith('/content/')
     return false
   }
 
