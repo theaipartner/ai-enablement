@@ -1397,13 +1397,14 @@ export type CallActivityRepRow = {
   name: string | null
   totalCalls: number
   totalOver90s: number
-  // Outbound dials to a lead that had a future (uncanceled) Calendly
-  // event at the moment of the dial. Drake's "calling a booked lead"
-  // signal — covers both direct-funnel-booked confirms and setter-
-  // booked confirms, without conflating the two with cold dials.
-  // Match by lead.display_name == invitee.name (case-insensitive).
-  // Inbound calls and pure-volume "did the lead pick up" aren't
-  // separated out here — `confirms` is a strict outbound-dial count.
+  // CONNECTED outbound dials (duration >= 90s) to a lead that had a
+  // future (uncanceled) Calendly event at the moment of the dial.
+  // Drake's "calling a booked lead" signal — covers both direct-
+  // funnel-booked confirms and setter-booked confirms. Gated on
+  // connected so a ring-out doesn't pollute the count; a connected
+  // dial is either a confirm OR a new booking, an unconnected dial
+  // is neither. Identity match via email → phone → name cascade
+  // (see comments where confirmsByUser is computed below).
   confirms: number
   bookings: number
   dqs: number
@@ -1475,8 +1476,12 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const volumeByUser = new Map<string, Vol>()
   const nameByUser = new Map<string, string>()
   const userIdByName = new Map<string, string>()
-  // Outbound-only tuples for the confirms join.
-  const outboundCalls: Array<{ userId: string; leadId: string; activityAt: string }> = []
+  // Outbound-only tuples for the confirms join. We keep `duration`
+  // here so the confirms pass can gate on connected dials (>=90s)
+  // per Drake 2026-05-27: a connected dial to a booked lead is a
+  // confirm; an UNconnected dial doesn't count for either confirm
+  // or new-booking.
+  const outboundCalls: Array<{ userId: string; leadId: string; activityAt: string; duration: number }> = []
   {
     // No direction filter on the volume aggregate — both inbound and
     // outbound count toward the rep's call activity (engagement on
@@ -1518,6 +1523,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
             userId: r.user_id,
             leadId: r.lead_id,
             activityAt: r.activity_at,
+            duration: r.duration ?? 0,
           })
         }
       }
@@ -1689,6 +1695,10 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     const hasFutureMatch = (starts: number[] | undefined, afterMs: number): boolean =>
       starts ? starts.some((ts) => ts > afterMs) : false
     for (const call of outboundCalls) {
+      // Gate on connected dials only — a dial that didn't pick up
+      // doesn't tell us whether the closer was "confirming" or
+      // "qualifying", it just rang out. Drake 2026-05-27.
+      if (call.duration < 90) continue
       const keys = keysByLead.get(call.leadId)
       if (!keys) continue
       const callMs = new Date(call.activityAt).getTime()

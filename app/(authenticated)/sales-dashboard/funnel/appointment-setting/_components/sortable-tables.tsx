@@ -143,7 +143,7 @@ function Num({ value, accent }: { value: string; accent?: boolean }) {
 function ConfirmsCell({ confirms }: { confirms: number }) {
   return (
     <span
-      title="Outbound dials to a lead that had a future Calendly event at the time of the dial (confirmation-style calls — direct funnel bookings and setter-booked, both)."
+      title="Connected outbound dials (>=90s) to a lead that had a future Calendly event at the time of the dial. Covers both direct-funnel-booked confirms and setter-booked confirms. A connected dial to an UNbooked lead is a new booking instead."
       style={{ display: 'inline-block', textAlign: 'right' }}
     >
       <span
