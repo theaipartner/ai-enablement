@@ -165,8 +165,13 @@ function ReconfirmsCell({ reconfirms }: { reconfirms: number }) {
 // column — no column widening, no new column. The arrow points from
 // the Dials column (visually adjacent) and signals "of dials, this %
 // connected". When totalCalls is 0 the rate is suppressed (—).
-function ConnectedCell({ totalCalls, totalOver90s }: { totalCalls: number; totalOver90s: number }) {
-  const pct = totalCalls > 0 ? Math.round((totalOver90s / totalCalls) * 100) : null
+//
+// `totalConnected` = drill row count for this rep: over-90s calls +
+// form-only rows (calls <=90s where the setter still filled an EOC).
+// Drake 2026-05-27 — a sub-90s call that produced a triage form is
+// real engagement, so it counts here.
+function ConnectedCell({ totalCalls, totalConnected }: { totalCalls: number; totalConnected: number }) {
+  const pct = totalCalls > 0 ? Math.round((totalConnected / totalCalls) * 100) : null
   return (
     <span
       style={{
@@ -178,7 +183,7 @@ function ConnectedCell({ totalCalls, totalOver90s }: { totalCalls: number; total
       title={
         pct === null
           ? 'No dials in this range'
-          : `${totalOver90s} of ${totalCalls} dials connected (${pct}%)`
+          : `${totalConnected} of ${totalCalls} dials connected (${pct}%). Connected = over-90s calls + sub-90s calls with a triage form filed.`
       }
     >
       {pct !== null ? (
@@ -193,7 +198,7 @@ function ConnectedCell({ totalCalls, totalOver90s }: { totalCalls: number; total
           →{pct}%
         </span>
       ) : null}
-      <Num value={totalOver90s.toString()} />
+      <Num value={totalConnected.toString()} />
     </span>
   )
 }
@@ -586,7 +591,7 @@ function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
 type RepSortKey =
   | 'name'
   | 'totalCalls'
-  | 'over90s'
+  | 'connected'
   | 'bookings'
   | 'downsells'
   | 'reconfirms'
@@ -617,7 +622,7 @@ export function PerRepCallActivityTable({
       switch (k) {
         case 'name': return r.name ?? null
         case 'totalCalls': return r.totalCalls
-        case 'over90s': return r.totalOver90s
+        case 'connected': return r.totalConnected
         case 'bookings': return r.bookings
         case 'downsells': return r.downsells
         case 'reconfirms': return r.reconfirms
@@ -659,7 +664,7 @@ export function PerRepCallActivityTable({
         >
           <SortableHeader label="Rep" sortKey="name" align="left" state={state} onToggle={onToggle} />
           <SortableHeader label="Dials" sortKey="totalCalls" state={state} onToggle={onToggle} />
-          <SortableHeader label="Connected" sortKey="over90s" state={state} onToggle={onToggle} />
+          <SortableHeader label="Connected" sortKey="connected" state={state} onToggle={onToggle} />
           <SortableHeader label="Books" sortKey="bookings" state={state} onToggle={onToggle} />
           <SortableHeader label="Downsell" sortKey="downsells" state={state} onToggle={onToggle} />
           <SortableHeader label="Reconfirms" sortKey="reconfirms" state={state} onToggle={onToggle} />
@@ -674,7 +679,7 @@ export function PerRepCallActivityTable({
             All {label.toLowerCase()}
           </span>
           <Num value={aggregate.totalCalls.toString()} accent />
-          <ConnectedCell totalCalls={aggregate.totalCalls} totalOver90s={aggregate.totalOver90s} />
+          <ConnectedCell totalCalls={aggregate.totalCalls} totalConnected={aggregate.totalConnected} />
           <Num value={aggregate.bookings.toString()} />
           <Num value={aggregate.downsells.toString()} />
           <ReconfirmsCell reconfirms={aggregate.reconfirms} />
@@ -723,7 +728,7 @@ export function PerRepCallActivityTable({
                         {isSelected ? '▼ ' : '▸ '}{r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
-                      <ConnectedCell totalCalls={r.totalCalls} totalOver90s={r.totalOver90s} />
+                      <ConnectedCell totalCalls={r.totalCalls} totalConnected={r.totalConnected} />
                       <Num value={r.bookings.toString()} />
                       <Num value={r.downsells.toString()} />
                       <ReconfirmsCell reconfirms={r.reconfirms} />

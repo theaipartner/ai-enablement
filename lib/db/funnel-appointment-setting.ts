@@ -1396,7 +1396,16 @@ export type CallActivityRepRow = {
   userId: string | null
   name: string | null
   totalCalls: number
+  // Close calls in window with duration > 90s. Used as the engagement
+  // proxy for the "missing" calc below.
   totalOver90s: number
+  // Drill-entry count == what the Connected column shows. Equals
+  // `totalOver90s + in-range form-only rows` for this rep. Form-only
+  // rows are triage forms attributed to this rep whose underlying
+  // call was <= 90s (the setter still filled an EOC, so it's real
+  // engagement even though the call is below the 90s engagement
+  // proxy). Drake 2026-05-27.
+  totalConnected: number
   // Forms where the setter logged outcome = "Re-confirm" — i.e. the
   // call was a re-confirmation of a lead that already had a booking.
   // Driven entirely by the Airtable triage form's booking_status; no
@@ -1526,6 +1535,10 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // here is missing its EOC. Distinct from outcome counts because
   // form-only outcomes (no matched call) shouldn't reduce missing.
   const matchedCallIdsByUser = new Map<string, Set<string>>()
+  // Per-rep count of form-only rows (in-range forms whose underlying
+  // call wasn't a >90s close_call). Added to over90s to produce the
+  // Connected column; matches the drill table's row count.
+  const formOnlyByUser = new Map<string, number>()
   let totalForms = 0
   {
     type FormRow = { record_id: string; lead_id: string | null; booking_status: string | null; setter_names: string[] | null; setter_record_ids: string[] | null; event_date_time: string | null; airtable_created_at: string }
@@ -1601,6 +1614,19 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
         matchedCallIdsByUser.get(uid)!.add(m.matchedCallId)
       }
     })
+
+    // Form-only count per rep — raw (no lead-dedupe), to match the
+    // drill table's row count. A form-only row is an in-range form
+    // whose underlying call wasn't a >90s close_call (setter still
+    // filled the EOC; the call was just shorter than the engagement
+    // proxy). Used to bump the Connected column past `totalOver90s`.
+    for (const r of inRangeRows) {
+      const m = matchByRecord.get(r.record_id)
+      if (m?.matchedCallId) continue   // matched to a >90s call → already in over90s
+      const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+      if (!uid) continue
+      formOnlyByUser.set(uid, (formOnlyByUser.get(uid) ?? 0) + 1)
+    }
   }
 
   // Compose per-rep rows.
@@ -1616,11 +1642,13 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
     const o = outcomesByUser.get(userId) ?? newOutcomes()
     const matchedCalls = matchedCallIdsByUser.get(userId)?.size ?? 0
+    const formOnly = formOnlyByUser.get(userId) ?? 0
     const row: CallActivityRepRow = {
       userId,
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
       totalOver90s: v.over90s,
+      totalConnected: v.over90s + formOnly,
       reconfirms: o.reconfirms,
       bookings: o.bookings,
       dqs: o.dqs,
@@ -1644,10 +1672,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
-  let calls = 0, over90s = 0, reconfirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
+  let calls = 0, over90s = 0, connected = 0, reconfirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
   for (const r of rows) {
     calls += r.totalCalls
     over90s += r.totalOver90s
+    connected += r.totalConnected
     reconfirms += r.reconfirms
     bookings += r.bookings
     dqs += r.dqs
@@ -1660,6 +1689,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     name: null,
     totalCalls: calls,
     totalOver90s: over90s,
+    totalConnected: connected,
     reconfirms,
     bookings,
     dqs,
