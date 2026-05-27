@@ -128,6 +128,11 @@ def find_pending_calls(
     that are eligible *and* haven't been transcribed yet. Filters
     here mirror `_assert_eligible` exactly — any drift between these
     and the per-call check is a bug.
+
+    The `limit` parameter is applied AFTER the NOT-EXISTS filter so
+    the cron always sees fresh pending work — applying it earlier
+    would pull the N oldest eligible rows (all already transcribed
+    from the backfill) and return [].
     """
     db = db or get_client()
 
@@ -135,30 +140,44 @@ def find_pending_calls(
     # PostgREST's `not.is.null` family cleanly, so rely on the
     # `recording_url IS NOT NULL` column condition — set by the same
     # webhook event whenever has_recording flips true.
-    query = (
-        db.table("close_calls")
-        .select("close_id")
-        .gte("duration", MIN_DURATION_S)
-        .not_.is_("recording_url", "null")
-        .gte("activity_at", since)
-        .order("activity_at", desc=False)
-    )
-    if limit is not None:
-        query = query.limit(limit)
-    candidates = [r["close_id"] for r in query.execute().data]
+    candidates = [
+        r["close_id"]
+        for r in (
+            db.table("close_calls")
+            .select("close_id")
+            .gte("duration", MIN_DURATION_S)
+            .not_.is_("recording_url", "null")
+            .gte("activity_at", since)
+            .order("activity_at", desc=False)
+            .execute()
+            .data
+            or []
+        )
+    ]
 
     if not candidates:
         return []
 
-    # Exclude those already transcribed in one round-trip.
-    done = (
-        db.table("setter_call_transcripts")
-        .select("close_call_id")
-        .in_("close_call_id", candidates)
-        .execute()
-    )
-    done_ids = {r["close_call_id"] for r in done.data}
-    return [c for c in candidates if c not in done_ids]
+    # Exclude those already transcribed. Chunk the IN-list so we don't
+    # blow PostgREST's URL length limit at scale (close_ids are ~50
+    # chars each; ~150 IDs in one URL is the practical ceiling).
+    done_ids: set[str] = set()
+    chunk = 100
+    for i in range(0, len(candidates), chunk):
+        sub = candidates[i : i + chunk]
+        done = (
+            db.table("setter_call_transcripts")
+            .select("close_call_id")
+            .in_("close_call_id", sub)
+            .execute()
+        )
+        for r in done.data or []:
+            done_ids.add(r["close_call_id"])
+
+    pending = [c for c in candidates if c not in done_ids]
+    if limit is not None:
+        pending = pending[:limit]
+    return pending
 
 
 # ---------------------------------------------------------------------------
