@@ -193,7 +193,14 @@ export function SpeedToLeadDrillTable({
       switch (k) {
         case 'prospect': return r.prospectName ?? null
         case 'created': return r.leadCreatedAt
-        case 'speed': return r.speedSec
+        // Treat "not yet called" as +∞ for sort purposes so it lands at
+        // the slowest end of the spectrum rather than always-last:
+        //   asc  → fastest, slowest, then not-called
+        //   desc → not-called, then slowest, then fastest
+        // This way the desc sort doubles as a "show me who hasn't been
+        // called yet" view without scrolling to the bottom. Drake's
+        // call 2026-05-27.
+        case 'speed': return r.speedSec ?? Number.MAX_SAFE_INTEGER
         case 'over90s': return r.firstCallAt ? (r.firstCallOver90s ? 2 : 1) : null
         case 'caller': return r.callerName ?? null
         default: return null
