@@ -82,7 +82,7 @@ export default async function FunnelApptSettingPage({
       }
       personPill={<PersonPill label="EST · Nabeel" />}
     >
-      <StageSection eyebrow="FIRST MESSAGE RESPONSE · BY HOUR OF CREATION" title="Bucketed by ET hour-of-day the lead opted in. Gold = ever replied. Muted = first reply within 24h of creation.">
+      <StageSection eyebrow="FIRST MESSAGE RESPONSE · BY HOUR OF CREATION" title="">
         <FmrTimeBlockChart fmr={fmr} />
       </StageSection>
 
@@ -187,7 +187,7 @@ function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} width="100%" style={{ maxWidth: CHART_W, display: 'block' }}>
+      <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} width="100%" style={{ maxWidth: CHART_W, display: 'block', margin: '0 auto' }}>
         {/* Y-axis labels + gridlines */}
         {gridlines.map((g) => {
           const yPos = PAD_TOP + usableH * (1 - g)
@@ -441,7 +441,7 @@ function SpeedToLeadSection({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr)) auto',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr)) auto',
           gap: 1,
           background: 'var(--color-geg-border)',
           border: '1px solid var(--color-geg-border)',
@@ -459,10 +459,6 @@ function SpeedToLeadSection({
                 {`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
               </div>
               {cohort.avgSpeedToLeadSecUnder3h !== null ? (
-                // Outlier-stripped avg (leads first-called within 3h
-                // of creation). Renders right under the cohort-size
-                // line per Drake's 2026-05-27 layout call — compact,
-                // no corner block.
                 <div
                   title={`Avg restricted to leads first-called within 3h of creation (${cohort.leadsUnder3h} of ${cohort.leadsCalled})`}
                 >
@@ -476,6 +472,11 @@ function SpeedToLeadSection({
           label="Connected rate"
           value={cohort.connectedRate !== null ? `${(cohort.connectedRate * 100).toFixed(0)}%` : '—'}
           subtext={`${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`}
+        />
+        <StatCell
+          label="Avg intensity"
+          value={cohort.avgIntensity !== null ? `${cohort.avgIntensity.toFixed(1)}×` : '—'}
+          subtext={`mean dials per called lead`}
         />
         <StatCell
           label="Cohort size"

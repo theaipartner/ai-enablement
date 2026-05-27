@@ -1123,6 +1123,10 @@ export type SpeedToLeadCohortResult = {
   // case is obvious.
   leadsUnder3h: number
   connectedRate: number | null      // leadsConnected / leadsCalled
+  // Mean total dials per CALLED lead in the cohort. "How hard did we
+  // work the average lead." Mirrors the per-row Intensity column;
+  // null when zero leads have been called.
+  avgIntensity: number | null
   // All callers that appear in the cohort — drives the filter dropdown.
   // userId may be null for leads where we couldn't resolve a caller.
   callers: Array<{ userId: string; name: string | null; leadCount: number }>
@@ -1153,7 +1157,7 @@ export async function getSpeedToLeadCohort(
     status_id: string | null
   }>
   if (leadRows.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
   }
   const leadIdSet = new Set(leadRows.map((l) => l.close_id))
 
@@ -1189,7 +1193,7 @@ export async function getSpeedToLeadCohort(
     return initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)
   })
   if (qualifyingLeads.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
   }
   const qualifyingMap = new Map(qualifyingLeads.map((l) => [l.close_id, l]))
 
@@ -1328,6 +1332,7 @@ export async function getSpeedToLeadCohort(
   let under3hN = 0
   let connectedCount = 0
   let calledCount = 0
+  let intensitySum = 0
   for (const r of filteredRows) {
     if (r.speedSec !== null) {
       cappedSum += Math.min(r.speedSec, SPEED_CAP_SEC)
@@ -1341,6 +1346,9 @@ export async function getSpeedToLeadCohort(
     // Global "connected" — any outbound call to this lead has ever
     // had duration >= 90s. Mirrors the new Connected column.
     if (r.anyCallConnected) connectedCount++
+    // Intensity contribution — sum across CALLED leads only (uncalled
+    // leads have intensity 0 which would suppress the average).
+    if (r.firstCallAt) intensitySum += r.intensity
   }
 
   // Sort rows: most recent first call first; leads without calls go
@@ -1360,6 +1368,7 @@ export async function getSpeedToLeadCohort(
     avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
     leadsUnder3h: under3hN,
     connectedRate: calledCount > 0 ? connectedCount / calledCount : null,
+    avgIntensity: calledCount > 0 ? intensitySum / calledCount : null,
     callers,
     rows: filteredRows,
   }

@@ -107,7 +107,7 @@ export default async function FunnelLandingPagesPage({
       }
       personPill={<PersonPill label="EST · Nabeel" />}
     >
-      <MetricsGrid metrics={clarityMetrics(clarity)} columns={3} />
+      <MetricsGrid metrics={buildLpMetrics(clarity, metaUniqueClicks, calendly)} columns={3} />
 
       <VideoSection
         eyebrow="VSL ON LANDING PAGE"
@@ -174,17 +174,23 @@ function formatMonthDay(etDate: string): string {
 // Clarity metrics block
 // ---------------------------------------------------------------------------
 
-// Clarity-sourced metrics — time-on-page only. The "Landing page
-// visits" row was removed 2026-05-27 because the headline above now
-// sources visits from Meta unique link clicks (single source of
-// truth). Showing a Clarity visits number here too would invite the
-// "why are these different?" question without adding signal.
-function clarityMetrics(c: {
-  avgTimeOnLpSec: number | null
-  avgTimeOnTypSec: number | null
-  canonicalPath: string
-  canonicalTypPath: string
-}): AggMetric[] {
+// LP-detail metric grid — time-on-page (Clarity) + LP conversion
+// (Meta unique-clicks → Calendly closer bookings). The headline tile
+// above shows LP visits (Meta unique link clicks) so we don't repeat
+// it here. LP conversion fills the 3rd slot of the 3-column grid,
+// directly under the headline.
+function buildLpMetrics(
+  c: {
+    avgTimeOnLpSec: number | null
+    avgTimeOnTypSec: number | null
+    canonicalPath: string
+    canonicalTypPath: string
+  },
+  metaUniqueClicks: number,
+  calendly: CalendlyBookings,
+): AggMetric[] {
+  const lpConversion =
+    metaUniqueClicks > 0 ? (calendly.total / metaUniqueClicks) * 100 : null
   return [
     {
       id: 'avg-time',
@@ -199,6 +205,13 @@ function clarityMetrics(c: {
       value: c.avgTimeOnTypSec,
       format: 'duration_seconds',
       note: `Clarity active-time ÷ sessions · path ${c.canonicalTypPath}`,
+    },
+    {
+      id: 'lp-conversion',
+      label: 'LP conversion',
+      value: lpConversion,
+      format: 'percent_0_100',
+      note: `Closer bookings ÷ Meta unique link clicks`,
     },
   ]
 }
