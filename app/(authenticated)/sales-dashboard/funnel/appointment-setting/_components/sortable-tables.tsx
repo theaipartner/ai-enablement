@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import type {
   CallActivityDrillRow,
@@ -377,62 +378,105 @@ export function CallActivityDrillTable({
           </div>
           <ScrollBody maxHeight={460}>
             {sorted.map((c) => (
-              <div
-                key={c.callId}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: CALL_DRILL_COLS,
-                  gap: 10,
-                  padding: '8px 0',
-                  borderBottom: '1px dashed var(--color-geg-border)',
-                  alignItems: 'center',
-                }}
-              >
-                <span
-                  className="geg-serif"
-                  style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                  title={c.leadId}
-                >
-                  {c.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
-                  {c.noMatchingCall ? (
-                    <span
-                      className="geg-mono"
-                      title="No call to match — EOC was filled but no over-90s call by this rep is in Close for this lead in this window"
-                      style={{
-                        fontSize: 9,
-                        letterSpacing: '0.08em',
-                        textTransform: 'uppercase',
-                        padding: '1px 6px',
-                        borderRadius: 4,
-                        border: '1px solid var(--color-geg-border)',
-                        color: 'var(--color-geg-text-faint)',
-                        background: 'var(--color-geg-bg)',
-                        cursor: 'help',
-                      }}
-                    >
-                      no call
-                    </span>
-                  ) : null}
-                </span>
-                <Num value={c.noMatchingCall ? '—' : formatDuration(c.durationSec)} accent />
-                <span
-                  className="geg-mono"
-                  style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
-                >
-                  {c.bookingStatus ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>Missing</span>}
-                </span>
-                <span
-                  className="geg-mono"
-                  style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
-                >
-                  {formatEtTimestamp(c.callAt)}
-                </span>
-              </div>
+              // Wrap the whole row in a Link to the setter-call detail
+              // page when there's an actual Close call backing it.
+              // Form-only rows (noMatchingCall=true) have no audio /
+              // transcript so we render a plain div. The detail page
+              // 404s gracefully if a transcript hasn't landed yet
+              // (cron may not have caught up — runs every 15 min).
+              <CallDrillRow key={c.callId} call={c} />
             ))}
           </ScrollBody>
         </>
       )}
     </div>
+  )
+}
+
+// Per-row renderer for the call-drill table. Extracted so we can swap
+// the outer element between a Next/Link (when the row maps to a real
+// Close call that should be transcribed) and a plain div (when the row
+// is a form-only artifact with no audio).
+function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
+  const baseStyle: React.CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: CALL_DRILL_COLS,
+    gap: 10,
+    padding: '8px 0',
+    borderBottom: '1px dashed var(--color-geg-border)',
+    alignItems: 'center',
+  }
+
+  const cells = (
+    <>
+      <span
+        className="geg-serif"
+        style={{
+          fontSize: 13,
+          color: 'var(--color-geg-text-2)',
+          letterSpacing: '-0.002em',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+        title={c.leadId}
+      >
+        {c.prospectName ?? (
+          <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>
+        )}
+        {c.noMatchingCall ? (
+          <span
+            className="geg-mono"
+            title="No call to match — EOC was filled but no over-90s call by this rep is in Close for this lead in this window"
+            style={{
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              padding: '1px 6px',
+              borderRadius: 4,
+              border: '1px solid var(--color-geg-border)',
+              color: 'var(--color-geg-text-faint)',
+              background: 'var(--color-geg-bg)',
+              cursor: 'help',
+            }}
+          >
+            no call
+          </span>
+        ) : null}
+      </span>
+      <Num value={c.noMatchingCall ? '—' : formatDuration(c.durationSec)} accent />
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
+      >
+        {c.bookingStatus ?? (
+          <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>Missing</span>
+        )}
+      </span>
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
+      >
+        {formatEtTimestamp(c.callAt)}
+      </span>
+    </>
+  )
+
+  // Form-only rows: no audio, render a static div.
+  if (c.noMatchingCall) {
+    return <div style={baseStyle}>{cells}</div>
+  }
+
+  return (
+    <Link
+      href={`/sales-dashboard/calls/${encodeURIComponent(c.callId)}`}
+      style={{ ...baseStyle, textDecoration: 'none', color: 'inherit' }}
+    >
+      {cells}
+    </Link>
   )
 }
 
@@ -569,9 +613,36 @@ export function PerRepCallActivityTable({
                           color: 'var(--color-geg-text)',
                           letterSpacing: '-0.002em',
                           fontWeight: isSelected ? 600 : 400,
+                          display: 'inline-flex',
+                          alignItems: 'baseline',
+                          gap: 8,
                         }}
                       >
                         {isSelected ? '▼ ' : '▸ '}{r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
+                        {/* Cross-page deep-link: go to /sales-dashboard/calls
+                            filtered to this setter. Stops propagation so the
+                            parent row's in-page drill toggle doesn't fire on
+                            the same click. */}
+                        {r.userId ? (
+                          <Link
+                            href={`/sales-dashboard/calls?setter=${encodeURIComponent(r.userId)}`}
+                            onClick={(e) => e.stopPropagation()}
+                            title="View this rep's transcripts in the Calls page"
+                            className="geg-mono"
+                            style={{
+                              fontSize: 10,
+                              letterSpacing: '0.10em',
+                              textTransform: 'uppercase',
+                              color: 'var(--color-geg-text-faint)',
+                              textDecoration: 'none',
+                              padding: '2px 6px',
+                              border: '1px solid var(--color-geg-border)',
+                              borderRadius: 4,
+                            }}
+                          >
+                            transcripts →
+                          </Link>
+                        ) : null}
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
                       <Num value={r.totalOver90s.toString()} />
