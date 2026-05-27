@@ -1397,15 +1397,11 @@ export type CallActivityRepRow = {
   name: string | null
   totalCalls: number
   totalOver90s: number
-  // CONNECTED outbound dials (duration >= 90s) to a lead that had a
-  // future (uncanceled) Calendly event at the moment of the dial.
-  // Drake's "calling a booked lead" signal — covers both direct-
-  // funnel-booked confirms and setter-booked confirms. Gated on
-  // connected so a ring-out doesn't pollute the count; a connected
-  // dial is either a confirm OR a new booking, an unconnected dial
-  // is neither. Identity match via email → phone → name cascade
-  // (see comments where confirmsByUser is computed below).
-  confirms: number
+  // Forms where the setter logged outcome = "Re-confirm" — i.e. the
+  // call was a re-confirmation of a lead that already had a booking.
+  // Driven entirely by the Airtable triage form's booking_status; no
+  // Calendly-side check. Attributed to whoever filled the form.
+  reconfirms: number
   bookings: number
   dqs: number
   downsells: number
@@ -1467,31 +1463,19 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Pull all calls in window — per-rep volume + calls over 90s.
   // Speed-to-lead lives in its own section now; we only need the
   // call-level stats here.
-  //
-  // We ALSO collect [user_id, lead_id, activity_at, direction]
-  // tuples for every call so the "confirms" pass below can match
-  // each OUTBOUND dial to any future Calendly event for that lead
-  // (Drake's "calling a booked lead" signal).
   type Vol = { calls: number; over90s: number }
   const volumeByUser = new Map<string, Vol>()
   const nameByUser = new Map<string, string>()
   const userIdByName = new Map<string, string>()
-  // Outbound-only tuples for the confirms join. We keep `duration`
-  // here so the confirms pass can gate on connected dials (>=90s)
-  // per Drake 2026-05-27: a connected dial to a booked lead is a
-  // confirm; an UNconnected dial doesn't count for either confirm
-  // or new-booking.
-  const outboundCalls: Array<{ userId: string; leadId: string; activityAt: string; duration: number }> = []
   {
     // No direction filter on the volume aggregate — both inbound and
     // outbound count toward the rep's call activity (engagement on
-    // the phone is engagement either way). Confirms filters to
-    // outbound below since "calling a booked lead" implies WE dialed.
+    // the phone is engagement either way).
     let from = 0
     for (;;) {
       const { data: page, error } = await sb
         .from('close_calls' as never)
-        .select('user_id, lead_id, direction, activity_at, duration, raw_payload')
+        .select('user_id, activity_at, duration, raw_payload')
         .not('user_id', 'is', null)
         .gte('activity_at', range.startUtcIso)
         .lt('activity_at', range.endUtcIso)
@@ -1499,8 +1483,6 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (error) throw new Error(`close_calls read failed: ${error.message}`)
       const rows = (page ?? []) as unknown as Array<{
         user_id: string
-        lead_id: string | null
-        direction: string | null
         activity_at: string
         duration: number | null
         raw_payload: { user_name?: string } | null
@@ -1517,217 +1499,9 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
           nameByUser.set(r.user_id, nm)
           userIdByName.set(nm, r.user_id)
         }
-
-        if (r.direction === 'outbound' && r.lead_id) {
-          outboundCalls.push({
-            userId: r.user_id,
-            leadId: r.lead_id,
-            activityAt: r.activity_at,
-            duration: r.duration ?? 0,
-          })
-        }
       }
       if (rows.length < 1000) break
       from += 1000
-    }
-  }
-
-  // -----------------------------------------------------------------
-  // Confirms — outbound dials to leads that had a future (uncanceled)
-  // Calendly event at dial time. Per Drake (2026-05-27): closers want
-  // to know which dials are confirmation-style vs cold; reframes the
-  // older "direct booking" idea into a broader "booked lead" check.
-  //
-  // Identity-match priority (Drake 2026-05-27 follow-up):
-  //   1. Email   (lead.contacts[].emails[].email ↔ invitee.email)
-  //   2. Phone   (lead.contacts[].phones[].phone ↔ invitee phone in
-  //              raw_payload.text_reminder_number or in the "Phone"
-  //              question of raw_payload.questions_and_answers)
-  //   3. Name    (lead.display_name ↔ invitee.name) — fuzzy fallback
-  //
-  // Phone normalization = digits-only (strips +, spaces, dashes).
-  // Names lowered + trimmed. First match wins (the loop short-circuits).
-  // Empirically (7d closer outbound cohort): email-and-phone catch
-  // the same 14 calls (Calendly invitees usually have both), name
-  // adds 15 more distinct matches → 29 total vs 15 name-only.
-  // -----------------------------------------------------------------
-  const confirmsByUser = new Map<string, number>()
-  if (outboundCalls.length > 0) {
-    // 1. Resolve lead_id → { name, emails, phones } from close_leads.
-    //    contacts is a jsonb array of contact objects, each with
-    //    optional `emails[]` and `phones[]` sub-arrays. We extract
-    //    everything per lead (a lead can have multiple contacts).
-    const leadIds = Array.from(new Set(outboundCalls.map((c) => c.leadId)))
-    type LeadKeys = {
-      name: string | null
-      emails: string[]    // lowercased
-      phones: string[]    // digits-only
-    }
-    const keysByLead = new Map<string, LeadKeys>()
-    for (let i = 0; i < leadIds.length; i += 200) {
-      const chunk = leadIds.slice(i, i + 200)
-      const { data, error } = await sb
-        .from('close_leads' as never)
-        .select('close_id, display_name, contacts')
-        .in('close_id', chunk)
-      if (error) throw new Error(`close_leads contacts read failed: ${error.message}`)
-      type ContactsBlob = Array<{
-        emails?: Array<{ email?: string | null }>
-        phones?: Array<{ phone?: string | null }>
-      }>
-      for (const r of (data ?? []) as unknown as Array<{
-        close_id: string
-        display_name: string | null
-        contacts: ContactsBlob | null
-      }>) {
-        const emails: string[] = []
-        const phones: string[] = []
-        for (const c of r.contacts ?? []) {
-          for (const em of c.emails ?? []) {
-            if (em?.email) emails.push(em.email.toLowerCase().trim())
-          }
-          for (const ph of c.phones ?? []) {
-            if (ph?.phone) {
-              const digits = ph.phone.replace(/[^0-9]/g, '')
-              if (digits.length >= 10) phones.push(digits)
-            }
-          }
-        }
-        keysByLead.set(r.close_id, {
-          name: r.display_name ? r.display_name.toLowerCase().trim() : null,
-          emails,
-          phones,
-        })
-      }
-    }
-
-    // 2. Pull Calendly events in [range_start, range_end + 60d] —
-    //    "future at dial time" cases. Build three lookup maps from
-    //    invitee identity to event start timestamps.
-    const evWindowEndIso = new Date(
-      new Date(range.endUtcIso).getTime() + 60 * 24 * 60 * 60 * 1000,
-    ).toISOString()
-    const futureByEmail = new Map<string, number[]>()
-    const futureByPhone = new Map<string, number[]>()
-    const futureByName = new Map<string, number[]>()
-    {
-      let from = 0
-      type EvRow = { uri: string; start_time: string }
-      const eventByUri = new Map<string, string>()
-      for (;;) {
-        const { data, error } = await sb
-          .from('calendly_scheduled_events' as never)
-          .select('uri, start_time')
-          .gte('start_time', range.startUtcIso)
-          .lt('start_time', evWindowEndIso)
-          .neq('status', 'canceled')
-          .range(from, from + 999)
-        if (error) throw new Error(`calendly events read failed: ${error.message}`)
-        const rows = (data ?? []) as unknown as EvRow[]
-        if (rows.length === 0) break
-        for (const r of rows) eventByUri.set(r.uri, r.start_time)
-        if (rows.length < 1000) break
-        from += 1000
-      }
-
-      // Pull invitees for those events, including raw_payload so we
-      // can extract phone from text_reminder_number / Q&A.
-      const uris = Array.from(eventByUri.keys())
-      type InvRow = {
-        event_uri: string
-        email: string | null
-        name: string | null
-        raw_payload: {
-          text_reminder_number?: string | null
-          questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
-        } | null
-      }
-      for (let i = 0; i < uris.length; i += 200) {
-        const chunk = uris.slice(i, i + 200)
-        const { data, error } = await sb
-          .from('calendly_invitees' as never)
-          .select('event_uri, email, name, raw_payload')
-          .in('event_uri', chunk)
-        if (error) throw new Error(`calendly invitees read failed: ${error.message}`)
-        for (const r of (data ?? []) as unknown as InvRow[]) {
-          const startIso = eventByUri.get(r.event_uri)
-          if (!startIso) continue
-          const ts = new Date(startIso).getTime()
-
-          if (r.email) {
-            const k = r.email.toLowerCase().trim()
-            const arr = futureByEmail.get(k) ?? []
-            arr.push(ts)
-            futureByEmail.set(k, arr)
-          }
-          if (r.name) {
-            const k = r.name.toLowerCase().trim()
-            const arr = futureByName.get(k) ?? []
-            arr.push(ts)
-            futureByName.set(k, arr)
-          }
-          // Phone: try text_reminder_number first, then any "Phone"
-          // Q&A answer. Normalize to digits-only.
-          const phones: string[] = []
-          const trn = r.raw_payload?.text_reminder_number
-          if (trn) phones.push(trn)
-          for (const qa of r.raw_payload?.questions_and_answers ?? []) {
-            const q = (qa?.question ?? '').toLowerCase()
-            if (q.includes('phone') && qa?.answer) phones.push(qa.answer)
-          }
-          for (const raw of phones) {
-            const digits = raw.replace(/[^0-9]/g, '')
-            if (digits.length < 10) continue
-            const arr = futureByPhone.get(digits) ?? []
-            arr.push(ts)
-            futureByPhone.set(digits, arr)
-          }
-        }
-      }
-      futureByEmail.forEach((arr) => arr.sort((a: number, b: number) => a - b))
-      futureByPhone.forEach((arr) => arr.sort((a: number, b: number) => a - b))
-      futureByName.forEach((arr) => arr.sort((a: number, b: number) => a - b))
-    }
-
-    // 3. Per call: check email → phone → name in priority order.
-    //    First match wins; short-circuit on hit. Per-key lists are
-    //    typically 1-3 entries so a linear scan is fine.
-    const hasFutureMatch = (starts: number[] | undefined, afterMs: number): boolean =>
-      starts ? starts.some((ts) => ts > afterMs) : false
-    for (const call of outboundCalls) {
-      // Gate on connected dials only — a dial that didn't pick up
-      // doesn't tell us whether the closer was "confirming" or
-      // "qualifying", it just rang out. Drake 2026-05-27.
-      if (call.duration < 90) continue
-      const keys = keysByLead.get(call.leadId)
-      if (!keys) continue
-      const callMs = new Date(call.activityAt).getTime()
-
-      let matched = false
-      // (1) Email
-      for (const email of keys.emails) {
-        if (hasFutureMatch(futureByEmail.get(email), callMs)) {
-          matched = true
-          break
-        }
-      }
-      // (2) Phone fallback
-      if (!matched) {
-        for (const phone of keys.phones) {
-          if (hasFutureMatch(futureByPhone.get(phone), callMs)) {
-            matched = true
-            break
-          }
-        }
-      }
-      // (3) Name fallback
-      if (!matched && keys.name && hasFutureMatch(futureByName.get(keys.name), callMs)) {
-        matched = true
-      }
-
-      if (matched) {
-        confirmsByUser.set(call.userId, (confirmsByUser.get(call.userId) ?? 0) + 1)
-      }
     }
   }
 
@@ -1744,8 +1518,8 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Range padding: extend BACKWARD by 0 (the form's call has to be
   // within the range), FORWARD by lookback (a call at range-end could
   // have a form filed up to lookback hours later).
-  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number }
-  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0 })
+  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number; reconfirms: number }
+  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0, reconfirms: 0 })
   const outcomesByUser = new Map<string, Outcomes>()
   // Per-rep set of close_call ids that a form matched. Used by the
   // per-rep "missing" calc — every over-90s call without an entry
@@ -1847,7 +1621,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
       totalOver90s: v.over90s,
-      confirms: confirmsByUser.get(userId) ?? 0,
+      reconfirms: o.reconfirms,
       bookings: o.bookings,
       dqs: o.dqs,
       downsells: o.downsells,
@@ -1870,11 +1644,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
-  let calls = 0, over90s = 0, confirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
+  let calls = 0, over90s = 0, reconfirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
   for (const r of rows) {
     calls += r.totalCalls
     over90s += r.totalOver90s
-    confirms += r.confirms
+    reconfirms += r.reconfirms
     bookings += r.bookings
     dqs += r.dqs
     downsells += r.downsells
@@ -1886,7 +1660,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     name: null,
     totalCalls: calls,
     totalOver90s: over90s,
-    confirms,
+    reconfirms,
     bookings,
     dqs,
     downsells,
@@ -2096,7 +1870,7 @@ export type TriageCallDrillRow = {
   prospectName: string | null
   occurredAtIso: string    // event_date_time if set, else airtable_created_at
   bookingStatus: string | null
-  bucket: 'bookings' | 'dqs' | 'downsells' | 'followUps' | 'unclassified'
+  bucket: 'bookings' | 'dqs' | 'downsells' | 'followUps' | 'reconfirms' | 'unclassified'
 }
 
 function classifyBookingStatus(bs: string | null): TriageCallDrillRow['bucket'] {
@@ -2105,6 +1879,11 @@ function classifyBookingStatus(bs: string | null): TriageCallDrillRow['bucket'] 
   if (s.includes('confirmed booked')) return 'bookings'
   if (s.includes('disqualif')) return 'dqs'
   if (s.includes('downsell') || s.includes('digital college')) return 'downsells'
+  // "Re-confirm" / "Reconfirm" — added 2026-05-27 (setter logs the
+  // call confirmed a lead's existing booking). Must come BEFORE the
+  // generic 'confirm' check is added (we don't have one) and before
+  // 'follow' since the form copy doesn't overlap.
+  if (s.includes('re-confirm') || s.includes('reconfirm')) return 'reconfirms'
   if (s.includes('follow')) return 'followUps'
   return 'unclassified'
 }
@@ -2173,8 +1952,8 @@ export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageM
 
   // Outcomes side: Airtable form rows in window. Each row's setter
   // is mapped back to a Close user_id by name.
-  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number }
-  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0 })
+  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number; reconfirms: number }
+  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0, reconfirms: 0 })
   const outcomesByUser = new Map<string, Outcomes>()
   let totalForms = 0
   let formFrom = 0

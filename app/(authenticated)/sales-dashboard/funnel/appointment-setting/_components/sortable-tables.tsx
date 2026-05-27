@@ -136,25 +136,25 @@ function Num({ value, accent }: { value: string; accent?: boolean }) {
   )
 }
 
-// Confirms cell — count of outbound dials this rep made to a lead
-// that had a future Calendly event at the dial moment. Drake's
-// "calling a booked lead" signal. Muted faint when 0 so it doesn't
-// compete with the active numeric columns.
-function ConfirmsCell({ confirms }: { confirms: number }) {
+// Reconfirms cell — count of triage forms this rep filed with
+// outcome = "Re-confirm" (the call confirmed a lead's existing
+// booking). Driven entirely by the form's booking_status. Muted
+// faint when 0 so it doesn't compete with the active numeric columns.
+function ReconfirmsCell({ reconfirms }: { reconfirms: number }) {
   return (
     <span
-      title="Connected outbound dials (>=90s) to a lead that had a future Calendly event at the time of the dial. Covers both direct-funnel-booked confirms and setter-booked confirms. A connected dial to an UNbooked lead is a new booking instead."
+      title="Triage forms with outcome = Re-confirm — the call confirmed a lead's existing booking. Attributed to whoever filled the form."
       style={{ display: 'inline-block', textAlign: 'right' }}
     >
       <span
         className="geg-numeric-serif"
         style={{
           fontSize: 14,
-          color: confirms === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
+          color: reconfirms === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
           letterSpacing: '-0.01em',
         }}
       >
-        {confirms}
+        {reconfirms}
       </span>
     </span>
   )
@@ -587,15 +587,16 @@ type RepSortKey =
   | 'name'
   | 'totalCalls'
   | 'over90s'
-  | 'confirms'
   | 'bookings'
-  | 'dqs'
   | 'downsells'
+  | 'reconfirms'
   | 'followUps'
+  | 'dqs'
   | 'missing'
 
-// Added Confirms column between Connected and Books. Drake 2026-05-27.
-const REP_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.8fr 0.8fr 0.8fr 0.8fr'
+// Column order: Rep | Dials | Connected | Books | Downsell | Reconfirms | Follow-up | DQs | Missing.
+// Reconfirms sits right before Follow-up. Drake 2026-05-27.
+const REP_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.8fr 0.7fr 0.8fr 0.8fr 0.8fr'
 
 export function PerRepCallActivityTable({
   label,
@@ -617,11 +618,11 @@ export function PerRepCallActivityTable({
         case 'name': return r.name ?? null
         case 'totalCalls': return r.totalCalls
         case 'over90s': return r.totalOver90s
-        case 'confirms': return r.confirms
         case 'bookings': return r.bookings
-        case 'dqs': return r.dqs
         case 'downsells': return r.downsells
+        case 'reconfirms': return r.reconfirms
         case 'followUps': return r.followUps
+        case 'dqs': return r.dqs
         case 'missing': return r.missing
         default: return null
       }
@@ -659,9 +660,9 @@ export function PerRepCallActivityTable({
           <SortableHeader label="Rep" sortKey="name" align="left" state={state} onToggle={onToggle} />
           <SortableHeader label="Dials" sortKey="totalCalls" state={state} onToggle={onToggle} />
           <SortableHeader label="Connected" sortKey="over90s" state={state} onToggle={onToggle} />
-          <SortableHeader label="Confirms" sortKey="confirms" state={state} onToggle={onToggle} />
           <SortableHeader label="Books" sortKey="bookings" state={state} onToggle={onToggle} />
           <SortableHeader label="Downsell" sortKey="downsells" state={state} onToggle={onToggle} />
+          <SortableHeader label="Reconfirms" sortKey="reconfirms" state={state} onToggle={onToggle} />
           <SortableHeader label="Follow-up" sortKey="followUps" state={state} onToggle={onToggle} />
           <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
           <SortableHeader label="Missing" sortKey="missing" state={state} onToggle={onToggle} />
@@ -674,9 +675,9 @@ export function PerRepCallActivityTable({
           </span>
           <Num value={aggregate.totalCalls.toString()} accent />
           <ConnectedCell totalCalls={aggregate.totalCalls} totalOver90s={aggregate.totalOver90s} />
-          <ConfirmsCell confirms={aggregate.confirms} />
           <Num value={aggregate.bookings.toString()} />
           <Num value={aggregate.downsells.toString()} />
+          <ReconfirmsCell reconfirms={aggregate.reconfirms} />
           <Num value={aggregate.followUps.toString()} />
           <Num value={aggregate.dqs.toString()} />
           <Num value={aggregate.missing.toString()} />
@@ -723,9 +724,9 @@ export function PerRepCallActivityTable({
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
                       <ConnectedCell totalCalls={r.totalCalls} totalOver90s={r.totalOver90s} />
-                      <ConfirmsCell confirms={r.confirms} />
                       <Num value={r.bookings.toString()} />
                       <Num value={r.downsells.toString()} />
+                      <ReconfirmsCell reconfirms={r.reconfirms} />
                       <Num value={r.followUps.toString()} />
                       <Num value={r.dqs.toString()} />
                       <Num value={r.missing.toString()} />
