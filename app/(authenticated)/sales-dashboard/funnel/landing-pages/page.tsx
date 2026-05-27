@@ -6,12 +6,16 @@ import {
 import { Sparkline } from '@/components/sales/sparkline'
 import {
   getLpClarityMetrics,
-  getLpVisitsTrend,
   getVslMetrics,
   getTypVideoMetrics,
   VSL_OPTIONS,
   type VideoMetrics,
 } from '@/lib/db/funnel-lp'
+import {
+  getAdsAggregateLive,
+  getAdsUniqueClicksTrend7d,
+  clampAdsRange,
+} from '@/lib/db/funnel-ads'
 import { getTypeformMetrics, type TypeformMetrics } from '@/lib/db/funnel-typeform'
 import { getCloserBookings, type CalendlyBookings } from '@/lib/db/funnel-calendly'
 import type { AggMetric } from '@/lib/db/funnel-mocks'
@@ -22,7 +26,6 @@ import {
   parseEtDateString,
   todayEtDate,
   daysInRange,
-  type DateRange,
 } from '@/lib/db/funnel-window'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from './date-range-picker'
@@ -53,16 +56,23 @@ export default async function FunnelLandingPagesPage({
   const range = resolveDateRange(searchParams)
   const vslHashedId = parseVslId(searchParams?.vsl)
 
+  // LP visits = Meta unique link clicks (Drake 2026-05-27 — keeps
+  // a single source of truth across Pulse + this LP detail page).
+  // Clarity still drives the time-on-page section below.
+  const adsRange = clampAdsRange(range.startEtDate, range.endEtDate)
+
   const [
     clarity,
-    headlineTrend,
+    ads,
+    visitsTrend7d,
     vsl,
     typVideo,
     typeform,
     calendly,
   ] = await Promise.all([
     getLpClarityMetrics(range),
-    getLpVisitsTrend(),
+    getAdsAggregateLive(adsRange),
+    getAdsUniqueClicksTrend7d(),
     getVslMetrics(range, vslHashedId),
     getTypVideoMetrics(range),
     getTypeformMetrics(range),
@@ -71,15 +81,22 @@ export default async function FunnelLandingPagesPage({
 
   const todayEt = todayEtDate()
 
+  const metaUniqueClicks =
+    (() => {
+      const m = ads.find((x) => x.id === 'unique-clicks')
+      if (typeof m?.value === 'number' && Number.isFinite(m.value)) return m.value
+      return 0
+    })()
+
   return (
     <StageDetailLayout
       eyebrow="FUNNEL · LANDING PAGE"
       title="Landing page."
       headline={{
-        label: `Landing page visits  ·  ${clarity.canonicalPath}  ·  ${rangeLabel(range.startEtDate, range.endEtDate)}`,
-        value: clarity.visits,
+        label: `Landing page visits  ·  Meta unique link clicks  ·  ${rangeLabel(range.startEtDate, range.endEtDate)}`,
+        value: metaUniqueClicks,
         format: 'count',
-        trend: headlineTrend.length > 0 ? headlineTrend : clarity.trendVisits,
+        trend: visitsTrend7d,
       }}
       windowSwitcher={
         <DateRangePicker
@@ -157,8 +174,12 @@ function formatMonthDay(etDate: string): string {
 // Clarity metrics block
 // ---------------------------------------------------------------------------
 
+// Clarity-sourced metrics — time-on-page only. The "Landing page
+// visits" row was removed 2026-05-27 because the headline above now
+// sources visits from Meta unique link clicks (single source of
+// truth). Showing a Clarity visits number here too would invite the
+// "why are these different?" question without adding signal.
 function clarityMetrics(c: {
-  visits: number
   avgTimeOnLpSec: number | null
   avgTimeOnTypSec: number | null
   canonicalPath: string
@@ -166,18 +187,11 @@ function clarityMetrics(c: {
 }): AggMetric[] {
   return [
     {
-      id: 'visits',
-      label: 'Landing page visits',
-      value: c.visits,
-      format: 'integer',
-      note: `Clarity rolling-3 → windowed isolation · path ${c.canonicalPath}`,
-    },
-    {
       id: 'avg-time',
       label: 'Average time on landing page',
       value: c.avgTimeOnLpSec,
       format: 'duration_seconds',
-      note: 'Clarity active-time ÷ sessions (windowed)',
+      note: `Clarity active-time ÷ sessions · path ${c.canonicalPath}`,
     },
     {
       id: 'avg-time-typ',

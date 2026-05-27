@@ -7,7 +7,6 @@ import {
   ADS_FLOOR_ET,
   type AdsRange,
 } from './funnel-ads'
-import { getLpClarityMetrics } from './funnel-lp'
 import { getTypeformMetrics } from './funnel-typeform'
 import {
   getCallActivityMetrics,
@@ -115,9 +114,12 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   // Spend value drives the cost-per math in every box that wires it.
   const adsRange: AdsRange = clampAdsRange(range.startEtDate, range.endEtDate)
 
-  const [ads, lp, typeform, callActivity, closing, calendly, fmr, cohortSpend, history] = await Promise.all([
+  const [ads, typeform, callActivity, closing, calendly, fmr, cohortSpend, history] = await Promise.all([
     getAdsAggregateLive(adsRange),
-    getLpClarityMetrics(range),
+    // Clarity dropped from Pulse 2026-05-27 — LP visits now reads
+    // Meta unique-link-clicks from `ads`. The LP detail page still
+    // pulls Clarity for time-on-page metrics; that lives there, not
+    // on the funnel overview.
     getTypeformMetrics(range),
     getCallActivityMetrics(range),
     getClosingActivity(range),
@@ -161,7 +163,12 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   // Funnel-volume counts with cost-per attribution rendered as the
   // corner badge on each tile. Five tiles: Visits / Submits / Qualified /
   // Bookings / Conversion (visits → bookings %).
-  const lpVisits = lp.visits
+  //
+  // 2026-05-27: LP visits switched from Clarity to Meta unique link
+  // clicks (Drake — keeps a single source of truth for "people who
+  // clicked through to the LP" and aligns with the Meta-side
+  // cost / unique-click metric).
+  const lpVisits = getMetricValue(ads, 'unique-clicks') ?? 0
   const lpBookings = calendly.total
   const lpConversion = lpVisits > 0 ? (lpBookings / lpVisits) * 100 : null
   const lpBox: FunnelBox = {
@@ -181,7 +188,7 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
         secondary: { label: 'cost / booking', value: costPer(adSpend, lpBookings), format: 'usd_precise' } },
       { id: 'lp-conversion', label: 'LP conversion', value: lpConversion, format: 'percent_0_100' },
     ],
-    footer: `Clarity path /lp-vsl  ·  qualified = budget ≥ $2,000 on Typeform  ·  conversion = bookings / visits`,
+    footer: `Visits = Meta unique link clicks  ·  qualified = budget ≥ $2,000 on Typeform  ·  conversion = bookings / visits`,
   }
 
   // ─── Appointment Setting ───────────────────────────────────────────────

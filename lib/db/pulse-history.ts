@@ -5,7 +5,6 @@ import { getAdsAggregateLive } from './funnel-ads'
 import { getCallActivityMetrics } from './funnel-appointment-setting'
 import { getCloserBookings } from './funnel-calendly'
 import { getClosingActivity } from './funnel-closing'
-import { getLpClarityMetrics } from './funnel-lp'
 import { getTypeformMetrics } from './funnel-typeform'
 import { dateRangeFromExplicit, todayEtDate } from './funnel-window'
 
@@ -142,7 +141,9 @@ export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
 
   // ─── Landing Page box ─────────────────────────────────────────────
   {
-    const trend = series((d) => d.lp.visits)
+    // LP visits = Meta unique link clicks (Drake 2026-05-27 — single
+    // source of truth, aligns with cost / unique-click).
+    const trend = series((d) => d.ads.uniqueLinkClicks)
     map.set('visits', { yesterday: last(trend), avg7d: mean(trend), trend7d: trend })
   }
   {
@@ -158,11 +159,13 @@ export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
     map.set('bookings', { yesterday: last(trend), avg7d: mean(trend), trend7d: trend })
   }
   {
-    // LP conversion = bookings / visits * 100. Volume-weighted 7d.
-    const trend = ratioDaily((d) => d.calendly.total, (d) => d.lp.visits, 100)
+    // LP conversion = bookings / visits * 100. Denominator now Meta
+    // unique link clicks (per the visits source swap). Volume-weighted
+    // 7d avg.
+    const trend = ratioDaily((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100)
     map.set('lp-conversion', {
-      yesterday: lastRatio((d) => d.calendly.total, (d) => d.lp.visits, 100),
-      avg7d: ratio7d((d) => d.calendly.total, (d) => d.lp.visits, 100),
+      yesterday: lastRatio((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100),
+      avg7d: ratio7d((d) => d.calendly.total, (d) => d.ads.uniqueLinkClicks, 100),
       trend7d: trend,
     })
   }
@@ -223,7 +226,6 @@ type DayAgg = {
     adspend: number | null
     uniqueLinkClicks: number | null
   }
-  lp: { visits: number | null }
   typeform: { submits: number | null; qualified: number | null }
   calendly: { total: number | null }
   calls: {
@@ -249,9 +251,9 @@ async function fetchDay(day: string): Promise<DayAgg> {
   // getAdsAggregateLive with a synthesized AdsRange-equivalent.
   const adsRange = { startEtDate: day, endEtDate: day, isEmptyRange: false }
 
-  const [ads, lp, typeform, calls, closing, calendly] = await Promise.all([
+  const [ads, typeform, calls, closing, calendly] = await Promise.all([
     getAdsAggregateLive(adsRange),
-    getLpClarityMetrics(range),
+    // Clarity dropped 2026-05-27 — LP visits sources from ads.unique-clicks.
     getTypeformMetrics(range),
     getCallActivityMetrics(range),
     getClosingActivity(range),
@@ -274,7 +276,6 @@ async function fetchDay(day: string): Promise<DayAgg> {
   return {
     day,
     ads: { impressions: adsImp, adspend: adsSpend, uniqueLinkClicks: adsUlc },
-    lp: { visits: lp.visits ?? null },
     typeform: { submits: typeform.submits ?? null, qualified: typeform.qualified ?? null },
     calendly: { total: calendly.total ?? null },
     calls: {

@@ -211,3 +211,42 @@ function numericOrNull(v: number | string | null | undefined): number | null {
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
+
+// Last-7-days Meta unique-link-clicks trend for the LP detail page
+// headline sparkline. Source-of-truth swap: LP visits is now Meta
+// unique-link-clicks (Drake 2026-05-27), so its sparkline reads from
+// meta_ad_daily, not Clarity. Same 7-day rolling convention as the
+// Pulse tiles. Returns the daily series oldest→newest; pads with
+// zeros only if meta_ad_daily has gaps inside the 7-day window.
+export async function getAdsUniqueClicksTrend7d(): Promise<number[]> {
+  const sb = createAdminClient()
+  // Hard cap at the ADS_FLOOR_ET so we never include days from before
+  // tracking started — mirrors the Pulse history floor.
+  const today = todayEtDate()
+  const sevenAgo = (() => {
+    const [y, m, d] = today.split('-').map((n) => parseInt(n, 10))
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    dt.setUTCDate(dt.getUTCDate() - 7)
+    return dt.toISOString().slice(0, 10)
+  })()
+  const start = sevenAgo > ADS_FLOOR_ET ? sevenAgo : ADS_FLOOR_ET
+  // Upper bound = yesterday (Meta data lands the morning after).
+  const yesterday = (() => {
+    const [y, m, d] = today.split('-').map((n) => parseInt(n, 10))
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    dt.setUTCDate(dt.getUTCDate() - 1)
+    return dt.toISOString().slice(0, 10)
+  })()
+  if (start > yesterday) return []
+
+  const { data, error } = await sb
+    .from('meta_ad_daily' as never)
+    .select('day, unique_link_clicks')
+    .gte('day', start)
+    .lte('day', yesterday)
+    .order('day', { ascending: true })
+  if (error) throw new Error(`meta_ad_daily trend read failed: ${error.message}`)
+
+  const rows = (data ?? []) as unknown as Array<{ day: string; unique_link_clicks: number | null }>
+  return rows.map((r) => numericOrNull(r.unique_link_clicks) ?? 0)
+}
