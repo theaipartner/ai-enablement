@@ -1397,6 +1397,14 @@ export type CallActivityRepRow = {
   name: string | null
   totalCalls: number
   totalOver90s: number
+  // Outbound dials to a lead that had a future (uncanceled) Calendly
+  // event at the moment of the dial. Drake's "calling a booked lead"
+  // signal — covers both direct-funnel-booked confirms and setter-
+  // booked confirms, without conflating the two with cold dials.
+  // Match by lead.display_name == invitee.name (case-insensitive).
+  // Inbound calls and pure-volume "did the lead pick up" aren't
+  // separated out here — `confirms` is a strict outbound-dial count.
+  confirms: number
   bookings: number
   dqs: number
   downsells: number
@@ -1455,23 +1463,30 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     if (r.setter_owner_id) setterUsers.add(r.setter_owner_id)
   }
 
-  // Pull all outbound calls in window — per-rep volume + calls over
-  // 90s. Speed-to-lead lives in its own section now; we only need the
+  // Pull all calls in window — per-rep volume + calls over 90s.
+  // Speed-to-lead lives in its own section now; we only need the
   // call-level stats here.
+  //
+  // We ALSO collect [user_id, lead_id, activity_at, direction]
+  // tuples for every call so the "confirms" pass below can match
+  // each OUTBOUND dial to any future Calendly event for that lead
+  // (Drake's "calling a booked lead" signal).
   type Vol = { calls: number; over90s: number }
   const volumeByUser = new Map<string, Vol>()
   const nameByUser = new Map<string, string>()
   const userIdByName = new Map<string, string>()
+  // Outbound-only tuples for the confirms join.
+  const outboundCalls: Array<{ userId: string; leadId: string; activityAt: string }> = []
   {
-    // No direction filter — both inbound and outbound count toward
-    // the rep's call activity (engagement on the phone is engagement
-    // either way). Speed-to-lead stays outbound-only because it's
-    // semantically "how fast did the rep dial."
+    // No direction filter on the volume aggregate — both inbound and
+    // outbound count toward the rep's call activity (engagement on
+    // the phone is engagement either way). Confirms filters to
+    // outbound below since "calling a booked lead" implies WE dialed.
     let from = 0
     for (;;) {
       const { data: page, error } = await sb
         .from('close_calls' as never)
-        .select('user_id, duration, raw_payload')
+        .select('user_id, lead_id, direction, activity_at, duration, raw_payload')
         .not('user_id', 'is', null)
         .gte('activity_at', range.startUtcIso)
         .lt('activity_at', range.endUtcIso)
@@ -1479,6 +1494,9 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (error) throw new Error(`close_calls read failed: ${error.message}`)
       const rows = (page ?? []) as unknown as Array<{
         user_id: string
+        lead_id: string | null
+        direction: string | null
+        activity_at: string
         duration: number | null
         raw_payload: { user_name?: string } | null
       }>
@@ -1494,9 +1512,111 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
           nameByUser.set(r.user_id, nm)
           userIdByName.set(nm, r.user_id)
         }
+
+        if (r.direction === 'outbound' && r.lead_id) {
+          outboundCalls.push({
+            userId: r.user_id,
+            leadId: r.lead_id,
+            activityAt: r.activity_at,
+          })
+        }
       }
       if (rows.length < 1000) break
       from += 1000
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // Confirms — outbound dials to leads that had a future (uncanceled)
+  // Calendly event at dial time. Per Drake (2026-05-27): closers want
+  // to know which dials are confirmation-style vs cold; reframes the
+  // older "direct booking" idea into a broader "booked lead" check.
+  // -----------------------------------------------------------------
+  const confirmsByUser = new Map<string, number>()
+  if (outboundCalls.length > 0) {
+    // 1. Resolve lead_id → display_name (in batches; up to ~500
+    //    distinct leads).
+    const leadIds = Array.from(new Set(outboundCalls.map((c) => c.leadId)))
+    const nameByLead = new Map<string, string>()
+    for (let i = 0; i < leadIds.length; i += 200) {
+      const chunk = leadIds.slice(i, i + 200)
+      const { data, error } = await sb
+        .from('close_leads' as never)
+        .select('close_id, display_name')
+        .in('close_id', chunk)
+      if (error) throw new Error(`close_leads display_name read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null }>) {
+        if (r.display_name) nameByLead.set(r.close_id, r.display_name)
+      }
+    }
+
+    // 2. Pull Calendly events whose start_time is in/after the call
+    //    window and NOT canceled. Join to invitees for the name key.
+    //    Forward window = range_end + 60d covers all "future at dial
+    //    time" cases without bloating the read.
+    const evWindowEndIso = new Date(
+      new Date(range.endUtcIso).getTime() + 60 * 24 * 60 * 60 * 1000,
+    ).toISOString()
+    const futureStartsByName = new Map<string, number[]>() // ms timestamps
+    {
+      // First, get qualifying events
+      let from = 0
+      type EvRow = { uri: string; start_time: string }
+      const eventByUri = new Map<string, string>() // uri → start_time iso
+      for (;;) {
+        const { data, error } = await sb
+          .from('calendly_scheduled_events' as never)
+          .select('uri, start_time')
+          .gte('start_time', range.startUtcIso)
+          .lt('start_time', evWindowEndIso)
+          .neq('status', 'canceled')
+          .range(from, from + 999)
+        if (error) throw new Error(`calendly events read failed: ${error.message}`)
+        const rows = (data ?? []) as unknown as EvRow[]
+        if (rows.length === 0) break
+        for (const r of rows) eventByUri.set(r.uri, r.start_time)
+        if (rows.length < 1000) break
+        from += 1000
+      }
+
+      // Then invitees for those events
+      const uris = Array.from(eventByUri.keys())
+      for (let i = 0; i < uris.length; i += 200) {
+        const chunk = uris.slice(i, i + 200)
+        const { data, error } = await sb
+          .from('calendly_invitees' as never)
+          .select('event_uri, name')
+          .in('event_uri', chunk)
+        if (error) throw new Error(`calendly invitees read failed: ${error.message}`)
+        for (const r of (data ?? []) as unknown as Array<{ event_uri: string; name: string | null }>) {
+          if (!r.name) continue
+          const startIso = eventByUri.get(r.event_uri)
+          if (!startIso) continue
+          const key = r.name.toLowerCase().trim()
+          const ts = new Date(startIso).getTime()
+          const arr = futureStartsByName.get(key) ?? []
+          arr.push(ts)
+          futureStartsByName.set(key, arr)
+        }
+      }
+      futureStartsByName.forEach((arr) => arr.sort((a: number, b: number) => a - b))
+    }
+
+    // 3. For each outbound call, check if any future event existed
+    //    for that lead's name at call time.
+    for (const call of outboundCalls) {
+      const leadName = nameByLead.get(call.leadId)
+      if (!leadName) continue
+      const key = leadName.toLowerCase().trim()
+      const futures = futureStartsByName.get(key)
+      if (!futures) continue
+      const callMs = new Date(call.activityAt).getTime()
+      // Find the first future start strictly after the call. Linear
+      // scan is fine — typical list per lead is 1-2 events.
+      const anyFuture = futures.some((ts) => ts > callMs)
+      if (anyFuture) {
+        confirmsByUser.set(call.userId, (confirmsByUser.get(call.userId) ?? 0) + 1)
+      }
     }
   }
 
@@ -1616,6 +1736,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
       totalOver90s: v.over90s,
+      confirms: confirmsByUser.get(userId) ?? 0,
       bookings: o.bookings,
       dqs: o.dqs,
       downsells: o.downsells,
@@ -1638,10 +1759,11 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
-  let calls = 0, over90s = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
+  let calls = 0, over90s = 0, confirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
   for (const r of rows) {
     calls += r.totalCalls
     over90s += r.totalOver90s
+    confirms += r.confirms
     bookings += r.bookings
     dqs += r.dqs
     downsells += r.downsells
@@ -1653,6 +1775,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     name: null,
     totalCalls: calls,
     totalOver90s: over90s,
+    confirms,
     bookings,
     dqs,
     downsells,
