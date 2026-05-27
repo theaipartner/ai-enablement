@@ -1092,6 +1092,12 @@ export type SpeedToLeadCohortRow = {
   // anyCallConnected can be true while firstTwoDialsConnected is
   // false (third+ dial finally got them).
   anyCallConnected: boolean
+  // Total count of outbound dials to this lead, GLOBAL (any time
+  // since lead creation, not bounded by the user's date range).
+  // Past cohorts naturally show higher intensity than fresh ones —
+  // that's the intent: this is "how hard did we work this lead" not
+  // "how many dials happened during the window".
+  intensity: number
   callerUserId: string | null
   callerName: string | null
   speedSec: number | null           // null if no first call
@@ -1191,21 +1197,28 @@ export async function getSpeedToLeadCohort(
   // We also track the SECOND outbound call per lead (for the
   // first-two-dials connect signal — Drake's double-dial convention)
   // and a Set of leads where ANY outbound call ever connected
-  // (>= 90s, drives the global "Connected" column + rate).
+  // (>= 90s, drives the global "Connected" column + rate). Plus a
+  // per-lead total dial count for the global "Intensity" column.
+  //
+  // Upper-bound on activity_at intentionally OMITTED — intensity is
+  // global (calls to date), not bounded by the user's date range
+  // plus a 30-day look-forward. A cohort lead from 5/24 viewed today
+  // shows every dial to date; viewed again next month, the same lead
+  // will show MORE dials. That's the desired behavior — intensity
+  // captures cumulative outreach effort.
   const firstCallByLead = new Map<string, { userId: string | null; activity_at: string; duration: number | null }>()
   const secondCallByLead = new Map<string, { duration: number | null }>()
   const leadsWithAnyConnect = new Set<string>()
+  const dialCountByLead = new Map<string, number>()
   const nameByUser = new Map<string, string>()
   {
     let from = 0
-    const lookbackEnd = new Date(new Date(range.endUtcIso).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
     for (;;) {
       const { data: page, error } = await sb
         .from('close_calls' as never)
         .select('lead_id, user_id, activity_at, duration, raw_payload')
         .eq('direction', 'outbound')
         .gte('activity_at', range.startUtcIso)
-        .lt('activity_at', lookbackEnd)
         .order('activity_at', { ascending: true })
         .range(from, from + 999)
       if (error) throw new Error(`close_calls read failed: ${error.message}`)
@@ -1230,6 +1243,7 @@ export async function getSpeedToLeadCohort(
         if ((r.duration ?? 0) >= 90) {
           leadsWithAnyConnect.add(r.lead_id)
         }
+        dialCountByLead.set(r.lead_id, (dialCountByLead.get(r.lead_id) ?? 0) + 1)
       }
       if (rows.length < 1000) break
       from += 1000
@@ -1277,6 +1291,7 @@ export async function getSpeedToLeadCohort(
       firstCallAt: call?.activity_at ?? null,
       firstTwoDialsConnected: firstConnected || secondConnected,
       anyCallConnected: leadsWithAnyConnect.has(lead.close_id),
+      intensity: dialCountByLead.get(lead.close_id) ?? 0,
       callerUserId: call?.userId ?? null,
       callerName: call?.userId ? (nameByUser.get(call.userId) ?? null) : null,
       speedSec,

@@ -176,9 +176,12 @@ function ScrollBody({ children, maxHeight }: { children: React.ReactNode; maxHei
 // Speed-to-lead drill — leads list under the speed cohort stats
 // ---------------------------------------------------------------------------
 
-type SpeedSortKey = 'prospect' | 'created' | 'speed' | 'over90s' | 'caller'
+type SpeedSortKey = 'prospect' | 'created' | 'speed' | 'over90s' | 'intensity' | 'caller'
 
-const SPEED_COLS = '1.5fr 1.1fr 0.9fr 0.8fr 1.2fr'
+// Six columns now: Prospect / Created / Time to call / Connected /
+// Intensity / Caller. Intensity is a tight numeric so it gets a
+// narrow fraction; took 0.1 off Prospect and Caller to make room.
+const SPEED_COLS = '1.4fr 1.05fr 0.95fr 0.8fr 0.7fr 1.1fr'
 
 export function SpeedToLeadDrillTable({
   rows,
@@ -202,6 +205,7 @@ export function SpeedToLeadDrillTable({
         // call 2026-05-27.
         case 'speed': return r.speedSec ?? Number.MAX_SAFE_INTEGER
         case 'over90s': return r.firstCallAt ? (r.anyCallConnected ? 2 : 1) : null
+        case 'intensity': return r.intensity
         case 'caller': return r.callerName ?? null
         default: return null
       }
@@ -250,6 +254,7 @@ export function SpeedToLeadDrillTable({
         <SortableHeader label="Created (ET)" sortKey="created" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Time to call" sortKey="speed" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Connected" sortKey="over90s" align="left" state={state} onToggle={onToggle} />
+        <SortableHeader label="Intensity" sortKey="intensity" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Caller" sortKey="caller" align="left" state={state} onToggle={onToggle} />
       </div>
       <ScrollBody maxHeight={520}>
@@ -306,6 +311,17 @@ export function SpeedToLeadDrillTable({
             >
               {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
             </span>
+            <span
+              className="geg-mono"
+              style={{
+                fontSize: 11,
+                color: r.intensity === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
+                letterSpacing: '0.04em',
+              }}
+              title="Total outbound dials to this lead, cumulative since lead creation (not bounded by the date picker)."
+            >
+              {r.intensity === 0 ? '—' : `${r.intensity}×`}
+            </span>
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
               {r.callerName ?? (r.callerUserId ? r.callerUserId.slice(0, 13) + '…' : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>—</span>)}
             </span>
@@ -317,7 +333,7 @@ export function SpeedToLeadDrillTable({
 }
 
 function headerLabelForSpeed(k: SpeedSortKey): string {
-  return ({ prospect: 'prospect', created: 'created', speed: 'time to call', over90s: 'connected', caller: 'caller' } as Record<SpeedSortKey, string>)[k]
+  return ({ prospect: 'prospect', created: 'created', speed: 'time to call', over90s: 'connected', intensity: 'intensity', caller: 'caller' } as Record<SpeedSortKey, string>)[k]
 }
 
 // ---------------------------------------------------------------------------

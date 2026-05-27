@@ -86,7 +86,7 @@ export default async function FunnelApptSettingPage({
         <FmrTimeBlockChart fmr={fmr} />
       </StageSection>
 
-      <StageSection eyebrow="SPEED TO LEAD" title={`Avg time from lead creation to first outbound call · ${rangeLabel(range.startEtDate, range.endEtDate)}.`}>
+      <StageSection eyebrow="LEAD LIST" title={`Status of leads created during this window · ${rangeLabel(range.startEtDate, range.endEtDate)}.`}>
         <SpeedToLeadSection
           cohort={speedCohort}
           activeCaller={speedCaller}
