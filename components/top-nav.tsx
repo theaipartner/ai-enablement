@@ -21,7 +21,7 @@ type NavItem = {
 // unanswered-flagger only), so the per-run audit page had no purpose.
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: '/clients', label: 'Fulfillment', requiredTier: 'csm' },
-  { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
+  { href: '/cost-hub', label: 'CEO', requiredTier: 'admin' },
   { href: '/sales-dashboard', label: 'Sales', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
