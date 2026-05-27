@@ -15,6 +15,7 @@ import {
 } from './funnel-appointment-setting'
 import { getClosingActivity } from './funnel-closing'
 import { getCloserBookings } from './funnel-calendly'
+import { getPulseHistory } from './pulse-history'
 import {
   dateRangeFromExplicit,
   todayEtDate,
@@ -53,6 +54,11 @@ export type PulseTile = {
   // Tiny caption under the value — used for "since May 24 ET" on
   // FMR (cohort metric that doesn't move with the date picker).
   caption?: string
+  // Rolling-7d historical context for the metric (yesterday value,
+  // 7d average floored at 2026-05-24, 7-day daily series for a
+  // sparkline). Populated by pulse-history.ts after the rest of the
+  // tile is built. Null when we haven't wired history for this id.
+  history?: import('./pulse-history').PulseHistory | null
 }
 
 export type FunnelBoxStatus = 'live' | 'stub'
@@ -109,7 +115,7 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   // Spend value drives the cost-per math in every box that wires it.
   const adsRange: AdsRange = clampAdsRange(range.startEtDate, range.endEtDate)
 
-  const [ads, lp, typeform, callActivity, closing, calendly, fmr, cohortSpend] = await Promise.all([
+  const [ads, lp, typeform, callActivity, closing, calendly, fmr, cohortSpend, history] = await Promise.all([
     getAdsAggregateLive(adsRange),
     getLpClarityMetrics(range),
     getTypeformMetrics(range),
@@ -118,6 +124,10 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
     getCloserBookings(range),
     getFmrTimeBlocks(),
     getCohortAdspendSinceFloor(),
+    // Rolling-7d historical context for the sparkline + yesterday +
+    // 7d-avg footer on every tile. Map keyed by tile id; tiles
+    // missing from the map render no history block.
+    getPulseHistory(),
   ])
 
   const impressionsMetric = ads.find((m) => m.id === 'impressions')
@@ -244,10 +254,19 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
       caption: 'contract value ÷ adspend' },
   ]
 
+  // Attach rolling-7d history to every tile by id. ROAS tiles stay
+  // un-hydrated (history map doesn't include null-value metrics).
+  const allBoxes = [adsBox, lpBox, apptBox, closingBox]
+  for (const box of allBoxes) {
+    for (const tile of box.tiles) {
+      tile.history = history.get(tile.id) ?? null
+    }
+  }
+
   return {
     range,
     adSpend,
-    boxes: [adsBox, lpBox, apptBox, closingBox],
+    boxes: allBoxes,
     roas,
   }
 }

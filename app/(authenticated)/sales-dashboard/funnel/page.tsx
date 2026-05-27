@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
+import { Sparkline } from '@/components/sales/sparkline'
 import {
   getFunnelActivity,
   resolveFunnelRange,
@@ -294,6 +295,57 @@ function MetricTile({ tile }: { tile: PulseTile }) {
         >
           {tile.caption}
         </div>
+      ) : null}
+      {tile.history ? <HistoryFooter tile={tile} /> : null}
+    </div>
+  )
+}
+
+// Rolling-7d historical context — "yest X · 7d Y" on the left,
+// sparkline on the right. Same render across every Pulse tile.
+function HistoryFooter({ tile }: { tile: PulseTile }) {
+  const h = tile.history
+  if (!h) return null
+  const yest = h.yesterday == null ? '—' : renderValue(h.yesterday, tile.format)
+  const avg = h.avg7d == null ? '—' : renderValue(h.avg7d, tile.format)
+  const hasTrend = h.trend7d.length >= 2
+  return (
+    <div
+      style={{
+        marginTop: 'auto',
+        paddingTop: 6,
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+        gap: 8,
+      }}
+    >
+      <div
+        className="geg-mono"
+        style={{
+          fontSize: 9,
+          letterSpacing: '0.04em',
+          color: 'var(--color-geg-text-faint)',
+          lineHeight: 1.3,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+        title={`Yesterday ${yest} · 7-day rolling avg ${avg}`}
+      >
+        <span style={{ textTransform: 'uppercase' }}>yest</span>{' '}
+        <span style={{ color: 'var(--color-geg-text-2)' }}>{yest}</span>
+        <span style={{ color: 'var(--color-geg-text-faint)', margin: '0 5px' }}>·</span>
+        <span style={{ textTransform: 'uppercase' }}>7d</span>{' '}
+        <span style={{ color: 'var(--color-geg-text-2)' }}>{avg}</span>
+      </div>
+      {hasTrend ? (
+        <Sparkline
+          data={h.trend7d}
+          width={70}
+          height={18}
+          stroke="var(--color-geg-text-faint)"
+        />
       ) : null}
     </div>
   )
