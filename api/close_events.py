@@ -69,6 +69,12 @@ from ingestion.close.pipeline import (
     upsert_opportunity_from_payload,
     upsert_sms_from_payload,
 )
+from ingestion.setter_calls import (
+    EligibilityError,
+    RecordingFetchError,
+    transcribe_call,
+)
+from ingestion.setter_calls.deepgram import DeepgramError
 from shared.db import get_client
 
 
@@ -226,9 +232,30 @@ class handler(BaseHTTPRequestHandler):
             "close_webhook: processed event_type=%s route=%s upserted_id=%s",
             event_type, route, upserted_id,
         )
+
+        # Live transcription trigger. When the upsert touched close_calls
+        # AND the call is eligible (>=90s + has recording + not expired),
+        # fire the Deepgram pipeline synchronously. Cheap eligibility
+        # check first (~50ms DB read) so non-eligible calls don't block
+        # the webhook response. For eligible calls the round-trip is
+        # ~3-5s — within Close's webhook timeout window (~30s) and well
+        # under our Vercel function budget (60s). Errors here are
+        # logged but do NOT fail the webhook (returning non-200 would
+        # tell Close to retry, which doesn't help — eligibility issues
+        # are usually "recording hasn't been uploaded yet" and will
+        # resolve when activity.call.updated fires later).
+        transcription_meta: dict[str, Any] = {"attempted": False}
+        if route == "close_calls" and upserted_id:
+            transcription_meta = _maybe_transcribe(db, upserted_id)
+
         self._respond(
             200,
-            {"delivered": True, "event_type": event_type, "upserted_id": upserted_id},
+            {
+                "delivered": True,
+                "event_type": event_type,
+                "upserted_id": upserted_id,
+                "transcription": transcription_meta,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -369,6 +396,65 @@ def _route_event(
         event_type,
     )
     return None, f"unknown:{event_type}"
+
+
+# ---------------------------------------------------------------------------
+# Live setter-call transcription trigger
+# ---------------------------------------------------------------------------
+
+
+def _maybe_transcribe(db: Any, close_call_id: str) -> dict[str, Any]:
+    """Fire Deepgram transcription if this call is eligible.
+
+    Returns a small metadata dict describing what happened — surfaced
+    in the webhook response body for observability without leaking
+    transcript content.
+
+    Failure modes, in order of likelihood:
+      1. EligibilityError — call doesn't meet criteria yet (no
+         recording uploaded, <90s, expired). Silent skip; Close will
+         fire activity.call.updated later when state changes.
+      2. RecordingFetchError — Close's `/recording/` endpoint didn't
+         hand us an S3 URL. Logged + skipped; cron sweep retries.
+      3. DeepgramError — Deepgram API failure. Logged + skipped;
+         cron sweep retries.
+      4. Unexpected — caught + logged so the webhook still 200s. The
+         cron sweep is the safety net here.
+    """
+    try:
+        row = transcribe_call(close_call_id, db=db)
+        # row may be a freshly-transcribed result OR the cached row
+        # transcribe_call returns when one already exists (it's
+        # idempotent on close_call_id). We don't try to distinguish in
+        # the response — the logger.info inside transcribe_call already
+        # emits `setter_calls.skip_existing` vs `setter_calls.persisted`
+        # so audit visibility is preserved.
+        logger.info(
+            "close_webhook.setter_call_ok close_id=%s duration_s=%s",
+            close_call_id, row.get("duration_s"),
+        )
+        return {"attempted": True, "status": "ok"}
+    except EligibilityError as e:
+        # Expected steady-state: most call activity events are for
+        # calls that don't qualify (short, no-answer, no recording yet).
+        # INFO not WARN — this is not an error.
+        logger.info(
+            "close_webhook.setter_call_skip close_id=%s reason=%s",
+            close_call_id, e,
+        )
+        return {"attempted": True, "status": "ineligible", "reason": str(e)[:200]}
+    except (RecordingFetchError, DeepgramError) as e:
+        logger.warning(
+            "close_webhook.setter_call_failed close_id=%s err=%s",
+            close_call_id, e,
+        )
+        return {"attempted": True, "status": "failed", "error": str(e)[:200]}
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception(
+            "close_webhook.setter_call_unexpected close_id=%s",
+            close_call_id,
+        )
+        return {"attempted": True, "status": "unexpected_error", "error": str(exc)[:200]}
 
 
 # ---------------------------------------------------------------------------
