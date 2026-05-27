@@ -142,9 +142,6 @@ export async function getDashboardNotifications(): Promise<Notification[]> {
 
   const todayStartEt = getEstPeriodBoundary('today')
   const now = new Date()
-  // Look back 48h from EST today-start so yesterday's tail is covered
-  // when EST is well past midnight UTC.
-  const lookbackStart = new Date(todayStartEt.getTime() - 24 * 60 * 60 * 1000)
 
   // ---- Negative-sentiment call_reviews (today in ET).
   const sentimentPromise = supabase
@@ -155,9 +152,11 @@ export async function getDashboardNotifications(): Promise<Notification[]> {
     .order('created_at', { ascending: false })
 
   // ---- Calendar events whose end_time + 30 min has passed.
-  // Window: events with start_time within the last 48h. We'll filter
-  // JS-side to those whose end_time + 30min < now AND no matching call.
-  const matchWindowStart = lookbackStart.toISOString()
+  // Window: events that started today (EST). Since calendar_events has
+  // both start_time and end_time non-null, no yesterday fallback is
+  // needed — we only surface today's events where the 30-min-post-end
+  // grace period has already elapsed AND no matching call landed.
+  const matchWindowStart = todayStartEt.toISOString()
   const matchWindowEnd = new Date(now.getTime() + 30 * 60 * 1000).toISOString()
   const eventsPromise = supabase
     .from('calendar_events')
