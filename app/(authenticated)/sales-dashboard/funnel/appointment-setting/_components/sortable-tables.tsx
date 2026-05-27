@@ -241,7 +241,7 @@ export function SpeedToLeadDrillTable({
         <SortableHeader label="Prospect" sortKey="prospect" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Created (ET)" sortKey="created" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Time to call" sortKey="speed" align="left" state={state} onToggle={onToggle} />
-        <SortableHeader label="Over 90s" sortKey="over90s" align="left" state={state} onToggle={onToggle} />
+        <SortableHeader label="Connected" sortKey="over90s" align="left" state={state} onToggle={onToggle} />
         <SortableHeader label="Caller" sortKey="caller" align="left" state={state} onToggle={onToggle} />
       </div>
       <ScrollBody maxHeight={520}>
@@ -295,7 +295,7 @@ export function SpeedToLeadDrillTable({
 }
 
 function headerLabelForSpeed(k: SpeedSortKey): string {
-  return ({ prospect: 'prospect', created: 'created', speed: 'time to call', over90s: 'over 90s', caller: 'caller' } as Record<SpeedSortKey, string>)[k]
+  return ({ prospect: 'prospect', created: 'created', speed: 'time to call', over90s: 'connected', caller: 'caller' } as Record<SpeedSortKey, string>)[k]
 }
 
 // ---------------------------------------------------------------------------

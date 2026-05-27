@@ -421,7 +421,10 @@ function CallActivityStacked({
 // ---------------------------------------------------------------------------
 // Speed-to-Lead section — per-lead, NOT split by caller. Top stats
 // + caller filter dropdown + drill list. Per-rep aggregates live
-// in the Call Activity section instead.
+// in the Call Activity section instead. "Connected" = first call to
+// the lead landed over 90s (the same engagement proxy used elsewhere
+// on the page; relabeled away from ">90s" so non-engineers don't
+// have to decode the unit).
 // ---------------------------------------------------------------------------
 
 function SpeedToLeadSection({
@@ -452,9 +455,9 @@ function SpeedToLeadSection({
           subtext={`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
         />
         <StatCell
-          label="Over 90s rate"
+          label="Connected rate"
           value={cohort.over90sRate !== null ? `${(cohort.over90sRate * 100).toFixed(0)}%` : '—'}
-          subtext={`${cohort.leadsOver90s} / ${cohort.leadsCalled} first calls over 90s`}
+          subtext={`${cohort.leadsOver90s} / ${cohort.leadsCalled} first calls connected`}
         />
         <StatCell
           label="Cohort size"
