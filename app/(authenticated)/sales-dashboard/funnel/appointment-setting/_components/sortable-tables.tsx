@@ -201,7 +201,7 @@ export function SpeedToLeadDrillTable({
         // called yet" view without scrolling to the bottom. Drake's
         // call 2026-05-27.
         case 'speed': return r.speedSec ?? Number.MAX_SAFE_INTEGER
-        case 'over90s': return r.firstCallAt ? (r.firstCallOver90s ? 2 : 1) : null
+        case 'over90s': return r.firstCallAt ? (r.anyCallConnected ? 2 : 1) : null
         case 'caller': return r.callerName ?? null
         default: return null
       }
@@ -276,21 +276,35 @@ export function SpeedToLeadDrillTable({
               {formatEtTimestamp(r.leadCreatedAt)}
             </span>
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-              {r.speedSec !== null ? formatDuration(r.speedSec) : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>}
+              {r.speedSec !== null ? (
+                <>
+                  {formatDuration(r.speedSec)}
+                  {/* First-two-dials connect signal — setters double-dial,
+                      so this captures "did we get them in the first
+                      attempt cycle." Muted bracket so it doesn't compete
+                      with the time value. */}
+                  <span style={{ color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
+                    ({r.firstTwoDialsConnected ? 'yes' : 'no'})
+                  </span>
+                </>
+              ) : (
+                <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>
+              )}
             </span>
             <span
               className="geg-mono"
               style={{
                 fontSize: 11,
                 letterSpacing: '0.04em',
-                color: r.firstCallOver90s
+                color: r.anyCallConnected
                   ? 'var(--color-geg-pos)'
                   : r.firstCallAt
                     ? 'var(--color-geg-neg)'
                     : 'var(--color-geg-text-faint)',
               }}
+              title="Yes when ANY outbound call to this lead has connected (>=90s) at any time."
             >
-              {r.firstCallAt ? (r.firstCallOver90s ? 'Yes' : 'No') : '—'}
+              {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
             </span>
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
               {r.callerName ?? (r.callerUserId ? r.callerUserId.slice(0, 13) + '…' : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>—</span>)}

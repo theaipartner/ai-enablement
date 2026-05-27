@@ -107,22 +107,20 @@ const STATUS_LOOKBACK_MS = STATUS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
 // Per block: two response rates side by side. Both use a UNIFIED
 // "response" definition (Drake 2026-05-27): the prospect counts as
 // having responded if EITHER channel triggers — an inbound SMS at
-// any point, OR the FIRST outbound dial to that lead was answered
+// any point, OR ANY outbound dial to that lead was answered
 // (duration >= 90s, the existing call-connected threshold). Only
-// one needs to be true. The intuition: if speed-to-lead is good and
-// a setter dials immediately, a pickup IS a response — they're
-// replying to the first message in a different channel.
+// one needs to be true. Updated 2026-05-27 (afternoon): "any
+// connect ever" replaces "first dial answered" — the question is
+// whether the lead has interacted with us at all, not whether they
+// picked up immediately. Setters double-dial as policy; a connect
+// on the second dial is still a response.
 //
-//   - everReplied = lead has (≥1 inbound SMS) OR (first outbound
-//                   dial duration >= 90s), at ANY time
+//   - everReplied = lead has (≥1 inbound SMS) OR (≥1 connected
+//                   outbound dial, duration >= 90s), at ANY time
 //   - within24h   = either of those channels happened within 24h of
-//                   date_created. Per-channel: a slow dial that
-//                   eventually got picked up flips everReplied but
+//                   date_created. Per-channel: a connect that came
+//                   later than 24h still counts for everReplied but
 //                   NOT within24h.
-//
-// "First outbound dial" is the chronologically first dial to that
-// lead — not "any dial that was answered." The metric measures
-// responsiveness to initial outreach, not eventual reachability.
 //
 // Denominator = all leads in the cohort that fell in this block,
 // whether or not we ever texted them. Matches the Close-UI calc:
@@ -223,15 +221,16 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
     }
   }
 
-  // First-outbound-dial scan — track the FIRST outbound call per lead
-  // (chronologically) regardless of duration, plus that call's
-  // duration so we can apply the 90s connection threshold downstream.
-  // Pulling by ascending activity_at + only keeping the first per
-  // lead gives us exactly "the first dial we made."
-  const firstOutboundDialByLead = new Map<
-    string,
-    { activity_at: string; duration: number }
-  >()
+  // Earliest-CONNECTED-outbound-dial scan — track the FIRST outbound
+  // call per lead WHERE duration >= 90s (i.e. an actual conversation,
+  // not a ring-out). The 90s filter happens DB-side so we only
+  // materialize connects. Sorting by ascending activity_at + only
+  // keeping the first per lead gives us the earliest connect.
+  //
+  // "Any connect ever" → presence in this map.
+  // "Connect within 24h"  → check the stored activity_at against the
+  //                         lead's date_created.
+  const earliestConnectedDialByLead = new Map<string, string>()
   {
     let from = 0
     const PAGE = 1000
@@ -240,10 +239,11 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
         .from('close_calls' as never)
         .select('lead_id, activity_at, duration')
         .eq('direction', 'outbound')
+        .gte('duration', FMR_DIAL_CONNECTED_SEC)
         .gte('activity_at', FMR_COHORT_START_UTC_ISO)
         .order('activity_at', { ascending: true })
         .range(from, from + PAGE - 1)
-      if (error) throw new Error(`close_calls outbound read failed: ${error.message}`)
+      if (error) throw new Error(`close_calls connected-outbound read failed: ${error.message}`)
       const rows = (data ?? []) as unknown as Array<{
         lead_id: string | null
         activity_at: string
@@ -252,11 +252,8 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
       if (rows.length === 0) break
       for (const r of rows) {
         if (!r.lead_id) continue
-        if (!firstOutboundDialByLead.has(r.lead_id)) {
-          firstOutboundDialByLead.set(r.lead_id, {
-            activity_at: r.activity_at,
-            duration: r.duration ?? 0,
-          })
+        if (!earliestConnectedDialByLead.has(r.lead_id)) {
+          earliestConnectedDialByLead.set(r.lead_id, r.activity_at)
         }
       }
       if (rows.length < PAGE) break
@@ -278,14 +275,10 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
 
     const leadCreatedMs = new Date(lead.date_created).getTime()
     const inboundAt = earliestInboundByLead.get(lead.close_id)
-    const firstDial = firstOutboundDialByLead.get(lead.close_id)
-    const firstDialAnswered =
-      firstDial && firstDial.duration >= FMR_DIAL_CONNECTED_SEC
-        ? firstDial.activity_at
-        : null
+    const earliestConnectAt = earliestConnectedDialByLead.get(lead.close_id)
 
     // Ever responded: either signal at any time.
-    if (inboundAt || firstDialAnswered) {
+    if (inboundAt || earliestConnectAt) {
       everCounts[block]++
     }
 
@@ -297,14 +290,14 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
         return delta >= 0 && delta <= ONE_DAY_MS
       })()
     )
-    const dialAnsweredWithin24h = !!(
-      firstDialAnswered &&
+    const connectWithin24h = !!(
+      earliestConnectAt &&
       (() => {
-        const delta = new Date(firstDialAnswered).getTime() - leadCreatedMs
+        const delta = new Date(earliestConnectAt).getTime() - leadCreatedMs
         return delta >= 0 && delta <= ONE_DAY_MS
       })()
     )
-    if (smsWithin24h || dialAnsweredWithin24h) {
+    if (smsWithin24h || connectWithin24h) {
       within24Counts[block]++
     }
   }
@@ -1087,7 +1080,18 @@ export type SpeedToLeadCohortRow = {
   prospectName: string | null
   leadCreatedAt: string             // ISO UTC
   firstCallAt: string | null        // null if no outbound call yet
-  firstCallOver90s: boolean         // duration > 90s
+  // True if EITHER of the first two outbound dials had duration >= 90s.
+  // Drake's setting policy is "double-dial" so this captures the
+  // "did we get them on the first attempt" signal even when the
+  // pickup came on attempt #2. Surfaced as the (yes/no) bracket
+  // next to "Time to call" on the UI.
+  firstTwoDialsConnected: boolean
+  // True if ANY outbound dial to this lead ever had duration >= 90s.
+  // Drives the "Connected" column on the UI and the headline
+  // "Connected rate" stat. Distinct from firstTwoDialsConnected:
+  // anyCallConnected can be true while firstTwoDialsConnected is
+  // false (third+ dial finally got them).
+  anyCallConnected: boolean
   callerUserId: string | null
   callerName: string | null
   speedSec: number | null           // null if no first call
@@ -1096,7 +1100,11 @@ export type SpeedToLeadCohortRow = {
 export type SpeedToLeadCohortResult = {
   cohortSize: number
   leadsCalled: number               // had ≥1 outbound call
-  leadsOver90s: number               // first call duration > 90s
+  // Count of cohort leads we ever reached (any outbound call,
+  // duration >= 90s). Renamed 2026-05-27 from `leadsOver90s` —
+  // the old name meant "first call connected" which is no longer
+  // the metric.
+  leadsConnected: number
   avgSpeedToLeadSec: number | null  // mean of speedSec (24h cap on outliers)
   // Same average computed against the subset of leads whose first
   // call landed within 3 hours. Drake's filter for the "active dialing
@@ -1108,7 +1116,7 @@ export type SpeedToLeadCohortResult = {
   // Surfaces in the UI as "(N of M)" subtext so the small-sample
   // case is obvious.
   leadsUnder3h: number
-  over90sRate: number | null        // leadsOver90s / leadsCalled
+  connectedRate: number | null      // leadsConnected / leadsCalled
   // All callers that appear in the cohort — drives the filter dropdown.
   // userId may be null for leads where we couldn't resolve a caller.
   callers: Array<{ userId: string; name: string | null; leadCount: number }>
@@ -1139,7 +1147,7 @@ export async function getSpeedToLeadCohort(
     status_id: string | null
   }>
   if (leadRows.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, over90sRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, callers: [], rows: [] }
   }
   const leadIdSet = new Set(leadRows.map((l) => l.close_id))
 
@@ -1175,12 +1183,18 @@ export async function getSpeedToLeadCohort(
     return initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)
   })
   if (qualifyingLeads.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, over90sRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, callers: [], rows: [] }
   }
   const qualifyingMap = new Map(qualifyingLeads.map((l) => [l.close_id, l]))
 
   // First outbound call per qualifying lead (any caller).
+  // We also track the SECOND outbound call per lead (for the
+  // first-two-dials connect signal — Drake's double-dial convention)
+  // and a Set of leads where ANY outbound call ever connected
+  // (>= 90s, drives the global "Connected" column + rate).
   const firstCallByLead = new Map<string, { userId: string | null; activity_at: string; duration: number | null }>()
+  const secondCallByLead = new Map<string, { duration: number | null }>()
+  const leadsWithAnyConnect = new Set<string>()
   const nameByUser = new Map<string, string>()
   {
     let from = 0
@@ -1210,6 +1224,11 @@ export async function getSpeedToLeadCohort(
         }
         if (!firstCallByLead.has(r.lead_id)) {
           firstCallByLead.set(r.lead_id, { userId: r.user_id, activity_at: r.activity_at, duration: r.duration })
+        } else if (!secondCallByLead.has(r.lead_id)) {
+          secondCallByLead.set(r.lead_id, { duration: r.duration })
+        }
+        if ((r.duration ?? 0) >= 90) {
+          leadsWithAnyConnect.add(r.lead_id)
         }
       }
       if (rows.length < 1000) break
@@ -1243,17 +1262,21 @@ export async function getSpeedToLeadCohort(
   const allRows: SpeedToLeadCohortRow[] = []
   for (const lead of qualifyingLeads) {
     const call = firstCallByLead.get(lead.close_id)
+    const second = secondCallByLead.get(lead.close_id)
     let speedSec: number | null = null
     if (call) {
       const dt = (new Date(call.activity_at).getTime() - new Date(lead.date_created).getTime()) / 1000
       if (Number.isFinite(dt) && dt >= 0) speedSec = dt
     }
+    const firstConnected = call ? (call.duration ?? 0) >= 90 : false
+    const secondConnected = second ? (second.duration ?? 0) >= 90 : false
     allRows.push({
       leadId: lead.close_id,
       prospectName: prospectFromForm.get(lead.close_id) ?? lead.display_name ?? null,
       leadCreatedAt: lead.date_created,
       firstCallAt: call?.activity_at ?? null,
-      firstCallOver90s: call ? (call.duration ?? 0) > 90 : false,
+      firstTwoDialsConnected: firstConnected || secondConnected,
+      anyCallConnected: leadsWithAnyConnect.has(lead.close_id),
       callerUserId: call?.userId ?? null,
       callerName: call?.userId ? (nameByUser.get(call.userId) ?? null) : null,
       speedSec,
@@ -1288,7 +1311,7 @@ export async function getSpeedToLeadCohort(
   let speedN = 0
   let under3hSum = 0
   let under3hN = 0
-  let over90sCount = 0
+  let connectedCount = 0
   let calledCount = 0
   for (const r of filteredRows) {
     if (r.speedSec !== null) {
@@ -1300,7 +1323,9 @@ export async function getSpeedToLeadCohort(
       }
     }
     if (r.firstCallAt) calledCount++
-    if (r.firstCallOver90s) over90sCount++
+    // Global "connected" — any outbound call to this lead has ever
+    // had duration >= 90s. Mirrors the new Connected column.
+    if (r.anyCallConnected) connectedCount++
   }
 
   // Sort rows: most recent first call first; leads without calls go
@@ -1315,11 +1340,11 @@ export async function getSpeedToLeadCohort(
   return {
     cohortSize: filteredRows.length,
     leadsCalled: calledCount,
-    leadsOver90s: over90sCount,
+    leadsConnected: connectedCount,
     avgSpeedToLeadSec: speedN > 0 ? cappedSum / speedN : null,
     avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
     leadsUnder3h: under3hN,
-    over90sRate: calledCount > 0 ? over90sCount / calledCount : null,
+    connectedRate: calledCount > 0 ? connectedCount / calledCount : null,
     callers,
     rows: filteredRows,
   }

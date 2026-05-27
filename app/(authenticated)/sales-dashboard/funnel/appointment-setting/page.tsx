@@ -470,8 +470,8 @@ function SpeedToLeadSection({
         />
         <StatCell
           label="Connected rate"
-          value={cohort.over90sRate !== null ? `${(cohort.over90sRate * 100).toFixed(0)}%` : '—'}
-          subtext={`${cohort.leadsOver90s} / ${cohort.leadsCalled} first calls connected`}
+          value={cohort.connectedRate !== null ? `${(cohort.connectedRate * 100).toFixed(0)}%` : '—'}
+          subtext={`${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`}
         />
         <StatCell
           label="Cohort size"
