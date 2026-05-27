@@ -613,36 +613,9 @@ export function PerRepCallActivityTable({
                           color: 'var(--color-geg-text)',
                           letterSpacing: '-0.002em',
                           fontWeight: isSelected ? 600 : 400,
-                          display: 'inline-flex',
-                          alignItems: 'baseline',
-                          gap: 8,
                         }}
                       >
                         {isSelected ? '▼ ' : '▸ '}{r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
-                        {/* Cross-page deep-link: go to /sales-dashboard/calls
-                            filtered to this setter. Stops propagation so the
-                            parent row's in-page drill toggle doesn't fire on
-                            the same click. */}
-                        {r.userId ? (
-                          <Link
-                            href={`/sales-dashboard/calls?setter=${encodeURIComponent(r.userId)}`}
-                            onClick={(e) => e.stopPropagation()}
-                            title="View this rep's transcripts in the Calls page"
-                            className="geg-mono"
-                            style={{
-                              fontSize: 10,
-                              letterSpacing: '0.10em',
-                              textTransform: 'uppercase',
-                              color: 'var(--color-geg-text-faint)',
-                              textDecoration: 'none',
-                              padding: '2px 6px',
-                              border: '1px solid var(--color-geg-border)',
-                              borderRadius: 4,
-                            }}
-                          >
-                            transcripts →
-                          </Link>
-                        ) : null}
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
                       <Num value={r.totalOver90s.toString()} />

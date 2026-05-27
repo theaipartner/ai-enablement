@@ -453,6 +453,19 @@ function SpeedToLeadSection({
           label="Avg speed to lead"
           value={cohort.avgSpeedToLeadSec !== null ? formatDuration(cohort.avgSpeedToLeadSec) : '—'}
           subtext={`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
+          // Secondary metric: avg restricted to leads first-called
+          // within 3h of creation. Strips overnight outliers that
+          // would otherwise inflate the headline. Small font, top-
+          // right corner — context, not competition with the headline.
+          corner={
+            cohort.avgSpeedToLeadSecUnder3h !== null
+              ? {
+                  label: '< 3h',
+                  value: formatDuration(cohort.avgSpeedToLeadSecUnder3h),
+                  subtext: `${cohort.leadsUnder3h} of ${cohort.leadsCalled}`,
+                }
+              : null
+          }
         />
         <StatCell
           label="Connected rate"
@@ -476,9 +489,28 @@ function SpeedToLeadSection({
   )
 }
 
-function StatCell({ label, value, subtext }: { label: string; value: string; subtext?: string }) {
+function StatCell({
+  label,
+  value,
+  subtext,
+  corner,
+}: {
+  label: string
+  value: string
+  subtext?: string
+  // Optional secondary metric anchored to the top-right of the cell.
+  // Used by Avg speed to lead to surface the <3h outlier-filtered avg
+  // alongside the headline.
+  corner?: { label: string; value: string; subtext?: string } | null
+}) {
   return (
-    <div style={{ padding: '16px 18px 14px', background: 'var(--color-geg-bg-elev)' }}>
+    <div
+      style={{
+        padding: '16px 18px 14px',
+        background: 'var(--color-geg-bg-elev)',
+        position: 'relative',
+      }}
+    >
       <div
         className="geg-mono"
         style={{
@@ -502,6 +534,57 @@ function StatCell({ label, value, subtext }: { label: string; value: string; sub
       >
         {value}
       </div>
+      {corner ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 14,
+            right: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 1,
+          }}
+          title={`${corner.label} avg — outliers (first call > 3h) removed`}
+        >
+          <span
+            className="geg-mono"
+            style={{
+              fontSize: 9,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--color-geg-text-faint)',
+              lineHeight: 1,
+            }}
+          >
+            {corner.label}
+          </span>
+          <span
+            className="geg-numeric-serif"
+            style={{
+              fontSize: 14,
+              lineHeight: '16px',
+              letterSpacing: '-0.01em',
+              color: 'var(--color-geg-text-2)',
+            }}
+          >
+            {corner.value}
+          </span>
+          {corner.subtext ? (
+            <span
+              className="geg-mono"
+              style={{
+                fontSize: 9,
+                letterSpacing: '0.06em',
+                color: 'var(--color-geg-text-faint)',
+                lineHeight: 1,
+              }}
+            >
+              {corner.subtext}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {subtext ? (
         <div
           className="geg-mono"

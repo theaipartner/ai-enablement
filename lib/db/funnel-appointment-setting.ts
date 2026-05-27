@@ -1008,6 +1008,16 @@ export type SpeedToLeadCohortResult = {
   leadsCalled: number               // had ≥1 outbound call
   leadsOver90s: number               // first call duration > 90s
   avgSpeedToLeadSec: number | null  // mean of speedSec (24h cap on outliers)
+  // Same average computed against the subset of leads whose first
+  // call landed within 3 hours. Drake's filter for the "active dialing
+  // pace today" view — strips overnight leads that aren't an honest
+  // signal of how fast the team is reacting in the moment.
+  // null when zero leads in the cohort meet the threshold.
+  avgSpeedToLeadSecUnder3h: number | null
+  // Count of leads that contributed to avgSpeedToLeadSecUnder3h.
+  // Surfaces in the UI as "(N of M)" subtext so the small-sample
+  // case is obvious.
+  leadsUnder3h: number
   over90sRate: number | null        // leadsOver90s / leadsCalled
   // All callers that appear in the cohort — drives the filter dropdown.
   // userId may be null for leads where we couldn't resolve a caller.
@@ -1039,7 +1049,7 @@ export async function getSpeedToLeadCohort(
     status_id: string | null
   }>
   if (leadRows.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, over90sRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, over90sRate: null, callers: [], rows: [] }
   }
   const leadIdSet = new Set(leadRows.map((l) => l.close_id))
 
@@ -1075,7 +1085,7 @@ export async function getSpeedToLeadCohort(
     return initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)
   })
   if (qualifyingLeads.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, over90sRate: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsOver90s: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, over90sRate: null, callers: [], rows: [] }
   }
   const qualifyingMap = new Map(qualifyingLeads.map((l) => [l.close_id, l]))
 
@@ -1177,14 +1187,27 @@ export async function getSpeedToLeadCohort(
     ? allRows.filter((r) => r.callerUserId === callerFilter)
     : allRows
 
+  // 3h outlier threshold. Per Drake (2026-05-27): the overnight leads
+  // that get picked up first thing in the morning skew the headline
+  // avg into a "responsiveness" number that doesn't reflect how fast
+  // the team is dialing while actively working — this restricts the
+  // secondary average to in-the-moment activity.
+  const UNDER_3H_THRESHOLD_SEC = 3 * 60 * 60
+
   let cappedSum = 0
   let speedN = 0
+  let under3hSum = 0
+  let under3hN = 0
   let over90sCount = 0
   let calledCount = 0
   for (const r of filteredRows) {
     if (r.speedSec !== null) {
       cappedSum += Math.min(r.speedSec, SPEED_CAP_SEC)
       speedN++
+      if (r.speedSec < UNDER_3H_THRESHOLD_SEC) {
+        under3hSum += r.speedSec
+        under3hN++
+      }
     }
     if (r.firstCallAt) calledCount++
     if (r.firstCallOver90s) over90sCount++
@@ -1204,6 +1227,8 @@ export async function getSpeedToLeadCohort(
     leadsCalled: calledCount,
     leadsOver90s: over90sCount,
     avgSpeedToLeadSec: speedN > 0 ? cappedSum / speedN : null,
+    avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
+    leadsUnder3h: under3hN,
     over90sRate: calledCount > 0 ? over90sCount / calledCount : null,
     callers,
     rows: filteredRows,
