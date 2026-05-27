@@ -920,3 +920,84 @@
     @apply font-sans;
   }
 }
+/* react-day-picker overrides — dark theme to match the dashboard.
+   Scoped to `.geg-rdp` so we don't disturb any future light-themed
+   picker usage. Variables follow react-day-picker v10's CSS-variable
+   surface (rdp-accent-color, rdp-background-color, etc.). */
+.geg-rdp {
+  --rdp-accent-color: var(--color-geg-accent);
+  --rdp-accent-background-color: var(--color-geg-accent-fill);
+  --rdp-background-color: transparent;
+  --rdp-day-height: 34px;
+  --rdp-day-width: 34px;
+  --rdp-day_button-height: 30px;
+  --rdp-day_button-width: 30px;
+  --rdp-day_button-border-radius: 4px;
+  --rdp-selected-border: 1px solid var(--color-geg-accent);
+  --rdp-range_middle-color: var(--color-geg-text);
+  --rdp-range_middle-background-color: var(--color-geg-accent-fill);
+  --rdp-range_start-color: var(--color-geg-text);
+  --rdp-range_end-color: var(--color-geg-text);
+  --rdp-today-color: var(--color-geg-accent);
+  --rdp-weekday-padding: 6px 0;
+  color: var(--color-geg-text-2);
+  font-family: var(--font-prom-sans), Inter, system-ui, sans-serif;
+  font-size: 12px;
+  padding: 8px 6px 4px;
+}
+.geg-rdp .rdp-month_caption {
+  color: var(--color-geg-text);
+  font-family: var(--font-geg-serif), Newsreader, Georgia, serif;
+  font-size: 14px;
+  letter-spacing: -0.005em;
+  padding: 2px 0 8px;
+}
+.geg-rdp .rdp-weekday {
+  color: var(--color-geg-text-faint);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.geg-rdp .rdp-day_button {
+  color: var(--color-geg-text-2);
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+.geg-rdp .rdp-day_button:hover:not([disabled]) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-geg-text);
+}
+.geg-rdp .rdp-day_outside .rdp-day_button {
+  color: var(--color-geg-text-faint);
+}
+.geg-rdp .rdp-day_disabled .rdp-day_button {
+  color: var(--color-geg-text-faint);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.geg-rdp .rdp-today .rdp-day_button {
+  color: var(--color-geg-accent);
+  font-weight: 600;
+}
+.geg-rdp .rdp-button_previous,
+.geg-rdp .rdp-button_next {
+  color: var(--color-geg-text-2);
+  background: transparent;
+  border: 1px solid var(--color-geg-border);
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+.geg-rdp .rdp-button_previous:hover,
+.geg-rdp .rdp-button_next:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-geg-accent);
+  color: var(--color-geg-accent);
+}
+.geg-rdp .rdp-nav {
+  gap: 4px;
+}
