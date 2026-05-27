@@ -12,6 +12,10 @@ dependencies = [
     "supabase>=2.9,<3.0",
     "openai>=1.58,<2.0",
     "python-dotenv>=1.0,<2.0",
+    # Deepgram SDK powers the setter-call transcription pipeline (see
+    # ingestion/setter_calls/). URL-ingest only — we never store audio
+    # locally; Deepgram fetches Close's pre-signed S3 URL directly.
+    "deepgram-sdk>=3.7,<4.0",
 ]
 
 [project.optional-dependencies]
