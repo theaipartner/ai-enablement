@@ -44,6 +44,14 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--smoke", action="store_true", help="Process exactly one pending review.")
     group.add_argument("--apply", action="store_true", help="Run the full backfill.")
+    # Slack posts are OFF by default for backfills — historical reviews
+    # shouldn't fan out to the team channel. Live cron + webhook paths
+    # keep their default post_to_slack=True.
+    parser.add_argument(
+        "--slack",
+        action="store_true",
+        help="Also post each review to Slack (off by default for backfills).",
+    )
     args = parser.parse_args()
 
     pending = find_pending_reviews()
@@ -69,7 +77,7 @@ def main() -> int:
     t0 = time.time()
     for i, cid in enumerate(target, start=1):
         try:
-            row = review_call(cid)
+            row = review_call(cid, post_to_slack=args.slack)
             cost = float(row.get("sonnet_cost_usd") or 0)
             total_cost += cost
             logger.info(

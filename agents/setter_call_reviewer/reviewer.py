@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 from agents.setter_call_reviewer.prompt import PROMPT_VERSION, SYSTEM_PROMPT
+from agents.setter_call_reviewer.slack_post import post_review_to_slack
 from agents.setter_call_reviewer.talk_time import compute_talk_time
 from shared.claude_client import DEFAULT_MODEL, complete
 from shared.db import get_client
@@ -71,8 +72,16 @@ def review_call(
     *,
     db: Any | None = None,
     force: bool = False,
+    post_to_slack: bool = True,
 ) -> dict[str, Any]:
-    """Review one transcript end-to-end. Returns the upserted review row."""
+    """Review one transcript end-to-end. Returns the upserted review row.
+
+    When `post_to_slack=True` (the default), a Slack message is posted
+    to the sales-reviews channel on first review. Re-runs skip the
+    post if `slack_message_ts` is already set. Pass `False` to suppress
+    Slack entirely (used for the initial backfill of 55 historical
+    calls — we don't want to spam the channel with old reviews).
+    """
     db = db or get_client()
 
     if not force:
@@ -82,6 +91,12 @@ def review_call(
                 "setter_review.skip_existing close_call_id=%s",
                 close_call_id,
             )
+            # Existing row — Slack may or may not have posted before.
+            # post_review_to_slack is itself idempotent on
+            # slack_message_ts, so safe to call. Only call when the
+            # caller opts in.
+            if post_to_slack:
+                _maybe_post_to_slack(db, close_call_id, existing)
             return existing
 
     transcript_row = _load_transcript(db, close_call_id)
@@ -131,7 +146,92 @@ def review_call(
         "sonnet_output_tokens": result.output_tokens,
         "sonnet_cost_usd": float(result.cost_usd),
     }
-    return _upsert(db, row)
+    persisted = _upsert(db, row)
+
+    if post_to_slack:
+        _maybe_post_to_slack(db, close_call_id, persisted)
+
+    return persisted
+
+
+def _maybe_post_to_slack(
+    db: Any,
+    close_call_id: str,
+    review_row: dict[str, Any],
+) -> None:
+    """Resolve setter / prospect context, then hand off to the Slack
+    poster. Fail-soft: Slack failures never break the review.
+
+    The context lookup (close_calls + team_members + close_leads) is
+    deliberately separate from the persisted review row to keep the
+    review table free of denormalized humanized labels — those would
+    rot when team_members rows are renamed or merged.
+    """
+    try:
+        ctx = _load_slack_context(db, close_call_id)
+        post_review_to_slack(
+            db,
+            close_call_id=close_call_id,
+            review_row=review_row,
+            setter_name=ctx["setter_name"],
+            prospect_name=ctx["prospect_name"],
+            duration_s=ctx["duration_s"],
+            direction=ctx["direction"],
+        )
+    except Exception as exc:
+        # Defensive — post_review_to_slack already swallows Slack
+        # transport errors; this catches anything in the context
+        # resolution that went sideways.
+        logger.warning(
+            "setter_review.slack_context_failed close_call_id=%s err=%s",
+            close_call_id, exc,
+        )
+
+
+def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
+    """Pull setter name, prospect name, duration, direction in 3 cheap
+    round trips. Returns nullable strings when joins are unresolved.
+    """
+    # close_calls — the source of duration, direction, user_id, lead_id
+    call_resp = (
+        db.table("close_calls")
+        .select("user_id, lead_id, duration, direction")
+        .eq("close_id", close_call_id)
+        .maybe_single()
+        .execute()
+    )
+    call = (call_resp.data or {}) if call_resp else {}
+
+    setter_name: str | None = None
+    if call.get("user_id"):
+        tm_resp = (
+            db.table("team_members")
+            .select("full_name")
+            .eq("close_user_id", call["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        if tm_resp and tm_resp.data:
+            setter_name = tm_resp.data.get("full_name")
+
+    prospect_name: str | None = None
+    if call.get("lead_id"):
+        ld_resp = (
+            db.table("close_leads")
+            .select("display_name")
+            .eq("close_id", call["lead_id"])
+            .maybe_single()
+            .execute()
+        )
+        if ld_resp and ld_resp.data:
+            prospect_name = ld_resp.data.get("display_name")
+
+    return {
+        "setter_name": setter_name,
+        "prospect_name": prospect_name,
+        "duration_s": call.get("duration"),
+        "direction": call.get("direction"),
+    }
 
 
 def find_pending_reviews(
