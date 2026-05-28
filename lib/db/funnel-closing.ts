@@ -810,11 +810,14 @@ export async function getClosingScheduledList(
     const closeType: 'ht' | 'dc' | null =
       closed === 'yes' ? planClass : null
 
-    // "Booked by" — matched from the setter triage form's Confirmed
-    // Call Date&Time + lead identity (see buildBookedByResolver). Works
-    // for any call type the match resolves; direct/ad-booked + rebooks
-    // simply won't match a setter form and stay null.
-    const bookedBy: string | null = bookedByResolver(ev.start_time, invitee)
+    // "Booked by" — only meaningful for setter-booked calls (the
+    // "Partnership Call" event type). Direct ad bookings ("Ai Partner
+    // Strategy Call", carrying utm ad-attribution) and rebooks have no
+    // setter, so we don't resolve one — the UI renders "—" for those.
+    // Matched from the setter triage form's Confirmed Call Date&Time +
+    // lead identity (see buildBookedByResolver); null → "Missing".
+    const bookedBy: string | null =
+      ev.callType === 'setter' ? bookedByResolver(ev.start_time, invitee) : null
 
     if (showed === 'yes') agg.showed++
     if (showed === 'no') agg.noShows++
