@@ -606,29 +606,47 @@ function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
 // Per-rep aggregate table — rep rows with click-to-drill expansion
 // ---------------------------------------------------------------------------
 
+// Setter + closer columns diverged 2026-05-27 (form redesign split
+// Setter Status / Closer Status). Setter outcomes are about meetings
+// booked; closer outcomes are about what happened on the call. Sort
+// keys union both sets; the renderer picks the relevant subset.
 type RepSortKey =
   | 'name'
   | 'totalCalls'
   | 'connected'
-  | 'bookings'
-  | 'downsells'
-  | 'reconfirms'
+  // setter-only
+  | 'htBookings'
+  | 'dcBookings'
   | 'followUps'
+  | 'reconfirms'
+  // closer-only
+  | 'confirmedBooks'
+  | 'reschedules'
+  | 'downsellsOnCall'
+  | 'handToSetter'
+  // shared
   | 'dqs'
   | 'missing'
 
-// Column order: Rep | Dials | Connected | Books | Downsell | Reconfirms | Follow-up | DQs | Missing.
-// Reconfirms sits right before Follow-up. Drake 2026-05-27.
-const REP_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.8fr 0.7fr 0.8fr 0.8fr 0.8fr'
+// Setter column order: Rep | Dials | Connected | HT Book | DC Book |
+// Follow-up | DQs | Reconfirms | Missing. Reconfirms is rare so it's
+// pushed near the end, per Drake.
+const SETTER_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.8fr 0.7fr 0.85fr 0.8fr'
+
+// Closer column order: Rep | Dials | Connected | Confirmed Book |
+// Reschedule | Downsell | Hand down | DQs | Missing.
+const CLOSER_COLS = '1.5fr 0.7fr 0.85fr 0.85fr 0.8fr 0.7fr 0.85fr 0.7fr 0.8fr'
 
 export function PerRepCallActivityTable({
   label,
+  variant,
   aggregate,
   rows,
   selectedRep,
   drill,
 }: {
   label: string
+  variant: 'setter' | 'closer'
   aggregate: CallActivityRepRow
   rows: CallActivityRepRow[]
   selectedRep: string | null
@@ -641,16 +659,22 @@ export function PerRepCallActivityTable({
         case 'name': return r.name ?? null
         case 'totalCalls': return r.totalCalls
         case 'connected': return r.totalConnected
-        case 'bookings': return r.bookings
-        case 'downsells': return r.downsells
-        case 'reconfirms': return r.reconfirms
+        case 'htBookings': return r.htBookings
+        case 'dcBookings': return r.dcBookings
         case 'followUps': return r.followUps
+        case 'reconfirms': return r.reconfirms
+        case 'confirmedBooks': return r.confirmedBooks
+        case 'reschedules': return r.reschedules
+        case 'downsellsOnCall': return r.downsellsOnCall
+        case 'handToSetter': return r.handToSetter
         case 'dqs': return r.dqs
         case 'missing': return r.missing
         default: return null
       }
     },
   )
+
+  const repCols = variant === 'setter' ? SETTER_COLS : CLOSER_COLS
 
   return (
     <div style={{ padding: '18px 22px', background: 'var(--color-geg-bg-elev)', border: '1px solid var(--color-geg-border)', borderRadius: 10 }}>
@@ -670,7 +694,7 @@ export function PerRepCallActivityTable({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: REP_COLS,
+            gridTemplateColumns: repCols,
             gap: 10,
             padding: '6px 0 8px',
             borderBottom: '1px solid var(--color-geg-border)',
@@ -683,26 +707,50 @@ export function PerRepCallActivityTable({
           <SortableHeader label="Rep" sortKey="name" align="left" state={state} onToggle={onToggle} />
           <SortableHeader label="Dials" sortKey="totalCalls" state={state} onToggle={onToggle} />
           <SortableHeader label="Connected" sortKey="connected" state={state} onToggle={onToggle} />
-          <SortableHeader label="Books" sortKey="bookings" state={state} onToggle={onToggle} />
-          <SortableHeader label="Downsell" sortKey="downsells" state={state} onToggle={onToggle} />
-          <SortableHeader label="Reconfirms" sortKey="reconfirms" state={state} onToggle={onToggle} />
-          <SortableHeader label="Follow-up" sortKey="followUps" state={state} onToggle={onToggle} />
-          <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
+          {variant === 'setter' ? (
+            <>
+              <SortableHeader label="HT Book" sortKey="htBookings" state={state} onToggle={onToggle} />
+              <SortableHeader label="DC Book" sortKey="dcBookings" state={state} onToggle={onToggle} />
+              <SortableHeader label="Follow-up" sortKey="followUps" state={state} onToggle={onToggle} />
+              <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
+              <SortableHeader label="Reconfirms" sortKey="reconfirms" state={state} onToggle={onToggle} />
+            </>
+          ) : (
+            <>
+              <SortableHeader label="Confirmed Book" sortKey="confirmedBooks" state={state} onToggle={onToggle} />
+              <SortableHeader label="Reschedule" sortKey="reschedules" state={state} onToggle={onToggle} />
+              <SortableHeader label="Downsell" sortKey="downsellsOnCall" state={state} onToggle={onToggle} />
+              <SortableHeader label="Hand down" sortKey="handToSetter" state={state} onToggle={onToggle} />
+              <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
+            </>
+          )}
           <SortableHeader label="Missing" sortKey="missing" state={state} onToggle={onToggle} />
         </div>
 
         {/* Aggregate row pinned at the top, never sorts */}
-        <div style={{ display: 'grid', gridTemplateColumns: REP_COLS, gap: 10, padding: '11px 0', borderBottom: '1px solid var(--color-geg-border)', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: repCols, gap: 10, padding: '11px 0', borderBottom: '1px solid var(--color-geg-border)', alignItems: 'center' }}>
           <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-2)', fontStyle: 'italic', letterSpacing: '-0.002em' }}>
             All {label.toLowerCase()}
           </span>
           <Num value={aggregate.totalCalls.toString()} accent />
           <ConnectedCell totalCalls={aggregate.totalCalls} totalConnected={aggregate.totalConnected} />
-          <Num value={aggregate.bookings.toString()} />
-          <Num value={aggregate.downsells.toString()} />
-          <ReconfirmsCell reconfirms={aggregate.reconfirms} />
-          <Num value={aggregate.followUps.toString()} />
-          <Num value={aggregate.dqs.toString()} />
+          {variant === 'setter' ? (
+            <>
+              <Num value={aggregate.htBookings.toString()} />
+              <Num value={aggregate.dcBookings.toString()} />
+              <Num value={aggregate.followUps.toString()} />
+              <Num value={aggregate.dqs.toString()} />
+              <ReconfirmsCell reconfirms={aggregate.reconfirms} />
+            </>
+          ) : (
+            <>
+              <Num value={aggregate.confirmedBooks.toString()} />
+              <Num value={aggregate.reschedules.toString()} />
+              <Num value={aggregate.downsellsOnCall.toString()} />
+              <Num value={aggregate.handToSetter.toString()} />
+              <Num value={aggregate.dqs.toString()} />
+            </>
+          )}
           <Num value={aggregate.missing.toString()} />
         </div>
 
@@ -723,7 +771,7 @@ export function PerRepCallActivityTable({
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: REP_COLS,
+                        gridTemplateColumns: repCols,
                         gap: 10,
                         padding: '11px 12px',
                         margin: '0 -12px',
@@ -747,11 +795,23 @@ export function PerRepCallActivityTable({
                       </span>
                       <Num value={r.totalCalls.toString()} accent />
                       <ConnectedCell totalCalls={r.totalCalls} totalConnected={r.totalConnected} />
-                      <Num value={r.bookings.toString()} />
-                      <Num value={r.downsells.toString()} />
-                      <ReconfirmsCell reconfirms={r.reconfirms} />
-                      <Num value={r.followUps.toString()} />
-                      <Num value={r.dqs.toString()} />
+                      {variant === 'setter' ? (
+                        <>
+                          <Num value={r.htBookings.toString()} />
+                          <Num value={r.dcBookings.toString()} />
+                          <Num value={r.followUps.toString()} />
+                          <Num value={r.dqs.toString()} />
+                          <ReconfirmsCell reconfirms={r.reconfirms} />
+                        </>
+                      ) : (
+                        <>
+                          <Num value={r.confirmedBooks.toString()} />
+                          <Num value={r.reschedules.toString()} />
+                          <Num value={r.downsellsOnCall.toString()} />
+                          <Num value={r.handToSetter.toString()} />
+                          <Num value={r.dqs.toString()} />
+                        </>
+                      )}
                       <Num value={r.missing.toString()} />
                     </div>
                   </RepLinkPreservingParams>

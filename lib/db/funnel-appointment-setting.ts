@@ -1038,28 +1038,6 @@ function classifyStatusFlip(newStatusId: string): Outcome | null {
 // sources per rep.
 // ---------------------------------------------------------------------------
 
-export type TriageRepRow = {
-  userId: string | null    // null for the aggregate row
-  name: string | null
-  totalCalls: number       // close_calls outbound by user_id in window
-  totalConnects: number    // same + duration > 0
-  connectRate: number | null
-  bookings: number         // outcomes from Airtable form
-  dqs: number
-  downsells: number
-  followUps: number
-}
-
-export type TriageMetricsResult = {
-  setters: TriageRepRow[]
-  closers: TriageRepRow[]
-  settersAggregate: TriageRepRow
-  closersAggregate: TriageRepRow
-  // Sparseness signal — surfaced on the page so users know to
-  // expect mostly-empty outcome cells while form adoption ramps.
-  totalFormsInWindow: number
-}
-
 // ---------------------------------------------------------------------------
 // Speed-to-Lead (per-lead) — its own section, NOT split by caller.
 //
@@ -1449,15 +1427,22 @@ export type CallActivityRepRow = {
   // underlying call was <=90s (setter still filed an EOC, real
   // engagement). Drake 2026-05-27.
   totalConnected: number
-  // Forms where the setter logged outcome = "Re-confirm" — i.e. the
-  // call was a re-confirmation of a lead that already had a booking.
-  // Driven entirely by the Airtable triage form's booking_status; no
-  // Calendly-side check. Attributed to whoever filled the form.
-  reconfirms: number
-  bookings: number
-  dqs: number
-  downsells: number
-  followUps: number
+  // ── Setter-side outcomes (populated from Airtable `setter_status`) ──
+  // For closer rows these stay 0; for setter rows they hold per-rep
+  // counts. Drake 2026-05-27: forms predating the Setter Status field
+  // contribute nothing here — those rows render as "NA" in the drill.
+  htBookings: number     // 'Confirmed HT Booking'
+  dcBookings: number     // 'Confirmed DC Booking'
+  followUps: number      // 'Follow up'
+  reconfirms: number     // 'Reconfirm' (rare; last column)
+  // ── Closer-side outcomes (populated from Airtable `closer_status`) ──
+  // For setter rows these stay 0.
+  confirmedBooks: number    // 'Confirmed Book'
+  reschedules: number       // 'Reschedule'
+  downsellsOnCall: number   // 'Downsell (on call)'
+  handToSetter: number      // 'Hand to Setter list'
+  // ── Shared ──
+  dqs: number               // 'DQ' on either Setter Status or Closer Status
   // Sessions with no EOC form filed — the engagement proxy fired
   // (over-90s call(s) to the same lead in 3h) but no form matched
   // any call in the session. max(0, sessions - matchedSessions) so
@@ -1611,8 +1596,32 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Range padding: extend BACKWARD by 0 (the form's call has to be
   // within the range), FORWARD by lookback (a call at range-end could
   // have a form filed up to lookback hours later).
-  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number; reconfirms: number }
-  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0, reconfirms: 0 })
+  //
+  // Outcomes carries every possible bucket (setter-side + closer-side +
+  // shared). Setter rows only populate setter buckets, closer rows only
+  // populate closer buckets — see the resolveRole branch below.
+  type Outcomes = {
+    htBookings: number
+    dcBookings: number
+    followUps: number
+    reconfirms: number
+    confirmedBooks: number
+    reschedules: number
+    downsellsOnCall: number
+    handToSetter: number
+    dqs: number
+  }
+  const newOutcomes = (): Outcomes => ({
+    htBookings: 0,
+    dcBookings: 0,
+    followUps: 0,
+    reconfirms: 0,
+    confirmedBooks: 0,
+    reschedules: 0,
+    downsellsOnCall: 0,
+    handToSetter: 0,
+    dqs: 0,
+  })
   const outcomesByUser = new Map<string, Outcomes>()
   // Per-rep set of session keys that at least one form matched. Used
   // by the "missing" calc — every session without an entry here is
@@ -1625,7 +1634,17 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   const formOnlyByUser = new Map<string, number>()
   let totalForms = 0
   {
-    type FormRow = { record_id: string; lead_id: string | null; booking_status: string | null; setter_names: string[] | null; setter_record_ids: string[] | null; event_date_time: string | null; airtable_created_at: string }
+    type FormRow = {
+      record_id: string
+      lead_id: string | null
+      booking_status: string | null    // legacy field (pre 2026-05-27)
+      setter_status: string | null     // new: "Confirmed HT Booking" etc.
+      closer_status: string | null     // new: "Confirmed Book" etc.
+      setter_names: string[] | null
+      setter_record_ids: string[] | null
+      event_date_time: string | null
+      airtable_created_at: string
+    }
     const allRows: FormRow[] = []
     const formWindowStartIso = range.startUtcIso
     const formWindowEndIso = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
@@ -1633,7 +1652,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     for (;;) {
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, booking_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, booking_status, setter_status, closer_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStartIso)
         .lt('airtable_created_at', formWindowEndIso)
         .range(from, from + 999)
@@ -1682,8 +1701,6 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (!existing || rDate > eDate) latestByLead.set(r.lead_id, r)
     }
     latestByLead.forEach((r) => {
-      const bucket = classifyBookingStatus(r.booking_status)
-      if (bucket === 'unclassified') return
       const m = matchByRecord.get(r.record_id)
       // Use the same resolver as matchInputs above — airtable rec_id
       // wins over name. A form attributes to exactly one rep (a real
@@ -1691,6 +1708,17 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       // owner only, matching dedupe-by-lead semantics elsewhere).
       const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
       if (!uid) return
+      // Pick the role-appropriate classifier. Setter rows that lack
+      // setter_status (pre-redesign Aman forms) classify to
+      // 'unclassified' and are skipped — they show "NA" in the drill
+      // but contribute nothing to the per-rep counters.
+      const role = resolveRole(uid, closerUsers, setterUsers)
+      if (!role) return
+      const bucket =
+        role === 'setter'
+          ? classifySetterStatus(r.setter_status)
+          : classifyCloserStatus(r.closer_status)
+      if (bucket === 'unclassified') return
       if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
       outcomesByUser.get(uid)![bucket]++
       if (m?.matchedCallId) {
@@ -1737,11 +1765,15 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       totalCalls: v.calls,
       totalOver90s: v.over90s,
       totalConnected: sessions + formOnly,
-      reconfirms: o.reconfirms,
-      bookings: o.bookings,
-      dqs: o.dqs,
-      downsells: o.downsells,
+      htBookings: o.htBookings,
+      dcBookings: o.dcBookings,
       followUps: o.followUps,
+      reconfirms: o.reconfirms,
+      confirmedBooks: o.confirmedBooks,
+      reschedules: o.reschedules,
+      downsellsOnCall: o.downsellsOnCall,
+      handToSetter: o.handToSetter,
+      dqs: o.dqs,
       missing: Math.max(0, sessions - matchedSessions),
     }
     if (role === 'setter') setters.push(row)
@@ -1760,16 +1792,23 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
-  let calls = 0, over90s = 0, connected = 0, reconfirms = 0, bookings = 0, dqs = 0, downsells = 0, followUps = 0, missing = 0
+  let calls = 0, over90s = 0, connected = 0, missing = 0
+  let htBookings = 0, dcBookings = 0, followUps = 0, reconfirms = 0
+  let confirmedBooks = 0, reschedules = 0, downsellsOnCall = 0, handToSetter = 0
+  let dqs = 0
   for (const r of rows) {
     calls += r.totalCalls
     over90s += r.totalOver90s
     connected += r.totalConnected
-    reconfirms += r.reconfirms
-    bookings += r.bookings
-    dqs += r.dqs
-    downsells += r.downsells
+    htBookings += r.htBookings
+    dcBookings += r.dcBookings
     followUps += r.followUps
+    reconfirms += r.reconfirms
+    confirmedBooks += r.confirmedBooks
+    reschedules += r.reschedules
+    downsellsOnCall += r.downsellsOnCall
+    handToSetter += r.handToSetter
+    dqs += r.dqs
     missing += r.missing
   }
   return {
@@ -1778,11 +1817,15 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     totalCalls: calls,
     totalOver90s: over90s,
     totalConnected: connected,
-    reconfirms,
-    bookings,
-    dqs,
-    downsells,
+    htBookings,
+    dcBookings,
     followUps,
+    reconfirms,
+    confirmedBooks,
+    reschedules,
+    downsellsOnCall,
+    handToSetter,
+    dqs,
     missing,
   }
 }
@@ -1855,16 +1898,19 @@ export async function getCallActivityForUser(
     }
   }
 
-  // Pull this rep's airtable_user_id from team_members so the form
-  // filter can match by ID (more robust than name when reps go by
-  // nicknames).
+  // Pull this rep's airtable_user_id AND sales_role from team_members.
+  // airtable_user_id keys the form-attribution match (more robust than
+  // name when reps go by nicknames). sales_role decides which status
+  // field (setter_status vs closer_status) drives the drill's Outcome
+  // column.
   const { data: tmRow } = await sb
     .from('team_members' as never)
-    .select('airtable_user_id')
+    .select('airtable_user_id, sales_role')
     .eq('close_user_id', userId)
     .is('archived_at', null)
     .maybeSingle()
   const repAirtableId = (tmRow as { airtable_user_id?: string | null } | null)?.airtable_user_id ?? null
+  const repRole = (tmRow as { sales_role?: string | null } | null)?.sales_role ?? null
 
   // Forms filled by this rep — pull airtable_created_at within
   // [range start, range end + 48h] so we catch forms submitted after
@@ -1876,7 +1922,9 @@ export async function getCallActivityForUser(
     record_id: string
     lead_id: string | null
     prospect_name: string | null
-    booking_status: string | null
+    booking_status: string | null   // legacy single field (pre 2026-05-27)
+    setter_status: string | null    // new
+    closer_status: string | null    // new
     setter_names: string[] | null
     setter_record_ids: string[] | null
     event_date_time: string | null
@@ -1890,7 +1938,7 @@ export async function getCallActivityForUser(
     for (;;) {
       const { data, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, prospect_name, booking_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, prospect_name, booking_status, setter_status, closer_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStart)
         .lt('airtable_created_at', formWindowEnd)
         .range(from, from + 999)
@@ -1965,6 +2013,29 @@ export async function getCallActivityForUser(
     }
   })
 
+  // Status-string + bucket per row: pick the role-appropriate Airtable
+  // field. Old forms (pre 2026-05-27 redesign) carry only booking_status,
+  // which we no longer classify — show "NA" so the rep sees the form
+  // is on file but pre-redesign, without inflating any per-rep counter.
+  const NA_LABEL = 'NA'
+  const statusFor = (f: FormRow | undefined | null): {
+    label: string | null
+    bucket: TriageCallDrillRow['bucket']
+  } => {
+    if (!f) return { label: null, bucket: 'unclassified' }
+    if (repRole === 'setter') {
+      if (f.setter_status) {
+        return { label: f.setter_status, bucket: classifySetterStatus(f.setter_status) }
+      }
+    } else if (repRole === 'closer') {
+      if (f.closer_status) {
+        return { label: f.closer_status, bucket: classifyCloserStatus(f.closer_status) }
+      }
+    }
+    // Old form with only booking_status, or role unknown → render NA.
+    return { label: NA_LABEL, bucket: 'unclassified' }
+  }
+
   // One drill row per session. Representative call = the call the
   // form is matched to (so outcome + timestamp + duration all align),
   // else the most recent call in the session.
@@ -1983,14 +2054,15 @@ export async function getCallActivityForUser(
       }
     }
     const c = callByCallId.get(repCallId)!
+    const status = statusFor(form)
     return {
       callId: c.callId,
       leadId,
       prospectName: form?.prospect_name ?? formProspectByLead.get(leadId) ?? leadName.get(leadId) ?? null,
       callAt: c.activityAt,
       durationSec: c.durationSec,
-      bookingStatus: form?.booking_status ?? null,
-      bucket: classifyBookingStatus(form?.booking_status ?? null),
+      bookingStatus: status.label,
+      bucket: status.bucket,
       groupedCallCount: session.callIds.length,
     }
   })
@@ -2002,14 +2074,15 @@ export async function getCallActivityForUser(
   for (const r of inRangeForms) {
     const m = matchByRecord.get(r.record_id)
     if (m?.matchedCallId) continue
+    const status = statusFor(r)
     formOnlyRows.push({
       callId: `form:${r.record_id}`,
       leadId: r.lead_id ?? '',
       prospectName: r.prospect_name,
       callAt: m?.effectiveDateIso ?? r.event_date_time ?? '',
       durationSec: 0,
-      bookingStatus: r.booking_status,
-      bucket: classifyBookingStatus(r.booking_status),
+      bookingStatus: status.label,
+      bucket: status.bucket,
       noMatchingCall: true,
     })
   }
@@ -2022,238 +2095,53 @@ export type TriageCallDrillRow = {
   prospectName: string | null
   occurredAtIso: string    // event_date_time if set, else airtable_created_at
   bookingStatus: string | null
-  bucket: 'bookings' | 'dqs' | 'downsells' | 'followUps' | 'reconfirms' | 'unclassified'
+  bucket:
+    | 'htBookings'
+    | 'dcBookings'
+    | 'followUps'
+    | 'reconfirms'
+    | 'confirmedBooks'
+    | 'reschedules'
+    | 'downsellsOnCall'
+    | 'handToSetter'
+    | 'dqs'
+    | 'unclassified'
 }
 
-function classifyBookingStatus(bs: string | null): TriageCallDrillRow['bucket'] {
-  if (!bs) return 'unclassified'
-  const s = bs.toLowerCase()
-  if (s.includes('confirmed booked')) return 'bookings'
-  if (s.includes('disqualif')) return 'dqs'
-  if (s.includes('downsell') || s.includes('digital college')) return 'downsells'
-  // "Re-confirm" / "Reconfirm" — added 2026-05-27 (setter logs the
-  // call confirmed a lead's existing booking). Must come BEFORE the
-  // generic 'confirm' check is added (we don't have one) and before
-  // 'follow' since the form copy doesn't overlap.
-  if (s.includes('re-confirm') || s.includes('reconfirm')) return 'reconfirms'
-  if (s.includes('follow')) return 'followUps'
+// Setter Status dropdown (post 2026-05-27 form redesign).
+// "Confirmed HT Booking" / "Confirmed DC Booking" / "Follow up" /
+// "Reconfirm" / "DQ". Null or unknown → unclassified (drill shows NA,
+// no counter bumped).
+function classifySetterStatus(s: string | null): TriageCallDrillRow['bucket'] {
+  if (!s) return 'unclassified'
+  const v = s.toLowerCase()
+  if (v.includes('ht booking') || v.includes('high ticket')) return 'htBookings'
+  if (v.includes('dc booking') || v.includes('digital college')) return 'dcBookings'
+  // Reconfirm before Follow because "follow" substring would otherwise
+  // win if a label ever read "follow-up reconfirm" or similar.
+  if (v.includes('reconfirm') || v.includes('re-confirm')) return 'reconfirms'
+  if (v.includes('follow')) return 'followUps'
+  if (v === 'dq' || v.includes('disqualif')) return 'dqs'
   return 'unclassified'
 }
 
-export async function getTriageMetrics(arg: Window | DateRange): Promise<TriageMetricsResult> {
-  const range = resolveRange(arg)
-  const sb = createAdminClient()
-
-  // team_members sales identity — authoritative; merged into the
-  // close_leads owner fallback below.
-  const salesId = await loadSalesIdentity(sb)
-
-  // Global role index (same source as speed-to-lead). Acts as a
-  // fallback for users not yet in team_members.
-  const { data: ownerRows, error: ownerErr } = await sb
-    .from('close_leads' as never)
-    .select('closer_owner_id, setter_owner_id')
-    .or('closer_owner_id.not.is.null,setter_owner_id.not.is.null')
-    .range(0, 19999)
-  if (ownerErr) throw new Error(`close_leads owner read failed: ${ownerErr.message}`)
-  const closerUsers = new Set<string>()
-  const setterUsers = new Set<string>()
-  for (const r of (ownerRows ?? []) as unknown as Array<{ closer_owner_id: string | null; setter_owner_id: string | null }>) {
-    if (r.closer_owner_id) closerUsers.add(r.closer_owner_id)
-    if (r.setter_owner_id) setterUsers.add(r.setter_owner_id)
-  }
-
-  // Volume side: outbound calls in window, per user. Also build the
-  // user_id → name map AND the name → user_id reverse lookup so we
-  // can join Airtable's setter_names back to a Close user_id.
-  type Volume = { calls: number; connects: number }
-  const volumeByUser = new Map<string, Volume>()
-  const nameByUser = new Map<string, string>()
-  const userIdByName = new Map<string, string>()
-  let from = 0
-  for (;;) {
-    const { data: page, error } = await sb
-      .from('close_calls' as never)
-      .select('user_id, duration, raw_payload')
-      .eq('direction', 'outbound')
-      .not('user_id', 'is', null)
-      .gte('activity_at', range.startUtcIso)
-      .lt('activity_at', range.endUtcIso)
-      .range(from, from + 999)
-    if (error) throw new Error(`close_calls read failed: ${error.message}`)
-    const rows = (page ?? []) as unknown as Array<{ user_id: string; duration: number | null; raw_payload: { user_name?: string } | null }>
-    if (rows.length === 0) break
-    for (const r of rows) {
-      if (!volumeByUser.has(r.user_id)) volumeByUser.set(r.user_id, { calls: 0, connects: 0 })
-      const v = volumeByUser.get(r.user_id)!
-      v.calls++
-      if ((r.duration ?? 0) > 0) v.connects++
-      const nm = r.raw_payload?.user_name
-      if (nm && !nameByUser.has(r.user_id)) {
-        nameByUser.set(r.user_id, nm)
-        userIdByName.set(nm, r.user_id)
-      }
-    }
-    if (rows.length < 1000) break
-    from += 1000
-  }
-
-  // Merge team_members identity in. Same rationale as
-  // getCallActivityMetrics.
-  mergeSalesIdentity(userIdByName, nameByUser, closerUsers, setterUsers, salesId)
-
-  // Outcomes side: Airtable form rows in window. Each row's setter
-  // is mapped back to a Close user_id by name.
-  type Outcomes = { bookings: number; dqs: number; downsells: number; followUps: number; reconfirms: number }
-  const newOutcomes = (): Outcomes => ({ bookings: 0, dqs: 0, downsells: 0, followUps: 0, reconfirms: 0 })
-  const outcomesByUser = new Map<string, Outcomes>()
-  let totalForms = 0
-  let formFrom = 0
-  // Filter by event_date_time (call's actual date), not the form's
-  // submit timestamp. See note in getCallActivityMetrics for rationale.
-  for (;;) {
-    const { data: page, error } = await sb
-      .from('airtable_setter_triage_calls' as never)
-      .select('record_id, booking_status, setter_names, event_date_time')
-      .gte('event_date_time', range.startUtcIso)
-      .lt('event_date_time', range.endUtcIso)
-      .range(formFrom, formFrom + 999)
-    if (error) throw new Error(`airtable_setter_triage_calls read failed: ${error.message}`)
-    const rows = (page ?? []) as unknown as Array<{ record_id: string; booking_status: string | null; setter_names: string[] | null; event_date_time: string | null }>
-    if (rows.length === 0) break
-    totalForms += rows.length
-    for (const r of rows) {
-      const bucket = classifyBookingStatus(r.booking_status)
-      if (bucket === 'unclassified') continue
-      const names = r.setter_names ?? []
-      // One outcome per form-row. If multiple setter_names, credit
-      // each (rare; usually just one). Could double-count if a row
-      // legitimately has two reps.
-      for (const nm of names) {
-        const uid = userIdByName.get(nm)
-        if (!uid) continue
-        if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
-        outcomesByUser.get(uid)![bucket]++
-      }
-    }
-    if (rows.length < 1000) break
-    formFrom += 1000
-  }
-
-  // Merge volume + outcomes per user; route to setters/closers.
-  const setterRows: TriageRepRow[] = []
-  const closerRows: TriageRepRow[] = []
-  const allUserIds = new Set<string>([
-    ...Array.from(volumeByUser.keys()),
-    ...Array.from(outcomesByUser.keys()),
-  ])
-  allUserIds.forEach((userId) => {
-    const role = resolveRole(userId, closerUsers, setterUsers)
-    if (!role) return
-    const v = volumeByUser.get(userId) ?? { calls: 0, connects: 0 }
-    const o = outcomesByUser.get(userId) ?? newOutcomes()
-    const row: TriageRepRow = {
-      userId,
-      name: nameByUser.get(userId) ?? null,
-      totalCalls: v.calls,
-      totalConnects: v.connects,
-      connectRate: v.calls > 0 ? v.connects / v.calls : null,
-      bookings: o.bookings,
-      dqs: o.dqs,
-      downsells: o.downsells,
-      followUps: o.followUps,
-    }
-    if (role === 'setter') setterRows.push(row)
-    else closerRows.push(row)
-  })
-  setterRows.sort((a, b) => b.totalCalls - a.totalCalls)
-  closerRows.sort((a, b) => b.totalCalls - a.totalCalls)
-
-  return {
-    setters: setterRows,
-    closers: closerRows,
-    settersAggregate: aggregateRows(setterRows),
-    closersAggregate: aggregateRows(closerRows),
-    totalFormsInWindow: totalForms,
-  }
+// Closer Status dropdown (post 2026-05-27 form redesign).
+// "Confirmed Book" / "Reschedule" / "Downsell (on call)" /
+// "Hand to Setter list" / "DQ". Null or unknown → unclassified.
+function classifyCloserStatus(s: string | null): TriageCallDrillRow['bucket'] {
+  if (!s) return 'unclassified'
+  const v = s.toLowerCase()
+  // "Confirmed Book" — careful not to swallow setter-side "HT Booking" /
+  // "DC Booking" strings; that's prevented by routing closer rows to
+  // this classifier (and setter rows to the other) upstream.
+  if (v.includes('confirmed book')) return 'confirmedBooks'
+  if (v.includes('reschedule')) return 'reschedules'
+  if (v.includes('downsell')) return 'downsellsOnCall'
+  if (v.includes('hand') && v.includes('setter')) return 'handToSetter'
+  if (v === 'dq' || v.includes('disqualif')) return 'dqs'
+  return 'unclassified'
 }
 
-function aggregateRows(rows: TriageRepRow[]): TriageRepRow {
-  const totals = { totalCalls: 0, totalConnects: 0, bookings: 0, dqs: 0, downsells: 0, followUps: 0 }
-  for (const r of rows) {
-    totals.totalCalls += r.totalCalls
-    totals.totalConnects += r.totalConnects
-    totals.bookings += r.bookings
-    totals.dqs += r.dqs
-    totals.downsells += r.downsells
-    totals.followUps += r.followUps
-  }
-  return {
-    userId: null,
-    name: null,
-    totalCalls: totals.totalCalls,
-    totalConnects: totals.totalConnects,
-    connectRate: totals.totalCalls > 0 ? totals.totalConnects / totals.totalCalls : null,
-    bookings: totals.bookings,
-    dqs: totals.dqs,
-    downsells: totals.downsells,
-    followUps: totals.followUps,
-  }
-}
-
-// Drill-down: list this rep's Airtable form rows in the window so
-// the page can show their calls (prospect, time, outcome).
-export async function getTriageCallsForUser(
-  arg: Window | DateRange,
-  userId: string,
-): Promise<TriageCallDrillRow[]> {
-  const range = resolveRange(arg)
-  const sb = createAdminClient()
-
-  // Resolve every name this rep is known by — close display name +
-  // first-name alias + manual-setter entry. Drives the setter_names
-  // overlap filter on Airtable form rows.
-  const knownNames = await buildKnownNamesForUser(sb, userId)
-  if (knownNames.size === 0) return []
-
-  // Pull all Airtable rows whose event happened in window; filter in
-  // JS by setter_names overlap with knownNames. Date filter matches
-  // the aggregate side — see note in getCallActivityMetrics.
-  const out: TriageCallDrillRow[] = []
-  let af = 0
-  for (;;) {
-    const { data: page, error } = await sb
-      .from('airtable_setter_triage_calls' as never)
-      .select('record_id, prospect_name, booking_status, setter_names, event_date_time')
-      .gte('event_date_time', range.startUtcIso)
-      .lt('event_date_time', range.endUtcIso)
-      .order('event_date_time', { ascending: false })
-      .range(af, af + 999)
-    if (error) throw new Error(`airtable_setter_triage_calls drill read failed: ${error.message}`)
-    const rows = (page ?? []) as unknown as Array<{
-      record_id: string
-      prospect_name: string | null
-      booking_status: string | null
-      setter_names: string[] | null
-      event_date_time: string | null
-    }>
-    if (rows.length === 0) break
-    for (const r of rows) {
-      const namesHere = r.setter_names ?? []
-      if (!namesHere.some((n) => knownNames.has(n))) continue
-      out.push({
-        recordId: r.record_id,
-        prospectName: r.prospect_name,
-        occurredAtIso: r.event_date_time ?? '',
-        bookingStatus: r.booking_status,
-        bucket: classifyBookingStatus(r.booking_status),
-      })
-    }
-    if (rows.length < 1000) break
-    af += 1000
-  }
-  return out
-}
 
 export type CloserTriageRow = {
   userId: string | null      // null for the aggregate row

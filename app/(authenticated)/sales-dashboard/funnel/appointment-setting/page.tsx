@@ -379,6 +379,7 @@ function CallActivityStacked({
       <div style={{ display: 'grid', gap: 14 }}>
         <PerRepCallActivityTable
           label="Setters"
+          variant="setter"
           aggregate={settersAggregate}
           rows={setters}
           selectedRep={selectedRep}
@@ -386,6 +387,7 @@ function CallActivityStacked({
         />
         <PerRepCallActivityTable
           label="Closers"
+          variant="closer"
           aggregate={closersAggregate}
           rows={closers}
           selectedRep={selectedRep}
@@ -402,11 +404,13 @@ function CallActivityStacked({
           lineHeight: 1.5,
         }}
       >
-        Volume + calls over 90s from <code>close_calls</code>. Outcomes (Books /
-        Downsell / Reconfirms / Follow-up / DQs) from
-        <code>airtable_setter_triage_calls</code>, attributed to whoever filled
-        the form. Speed-to-lead = avg of each rep's earliest call to each lead
-        minus lead creation (24h cap on outliers).
+        Volume + calls over 90s from <code>close_calls</code>. Setter outcomes
+        (HT Book / DC Book / Follow-up / DQ / Reconfirm) come from the form's
+        <code>Setter Status</code>; closer outcomes (Confirmed Book / Reschedule
+        / Downsell / Hand down / DQ) from <code>Closer Status</code>. Forms
+        predating the 2026-05-27 split show as NA in the drill. Speed-to-lead =
+        avg of each rep's earliest call to each lead minus lead creation (24h
+        cap on outliers).
         {totalFormsInWindow > 0
           ? ` ${totalFormsInWindow} form${totalFormsInWindow === 1 ? '' : 's'} filled in this range — adoption is still ramping.`
           : ' No Airtable form rows yet in this range.'}

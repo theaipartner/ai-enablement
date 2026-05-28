@@ -203,9 +203,16 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
   const closersAgg = callActivity.closersAggregate
   const totalDials = settersAgg.totalCalls + closersAgg.totalCalls
   const totalOver90s = settersAgg.totalOver90s + closersAgg.totalOver90s
-  const totalBookings = settersAgg.bookings + closersAgg.bookings
+  // Post 2026-05-27 form redesign:
+  //   - "Booked meetings" tile = HT bookings the setter set up (the
+  //     identity rename of the old "Confirmed Booked with Closer").
+  //     Closer-side `confirmedBooks` is a CLOSE (a sale), conceptually
+  //     different from a booking, so it doesn't roll up here.
+  //   - "Downsells" tile = any DC outcome (setter booked into a DC
+  //     call OR closer sold DC live on the call).
+  const totalBookings = settersAgg.htBookings
   const totalDqs = settersAgg.dqs + closersAgg.dqs
-  const totalDownsells = settersAgg.downsells + closersAgg.downsells
+  const totalDownsells = settersAgg.dcBookings + closersAgg.downsellsOnCall
   const fmrCount = fmr.cohortEverReplied
 
   const apptBox: FunnelBox = {

@@ -130,7 +130,15 @@ def parse_setter_triage(record: dict[str, Any]) -> dict[str, Any] | None:
         "lead_id": _to_str(fields.get("Lead ID")),
         "prospect_name": _to_str(fields.get("Prospect Name")),
         "outcome": _to_str(fields.get("Outcome")),
+        # Legacy single-field disposition (kept for backward compat with
+        # forms filed before the 2026-05-27 Airtable redesign — Aman's
+        # earlier submissions reference this only).
         "booking_status": _to_str(fields.get("Booking Status")),
+        # New split disposition (introduced 2026-05-27). Setter-filled
+        # forms populate Setter Status; closer-filled forms populate
+        # Closer Status. Mutually exclusive on a single record.
+        "setter_status": _to_str(fields.get("Setter Status")),
+        "closer_status": _to_str(fields.get("Closer Status")),
         "showed_pct": _to_bool(fields.get("Showed %")),
         "no_show_pct": _to_bool(fields.get("No Show %")),
         "booked_with_closer": _to_bool(fields.get("Booked with Closer?")),

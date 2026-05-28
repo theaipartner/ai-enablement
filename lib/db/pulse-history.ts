@@ -265,14 +265,18 @@ async function fetchDay(day: string): Promise<DayAgg> {
   const adsSpend = pickAgg(ads, 'adspend')
   const adsUlc = pickAgg(ads, 'unique-clicks')
 
-  // Combined setters + closers totals (mirrors getFunnelActivity)
+  // Combined setters + closers totals (mirrors getFunnelActivity).
+  // Same mapping as funnel-stages.ts after the 2026-05-27 form split:
+  //   bookings  = setter HT bookings only (closer confirmedBooks is a
+  //               close, not a booking)
+  //   downsells = setter DC bookings + closer downsells-on-call
   const settersAgg = calls.settersAggregate
   const closersAgg = calls.closersAggregate
   const totalDials = settersAgg.totalCalls + closersAgg.totalCalls
   const totalOver90s = settersAgg.totalOver90s + closersAgg.totalOver90s
-  const totalBookings = settersAgg.bookings + closersAgg.bookings
+  const totalBookings = settersAgg.htBookings
   const totalDqs = settersAgg.dqs + closersAgg.dqs
-  const totalDownsells = settersAgg.downsells + closersAgg.downsells
+  const totalDownsells = settersAgg.dcBookings + closersAgg.downsellsOnCall
 
   return {
     day,
