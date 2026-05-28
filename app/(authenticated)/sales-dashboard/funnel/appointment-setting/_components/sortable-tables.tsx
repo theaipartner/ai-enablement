@@ -167,7 +167,7 @@ function ReconfirmsCell({ reconfirms }: { reconfirms: number }) {
 // connected". When totalCalls is 0 the rate is suppressed (—).
 //
 // `totalConnected` = drill row count for this rep: over-90s sessions
-// (chained calls to one lead within 3h) + form-only rows (calls
+// (chained calls to one lead within 1 day) + form-only rows (calls
 // <=90s where the setter still filled an EOC). A "session" collapses
 // disconnect-and-redial sequences into one engagement entry.
 function ConnectedCell({ totalCalls, totalConnected }: { totalCalls: number; totalConnected: number }) {
@@ -183,7 +183,7 @@ function ConnectedCell({ totalCalls, totalConnected }: { totalCalls: number; tot
       title={
         pct === null
           ? 'No dials in this range'
-          : `${totalConnected} of ${totalCalls} dials connected (${pct}%). Connected = over-90s sessions (chained calls within 3h count as one) + sub-90s calls with a triage form filed.`
+          : `${totalConnected} of ${totalCalls} dials connected (${pct}%). Connected = over-90s sessions (chained calls within 1 day count as one) + sub-90s calls with a triage form filed.`
       }
     >
       {pct !== null ? (
@@ -552,7 +552,7 @@ function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
         ) : (c.groupedCallCount ?? 1) > 1 ? (
           <span
             className="geg-mono"
-            title={`${c.groupedCallCount} over-90s calls to this lead within 3h — collapsed into one session. Duration + outcome are from the matched-form call (or the most recent call if no form matched).`}
+            title={`${c.groupedCallCount} over-90s calls to this lead within 1 day — collapsed into one session. Duration + outcome are from the matched-form call (or the most recent call if no form matched).`}
             style={{
               fontSize: 9,
               letterSpacing: '0.08em',

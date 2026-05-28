@@ -1373,8 +1373,11 @@ export async function getSpeedToLeadCohort(
 // Session grouping — multiple over-90s calls to the same lead by the
 // same rep within SESSION_GAP_MS of each other count as ONE session.
 // Setter disconnects and redials a few minutes later → same session →
-// one EOC form → one drill row. Drake 2026-05-27.
-const SESSION_GAP_MS = 3 * 60 * 60 * 1000  // 3 hours
+// one EOC form → one drill row. Drake 2026-05-27 originally set the
+// gap to 3h; widened to 1 day 2026-05-28 because closer/setter
+// sometimes leave a same-lead callback open across a half-day, and
+// the longer chain matches the "one logical engagement" intent.
+const SESSION_GAP_MS = 24 * 60 * 60 * 1000  // 24 hours
 
 type CallForSession = { callId: string; activityAt: string }
 type CallSession = {
@@ -1421,7 +1424,7 @@ export type CallActivityRepRow = {
   totalOver90s: number
   // Drill-entry count == what the Connected column shows. Equals
   // `over-90s sessions + in-range form-only rows`. A session is one
-  // or more chained >90s calls to the same lead within 3h of each
+  // or more chained >90s calls to the same lead within 1 day of each
   // other (setter redials after disconnect → still one engagement).
   // Form-only rows are triage forms attributed to this rep whose
   // underlying call was <=90s (setter still filed an EOC, real
@@ -1474,7 +1477,7 @@ export type CallActivityDrillRow = {
   noMatchingCall?: boolean
   // Number of >90s calls in the session this row represents. 1 for
   // ordinary single-call rows (the default); > 1 means the setter
-  // dialed the same lead multiple times within 3h and we collapsed
+  // dialed the same lead multiple times within 1 day and we collapsed
   // them into one row (UI shows a "×N" tag).
   groupedCallCount?: number
 }
@@ -1509,7 +1512,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   //
   // We also retain (user_id, lead_id, close_id, activity_at) tuples for
   // every over-90s call so we can group them into sessions below —
-  // multiple calls to the same lead within 3h chain into one session
+  // multiple calls to the same lead within 1 day chain into one session
   // and count as a single Connected entry / a single expected EOC.
   type Vol = { calls: number; over90s: number }
   const volumeByUser = new Map<string, Vol>()
@@ -1995,7 +1998,7 @@ export async function getCallActivityForUser(
     }
   }
 
-  // Group calls into sessions per lead — calls within 3h of the
+  // Group calls into sessions per lead — calls within 1 day of the
   // previous chain into one session. Drake 2026-05-27: setter
   // disconnects + redials a few min later is still one engagement,
   // gets one EOC form, should be one drill row.
