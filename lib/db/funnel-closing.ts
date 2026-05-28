@@ -380,6 +380,13 @@ export type CloserScheduledDrillRow = {
   // null if the close happened but plan unknown, or not closed yet.
   closeType: 'ht' | 'dc' | null
   upfront: number | null
+  // Booking lifecycle. 'active' = still on the calendar. 'canceled' =
+  // hard cancel (booking fell through). 'rescheduled' = the original
+  // slot was moved (Calendly cancels the old leg with reason
+  // "Rescheduled from connected calendar event"; a new active event
+  // exists separately). Canceled + rescheduled rows show in the drill
+  // with a tag but do NOT count toward the closer's aggregates.
+  bookingStatus: 'active' | 'canceled' | 'rescheduled'
 }
 
 export type CloserScheduledAggregate = {
@@ -411,6 +418,19 @@ function categorizeEventName(name: string): CloserCallType | null {
   if (n.startsWith('partnership call')) return 'setter'
   if (n.startsWith('ai partner sync')) return 'rebook'
   return null
+}
+
+// Closer-booking lifecycle. Calendly cancels the original leg of a
+// reschedule with the sentinel reason "Rescheduled from connected
+// calendar event"; any other cancellation is a hard cancel. Active
+// events (status != canceled) are live bookings.
+function resolveBookingStatus(
+  status: string | null,
+  cancellation: { reason?: string | null } | null,
+): 'active' | 'canceled' | 'rescheduled' {
+  if (status !== 'canceled') return 'active'
+  const reason = (cancellation?.reason ?? '').toLowerCase()
+  return reason.includes('reschedul') ? 'rescheduled' : 'canceled'
 }
 
 function normalizeShowed(raw: string | null): 'yes' | 'no' | 'dq' | null {
@@ -620,7 +640,7 @@ export async function getClosingScheduledList(
   //    for AI Strategy with long lead time).
   const { data: eventData, error: eventErr } = await sb
     .from('calendly_scheduled_events' as never)
-    .select('uri, name, start_time, host_user_name, status')
+    .select('uri, name, start_time, host_user_name, status, cancellation')
     .gte('start_time', range.startUtcIso)
     .lt('start_time', range.endUtcIso)
     .order('start_time', { ascending: true })
@@ -632,18 +652,27 @@ export async function getClosingScheduledList(
     start_time: string
     host_user_name: string | null
     status: string | null
+    cancellation: { reason?: string | null } | null
   }>
-  // Categorize + drop non-closer events. Also drop canceled events
-  // from the per-closer "calls" count (they didn't happen).
+  // Categorize + drop non-closer events. Canceled events are KEPT
+  // (Drake 2026-05-28: show them in the drill tagged Canceled /
+  // Rescheduled) — they just don't count toward the aggregates, gated
+  // per-row in the loop below via bookingStatus.
   const events = allEvents
-    .map((e) => ({ ...e, callType: categorizeEventName(e.name) }))
-    .filter((e) => e.callType !== null && e.status !== 'canceled') as Array<{
+    .map((e) => ({
+      ...e,
+      callType: categorizeEventName(e.name),
+      bookingStatus: resolveBookingStatus(e.status, e.cancellation),
+    }))
+    .filter((e) => e.callType !== null) as Array<{
       uri: string
       name: string
       start_time: string
       host_user_name: string | null
       status: string | null
+      cancellation: { reason?: string | null } | null
       callType: CloserCallType
+      bookingStatus: 'active' | 'canceled' | 'rescheduled'
     }>
 
   if (events.length === 0) {
@@ -789,14 +818,13 @@ export async function getClosingScheduledList(
   for (const ev of events) {
     const closer = ev.host_user_name ?? '(no host)'
     const agg = bumpAgg(closer)
-    agg.calls++
-    if (ev.callType === 'direct') agg.directCalls++
-    else if (ev.callType === 'setter') agg.setterCalls++
-    else if (ev.callType === 'rebook') agg.followupCalls++
+    const active = ev.bookingStatus === 'active'
 
     const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null, phones: [] }
-    const form = matchForm(ev.start_time, invitee.name)
 
+    // Outcomes (showed/closed/cash) only apply to calls that actually
+    // happened. A canceled or rescheduled slot has no closer outcome.
+    const form = active ? matchForm(ev.start_time, invitee.name) : null
     const showed = form ? normalizeShowed(form.showed) : null
     const closed = form ? normalizeClosed(form.closed) : null
     const upfront =
@@ -814,19 +842,28 @@ export async function getClosingScheduledList(
     // "Partnership Call" event type). Direct ad bookings ("Ai Partner
     // Strategy Call", carrying utm ad-attribution) and rebooks have no
     // setter, so we don't resolve one — the UI renders "—" for those.
-    // Matched from the setter triage form's Confirmed Call Date&Time +
-    // lead identity (see buildBookedByResolver); null → "Missing".
+    // Resolved even for canceled/rescheduled bookings so Drake can see
+    // whose booking fell through. null → "Missing".
     const bookedBy: string | null =
       ev.callType === 'setter' ? bookedByResolver(ev.start_time, invitee) : null
 
-    if (showed === 'yes') agg.showed++
-    if (showed === 'no') agg.noShows++
-    if (closed === 'yes') {
-      agg.closed++
-      if (planClass === 'ht') agg.closedHt++
-      if (planClass === 'dc') agg.closedDc++
+    // Aggregates count active bookings only — canceled/rescheduled
+    // didn't happen, so they stay out of calls/showed/closed/cash but
+    // still appear in the drill with their tag.
+    if (active) {
+      agg.calls++
+      if (ev.callType === 'direct') agg.directCalls++
+      else if (ev.callType === 'setter') agg.setterCalls++
+      else if (ev.callType === 'rebook') agg.followupCalls++
+      if (showed === 'yes') agg.showed++
+      if (showed === 'no') agg.noShows++
+      if (closed === 'yes') {
+        agg.closed++
+        if (planClass === 'ht') agg.closedHt++
+        if (planClass === 'dc') agg.closedDc++
+      }
+      if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
     }
-    if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
 
     drillByCloser[closer].push({
       eventUri: ev.uri,
@@ -838,6 +875,7 @@ export async function getClosingScheduledList(
       closed,
       closeType,
       upfront,
+      bookingStatus: ev.bookingStatus,
     })
   }
 

@@ -322,20 +322,23 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
             <SortableHeader label="Closed" sortKey="closed" align="left" state={state} onToggle={onToggle} />
             <SortableHeader label="Upfront" sortKey="upfront" state={state} onToggle={onToggle} />
           </div>
-          {sorted.map((c) => (
-            <div
-              key={c.eventUri}
-              style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}
-            >
-              <Cell text={c.prospectName ?? '—'} />
-              <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
-              <Cell text={callTypeLabel(c.callType)} mono />
-              <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
-              <YesNoCell value={c.showed} />
-              <ClosedTypeCell closed={c.closed} closeType={c.closeType} />
-              <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
-            </div>
-          ))}
+          {sorted.map((c) => {
+            const dimmed = c.bookingStatus !== 'active'
+            return (
+              <div
+                key={c.eventUri}
+                style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
+              >
+                <ProspectCell name={c.prospectName} bookingStatus={c.bookingStatus} />
+                <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
+                <Cell text={callTypeLabel(c.callType)} mono />
+                <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
+                <YesNoCell value={c.showed} />
+                <ClosedTypeCell closed={c.closed} closeType={c.closeType} />
+                <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
@@ -521,6 +524,76 @@ function MissingTag() {
       title="No EOC form submitted yet — value will populate once the closer files the form."
     >
       missing
+    </span>
+  )
+}
+
+// Prospect cell with an optional booking-lifecycle badge. Canceled /
+// rescheduled bookings stay in the drill (so the closer's history is
+// visible) but carry a tag and a dimmed row so they read as "didn't
+// happen" — they're excluded from the closer's aggregate counts.
+function ProspectCell({
+  name,
+  bookingStatus,
+}: {
+  name: string | null
+  bookingStatus: CloserScheduledDrillRow['bookingStatus']
+}) {
+  const isDash = !name
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+      }}
+    >
+      <span
+        className="geg-serif"
+        style={{
+          fontSize: 13,
+          color: isDash ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
+          letterSpacing: '-0.002em',
+          fontStyle: isDash ? 'italic' : 'normal',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {name ?? '—'}
+      </span>
+      {bookingStatus !== 'active' ? <BookingStatusTag status={bookingStatus} /> : null}
+    </span>
+  )
+}
+
+function BookingStatusTag({ status }: { status: 'canceled' | 'rescheduled' }) {
+  const label = status === 'canceled' ? 'Canceled' : 'Rescheduled'
+  const color = status === 'canceled' ? 'var(--color-geg-neg)' : 'var(--color-geg-text-3)'
+  const border = status === 'canceled' ? 'var(--color-geg-neg-border)' : 'var(--color-geg-border)'
+  const bg = status === 'canceled' ? 'var(--color-geg-neg-fill)' : 'var(--color-geg-bg)'
+  return (
+    <span
+      className="geg-mono"
+      title={
+        status === 'canceled'
+          ? 'Booking was canceled — kept for history, not counted in calls/showed/closed.'
+          : 'Booking was rescheduled to a new slot — the new booking appears as its own row.'
+      }
+      style={{
+        flexShrink: 0,
+        fontSize: 8.5,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        padding: '1px 5px',
+        borderRadius: 4,
+        border: `1px solid ${border}`,
+        background: bg,
+        color,
+      }}
+    >
+      {label}
     </span>
   )
 }
