@@ -1692,16 +1692,19 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
     totalForms = inRangeRows.length
 
-    // Dedupe by lead_id (latest effective_date wins). Drop rows with
-    // no lead_id — empty/junk submissions Airtable's own views also
-    // exclude.
+    // Dedupe by lead_id — latest form (by airtable_created_at) wins.
+    // Drake 2026-05-28: when a setter files multiple EOCs against the
+    // same lead (revising an outcome, e.g. "Follow up" → "Confirmed HT
+    // Booking" later in the day), the latest filing is the truth.
+    // Drop rows with no lead_id — empty/junk submissions Airtable's
+    // own views also exclude.
     const latestByLead = new Map<string, FormRow>()
     for (const r of inRangeRows) {
       if (!r.lead_id) continue
       const existing = latestByLead.get(r.lead_id)
-      const rDate = matchByRecord.get(r.record_id)?.effectiveDateIso ?? r.event_date_time ?? ''
-      const eDate = existing ? (matchByRecord.get(existing.record_id)?.effectiveDateIso ?? existing.event_date_time ?? '') : ''
-      if (!existing || rDate > eDate) latestByLead.set(r.lead_id, r)
+      if (!existing || r.airtable_created_at > existing.airtable_created_at) {
+        latestByLead.set(r.lead_id, r)
+      }
     }
     latestByLead.forEach((r) => {
       const m = matchByRecord.get(r.record_id)
@@ -1982,12 +1985,16 @@ export async function getCallActivityForUser(
   })
 
   // Build a callId → form map for fast lookup when composing call rows.
-  // Most-recent form per call (last write wins on duplicate matches).
+  // When multiple forms match the same call (rare — usually a rep
+  // revising an outcome), keep the one filed latest by airtable_created_at.
   const formByCallId = new Map<string, FormRow>()
   for (const r of inRangeForms) {
     const m = matchByRecord.get(r.record_id)
     if (!m?.matchedCallId) continue
-    formByCallId.set(m.matchedCallId, r)
+    const existing = formByCallId.get(m.matchedCallId)
+    if (!existing || r.airtable_created_at > existing.airtable_created_at) {
+      formByCallId.set(m.matchedCallId, r)
+    }
   }
 
   // Prospect-name + display-name lookup keyed by lead.
