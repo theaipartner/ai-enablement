@@ -77,3 +77,8 @@ scripts/preview-screenshots/
 # canonical sheet lives in Google Sheets. Local file is the reference
 # Builder reads at design time per docs/specs/close-ingestion-v1.md.
 Data Sheet - Overall Engine.csv
+
+# Lead/booking PII — Typeform CSV exports and one-shot analysis output.
+# Regenerable from source + DB; contains emails/phones. Never commit.
+Closer Funnel Leads*.csv
+scripts/out/
