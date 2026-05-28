@@ -155,9 +155,10 @@ Sequential — each step depends on the previous:
 .venv/bin/python scripts/backfill_calendly.py --smoke     # 1 event + invitees
 .venv/bin/python scripts/backfill_calendly.py --apply
 .venv/bin/python scripts/backfill_calendly.py --apply --limit 10
+.venv/bin/python scripts/backfill_calendly.py --apply --lookback-days 35   # wider historical pull
 ```
 
-**Window:** events with `start_time` in `[now - 7d, now + 60d]`. The wide future-window catches events booked recently for far-out meetings (closer-strategy-calls are often scheduled days-to-weeks in advance). Aggregation buckets by `event_created_at`.
+**Window:** events with `start_time` in `[now - lookback_days, now + 60d]` (`--lookback-days` defaults to 7). The wide future-window catches events booked recently for far-out meetings (closer-strategy-calls are often scheduled days-to-weeks in advance). Aggregation buckets by `event_created_at`. Because a booking's created-time is always ≤ its meeting start-time, setting the lookback floor at date D captures every booking *created* on/after D (then filter precisely on `event_created_at` downstream).
 
 **Smoke gate (mandatory before `--apply`):** smoke refreshes event-types + upserts ONE event + its invitees. Idempotent. Per CLAUDE.md § Operational patterns.
 

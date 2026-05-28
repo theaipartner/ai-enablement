@@ -155,13 +155,16 @@ def smoke(client: CalendlyClient, db) -> int:
     return 0
 
 
-def apply_bulk(client: CalendlyClient, db, *, max_events: int | None) -> int:
-    print(f"Bulk backfill: lookback={BACKFILL_LOOKBACK_DAYS}d "
+def apply_bulk(
+    client: CalendlyClient, db, *, max_events: int | None,
+    lookback_days: int = BACKFILL_LOOKBACK_DAYS,
+) -> int:
+    print(f"Bulk backfill: lookback={lookback_days}d "
           f"future={BACKFILL_FUTURE_DAYS}d max_events={max_events}")
     org = client.get_organization_uri()
     outcome = sync_recent_events_with_invitees(
         client, db, org,
-        lookback_days=BACKFILL_LOOKBACK_DAYS,
+        lookback_days=lookback_days,
         future_days=BACKFILL_FUTURE_DAYS,
         max_events=max_events,
     )
@@ -181,6 +184,8 @@ def main() -> int:
                    help="Bulk 7-day backfill (Drake-gated at first run).")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap events processed in --apply mode.")
+    p.add_argument("--lookback-days", type=int, default=BACKFILL_LOOKBACK_DAYS,
+                   help="Days back to pull (by start_time). Default 7.")
     args = p.parse_args()
 
     if args.smoke and args.apply:
@@ -196,7 +201,10 @@ def main() -> int:
     if args.smoke:
         return smoke(client, get_client())
     if args.apply:
-        return apply_bulk(client, get_client(), max_events=args.limit)
+        return apply_bulk(
+            client, get_client(),
+            max_events=args.limit, lookback_days=args.lookback_days,
+        )
     return dry_run(client)
 
 
