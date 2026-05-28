@@ -5,14 +5,19 @@ POSTs here every 15 minutes (`*/15 * * * *`, all hours / all days — no
 timezone considerations, it runs 24/7 by design so weekend + after-
 hours flags still get a second wave).
 
-The daily digest (`api/ella_daily_digest_cron.py`) is Scott's once-a-
-day skim. It can't catch a Saturday booking-link question that needed
-a Saturday answer. This cron does: every flagged `pending_digest_items`
-row that ages past 2h with no `team_member` message in the source
-channel gets posted to `#unanswered-channels` with @-mentions of the
-primary advisor + Scott. One post per row (`unanswered_posted_at`
-dedup). The digest still fires independently — this is additive, not a
-replacement.
+The daily digest (`api/ella_daily_digest_cron.py`) is the once-a-day
+skim. It can't catch a Saturday booking-link question that needed a
+Saturday answer. This cron does: every `open_ended` flagged
+`pending_digest_items` row that ages past 2h with no `team_member`
+message in the source channel gets posted to `#unanswered-channels`.
+One post per row (`unanswered_posted_at` dedup). The digest still fires
+independently — this is additive, not a replacement.
+
+Post format (2026-05-28 channel redesign): `[Client] — [CSM]` on the
+first line (CSM as plain text, no @-mention), the message permalink on
+the second line so Slack unfurls a preview. Only `open_ended=true`
+client messages reach here — closers / gratitude / acknowledgments are
+filtered out by the passive Haiku's open_ended signal.
 
 "Human intervention" = ANY `team_member` message in the channel after
 the flagged message landed (topic-agnostic — an active advisor means
@@ -30,14 +35,14 @@ gap):
      `ELLA_UNANSWERED_CHANNEL_SLACK_ID`. Unset -> 500 + audit row
      noting the config gap (gate (d) — Drake sets it in Vercel).
   4. SELECT candidate rows: `unanswered_posted_at IS NULL`,
-     2h <= age <= 7d (the 7d backstop bounds a cron-paused-for-days
-     scenario), oldest first, capped at 50/tick.
+     `open_ended = true`, 2h <= age <= 7d (the 7d backstop bounds a
+     cron-paused-for-days scenario), oldest first, capped at 50/tick;
+     then filter to client-authored triggering messages.
   5. Per candidate: if a `team_member` posted in the channel after
      `created_at`, mark resolved-before-post (unanswered_posted_at set,
-     channel/ts NULL) and skip. Else build the body, resolve recipients
-     (Scott from `team_members` head_csm + the client's primary advisor
-     via `client_team_assignments`, deduped), post to the channel,
-     stamp the row, write an audit row.
+     channel/ts NULL) and skip. Else build the `[Client] — [CSM]` body
+     (CSM full_name resolved via `client_team_assignments`), post to the
+     channel, stamp the row, write an audit row.
   6. Per-item Slack failure is isolated — audit + continue; one bad
      post doesn't break the drain.
   7. Return 200 with a checked / resolved / posted summary.
@@ -220,7 +225,6 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
         }
 
     client_map = _resolve_clients(db, candidates)
-    scott_ids = _resolve_head_csm_ids(db)
 
     resolved_before_post = 0
     posted = 0
@@ -233,8 +237,9 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
             continue
 
         info = client_map.get(row.get("client_id") or "", {})
-        mention_ids = _dedup_mentions(scott_ids, info.get("advisor_slack_user_id"))
-        body = _format_channel_post(row, info.get("client_name"), mention_ids)
+        body = _format_channel_post(
+            row, info.get("client_name"), info.get("advisor_name")
+        )
 
         slack_result = post_message(channel_id, body)
         if not slack_result["ok"]:
@@ -245,7 +250,6 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
                 payload={
                     "pending_digest_item_id": row["id"],
                     "client_id": row.get("client_id"),
-                    "recipient_slack_user_ids": mention_ids,
                     "slack_error": slack_result.get("slack_error"),
                     "message_text_snippet": _truncate(
                         (row.get("message_text") or "").strip(), _SNIPPET_MAX
@@ -269,7 +273,6 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
             payload={
                 "pending_digest_item_id": row["id"],
                 "client_id": row.get("client_id"),
-                "recipient_slack_user_ids": mention_ids,
                 "channel_post_ts": post_ts,
                 "message_text_snippet": _truncate(
                     (row.get("message_text") or "").strip(), _SNIPPET_MAX
@@ -303,17 +306,24 @@ def run_ella_unanswered_flagger_cron() -> dict[str, Any]:
 
 
 def _fetch_candidates(db, now_utc: datetime) -> list[dict[str, Any]]:
-    """Unposted rows aged into the [2h, 7d] window, oldest first,
-    capped at _MAX_PER_TICK. Filters to client-authored triggering
-    messages only (team_member / ella / bot / workflow / unknown
-    excluded — the unanswered flagger surfaces 'client needs a human',
-    not advisor questions to the team)."""
+    """Unposted, open-ended rows aged into the [2h, 7d] window, oldest
+    first, capped at _MAX_PER_TICK. Two narrowing filters:
+
+      - `open_ended = true` (DB-level): only messages the passive Haiku
+        judged to be awaiting a human reply reach #unanswered-channels.
+        Closers, gratitude, and acknowledgments (open_ended=false) are
+        excluded so the channel stays a tight "someone's still waiting"
+        signal rather than the broad digest set.
+      - client-authored (post-fetch, `_filter_to_client_authored`):
+        team_member / ella / bot / workflow / unknown excluded — the
+        flagger surfaces 'client needs a human', not advisor chatter."""
     stale_before = (now_utc - _STALE_AFTER).isoformat()
     backstop_after = (now_utc - _BACKSTOP).isoformat()
     resp = (
         db.table("pending_digest_items")
         .select("*")
         .is_("unanswered_posted_at", "null")
+        .eq("open_ended", True)
         .lte("created_at", stale_before)
         .gte("created_at", backstop_after)
         .order("created_at", desc=False)
@@ -435,8 +445,9 @@ def _has_human_intervention(db, row: dict[str, Any]) -> bool:
 
 
 def _resolve_clients(db, candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Map client_id -> {client_name, advisor_slack_user_id}. Mirrors
-    the accountability cron's embedded-assignment shape."""
+    """Map client_id -> {client_name, advisor_name}. The post format is
+    "[Client] — [CSM]" with the CSM as plain text (no @-mention), so we
+    resolve the primary CSM's full_name rather than a slack_user_id."""
     client_ids = sorted({c["client_id"] for c in candidates if c.get("client_id")})
     if not client_ids:
         return {}
@@ -447,7 +458,7 @@ def _resolve_clients(db, candidates: list[dict[str, Any]]) -> dict[str, dict[str
                 "id,"
                 "full_name,"
                 "client_team_assignments("
-                "role,unassigned_at,team_members(slack_user_id)"
+                "role,unassigned_at,team_members(full_name)"
                 ")"
             )
             .in_("id", client_ids)
@@ -463,15 +474,15 @@ def _resolve_clients(db, candidates: list[dict[str, Any]]) -> dict[str, dict[str
     for r in resp.data or []:
         out[r["id"]] = {
             "client_name": r.get("full_name") or "(unknown client)",
-            "advisor_slack_user_id": _select_primary_csm_slack_id(
+            "advisor_name": _select_primary_csm_name(
                 r.get("client_team_assignments")
             ),
         }
     return out
 
 
-def _select_primary_csm_slack_id(assignments: Any) -> str | None:
-    """slack_user_id of the active primary_csm from the embedded
+def _select_primary_csm_name(assignments: Any) -> str | None:
+    """full_name of the active primary_csm from the embedded
     client_team_assignments list (role='primary_csm',
     unassigned_at IS NULL)."""
     if not assignments or not isinstance(assignments, list):
@@ -483,46 +494,10 @@ def _select_primary_csm_slack_id(assignments: Any) -> str | None:
             continue
         tm = a.get("team_members")
         if isinstance(tm, dict):
-            sid = tm.get("slack_user_id")
-            if isinstance(sid, str) and sid.strip():
-                return sid.strip()
+            name = tm.get("full_name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
     return None
-
-
-def _resolve_head_csm_ids(db) -> list[str]:
-    """Every `team_members` slack_user_id with access_tier='head_csm'
-    and archived_at IS NULL (Scott today). Zero -> post without Scott
-    @-mention + log. Multiple -> @-mention all (correct behavior)."""
-    try:
-        resp = (
-            db.table("team_members")
-            .select("slack_user_id, access_tier, archived_at")
-            .eq("access_tier", "head_csm")
-            .is_("archived_at", "null")
-            .execute()
-        )
-        ids = [r["slack_user_id"] for r in (resp.data or []) if r.get("slack_user_id")]
-    except Exception as exc:
-        logger.warning(
-            "ella_unanswered_flagger_cron: head_csm resolution failed: %s", exc
-        )
-        return []
-    if not ids:
-        logger.warning(
-            "ella_unanswered_flagger_cron: zero head_csm resolved — "
-            "posting without Scott @-mention"
-        )
-    return ids
-
-
-def _dedup_mentions(scott_ids: list[str], advisor_id: str | None) -> list[str]:
-    """Scott(s) + primary advisor, order-preserving, de-duplicated (a
-    client whose primary advisor IS Scott shouldn't get pinged twice)."""
-    ordered: list[str] = []
-    for sid in list(scott_ids) + ([advisor_id] if advisor_id else []):
-        if sid and sid not in ordered:
-            ordered.append(sid)
-    return ordered
 
 
 # ---------------------------------------------------------------------------
@@ -533,35 +508,29 @@ def _dedup_mentions(scott_ids: list[str], advisor_id: str | None) -> list[str]:
 def _format_channel_post(
     row: dict[str, Any],
     client_name: str | None,
-    mention_ids: list[str],
+    advisor_name: str | None,
 ) -> str:
     """Build the channel post for an unanswered flagged message.
 
-    Format (terse — 2026-05-21 simplification):
-        <@U001> <@U002> unanswered in {client_name}'s channel ({time_ago}): {permalink}
+    Format (2026-05-28 channel redesign):
+        [Client] — [CSM]
+        {permalink}
 
-    The mention is the primary action signal; client_name disambiguates;
-    time_ago lets the CSM see at a glance whether it just hit 2h or
-    has been sitting all day; the permalink is the action. The full
-    message text, Ella's category read, and Haiku's reasoning are NOT
-    included — CSMs see them in the source channel after clicking
-    through. Was a six-line block pre-2026-05-21 (`docs/specs/ella-
-    unanswered-flagger-client-only-and-terse-post.md`).
+    The CSM name is plain text (no @-mention — the channel is a shared
+    review surface, not a ping). The permalink is on its own line so
+    Slack unfurls it into a message preview. No category, reasoning, or
+    time-ago — the preview carries the content.
 
-    Backstop on missing data: no mentions falls back to a bare line
-    without the leading mention; missing client_name renders
-    "(unknown client)"; missing permalink renders empty trailing."""
+    Backstop on missing data: missing client_name renders
+    "(unknown client)"; missing advisor_name renders "(unassigned)";
+    missing permalink renders an empty trailing line."""
     name = client_name or "(unknown client)"
-    mentions = " ".join(f"<@{m}>" for m in mention_ids)
-    time_ago = _format_time_ago(row.get("created_at"))
+    csm = advisor_name or "(unassigned)"
     permalink = _build_message_permalink(
         row.get("slack_channel_id") or "",
         row.get("triggering_message_ts") or "",
     )
-    prefix = f"{mentions} " if mentions else ""
-    return (
-        f"{prefix}unanswered in {name}'s channel ({time_ago}): {permalink}"
-    )
+    return f"{name} — {csm}\n{permalink}"
 
 
 def _truncate(text: str, n: int) -> str:
@@ -578,26 +547,6 @@ def _build_message_permalink(slack_channel_id: str, slack_ts: str) -> str:
     ts_compact = slack_ts.replace(".", "")
     subdomain = f"{workspace}." if workspace else ""
     return f"https://{subdomain}slack.com/archives/{slack_channel_id}/p{ts_compact}"
-
-
-def _format_time_ago(created_at: Any) -> str:
-    """Coarse human age ("2h ago", "3d ago"). Best-effort; an
-    unparseable timestamp degrades to a literal."""
-    if not created_at:
-        return "an unknown time ago"
-    try:
-        dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return str(created_at)
-    delta = datetime.now(timezone.utc) - dt
-    secs = int(delta.total_seconds())
-    if secs < 3600:
-        return f"{max(1, secs // 60)}m ago"
-    if secs < 86400:
-        return f"{secs // 3600}h ago"
-    return f"{secs // 86400}d ago"
 
 
 # ---------------------------------------------------------------------------

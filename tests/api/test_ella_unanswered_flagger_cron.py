@@ -91,6 +91,10 @@ class _Chain:
                     "unanswered_posted_at"
                 ):
                     continue
+                if "open_ended" in self._eq and r.get("open_ended") != self._eq[
+                    "open_ended"
+                ]:
+                    continue
                 ca = r["created_at"]
                 if self._lte and ca > self._lte[1]:
                     continue
@@ -190,6 +194,7 @@ def _item(
     channel="C1",
     age=timedelta(hours=3),
     posted=False,
+    open_ended=True,
 ):
     return {
         "id": item_id,
@@ -200,20 +205,24 @@ def _item(
         "haiku_decision": "acknowledge_and_escalate",
         "haiku_reasoning": "client asking for booking link, no advisor in thread",
         "digest_category": "question_program",
+        "open_ended": open_ended,
         "ella_responded": False,
         "unanswered_posted_at": _iso(_NOW) if posted else None,
         "created_at": _iso(_NOW - age),
     }
 
 
-def _client(cid="cli-1", name="Acme Co", advisor="U_ADVISOR"):
+def _client(cid="cli-1", name="Acme Co", advisor="U_ADVISOR", advisor_name="Lou"):
     assignments = []
     if advisor is not None:
         assignments = [
             {
                 "role": "primary_csm",
                 "unassigned_at": None,
-                "team_members": {"slack_user_id": advisor},
+                "team_members": {
+                    "slack_user_id": advisor,
+                    "full_name": advisor_name,
+                },
             }
         ]
     return {
@@ -267,8 +276,10 @@ def test_happy_path_posts_and_marks(fake_db, slack_calls):
     assert len(slack_calls) == 1
     ch, body = slack_calls[0]
     assert ch == "C_UNANSWERED"
-    assert "<@U_SCOTT>" in body and "<@U_ADVISOR>" in body
-    assert "Acme Co" in body
+    # New format: "[Client] — [CSM]\n{permalink}", no @-mentions.
+    assert "<@" not in body
+    assert "Acme Co — Lou" in body
+    assert "slack.com/archives/C1/p1745500100000100" in body
     # Row stamped as posted (channel + ts non-null).
     upd = fake_db.item_updates[0]["payload"]
     assert upd["unanswered_posted_at"] is not None
@@ -398,40 +409,39 @@ def test_multiple_items_one_failure_isolated(fake_db, monkeypatch):
     assert any(a["processing_status"] == "failed" for a in fake_db.audit_inserts)
 
 
-def test_scott_is_primary_advisor_dedup(fake_db, slack_calls):
+def test_post_names_client_and_csm_no_mentions(fake_db, slack_calls):
     item = _item()
     fake_db.items = [item]
     fake_db.slack_messages = [_backing_message(item)]
-    fake_db.clients = [_client(advisor="U_SCOTT")]  # advisor == Scott
-    fake_db.team_members = [_scott("U_SCOTT")]
+    fake_db.clients = [_client(advisor="U_ADVISOR", advisor_name="Lou")]
     cron.run_ella_unanswered_flagger_cron()
     body = slack_calls[0][1]
-    assert body.count("<@U_SCOTT>") == 1
+    assert body.startswith("Acme Co — Lou")
+    assert "<@" not in body  # no pings — plain CSM name only
 
 
-def test_no_primary_advisor_only_scott(fake_db, slack_calls):
+def test_no_primary_advisor_renders_unassigned(fake_db, slack_calls):
     item = _item()
     fake_db.items = [item]
     fake_db.slack_messages = [_backing_message(item)]
     fake_db.clients = [_client(advisor=None)]
-    fake_db.team_members = [_scott()]
-    cron.run_ella_unanswered_flagger_cron()
-    body = slack_calls[0][1]
-    assert "<@U_SCOTT>" in body
-    assert "<@U_ADVISOR>" not in body
-
-
-def test_no_scott_posts_without_scott_mention(fake_db, slack_calls):
-    item = _item()
-    fake_db.items = [item]
-    fake_db.slack_messages = [_backing_message(item)]
-    fake_db.clients = [_client(advisor="U_ADVISOR")]
-    fake_db.team_members = []  # zero head_csm
     result = cron.run_ella_unanswered_flagger_cron()
     assert result["posted"] == 1
     body = slack_calls[0][1]
-    assert "<@U_ADVISOR>" in body
-    assert "<@U_SCOTT>" not in body
+    assert body.startswith("Acme Co — (unassigned)")
+
+
+def test_open_ended_false_dropped(fake_db, slack_calls):
+    """Closers / gratitude / acknowledgments (open_ended=false) never
+    reach #unanswered-channels even when aged past 2h and unanswered."""
+    item = _item(open_ended=False)
+    fake_db.items = [item]
+    fake_db.slack_messages = [_backing_message(item)]
+    fake_db.clients = [_client()]
+    result = cron.run_ella_unanswered_flagger_cron()
+    assert result["checked"] == 0
+    assert result["posted"] == 0
+    assert len(slack_calls) == 0
 
 
 def test_channel_unset_500_and_audit(fake_db, monkeypatch):
@@ -596,39 +606,29 @@ def test_filter_skips_channel_on_author_lookup_failure(
 
 
 # ---------------------------------------------------------------------------
-# Terse channel-post format (post-2026-05-21)
+# Channel-post format (2026-05-28 redesign: "[Client] — [CSM]\n{link}")
 # ---------------------------------------------------------------------------
 
 
-def test_format_terse_one_line_happy_path():
-    """The new format is one line: mentions + 'unanswered in
-    {client}'s channel ({time_ago}): {permalink}'."""
+def test_format_two_line_client_csm_and_link():
     row = {
         "slack_channel_id": "C1",
         "triggering_message_ts": "1745500100.000100",
         "created_at": _iso(_NOW - timedelta(hours=3)),
     }
-    body = cron._format_channel_post(
-        row,
-        client_name="Acme Co",
-        mention_ids=["U_SCOTT", "U_ADVISOR"],
-    )
+    body = cron._format_channel_post(row, client_name="Acme Co", advisor_name="Lou")
 
-    # One line, no newlines.
-    assert "\n" not in body
-    # Mentions at the start.
-    assert body.startswith("<@U_SCOTT> <@U_ADVISOR> ")
-    # Anchor copy.
-    assert "unanswered in Acme Co's channel" in body
-    # Time-ago in parens.
-    assert "(3h ago)" in body
-    # Permalink trailing.
-    assert "slack.com/archives/C1/p1745500100000100" in body
+    lines = body.split("\n")
+    assert len(lines) == 2
+    assert lines[0] == "Acme Co — Lou"
+    assert lines[1] == "https://slack.com/archives/C1/p1745500100000100"
+    # No @-mentions, no time-ago, no category/reasoning leakage.
+    assert "<@" not in body
+    assert "ago" not in body
 
 
-def test_format_terse_drops_legacy_fields():
-    """Documents removal: snippet, category, reasoning, alert-bell
-    prefix, posted-by line are all gone."""
+def test_format_drops_legacy_fields():
+    """Snippet, category, reasoning, alert-bell prefix are all gone."""
     row = {
         "slack_channel_id": "C1",
         "triggering_message_ts": "1745500100.000100",
@@ -637,29 +637,14 @@ def test_format_terse_drops_legacy_fields():
         "haiku_reasoning": "client asking for booking link",
         "created_at": _iso(_NOW - timedelta(hours=2)),
     }
-    body = cron._format_channel_post(row, "Acme Co", ["U_SCOTT"])
+    body = cron._format_channel_post(row, "Acme Co", "Lou")
 
-    # None of the V1 multi-line fields appear.
     assert "🔔" not in body and ":bell:" not in body
     assert "Ella's read" not in body
-    assert "Posted:" not in body
-    assert "this message has been sitting" not in body
-    # Snippet and reasoning text don't leak into the channel post.
+    assert "unanswered in" not in body
     assert "Where is the booking link" not in body
     assert "question_program" not in body
     assert "client asking for booking link" not in body
-
-
-def test_format_no_mentions_renders_without_leading_prefix():
-    """Zero mentions → no leading prefix, no orphan space."""
-    row = {
-        "slack_channel_id": "C1",
-        "triggering_message_ts": "1745500100.000100",
-        "created_at": _iso(_NOW - timedelta(hours=2)),
-    }
-    body = cron._format_channel_post(row, "Acme Co", mention_ids=[])
-    assert not body.startswith(" ")
-    assert body.startswith("unanswered in Acme Co's channel")
 
 
 def test_format_missing_client_name_renders_unknown():
@@ -668,20 +653,29 @@ def test_format_missing_client_name_renders_unknown():
         "triggering_message_ts": "1745500100.000100",
         "created_at": _iso(_NOW - timedelta(hours=2)),
     }
-    body = cron._format_channel_post(row, client_name=None, mention_ids=["U_X"])
-    assert "(unknown client)'s channel" in body
+    body = cron._format_channel_post(row, client_name=None, advisor_name="Lou")
+    assert body.startswith("(unknown client) — Lou")
+
+
+def test_format_missing_advisor_renders_unassigned():
+    row = {
+        "slack_channel_id": "C1",
+        "triggering_message_ts": "1745500100.000100",
+        "created_at": _iso(_NOW - timedelta(hours=2)),
+    }
+    body = cron._format_channel_post(row, "Acme Co", advisor_name=None)
+    assert body.startswith("Acme Co — (unassigned)")
 
 
 def test_format_missing_permalink_inputs_renders_degenerate_url():
     """Missing channel/ts → permalink builder returns an empty-channel
-    URL with no ts. The format still renders one clean line (no
-    crash, no orphan whitespace). Operationally fine — the row was
-    malformed enough that we wouldn't expect a real permalink."""
+    URL with no ts. Still renders the two-line shape (no crash)."""
     row = {
         "created_at": _iso(_NOW - timedelta(hours=2)),
         # No slack_channel_id, no triggering_message_ts
     }
-    body = cron._format_channel_post(row, "Acme Co", ["U_X"])
-    assert "\n" not in body
-    assert body.endswith("https://slack.com/archives//p")
-    assert ": https://" in body  # single space after colon, no double-space
+    body = cron._format_channel_post(row, "Acme Co", "Lou")
+    lines = body.split("\n")
+    assert len(lines) == 2
+    assert lines[0] == "Acme Co — Lou"
+    assert lines[1] == "https://slack.com/archives//p"
