@@ -63,12 +63,6 @@ def _block_real_slack_posts(monkeypatch):
     # Live local re-export bound at import time inside cs_call_summary_post.
     # See the module docstring above for the import-time-binding rationale.
     monkeypatch.setattr("agents.gregory.cs_call_summary_post.post_message", _noop)
-    # Live local re-export bound at import time inside the unified
-    # escalation-routing fan-out (2026-05-14 ella-escalation-unify spec).
-    # Reactive + passive escalation paths both route their DM sends
-    # through this module; tests that flow through either path must
-    # not hit real Slack DMs.
-    monkeypatch.setattr("agents.ella.escalation_routing.post_message", _noop)
     # Live local re-export bound at import time inside the unanswered-
     # message flagger cron (ella-unanswered-message-flagger spec). The
     # cron's test patches this locally too; this is the belt-and-

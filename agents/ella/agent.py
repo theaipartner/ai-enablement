@@ -36,14 +36,9 @@ import json
 import random
 import re
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
 from agents.ella.escalation import escalate as ella_escalate
-from agents.ella.escalation_routing import (
-    fire_escalation_dms,
-    resolve_escalation_recipients,
-)
 from agents.ella.identity import SpeakerIdentity, resolve_speaker_identity
 from agents.ella.passive_dispatch import insert_digest_item
 from agents.ella.passive_monitor import PassiveTriggerPayload
@@ -282,7 +277,6 @@ def handle_at_mention(payload: PassiveTriggerPayload) -> AtMentionResult:
                 run_id=run_id,
                 payload=payload,
                 channel_client=channel_client,
-                primary_csm=context.primary_csm,
                 speaker=speaker,
                 response_text=response_text,
                 handoff_reasoning=handoff_reasoning or "",
@@ -391,14 +385,17 @@ def _do_escalation_fanout(
     run_id: str,
     payload: PassiveTriggerPayload,
     channel_client: dict[str, Any],
-    primary_csm: dict[str, Any] | None,
     speaker: SpeakerIdentity | None,
     response_text: str,
     handoff_reasoning: str,
 ) -> str | None:
-    """Write the escalations row and fan DMs to Scott + primary advisor.
-    Mirrors the pre-2026-05-18 reactive behavior but uses the modern
-    `escalation_routing` helpers."""
+    """Write the escalations row and mirror a digest item so the
+    escalation surfaces in the daily-digest channel.
+
+    No DMs (2026-05-28 channels-only redesign): the real-time advisor /
+    Scott DM fan-out was removed. The in-channel ack to the client
+    (posted by the caller before this runs) is the real-time signal;
+    the daily digest is the once-a-day roll-up."""
     escalation_id = None
     try:
         escalation_id = ella_escalate(
@@ -417,23 +414,6 @@ def _do_escalation_fanout(
     except Exception as exc:
         logger.warning(
             "handle_at_mention: escalations row write failed run_id=%s: %s",
-            run_id,
-            exc,
-        )
-
-    try:
-        recipients = resolve_escalation_recipients(primary_csm)
-        fire_escalation_dms(
-            recipients=recipients,
-            slack_channel_id=payload.slack_channel_id,
-            triggering_message_ts=payload.triggering_message_ts,
-            reasoning=handoff_reasoning,
-            path="reactive",
-            channel_client_id=channel_client["id"],
-        )
-    except Exception as exc:
-        logger.warning(
-            "handle_at_mention: escalation DM fan-out failed run_id=%s: %s",
             run_id,
             exc,
         )

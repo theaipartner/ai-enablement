@@ -183,8 +183,9 @@ def test_substantive_with_advisor_speaker_still_responds(mocker):
 
 def test_escalate_worthy_message_acks_and_escalates(mocker):
     """Spec acceptance case (d): an escalate-worthy question (money /
-    emotional) — Sonnet returns escalate=true, handler posts the ack,
-    writes escalations row, fires DMs."""
+    emotional) — Sonnet returns escalate=true, handler posts the ack and
+    writes the escalations row. No DMs (2026-05-28 channels-only); the
+    escalation surfaces via the in-channel ack + the daily digest."""
     capture = _patch_common(mocker)
     _stub_sonnet(
         mocker,
@@ -197,14 +198,6 @@ def test_escalate_worthy_message_acks_and_escalates(mocker):
 
     escalate_mock = mocker.patch(
         "agents.ella.agent.ella_escalate", return_value="esc-42"
-    )
-    dms_mock = mocker.patch(
-        "agents.ella.agent.fire_escalation_dms",
-        return_value=[{"label": "Scott Wilson", "dm_ok": True}],
-    )
-    mocker.patch(
-        "agents.ella.agent.resolve_escalation_recipients",
-        return_value=[{"label": "Scott Wilson"}],
     )
 
     result = agent.handle_at_mention(
@@ -221,9 +214,6 @@ def test_escalate_worthy_message_acks_and_escalates(mocker):
     assert escalate_mock.called
     ctx = escalate_mock.call_args.kwargs["context"]
     assert ctx["handoff_reasoning"] == "Client asking about a refund."
-    # DMs fired with path='reactive'
-    assert dms_mock.called
-    assert dms_mock.call_args.kwargs["path"] == "reactive"
     # agent_run ended 'escalated'
     end_status = [r[0] for r in capture["runs"]]
     assert end_status == ["escalated"]
@@ -409,7 +399,7 @@ def test_handle_at_mention_passes_recent_exchanges_into_prompt(mocker):
     fetch_recent_at_mention_exchanges helper and the returned text
     reaches the system prompt with the labeled header so Sonnet can
     use it for continuity + FIRM AFTER FIRST."""
-    capture = _patch_common(mocker)
+    _patch_common(mocker)
     # Override the default empty exchanges with a real-looking string.
     fake_block = (
         "[2026-05-23 13:30 ET — 30 minutes ago] user (Drake): "
@@ -461,7 +451,7 @@ def test_handle_at_mention_omits_block_when_no_prior_exchanges(mocker):
     """When the fetch returns empty (no prior @-mentions in channel),
     the RECENT @-MENTION EXCHANGES header should NOT appear in the
     prompt — keeps the prompt clean for first-time conversations."""
-    capture = _patch_common(mocker)
+    _patch_common(mocker)
     # Default fixture already stubs fetch_recent_at_mention_exchanges → "".
     captured_system = {}
 
@@ -570,8 +560,6 @@ def test_escalate_ack_posts_via_user_first(mocker):
     # Stub the escalation fan-out so we don't need to mock its DB/Slack
     # internals; we only care about the in-channel ack post.
     mocker.patch("agents.ella.agent.ella_escalate", return_value="esc-1")
-    mocker.patch("agents.ella.agent.fire_escalation_dms", return_value=[])
-    mocker.patch("agents.ella.agent.resolve_escalation_recipients", return_value=[])
     mocker.patch("agents.ella.agent.insert_digest_item", return_value="dg-1")
 
     agent.handle_at_mention(_payload(text="<@UBOT0001> I want a refund"))
