@@ -40,10 +40,15 @@ Message format (sentiment-only — the only shape):
 
     *[CSM Name] / [Client Name]*
 
-    *Sentiment*
+    *Sentiment*  🟢 - Positive - 🟢
     [sentiment_arc]
 
     <https://ai-enablement-sigma.vercel.app/calls/[call_id]|View in Gregory>
+
+The Sentiment header carries an inline pill (🟢 Positive / 🟡 Mixed /
+🔴 Negative) sourced from the call_review's metadata.sentiment_tier so
+Scott can triage which calls to review at a glance. The pill is omitted
+when no tier was classified (the arc text still conveys sentiment).
 
 The previous review-shape post additionally rendered Pain points, Wins,
 and Conversation pivots sections. Those were dropped 2026-05-11 — CSMs
@@ -74,7 +79,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.call_reviewer.persistence import find_review_by_call_external_id
+from agents.call_reviewer.persistence import (
+    find_review_by_call_external_id,
+    find_review_sentiment_tier_by_call_external_id,
+)
 from shared.slack_format import markdown_to_mrkdwn
 from shared.slack_post import post_message
 
@@ -214,12 +222,14 @@ def maybe_post_cs_call_summary(
     # the gap in the audit ledger. The Fathom-summary fallback was
     # retired (see module docstring).
     review, review_fetch_error = _try_get_review(db, fathom_external_id)
+    sentiment_tier = _try_get_sentiment_tier(db, fathom_external_id)
     review_text = (
         _format_review_message(
             csm_name=csm_name or "[unassigned]",
             client_name=client_name or "[unknown client]",
             review=review,
             call_id=call_id,
+            sentiment_tier=sentiment_tier,
         )
         if review is not None
         else None
@@ -417,9 +427,29 @@ def _try_get_review(
         return None, str(exc)[:500]
 
 
+def _try_get_sentiment_tier(db, fathom_external_id: str) -> str | None:
+    """Read the persisted sentiment tier for the call_review doc.
+    Fail-soft: a lookup error degrades to None (the post renders without
+    the pill — the sentiment arc text still carries the signal)."""
+    try:
+        return find_review_sentiment_tier_by_call_external_id(db, fathom_external_id)
+    except Exception as exc:
+        logger.warning(
+            "cs_call_summary_post: sentiment tier fetch failed for external_id=%s: %s",
+            fathom_external_id,
+            exc,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Message formatting
 # ---------------------------------------------------------------------------
+
+
+_TIER_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+# Pill labels mirror components/gregory/sentiment-pill.tsx.
+_TIER_LABEL = {"green": "Positive", "yellow": "Mixed", "red": "Negative"}
 
 
 def _format_review_message(
@@ -428,11 +458,17 @@ def _format_review_message(
     client_name: str,
     review: dict[str, Any],
     call_id: str,
+    sentiment_tier: str | None = None,
 ) -> str | None:
     """Render the sentiment-only Slack message.
 
     Returns None when `sentiment_arc` is missing or empty — caller treats
     that as a degenerate review and skips the Slack post entirely.
+
+    When a `sentiment_tier` is available, the Sentiment header carries an
+    inline pill — `{emoji} - {label} - {emoji}` (🟢 Positive / 🟡 Mixed
+    / 🔴 Negative) — so Scott can see at a glance whether the call needs
+    review without reading the arc. Mirrors the dashboard SentimentPill.
 
     Headers emitted as `**Header**` Markdown so `markdown_to_mrkdwn`
     normalizes them to mrkdwn bold via its bold-stash mechanism.
@@ -445,7 +481,12 @@ def _format_review_message(
 
     sentiment_arc = review.get("sentiment_arc")
     if isinstance(sentiment_arc, str) and sentiment_arc.strip():
-        sections.append(f"**Sentiment**\n{sentiment_arc.strip()}")
+        header = "**Sentiment**"
+        if sentiment_tier in _TIER_EMOJI:
+            emoji = _TIER_EMOJI[sentiment_tier]
+            label = _TIER_LABEL[sentiment_tier]
+            header = f"**Sentiment**  {emoji} - {label} - {emoji}"
+        sections.append(f"{header}\n{sentiment_arc.strip()}")
 
     if not sections:
         # Missing or empty sentiment — degenerate render. Caller skips.

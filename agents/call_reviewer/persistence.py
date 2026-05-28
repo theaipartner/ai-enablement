@@ -168,6 +168,26 @@ def find_review_by_call_external_id(
     return parsed
 
 
+def find_review_sentiment_tier_by_call_external_id(
+    db, call_external_id: str
+) -> str | None:
+    """Return the persisted sentiment tier ('green'|'yellow'|'red') for a
+    call_review doc, or None.
+
+    Reads `metadata.sentiment_tier` — the value the Haiku classifier
+    wrote at upsert time. Does NOT re-classify (no LLM call). None when
+    the row is missing, the metadata lacks the field, or the value is
+    out of the known set."""
+    row = _find_review_document(db, call_external_id)
+    if row is None:
+        return None
+    meta = row.get("metadata")
+    if not isinstance(meta, dict):
+        return None
+    tier = meta.get("sentiment_tier")
+    return tier if tier in ("green", "yellow", "red") else None
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------

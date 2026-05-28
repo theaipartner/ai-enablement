@@ -144,6 +144,10 @@ If a meeting renders as "(no Fathom match)" but you expected one:
 
 V2 fixes (out of scope today): use Google Meet link → Fathom's `meeting_link` as a more stable join, or migrate to a Fathom-side ID Calendar can reference.
 
+## Missed-recording flagger (cs-call-summaries)
+
+`api/cs_missed_recording_cron.py` (Vercel cron, `*/15 * * * *`) reuses this same title-and-time match against `calendar_events` to catch meetings that should have produced a Fathom recording but didn't. A row qualifies when `end_time + 30min` has passed (grace elapsed), it's within the trailing 7-day backstop, no client `calls` row matches (normalized title + ±30min of start), and `missing_recording_posted_at IS NULL`. It posts `[title] - recording not available` to the cs-call-summaries channel (`SLACK_CS_CALL_SUMMARIES_CHANNEL_ID`) and stamps `calendar_events.missing_recording_posted_at` so each missed call posts once. Matched events are left unstamped and simply age out of the backstop window. This is the time-based complement to `agents/gregory/cs_call_summary_post.py`, which fires when a recording *does* arrive. Schema: `missing_recording_posted_at` added by migration `0056`; the 30-min teams sync upsert does not write that column, so the stamp survives re-syncs.
+
 ## Lateness pill
 
 When a matched call's `started_at` is more than 2 minutes after the Calendar event's `start_time`, the page renders a `started Nm late` pill. Under 2 minutes shows just the checkmark; early starts show no delta (we don't surface "started early" as a signal).
