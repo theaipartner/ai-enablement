@@ -173,6 +173,7 @@ def _insert_pending_digest_item(
         haiku_decision=decision.decision,
         haiku_reasoning=decision.reasoning,
         digest_category=decision.digest_category,
+        open_ended=decision.open_ended,
         ella_responded=ella_responded,
     )
 
@@ -189,6 +190,7 @@ def insert_digest_item(
     haiku_reasoning: str | None,
     digest_category: str | None,
     ella_responded: bool,
+    open_ended: bool = False,
 ) -> str | None:
     """Insert one pending_digest_items row. Returns the new id, or None
     if the unique index `(slack_channel_id, triggering_message_ts)`
@@ -196,7 +198,9 @@ def insert_digest_item(
 
     Also called by `agents.ella.agent.handle_at_mention` for the @
     path's escalate case so @-path escalations surface in the daily
-    digest too.
+    digest too. `open_ended` defaults False — the @-path mirror leaves
+    it False because Ella already answered in-channel (the message
+    isn't "unanswered"); only the passive path passes the Haiku's value.
     """
     row = {
         "agent_run_id": run_id,
@@ -208,6 +212,7 @@ def insert_digest_item(
         "haiku_decision": haiku_decision,
         "haiku_reasoning": haiku_reasoning,
         "digest_category": digest_category,
+        "open_ended": open_ended,
         "ella_responded": ella_responded,
     }
     try:

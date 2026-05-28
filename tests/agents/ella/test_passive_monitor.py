@@ -144,18 +144,15 @@ def test_non_human_author_skips_with_audit(fake_db, atype):
     assert ev.skip_reason == "non_human_author"
 
 
-def test_team_member_always_evaluated(fake_db, monkeypatch):
-    _stub_haiku(
-        monkeypatch,
-        {
-            "decision": "skip",
-            "digest_flag": False,
-            "digest_category": None,
-            "reasoning": "advisor work",
-        },
-    )
+def test_team_member_skips_as_non_client(fake_db):
+    # Passive eval is client-only: an advisor talking in a client
+    # channel is excluded from the digest / unanswered-channel path. The
+    # decision Haiku is never consulted (no stub needed — if it were
+    # called the test DB's missing stub would surface).
     ev = evaluate_passive_trigger(_payload(author_type="team_member"))
-    assert ev.skip_reason != "non_human_author"
+    assert ev.decision.decision == "skip"
+    assert ev.skip_reason == "non_client_author"
+    assert ev.decision.digest_flag is False
 
 
 # --- three decisions -----------------------------------------------------
@@ -388,32 +385,6 @@ def test_speaker_role_and_name_in_prompt(fake_db, monkeypatch):
     monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
     evaluate_passive_trigger(_payload())
     assert "client (Catrina Reeves)" in captured["u"]
-
-
-def test_team_member_speaker_role_is_advisor(fake_db, monkeypatch):
-    captured = {}
-
-    def _cap(**kw):
-        captured["u"] = kw["messages"][0]["content"]
-        return SimpleNamespace(
-            text=json.dumps(
-                {
-                    "decision": "skip",
-                    "digest_flag": False,
-                    "digest_category": None,
-                    "reasoning": "ok",
-                }
-            ),
-            input_tokens=1,
-            output_tokens=1,
-            cost_usd=Decimal("0"),
-            model="h",
-            raw=None,
-        )
-
-    monkeypatch.setattr("agents.ella.passive_monitor.complete", _cap)
-    evaluate_passive_trigger(_payload(author_type="team_member"))
-    assert "advisor (Catrina Reeves)" in captured["u"]
 
 
 def test_digest_flag_false_nulls_category(fake_db, monkeypatch):

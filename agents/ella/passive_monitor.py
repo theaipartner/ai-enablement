@@ -137,6 +137,10 @@ class PassiveDecision:
     ack_text: str | None = None  # only on acknowledge_and_escalate
     digest_flag: bool = False
     digest_category: str | None = None
+    # open_ended: client message is awaiting a human reply (question,
+    # request, emotional-hanging) vs a closer/gratitude/acknowledgment.
+    # Drives the unanswered-channels 2h scan; independent of digest_flag.
+    open_ended: bool = False
     reasoning: str = ""
     haiku_cost_usd: Decimal = Decimal("0")
     haiku_input_tokens: int = 0
@@ -196,8 +200,8 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
             skip_reason="kill_switch",
         )
 
-    # Gate 2: author type. client + team_member always evaluated;
-    # ella / bot / workflow / unknown skip WITH an audit row.
+    # Gate 2a: non-human authors (ella / bot / workflow / unknown) skip
+    # WITH an audit row.
     if payload.author_type not in _HUMAN_AUTHOR_TYPES:
         return PassiveEvaluation(
             payload=payload,
@@ -206,6 +210,22 @@ def _evaluate(payload: PassiveTriggerPayload) -> PassiveEvaluation:
                 reasoning=f"non-human author_type={payload.author_type}",
             ),
             skip_reason="non_human_author",
+        )
+
+    # Gate 2b: human but non-client (team_member). An advisor talking in
+    # a client channel is not "a client awaiting a human", so the
+    # passive/digest path ignores them — this keeps the daily digest AND
+    # #unanswered-channels client-only. team_member @-mentions to Ella
+    # still route through handle_at_mention upstream and never reach
+    # here, so advisors can still ask Ella directly.
+    if payload.author_type != "client":
+        return PassiveEvaluation(
+            payload=payload,
+            decision=PassiveDecision(
+                decision=_SAFER_FALLBACK_DECISION,
+                reasoning=f"passive eval is client-only; author_type={payload.author_type}",
+            ),
+            skip_reason="non_client_author",
         )
 
     # Gate 3: routed-to-humans. The triggering message @-mentions one
@@ -426,6 +446,23 @@ When digest_flag=true, set digest_category to one of:
 
 When digest_flag=false, set digest_category to null.
 
+# THE OPEN-ENDED FLAG (INDEPENDENT)
+
+Independently of everything else, return `open_ended: bool`. This drives a SEPARATE channel (#unanswered-channels) that surfaces client messages still waiting on a human after 2 hours. It is NOT the same as digest_flag.
+
+Set open_ended=true when the client's message is genuinely awaiting a human reply:
+- A question or request for information.
+- A request for help, review, or a decision.
+- An emotional message left hanging — frustration, confusion, feeling stuck — even if not phrased as a question ("honestly I'm really lost right now").
+- Anything where the client would reasonably expect someone to respond.
+
+Set open_ended=false for messages that do NOT await a reply:
+- Conversation-closers and gratitude, INCLUDING ones with a small appendage: "thanks!", "thank you so much, really appreciate it", "got it, thanks", "perfect, talk soon", "sounds good 🙏". A thank-you does not stop being a closer just because the client added a few warm words.
+- Pure acknowledgments: "ok", "got it", "will do", "makes sense".
+- Statements that close a loop rather than open one.
+
+open_ended is about the CLIENT message itself, independent of `decision` — Ella may answer a message in-channel AND it can still be open_ended (a human may need to follow up). When genuinely unsure whether a message awaits a reply, lean false — #unanswered-channels is a tight signal, not a catch-all (that's what the daily digest is for).
+
 # DEFAULT STANCES
 
 Two independent defaults:
@@ -444,6 +481,7 @@ Return a strict JSON object. No prose around it, no code fences, no commentary.
   "ack_text": "<warm 1-2 sentence ack in Ella's voice, only when decision=acknowledge_and_escalate, otherwise null>",
   "digest_flag": true | false,
   "digest_category": "question_program | emotional_human_needed | confusion | money_commitment | complaint | other | null",
+  "open_ended": true | false,
   "reasoning": "<1-3 sentences explaining your decision, max 400 chars>"
 }
 
@@ -451,6 +489,7 @@ Field rules:
 - `response_model` is required when decision='respond', null otherwise.
 - `ack_text` is required when decision='acknowledge_and_escalate', null otherwise.
 - `digest_category` is null when digest_flag=false; required when digest_flag=true.
+- `open_ended` is always a boolean — true only when the client message awaits a human reply (see THE OPEN-ENDED FLAG).
 - `reasoning` is always set — explain your decision concisely."""
 
 
@@ -480,7 +519,7 @@ _USER_PROMPT_TEMPLATE = """# TRIGGERING MESSAGE
 
 # DECIDE
 
-Return JSON with `decision`, `response_model`, `ack_text`, `digest_flag`, `digest_category`, and `reasoning`."""
+Return JSON with `decision`, `response_model`, `ack_text`, `digest_flag`, `digest_category`, `open_ended`, and `reasoning`."""
 
 
 _NO_PRIMARY_ADVISOR = "(no primary advisor assigned)"
@@ -536,6 +575,7 @@ def decide_passive_response(
         ack_text=parsed["ack_text"],
         digest_flag=parsed["digest_flag"],
         digest_category=parsed["digest_category"],
+        open_ended=parsed["open_ended"],
         reasoning=parsed["reasoning"],
         haiku_cost_usd=result.cost_usd,
         haiku_input_tokens=result.input_tokens,
@@ -567,6 +607,7 @@ def _parse_haiku_output(raw: str) -> dict[str, Any]:
         "ack_text": None,
         "digest_flag": False,
         "digest_category": None,
+        "open_ended": False,
         "reasoning": "",
     }
     if not raw or not raw.strip():
@@ -607,6 +648,7 @@ def _parse_haiku_output(raw: str) -> dict[str, Any]:
     digest_flag = bool(parsed.get("digest_flag"))
     raw_cat = parsed.get("digest_category")
     digest_category = raw_cat if raw_cat in _DIGEST_CATEGORIES else None
+    open_ended = bool(parsed.get("open_ended"))
 
     response_model = None
     ack_text = None
@@ -635,6 +677,7 @@ def _parse_haiku_output(raw: str) -> dict[str, Any]:
         "ack_text": ack_text,
         "digest_flag": digest_flag,
         "digest_category": digest_category,
+        "open_ended": open_ended,
         "reasoning": reasoning,
     }
 

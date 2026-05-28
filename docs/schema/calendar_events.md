@@ -22,11 +22,13 @@ Local mirror of every CSM's current-week meetings so the `/teams` page never cal
 | `raw_payload` | `jsonb` | Not null. Full Calendar API event response — preserves attributes we haven't promoted to columns |
 | `fetched_at` | `timestamptz` | Default `now()`. Stamped on every cron upsert; tells the UI how fresh the cache is |
 | `created_at` | `timestamptz` | Default `now()` |
+| `missing_recording_posted_at` | `timestamptz` | Added by `0056`. Dedup stamp for the missed-recording cron (`api/cs_missed_recording_cron.py`). Set when the cron posts a "recording not available" entry to cs-call-summaries for this event so it never re-posts. The 30-min `teams_calendar_sync_cron` upsert does NOT include this column in its payload, so the payload-scoped `ON CONFLICT` update leaves the stamp intact across re-syncs |
 
 ## Indexes
 
 - `calendar_events_team_event_idx` — `UNIQUE (team_member_id, google_event_id)`. Upsert key.
 - `calendar_events_start_time_idx` — `(team_member_id, start_time)`. The `/teams` page's primary query path: "this week's events for this team_member."
+- `calendar_events_missing_recording_scan_idx` — partial index on `(end_time) WHERE missing_recording_posted_at IS NULL` (added by `0056`). The missed-recording cron's scan path: events whose recording grace period may have lapsed, not yet posted. Partial predicate keeps it small as posted rows accumulate.
 
 ## Relationships
 

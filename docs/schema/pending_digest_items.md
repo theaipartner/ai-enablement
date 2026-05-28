@@ -2,13 +2,15 @@
 
 ## Purpose
 
-Queue of Ella-flagged messages awaiting the daily digest DM. A row is
+Queue of Ella-flagged messages feeding the daily digest. A row is
 inserted whenever the decision Haiku sets `digest_flag=true` on a
 message — on either the passive path (`agents/ella/passive_dispatch.py`)
 or the reactive @-mention path (`agents/ella/agent.py`). The daily cron
 (`api/ella_daily_digest_cron.py`) drains all unsent rows in a trailing
-24h window, formats a digest, DMs it to Scott + an optional CC (Drake),
-and stamps `sent_in_digest_at` so a row never re-sends.
+24h window, Haiku-ranks the top 25, posts them to the `#daily-digest`
+channel, and stamps `sent_in_digest_at` so a row never re-sends. (Pre-
+`0056` the digest was a DM to Scott + an optional CC; the channel
+redesign moved it to a channel and dropped all DMs.)
 
 This is a curated daily skim of "things worth Scott's eyes" — not an
 escalation queue. The flagging criteria are deliberately permissive;
@@ -36,6 +38,7 @@ false positives are explicitly acceptable. Added by migration
 | `unanswered_posted_at` | `timestamptz` | Added by `0041`. Dedup key for the unanswered-message flagger. NULL = still eligible for the 2h check. Set when the flagger cron either posts the item OR marks it resolved-before-post. Independent of `sent_in_digest_at` |
 | `unanswered_post_slack_channel_id` | `text` | Added by `0041`. Channel the unanswered post landed in. NULL together with a non-NULL `unanswered_posted_at` means "resolved before post" (a human responded inside the 2h window) |
 | `unanswered_post_slack_ts` | `text` | Added by `0041`. Slack `ts` of the unanswered post (audit trail / future post-edit feature). NULL on resolved-before-post |
+| `open_ended` | `boolean` | Added by `0056`. The passive Haiku's second signal: `true` = the client message is open-ended / awaiting a human reply (questions, requests, emotional-hanging); `false` = closers, gratitude (incl. "thanks so much, appreciate it!"), pure acknowledgments. The unanswered-channels cron filters its 2h scan to `open_ended = true`; the daily digest ignores it (reads the broad `digest_flag` set). Nullable — historical rows predate the signal and stay out of the unanswered scan |
 
 ## Indexes
 
