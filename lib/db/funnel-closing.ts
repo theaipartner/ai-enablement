@@ -438,6 +438,177 @@ function classifyPlan(plan: string | null): 'ht' | 'dc' | null {
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Booked-by resolver — match a Calendly closer event to the setter who
+// booked it, via the setter triage form's Confirmed Call Date&Time.
+// ---------------------------------------------------------------------------
+
+// Digits-only phone (drops +, spaces, dashes). Returns null when fewer
+// than 10 digits — too short to be a real number to match on.
+function normalizePhone(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/[^0-9]/g, '')
+  return digits.length >= 10 ? digits : null
+}
+
+// YYYY-MM-DD calendar date of a UTC instant, in ET. Both the triage
+// confirmed-call timestamp and the Calendly event run through this so
+// the date comparison is apples-to-apples (and matches what the rest
+// of the dashboard renders per ADR 0003).
+function etDateString(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso))
+}
+
+function normName(n: string | null | undefined): string | null {
+  if (!n) return null
+  const v = n.toLowerCase().trim()
+  return v || null
+}
+
+type BookedByInvitee = { name: string | null; email: string | null; phones: string[] }
+
+// Builds a closure that resolves a Calendly event's "booked by" setter.
+// Pulls triage forms with a confirmed call date in/around the range,
+// resolves each form's lead identity (emails + phones from close_leads,
+// plus the form's own prospect_name), and keys them by ET date so the
+// per-event lookup is O(1). Identity priority on lookup: email → phone
+// → name. Name uses both full and first-name tokens since Calendly
+// invitees are often first-name-only ("Inesha" vs "Inesha Joneja").
+async function buildBookedByResolver(
+  sb: ReturnType<typeof createAdminClient>,
+  range: DateRange,
+): Promise<(eventStartIso: string, invitee: BookedByInvitee) => string | null> {
+  // Widen the confirmed-call pull by ±2 days around the range so an
+  // event near a range boundary still finds its form even if the
+  // setter's date entry drifts by a day.
+  const padMs = 2 * 24 * 60 * 60 * 1000
+  const startIso = new Date(new Date(range.startUtcIso).getTime() - padMs).toISOString()
+  const endIso = new Date(new Date(range.endUtcIso).getTime() + padMs).toISOString()
+
+  type TriageRow = {
+    lead_id: string | null
+    prospect_name: string | null
+    setter_names: string[] | null
+    confirmed_call_date_time: string | null
+  }
+  const triage: TriageRow[] = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('lead_id, prospect_name, setter_names, confirmed_call_date_time')
+      .not('confirmed_call_date_time', 'is', null)
+      .gte('confirmed_call_date_time', startIso)
+      .lt('confirmed_call_date_time', endIso)
+      .range(from, from + 999)
+    if (error) throw new Error(`airtable_setter_triage_calls (booked-by) read failed: ${error.message}`)
+    const rows = (data ?? []) as unknown as TriageRow[]
+    if (rows.length === 0) break
+    triage.push(...rows)
+    if (rows.length < 1000) break
+    from += 1000
+  }
+
+  // Resolve lead identities (emails + phones) from close_leads.contacts.
+  const leadIds = Array.from(
+    new Set(triage.map((t) => t.lead_id).filter((x): x is string => !!x)),
+  )
+  const leadKeys = new Map<string, { emails: string[]; phones: string[]; name: string | null }>()
+  for (let i = 0; i < leadIds.length; i += 200) {
+    const chunk = leadIds.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, contacts')
+      .in('close_id', chunk)
+    if (error) throw new Error(`close_leads (booked-by) read failed: ${error.message}`)
+    type ContactsBlob = Array<{
+      emails?: Array<{ email?: string | null }>
+      phones?: Array<{ phone?: string | null }>
+    }>
+    for (const r of (data ?? []) as unknown as Array<{
+      close_id: string
+      display_name: string | null
+      contacts: ContactsBlob | null
+    }>) {
+      const emails: string[] = []
+      const phones: string[] = []
+      for (const c of r.contacts ?? []) {
+        for (const em of c.emails ?? []) {
+          if (em?.email) emails.push(em.email.toLowerCase().trim())
+        }
+        for (const ph of c.phones ?? []) {
+          const norm = normalizePhone(ph?.phone)
+          if (norm) phones.push(norm)
+        }
+      }
+      leadKeys.set(r.close_id, { emails, phones, name: normName(r.display_name) })
+    }
+  }
+
+  // Date-keyed maps: `${etDate}|${identity}` → setter name. Email and
+  // phone are precise. Name maps are collision-safe: a key that two
+  // different setters' leads would claim is set to null (ambiguous) so
+  // the lookup returns "Missing" instead of guessing wrong — names are
+  // the weakest signal (Calendly gives first-name only) and contacts
+  // are currently empty so name carries most matches today.
+  const byEmail = new Map<string, string>()
+  const byPhone = new Map<string, string>()
+  const byName = new Map<string, string | null>()
+  const setName = (key: string, setter: string) => {
+    if (byName.has(key) && byName.get(key) !== setter) {
+      byName.set(key, null) // collision with a different setter → ambiguous
+    } else {
+      byName.set(key, setter)
+    }
+  }
+  for (const t of triage) {
+    if (!t.setter_names || t.setter_names.length === 0) continue
+    if (!t.confirmed_call_date_time) continue
+    const setter = t.setter_names[0]
+    const etDate = etDateString(t.confirmed_call_date_time)
+    const keys = t.lead_id ? leadKeys.get(t.lead_id) : undefined
+    for (const e of keys?.emails ?? []) byEmail.set(`${etDate}|${e}`, setter)
+    for (const p of keys?.phones ?? []) byPhone.set(`${etDate}|${p}`, setter)
+    // Names: lead display name + the form's own prospect_name, plus
+    // each one's first-name token (Calendly invitees are first-name-only).
+    const names = [keys?.name ?? null, normName(t.prospect_name)].filter(
+      (x): x is string => !!x,
+    )
+    for (const n of names) {
+      setName(`${etDate}|${n}`, setter)
+      const first = n.split(/\s+/)[0]
+      if (first && first !== n) setName(`${etDate}|${first}`, setter)
+    }
+  }
+
+  return (eventStartIso: string, invitee: BookedByInvitee): string | null => {
+    const etDate = etDateString(eventStartIso)
+    const email = invitee.email ? invitee.email.toLowerCase().trim() : null
+    if (email) {
+      const hit = byEmail.get(`${etDate}|${email}`)
+      if (hit) return hit
+    }
+    for (const p of invitee.phones) {
+      const hit = byPhone.get(`${etDate}|${p}`)
+      if (hit) return hit
+    }
+    const nm = normName(invitee.name)
+    if (nm) {
+      // null = ambiguous; `?? undefined` so `|| ` falls through cleanly.
+      const full = byName.get(`${etDate}|${nm}`)
+      if (full) return full
+      const first = byName.get(`${etDate}|${nm.split(/\s+/)[0]}`)
+      if (first) return first
+    }
+    return null
+  }
+}
+
 export async function getClosingScheduledList(
   range: DateRange,
 ): Promise<CloserScheduledResult> {
@@ -484,27 +655,54 @@ export async function getClosingScheduledList(
     return { closers: [], aggregate: emptyAgg, drillByCloser: {} }
   }
 
-  // 2. Invitees for those events (prospect name).
+  // 2. Invitees for those events (prospect name + email + phone). Phone
+  //    lives in raw_payload.questions_and_answers (a "Phone" Q&A) or
+  //    text_reminder_number — used by the booked-by identity match.
   const eventUris = events.map((e) => e.uri)
-  const inviteeByEvent = new Map<string, { name: string | null; email: string | null }>()
+  const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[] }>()
   for (let i = 0; i < eventUris.length; i += 200) {
     const chunk = eventUris.slice(i, i + 200)
     const { data, error } = await sb
       .from('calendly_invitees' as never)
-      .select('event_uri, name, email')
+      .select('event_uri, name, email, raw_payload')
       .in('event_uri', chunk)
     if (error) throw new Error(`calendly_invitees read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       event_uri: string
       name: string | null
       email: string | null
+      raw_payload: {
+        text_reminder_number?: string | null
+        questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
+      } | null
     }>) {
       // Keep the first invitee per event (1:1 in practice).
       if (!inviteeByEvent.has(r.event_uri)) {
-        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email })
+        const rawPhones: string[] = []
+        const trn = r.raw_payload?.text_reminder_number
+        if (trn) rawPhones.push(trn)
+        for (const qa of r.raw_payload?.questions_and_answers ?? []) {
+          if ((qa?.question ?? '').toLowerCase().includes('phone') && qa?.answer) {
+            rawPhones.push(qa.answer)
+          }
+        }
+        const phones = rawPhones
+          .map(normalizePhone)
+          .filter((p): p is string => p !== null)
+        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones })
       }
     }
   }
+
+  // 2b. Booked-by source: setter triage forms with a Confirmed Call
+  //     Date&Time. A setter "books" a closing call by filing a triage
+  //     EOC with a Confirmed HT/DC Booking, which carries that date.
+  //     We attribute the Calendly closer event to that setter when the
+  //     ET date of confirmed_call_date_time equals the ET date of the
+  //     event AND the lead identity matches (email → phone → name).
+  //     No match → null → "Missing" in the UI (prompts setters to fill
+  //     the confirmed-call field). Drake 2026-05-28.
+  const bookedByResolver = await buildBookedByResolver(sb, range)
 
   // 3. Closer forms covering the event window (±48h on either side for
   //    matching). Pull as a single windowed read; small table.
@@ -596,7 +794,7 @@ export async function getClosingScheduledList(
     else if (ev.callType === 'setter') agg.setterCalls++
     else if (ev.callType === 'rebook') agg.followupCalls++
 
-    const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null }
+    const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null, phones: [] }
     const form = matchForm(ev.start_time, invitee.name)
 
     const showed = form ? normalizeShowed(form.showed) : null
@@ -612,14 +810,11 @@ export async function getClosingScheduledList(
     const closeType: 'ht' | 'dc' | null =
       closed === 'yes' ? planClass : null
 
-    // "Booked by" resolution per call type:
-    // - setter: first entry in form.setter_names (when form matched)
-    // - direct: ad attribution intent — not wired, always null for now
-    // - rebook (follow-up): null
-    const bookedBy: string | null =
-      ev.callType === 'setter' && form?.setter_names && form.setter_names.length > 0
-        ? form.setter_names[0]
-        : null
+    // "Booked by" — matched from the setter triage form's Confirmed
+    // Call Date&Time + lead identity (see buildBookedByResolver). Works
+    // for any call type the match resolves; direct/ad-booked + rebooks
+    // simply won't match a setter form and stay null.
+    const bookedBy: string | null = bookedByResolver(ev.start_time, invitee)
 
     if (showed === 'yes') agg.showed++
     if (showed === 'no') agg.noShows++
