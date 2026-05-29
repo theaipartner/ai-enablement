@@ -45,7 +45,15 @@ CSV_PATH = _REPO / "lead data" / (
     "01KSRAVZ62MZ3DH1GN4YJMK0K4-881NOMZ6YVCQEIRO8EG1OU17.csv"
 )
 OUT_DIR = _REPO / "scripts" / "out"
-SETTER_URI_SUFFIX = "95d96439e072"   # the partnership link (renamed; same URI)
+# Setter/partnership links (event_type_uri suffixes). "Success AP"
+# (success-theaipartner, ...488e20717063) has 0 bookings in our data —
+# kept here for completeness; that path shows up only in the setters'
+# Slack log, not Calendly.
+SETTER_URI_SUFFIXES = (
+    "95d96439e072",   # Partnership Call w/ Aman (renamed from "Strategy Call with Aman")
+    "656dbd6b6c1f",   # Partnership Call w/ Adam
+    "488e20717063",   # Success AP (success-theaipartner/30min) — 0 bookings so far
+)
 STRATEGY_CALL = "ai partner strategy call"
 
 
@@ -105,7 +113,7 @@ def load_bookings(db) -> list[dict]:
                 continue
             uri = ev.get("event_type_uri") or ""
             nm = norm_event_name(ev["name"])
-            if uri.endswith(SETTER_URI_SUFFIX):
+            if uri.endswith(SETTER_URI_SUFFIXES):
                 kind = "setter"
             elif nm == STRATEGY_CALL:
                 kind = "direct"
@@ -178,7 +186,9 @@ def main() -> int:
     print(f"  FRESH setter bookings (setter, no direct):  {len(fresh)}")
     qy = sum(1 for l in fresh if l["qualified"])
     print(f"     - of fresh: closer-funnel qualified={qy}, unqualified={len(fresh)-qy}")
-    print(f"\n  (setter link = Partnership Call w/ Aman, uri ...{SETTER_URI_SUFFIX})")
+    print(f"\n  (setter links = Aman/Adam/Success-AP, uris ...{SETTER_URI_SUFFIXES})")
+    setter_links = Counter(l["_setter"][0]["link"] for l in fresh)
+    print("  fresh by link:", dict(setter_links))
     print(f"  Wrote {OUT_DIR/'may_fresh_setter_bookings.csv'}")
     return 0
 
