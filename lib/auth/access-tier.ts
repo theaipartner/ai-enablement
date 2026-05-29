@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { cache } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { tierAtLeast, type AccessTier } from '@/lib/auth/access-tier-shared'
@@ -37,7 +38,15 @@ export type CurrentUserAccess = {
 // Layout callers map null → redirect to /login?error=no_team_member_row.
 // Production rollout assumes every operator has a matching row; ghost
 // users are setup errors and should be surfaced loudly.
-export async function getCurrentUserAccessTier(): Promise<CurrentUserAccess | null> {
+//
+// Wrapped in React `cache()` so the per-request result is memoized:
+// the authenticated layout chain is nested (e.g. (authenticated) →
+// (ceo) → cost-hub), and each layout independently calls this. Without
+// memoization that's 2–3 serial `auth.getUser()` round-trips + as many
+// `team_members` queries before a page even starts rendering. `cache()`
+// dedupes them to a single lookup per request (it does NOT persist
+// across requests, so auth freshness is unchanged).
+export const getCurrentUserAccessTier = cache(async function getCurrentUserAccessTier(): Promise<CurrentUserAccess | null> {
   const supabase = createClient()
   const {
     data: { user },
@@ -71,4 +80,4 @@ export async function getCurrentUserAccessTier(): Promise<CurrentUserAccess | nu
       email: data.email,
     },
   }
-}
+})
