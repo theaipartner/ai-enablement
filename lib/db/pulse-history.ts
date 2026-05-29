@@ -3,7 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getAdsAggregateLive } from './funnel-ads'
 import { getCallActivityMetrics } from './funnel-appointment-setting'
-import { getCloserBookings } from './funnel-calendly'
+import { getDirectBookings } from './funnel-calendly'
 import { getClosingActivity } from './funnel-closing'
 import { getTypeformMetrics } from './funnel-typeform'
 import { dateRangeFromExplicit, todayEtDate } from './funnel-window'
@@ -281,7 +281,7 @@ async function fetchDay(day: string): Promise<DayAgg> {
     getTypeformMetrics(range),
     getCallActivityMetrics(range),
     getClosingActivity(range),
-    getCloserBookings(range),
+    getDirectBookings(range),
   ])
 
   const adsImp = pickAgg(ads, 'impressions')

@@ -6,6 +6,40 @@ Mirror of Calendly's `/scheduled_events`. URI-keyed; idempotent.
 
 Source for the Engine sheet's six Calendly-sourced rows. Live ingestion via `api/calendly_events.py` (webhook receiver fetches the parent event on every invitee.created/canceled tick); 7-day backfill via `scripts/backfill_calendly.py`.
 
+## ⭐ Booking link identities (CRITICAL — read before touching booking logic)
+
+Several Calendly event types share near-identical names. Counting the wrong
+one inflates or undercounts bookings. Confirmed 2026-05-29 with Drake +
+live data. **The data layer keys on the `event_type_uri`, NOT the name** —
+the only thing separating the direct link from the Aman-solo link by name
+is casing (`Ai` vs `AI`), and Calendly drifts casing at booking time, so
+the name is ambiguous here. The URI is unambiguous.
+
+| What it is | Name (as booked) | `event_type_uri` (ends in) | Counts as |
+|---|---|---|---|
+| **Direct / funnel self-book** (LP Calendly widget) | `Ai Partner Strategy Call` | `8f6795d3-…-9ecaabb3938c` | **DIRECT BOOKINGS** ✅ |
+| Aman solo call (`aman-theaipartner/strategy-call`) | `AI Partner Strategy Call` | `a596a1b1-…-53092036c2c5` | not direct ✗ |
+| period variant | `AI Partner Strategy Call.` | `8ce6d7e4-…-8892b68ef205` | not the funnel link ✗ |
+| **Setter-led** booking (a setter booked the prospect) | `Partnership Call w/ {closer}` (w/ Aman, w/ Adam, …) | — | setter-led, NOT direct ✗ |
+
+The direct-bookings constant lives at
+`lib/db/funnel-calendly.ts` → `DIRECT_BOOKING_EVENT_TYPE_URI`
+(`getDirectBookings()`), which powers the LP page "Direct bookings" box and
+the Pulse Landing-Page "Bookings" tile.
+
+**Booking lead-time options.** When a lead self-books the direct link,
+Calendly only offers **today, +1 day, or +2 days** (verified: a 45-day
+sample was 8 today / 33 one-day / 23 two-day, nothing 3+). The day-out
+split (`start_time.date − event_created_at.date` in ET — see § Date math
+gotcha) is surfaced on the LP page.
+
+**Scaling closers.** Because we key on the round-robin direct event type,
+ANY closer the round-robin assigns is captured automatically — no per-closer
+config. Setter-led "Partnership Call w/ {closer}" links are a *separate*
+family that this metric deliberately excludes (they're setter bookings, not
+direct). If setter-led bookings ever need their own per-rep metric, match
+the `Partnership Call w/ %` name family.
+
 ## Columns
 
 ### Identity + core fields

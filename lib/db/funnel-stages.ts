@@ -13,7 +13,7 @@ import {
   getFmrTimeBlocks,
 } from './funnel-appointment-setting'
 import { getClosingActivity } from './funnel-closing'
-import { getCloserBookings } from './funnel-calendly'
+import { getDirectBookings } from './funnel-calendly'
 import { getPulseHistory } from './pulse-history'
 import {
   dateRangeFromExplicit,
@@ -116,7 +116,7 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
     getTypeformMetrics(range),
     getCallActivityMetrics(range),
     getClosingActivity(range),
-    getCloserBookings(range),
+    getDirectBookings(range),
     getFmrTimeBlocks(),
     getCohortAdspendSinceFloor(),
     // Rolling-7d historical context for the sparkline + yesterday +

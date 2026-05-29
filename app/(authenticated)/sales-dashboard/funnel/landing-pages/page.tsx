@@ -17,7 +17,7 @@ import {
   clampAdsRange,
 } from '@/lib/db/funnel-ads'
 import { getTypeformMetrics, type TypeformMetrics } from '@/lib/db/funnel-typeform'
-import { getCloserBookings, type CalendlyBookings } from '@/lib/db/funnel-calendly'
+import { getDirectBookings, type DirectBookings } from '@/lib/db/funnel-calendly'
 import type { AggMetric } from '@/lib/db/funnel-mocks'
 import { compactCount } from '@/lib/db/sales-dashboard-shared'
 import {
@@ -76,7 +76,7 @@ export default async function FunnelLandingPagesPage({
     getVslMetrics(range, vslHashedId),
     getTypVideoMetrics(range),
     getTypeformMetrics(range),
-    getCloserBookings(range),
+    getDirectBookings(range),
   ])
 
   const todayEt = todayEtDate()
@@ -452,13 +452,13 @@ function formatStampShort(iso: string): string {
 // Calendly closer-bookings block
 // ---------------------------------------------------------------------------
 
-function CalendlyBlock({ calendly }: { calendly: CalendlyBookings }) {
+function CalendlyBlock({ calendly }: { calendly: DirectBookings }) {
   return (
     <div>
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr)',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
           gap: 1,
           background: 'var(--color-geg-border)',
           border: '1px solid var(--color-geg-border)',
@@ -466,10 +466,16 @@ function CalendlyBlock({ calendly }: { calendly: CalendlyBookings }) {
           overflow: 'hidden',
         }}
       >
-        {/* Total booked only — active/canceled split removed per Drake
-            2026-05-29. `total` counts every closer booking created in the
-            window regardless of later cancellation. */}
-        <VideoMetricCellTrend label="Total booked (14-day)" total={calendly.total} trend={calendly.trend} />
+        {/* Direct bookings = the "Ai Partner Strategy Call" funnel link
+            only. Total spans the row; the day-out split (today / +1 / +2,
+            the only options Calendly offers) replaced active/canceled
+            per Drake 2026-05-29. */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <VideoMetricCellTrend label="Direct bookings created (14-day)" total={calendly.total} trend={calendly.trend} />
+        </div>
+        <VideoMetricCell label="Booked today" value={compactCount(calendly.today)} />
+        <VideoMetricCell label="Booked 1 day out" value={compactCount(calendly.oneDayOut)} />
+        <VideoMetricCell label="Booked 2 days out" value={compactCount(calendly.twoDaysOut)} />
       </div>
       <div
         className="geg-mono"
@@ -480,8 +486,10 @@ function CalendlyBlock({ calendly }: { calendly: CalendlyBookings }) {
           marginTop: 10,
         }}
       >
-        Filter: events named “AI Partner Strategy Call” (any casing) excluding the solo
-        URI <code>calendly.com/aman-theaipartner/strategy-call</code>.
+        Direct = the funnel self-book link “Ai Partner Strategy Call”
+        (event type <code>8f6795d3…</code>). Excludes the Aman-solo
+        “AI Partner Strategy Call”, the period variant, and setter-led
+        “Partnership Call w/ …” bookings. Live via the Calendly webhook.
       </div>
     </div>
   )
