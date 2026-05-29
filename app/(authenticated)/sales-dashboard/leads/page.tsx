@@ -171,7 +171,14 @@ function LeadRowView({ r }: { r: LeadRow }) {
       </span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
-          formatDuration(r.speedSec)
+          <>
+            {formatDuration(r.speedSec)}
+            {/* (yes/no) = connected on either of the first two dials —
+                same signal as the appointment-setting dial list. */}
+            <span style={{ color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
+              ({r.firstTwoDialsConnected ? 'yes' : 'no'})
+            </span>
+          </>
         ) : (
           <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>
         )}
