@@ -12,15 +12,14 @@ import {
 // — already includes re-opt-ins) so the two can't drift, then enriched
 // with two columns the dial list doesn't carry:
 //
-//   - qualified  — read DIRECTLY off the Close lead's `investment` field
-//                  (the budget answer Close stores from the Typeform
-//                  submission). "Under $2,000" → non-qualified; any higher
-//                  band → qualified; not set → unknown. No Typeform join /
-//                  email-match needed — the answer lives on the lead, and
-//                  Close overwrites it on each opt-in, so a re-opt-in's
-//                  status is automatically its MOST RECENT submission
-//                  (Drake 2026-05-29). (Close also has a `marketing_qualified`
-//                  Yes/No flag; we key on `investment` per Drake's rule.)
+//   - qualified  — read DIRECTLY off the Close lead's `marketing_qualified`
+//                  Yes/No flag (the team's canonical qualified field; ≡ the
+//                  under/over-$2,000 investment rule — verified 0 disagreements
+//                  across 163 non-re-opt-in leads since 2026-05-24). No
+//                  Typeform join / email-match needed — the flag lives on the
+//                  lead, and Close overwrites it on each opt-in, so a
+//                  re-opt-in's status is automatically its MOST RECENT
+//                  submission (Drake 2026-05-29).
 //   - booked     — match the lead (email, else name) to a Calendly invitee
 //                  on the "AI Partner Strategy Call" link. No match → false.
 //
@@ -66,9 +65,9 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
   const leadIds = rows.map((r) => r.leadId)
 
   // 2. Lead identity (emails + names) + qualified — all from close_leads.
-  //    `investment` is the budget answer Close stores from the Typeform
-  //    submission (and overwrites on each opt-in → most-recent wins).
-  //    Chunked .in to stay under PostgREST's URI budget.
+  //    `marketing_qualified` is the team's Yes/No qualified flag, set from
+  //    the Typeform submission and overwritten on each opt-in → most-recent
+  //    wins. Chunked .in to stay under PostgREST's URI budget.
   const leadEmails = new Map<string, string[]>()       // leadId → normalized emails
   const leadNames = new Map<string, string>()          // leadId → normalized name
   const leadQualified = new Map<string, Qualification>() // leadId → qualified
@@ -76,14 +75,14 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts, investment')
+      .select('close_id, display_name, contacts, marketing_qualified')
       .in('close_id', chunk)
     if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       close_id: string
       display_name: string | null
       contacts: unknown
-      investment: string | null
+      marketing_qualified: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -96,7 +95,7 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
       }
       leadEmails.set(r.close_id, Array.from(emails))
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
-      leadQualified.set(r.close_id, qualFromInvestment(r.investment))
+      leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
     }
   }
 
@@ -179,11 +178,12 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
   }
 }
 
-// Qualified from the Close lead's `investment` budget band.
-// "Under $2,000" → non-qualified; any higher band → qualified; unset →
-// unknown. Drake's rule (2026-05-29): under $2k investment = unqualified.
-function qualFromInvestment(investment: string | null): Qualification {
-  if (!investment || !investment.trim()) return 'unknown'
-  if (/^under\s/i.test(investment.trim())) return 'non-qualified'
-  return 'qualified'
+// Qualified from the Close lead's `marketing_qualified` flag (the team's
+// canonical Yes/No, ≡ the under/over-$2,000 investment rule). Unset →
+// unknown.
+function qualFromMarketingQualified(mq: string | null): Qualification {
+  const v = (mq ?? '').trim().toLowerCase()
+  if (v === 'yes') return 'qualified'
+  if (v === 'no') return 'non-qualified'
+  return 'unknown'
 }
