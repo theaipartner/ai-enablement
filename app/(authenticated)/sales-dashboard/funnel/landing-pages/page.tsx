@@ -458,7 +458,7 @@ function CalendlyBlock({ calendly }: { calendly: CalendlyBookings }) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gridTemplateColumns: 'minmax(0, 1fr)',
           gap: 1,
           background: 'var(--color-geg-border)',
           border: '1px solid var(--color-geg-border)',
@@ -466,9 +466,10 @@ function CalendlyBlock({ calendly }: { calendly: CalendlyBookings }) {
           overflow: 'hidden',
         }}
       >
-        <VideoMetricCellTrend label="Bookings created (14-day)" total={calendly.total} trend={calendly.trend} />
-        <VideoMetricCell label="Active (not canceled)" value={compactCount(calendly.active)} />
-        <VideoMetricCell label="Canceled" value={compactCount(calendly.canceled)} />
+        {/* Total booked only — active/canceled split removed per Drake
+            2026-05-29. `total` counts every closer booking created in the
+            window regardless of later cancellation. */}
+        <VideoMetricCellTrend label="Total booked (14-day)" total={calendly.total} trend={calendly.trend} />
       </div>
       <div
         className="geg-mono"
