@@ -19,6 +19,7 @@ import { PersonPill } from '../header-pills'
 // or any Ella-touched surface.
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 const PAGE_SIZE = 50
 

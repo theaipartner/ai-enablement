@@ -42,6 +42,11 @@ import {
 // closers via PRIMARY_ROLE_OVERRIDE in the data layer.
 
 export const dynamic = 'force-dynamic'
+// This page fans out into several paginated Close-table scans in
+// parallel; the default ~15s function ceiling can time out under DB
+// load or cold start. 60s headroom prevents the 500s while the
+// underlying query fan-out is optimized separately.
+export const maxDuration = 60
 
 export default async function FunnelApptSettingPage({
   searchParams,

@@ -10,6 +10,7 @@ import { ClientsTable } from './clients-table'
 // navigation re-runs against fresh DB data. Cost: ~200ms per visit;
 // acceptable at 197 clients.
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 // Column layout per Scott's 2026-05-11 ask. Mirror of clients-table.tsx
 // SORTABLE_COLUMNS — kept duplicated rather than imported because the

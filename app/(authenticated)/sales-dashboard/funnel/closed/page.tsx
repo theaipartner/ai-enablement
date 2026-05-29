@@ -25,6 +25,7 @@ import { DateRangePicker } from '../landing-pages/date-range-picker'
 //   3. Cash produced (upfront / contract / AOV) — links out to Revenue
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 // Default = TODAY (single-day window). Drake's call 2026-05-27 — the
 // closing page is now organized around scheduled-calls-for-today, so

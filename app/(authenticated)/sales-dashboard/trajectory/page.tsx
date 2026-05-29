@@ -14,6 +14,7 @@ import { WindowSwitcher } from '../window-switcher'
 // against each source's target slice.
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 export default async function SalesDashboardTrajectoryPage({
   searchParams,

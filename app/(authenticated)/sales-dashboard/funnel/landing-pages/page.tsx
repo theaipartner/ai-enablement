@@ -43,6 +43,7 @@ import { VslSelector } from './vsl-selector'
 //   7. Per-LP table: Clarity breakdown across all url_paths Clarity sees
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 export default async function FunnelLandingPagesPage({
   searchParams,

@@ -33,6 +33,7 @@ import { DateRangePicker } from './landing-pages/date-range-picker'
 // and restates as the day finalizes.
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 export default async function SalesDashboardFunnelPage({
   searchParams,

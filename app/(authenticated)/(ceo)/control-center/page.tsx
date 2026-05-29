@@ -6,6 +6,7 @@ import { getCeoControlCenterData } from '@/lib/db/ceo-control-center'
 // Clients and Ad Spend MTD are real.
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 // Placeholder cash numbers — replaced when revenue source wires up.
 const PLACEHOLDER_NEW_CASH = 185_400

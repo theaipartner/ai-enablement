@@ -34,6 +34,7 @@ import { DateRangePicker } from '../landing-pages/date-range-picker'
 // available range (floor → today; data layer clamps end to yesterday).
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 export default async function FunnelAdsPage({
   searchParams,
