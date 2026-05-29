@@ -81,4 +81,5 @@ Data Sheet - Overall Engine.csv
 # Lead/booking PII — Typeform CSV exports and one-shot analysis output.
 # Regenerable from source + DB; contains emails/phones. Never commit.
 Closer Funnel Leads*.csv
+lead data/
 scripts/out/
