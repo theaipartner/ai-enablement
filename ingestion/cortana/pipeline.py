@@ -48,12 +48,22 @@ class SyncOutcome:
 
 
 def et_day_window(day: date) -> tuple[str, str]:
-    """UTC ISO (...Z) window covering one ET calendar day, DST-aware.
+    """UTC ISO (...Z) window that makes Cortana report `day`'s metrics.
 
-    start = ET 00:00 of `day`; end = ET 00:00 of the next day.
+    Cortana/Meta's daily attribution runs one ET calendar day *ahead* of
+    the 24h window we send: a `[D 00:00, D+1 00:00)` ET window comes back
+    carrying day **D+1**'s spend, not D's. Verified 2026-05-29 against
+    known ground truth — the window `[05-27 00:00, 05-28 00:00) ET`
+    returned 05-28's $745, and `[05-28 00:00, 05-29 00:00) ET` returned
+    05-29's (today's) spend, not 05-27/05-28's.
+
+    So to retrieve `day`, we send the window that *ends* at `day` 00:00
+    ET (and starts the prior ET midnight). DST-aware via zoneinfo. The
+    pipeline then labels the returned row `day`, and the stored date
+    matches the real calendar day.
     """
-    start_et = datetime(day.year, day.month, day.day, tzinfo=_ET)
-    end_et = start_et + timedelta(days=1)
+    end_et = datetime(day.year, day.month, day.day, tzinfo=_ET)
+    start_et = end_et - timedelta(days=1)
     return (
         start_et.astimezone(_UTC).strftime(CORTANA_DT_FORMAT),
         end_et.astimezone(_UTC).strftime(CORTANA_DT_FORMAT),

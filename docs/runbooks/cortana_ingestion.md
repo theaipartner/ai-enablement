@@ -44,7 +44,7 @@ tables, never the API.
   Business ID `b97a1874-7be6-41d4-bba1-8df9ffd69e18` is not a secret;
   the API key is.
 
-## Three landmines (all hit + solved during discovery 2026-05-29)
+## Four landmines (all hit + solved during discovery 2026-05-29)
 
 1. **Cloudflare blocks `Python-urllib`** → HTTP 403, body
    `error code: 1010` (banned browser signature). The client sends a
@@ -58,6 +58,15 @@ tables, never the API.
    (Vercel→cloud) uses the supabase client and is fine; the **local
    backfill** writes via **psycopg2** (`--cloud` flag) to bypass
    PostgREST entirely.
+4. **Day attribution runs one ET day ahead of the window (fixed
+   2026-05-29 eve).** A `[D 00:00, D+1 00:00)` ET window comes back
+   carrying day **D+1**'s spend, not D's — so the first cutover stored
+   every row one day early (today blank, yesterday holding the
+   day-before's number). `et_day_window(day)` now sends the window that
+   **ends** at `day` 00:00 ET (starts the prior ET midnight); verified
+   against ground truth (`[05-27, 05-28) ET` → 05-28's $745.75). Guarded
+   by `tests/ingestion/cortana/test_pipeline.py`. If daily numbers ever
+   look shifted again, check this window first.
 
 ## Field map (read off live responses — the OpenAPI types rows as opaque)
 
