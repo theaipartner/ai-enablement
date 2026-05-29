@@ -1,12 +1,22 @@
 # meta_ad_daily
 
-Mirror of the Cortana → Google-Sheet Meta ad-spend rows. One row per day.
+Account-level (paid) daily Meta ad-spend mirror. One row per day.
+
+> **Source changed 2026-05-29.** This table is now fed from the
+> **Cortana Attribution API** (`groupBy=source`, the "Meta Ads" row) via
+> `ingestion/cortana/` → `api/cortana_sync_cron.py`. The schema is
+> unchanged, but `ctr` is now Meta's **real** CTR and `frequency` is
+> derived from `impressions/reach` — no longer the broken/derived Sheet
+> values. The prior Cortana → Google-Sheet pipeline (`ingestion/meta/`,
+> `api/meta_sheet_sync_cron.py`) is retired (code kept for revert).
+> Runbook: `docs/runbooks/cortana_ingestion.md`. Per-campaign and
+> per-ad grain live in `cortana_campaign_daily` / `cortana_ad_daily`.
 
 ## Purpose
 
-Source data for the Engine sheet's ADVERTISING section (Total Adspend, Frequency, Total Impressions, Unique Link Clicks, Cost per Impression, Cost per Unique Link Click, Click Through Rate). Per CLAUDE.md § Core Principles, the Gregory aggregation layer reads from here — not the Sheet directly.
+Source data for the Engine sheet's ADVERTISING section (Total Adspend, Frequency, Total Impressions, Unique Link Clicks, Cost per Impression, Cost per Unique Link Click, Click Through Rate). Per CLAUDE.md § Core Principles, the Gregory aggregation layer reads from here — not the API directly.
 
-Cortana is the team's Meta-consolidation tool (avoids Meta-API fatigue). It writes one row per day into a Google Sheet (Sheet ID `1XX6MV7dqAsjlWOiwkuKe9d1uWc1qFR4Dt1CfCVfK8d4`, first tab). A 3-hour Vercel cron (`api/meta_sheet_sync_cron.py`) pulls the Sheet and upserts into this table. Cortana restates the current day with corrected numbers over the day; the upsert's last-write-wins on `day` is the desired behavior — the latest pull of a day is the most complete.
+Cortana is the team's Meta-consolidation tool (avoids Meta-API fatigue). A 3-hour Vercel cron (`api/cortana_sync_cron.py`) pulls a trailing 4-ET-day window from Cortana's `attribution/data` endpoint and upserts the "Meta Ads" source row into this table. Cortana/Meta restate recent days (~72h) with corrected numbers; the upsert's last-write-wins on `day` is the desired behavior — the latest pull of a day is the most complete.
 
 ## Columns
 
@@ -21,20 +31,23 @@ Cortana is the team's Meta-consolidation tool (avoids Meta-API fatigue). It writ
 | `unique_link_clicks` | `integer` | Source: Sheet col "Unique Link Clicks". |
 | `cpm` | `numeric` | Source: Sheet col "CPM (Cost per 1,000 Impressions)". |
 | `cost_per_unique_link_click` | `numeric` | Source: Sheet col "Cost per Unique Link Click". |
-| `ctr` | `numeric` | **DERIVED**: `link_clicks / impressions * 100`. NULL when impressions is 0 or missing. NOT the Sheet's source CTR column — see § Why CTR is derived below. |
-| `ctr_source_raw` | `text` | Forensic: the Sheet's raw CTR cell. Today always `1899-12-31` (the serial-0 bug). |
+| `ctr` | `numeric` | Meta's real link CTR (Cortana `ctr`). (Was derived `link_clicks/impressions*100` in the Sheet era because the Sheet's CTR column was broken — see § CTR history.) |
+| `cost_per_unique_link_click` | `numeric` | DERIVED `amount_spent / unique_link_clicks` (Cortana's `costPerUniqueInlineLinkClick` is null at row grain). |
+| `frequency` | `numeric` | DERIVED `impressions / reach` (Cortana returns it null at row grain). |
+| `ctr_source_raw` | `text` | Provenance marker. Now `'cortana_attribution'`. (Sheet-era rows held `1899-12-31`, the serial-0 bug.) |
 | `created_at` / `updated_at` | `timestamptz` | Standard. `updated_at` reflects the last cron pull that restated this day. Trigger: `set_updated_at`. |
 
-## Why CTR is derived
+## CTR history
 
-The Sheet's "CTR (Link Click-Through Rate)" column is broken — Cortana exports it formatted as a date serial, so every row reads `1899-12-31` (Sheets serial 0 = the classic percentage-formatted-as-date bug). Mirroring it as text would poison aggregation queries; mirroring it as numeric would silently insert `0` on every row.
+In the Sheet era (pre-2026-05-29) the Sheet's "CTR" column was broken —
+Cortana exported it as a date serial, every row reading `1899-12-31`
+(Sheets serial 0). The ingestion layer worked around it by deriving
+`ctr = link_clicks / impressions * 100` and stashing the broken raw
+value in `ctr_source_raw`.
 
-Two columns split the responsibility:
-
-- `ctr` = `link_clicks / impressions * 100`, computed in `ingestion.meta.parser._derive_ctr`. This is what the aggregation layer reads.
-- `ctr_source_raw` = the raw broken Sheet text, captured for forensic transparency. If Cortana ever fixes the export, future-readers can see when the fix held; if a different column starts exhibiting the same drift, the precedent is established.
-
-Verified live on 2026-05-23: 23 days of data, every `ctr_source_raw` value is the string `1899-12-31`.
+Since the cutover to the **Cortana Attribution API**, `ctr` is Meta's
+real link CTR (the API's `ctr` field), and `ctr_source_raw` is a plain
+provenance marker (`'cortana_attribution'`). The derivation is gone.
 
 ## Indexes
 
@@ -46,9 +59,9 @@ PK on `day` covers the only meaningful access pattern (point lookup + DESC scan 
 
 ## What populates it
 
-- `ingestion.meta.pipeline.sync_meta_ad_daily(db, access_token)` — orchestrator.
-- `api/meta_sheet_sync_cron.py` — Vercel cron at `0 */3 * * *` (every 3 hours starting at the top of the hour). Catches Cortana's same-day restatements without burning needless Sheets API calls.
-- Manual catch-up: re-trigger the cron manually with `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://ai-enablement-sigma.vercel.app/api/meta_sheet_sync_cron`. Idempotent.
+- `ingestion.cortana.pipeline.sync_cortana_range(db, client, start, end)` — orchestrator (writes this table + `cortana_campaign_daily` + `cortana_ad_daily`).
+- `api/cortana_sync_cron.py` — Vercel cron at `0 */3 * * *`, trailing 4-ET-day window. Catches Meta's ~72h restatements.
+- Manual catch-up: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://ai-enablement-sigma.vercel.app/api/cortana_sync_cron`, or `scripts/backfill_cortana.py --days N --apply --cloud`. Idempotent.
 
 ## What reads from it
 
