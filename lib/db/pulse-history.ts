@@ -12,8 +12,13 @@ import { dateRangeFromExplicit, todayEtDate } from './funnel-window'
 // /sales-dashboard/funnel, returns:
 //
 //   - yesterday: single-day value
-//   - avg7d:     7-day rolling average (floor: 2026-05-24)
-//   - trend7d:   daily values for a sparkline
+//   - avg7d:     7-day rolling stat over the LAST 7 days of the series
+//                (mean for most tiles; SUM for adspend — Drake wants
+//                "7d spend" to read as a total, 2026-05-29)
+//   - trend7d:   daily values for a sparkline — now up to 14 days
+//                (Drake 2026-05-29). Field name kept for stability;
+//                holds 14 points once that much data exists past the
+//                2026-05-24 tracking floor.
 //
 // Math notes:
 //   - For raw COUNT/SUM metrics (impressions, dials, visits, etc.),
@@ -27,9 +32,12 @@ import { dateRangeFromExplicit, todayEtDate } from './funnel-window'
 //     created on day X who ever responded" — i.e. the daily delta to
 //     the cumulative cohort. yesterday + avg7d match that semantic.
 //
-// Window: max(today - 7d, 2026-05-24) → yesterday. Today is excluded
+// Window: max(today - 14d, 2026-05-24) → yesterday. Today is excluded
 // because most upstream sources (Meta especially) restate the current
-// day all day. Floor at 5/24 to match the rest of the Pulse page.
+// day all day. Floor at 5/24 to match the rest of the Pulse page — so
+// the sparkline grows toward 14 points as data accrues past that floor
+// (today it shows however many days exist since 5/24). The avg7d stat
+// is computed over the last 7 days of whatever the series holds.
 //
 // Implementation: one fetch per day in parallel — re-uses the existing
 // per-source aggregation functions instead of writing source-specific
@@ -56,7 +64,7 @@ export type PulseHistory = {
 export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
   const today = todayEtDate()
   const yesterday = subtractDayEt(today, 1)
-  const windowStart = maxDate(subtractDayEt(today, 7), PULSE_FLOOR_ET_DATE)
+  const windowStart = maxDate(subtractDayEt(today, 14), PULSE_FLOOR_ET_DATE)
   const days = enumerateDaysInclusive(windowStart, yesterday)
 
   if (days.length === 0) {
@@ -69,22 +77,35 @@ export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
   const perDay = await Promise.all(days.map(fetchDay))
   const fmrDaily = await fetchFmrDaily(days)
 
+  // The series spans the full window (up to 14 days) for the sparkline;
+  // the 7d stats below are computed over the last 7 days only so the
+  // "7d" footer label stays honest.
+  const recent7 = perDay.slice(-7)
+
   // Helpers for assembling each metric history
   const series = (extractor: (d: DayAgg) => number | null): number[] =>
     perDay.map((d) => extractor(d) ?? 0)
-  const mean = (xs: number[]): number | null =>
-    xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length
+  // mean/sum over the LAST 7 points of a (possibly 14-long) series.
+  const mean = (xs: number[]): number | null => {
+    const s = xs.slice(-7)
+    return s.length === 0 ? null : s.reduce((a, b) => a + b, 0) / s.length
+  }
+  const sum7 = (xs: number[]): number | null => {
+    const s = xs.slice(-7)
+    return s.length === 0 ? null : s.reduce((a, b) => a + b, 0)
+  }
   const last = (xs: number[]): number | null =>
     xs.length === 0 ? null : xs[xs.length - 1]
 
-  // Volume-weighted ratio. Returns null when denominator is 0.
+  // Volume-weighted ratio over the last 7 days. Returns null when
+  // denominator is 0.
   const ratio7d = (
     numExtract: (d: DayAgg) => number | null,
     denExtract: (d: DayAgg) => number | null,
     scale: number = 1,
   ): number | null => {
-    const num = perDay.reduce((s, d) => s + (numExtract(d) ?? 0), 0)
-    const den = perDay.reduce((s, d) => s + (denExtract(d) ?? 0), 0)
+    const num = recent7.reduce((s, d) => s + (numExtract(d) ?? 0), 0)
+    const den = recent7.reduce((s, d) => s + (denExtract(d) ?? 0), 0)
     return den > 0 ? (num / den) * scale : null
   }
   const ratioDaily = (
@@ -117,8 +138,10 @@ export async function getPulseHistory(): Promise<Map<string, PulseHistory>> {
     map.set('impressions', { yesterday: last(trend), avg7d: mean(trend), trend7d: trend })
   }
   {
+    // Adspend: "7d" reads as a TOTAL (sum of the last 7 days), not an
+    // average — Drake 2026-05-29. yesterday stays the single-day total.
     const trend = series((d) => d.ads.adspend)
-    map.set('adspend', { yesterday: last(trend), avg7d: mean(trend), trend7d: trend })
+    map.set('adspend', { yesterday: last(trend), avg7d: sum7(trend), trend7d: trend })
   }
   {
     // CTR = unique_link_clicks / impressions * 100 (Drake's spec)
