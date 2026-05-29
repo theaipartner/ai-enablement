@@ -6,24 +6,26 @@ import {
   getSpeedToLeadCohort,
   type SpeedToLeadCohortRow,
 } from './funnel-appointment-setting'
-import { classifyResponse } from './funnel-typeform'
 
 // View-only Leads list (the /sales-dashboard/leads page). Built on the
 // SAME cohort as the appointment-setting lead list (getSpeedToLeadCohort
 // — already includes re-opt-ins) so the two can't drift, then enriched
-// with two cross-source joins the dial list doesn't carry:
+// with two columns the dial list doesn't carry:
 //
-//   - qualified  — match the lead (email/phone, else name) to a Typeform
-//                  response and classify the budget question. "Under
-//                  $2,000" → non-qualified; anything higher → qualified.
-//                  Reuses funnel-typeform's classifier. No match → unknown.
+//   - qualified  — read DIRECTLY off the Close lead's `investment` field
+//                  (the budget answer Close stores from the Typeform
+//                  submission). "Under $2,000" → non-qualified; any higher
+//                  band → qualified; not set → unknown. No Typeform join /
+//                  email-match needed — the answer lives on the lead, and
+//                  Close overwrites it on each opt-in, so a re-opt-in's
+//                  status is automatically its MOST RECENT submission
+//                  (Drake 2026-05-29). (Close also has a `marketing_qualified`
+//                  Yes/No flag; we key on `investment` per Drake's rule.)
 //   - booked     — match the lead (email, else name) to a Calendly invitee
 //                  on the "AI Partner Strategy Call" link. No match → false.
 //
-// Matching is email-primary, name-fallback, and imperfect by nature
-// (Drake 2026-05-29): unmatched leads show unknown / not-booked honestly
-// rather than guessing. For forward (June+) leads, where Typeform →
-// Close → Calendly all flow live to production, match rates are high.
+// Booked matching is email-primary, name-fallback, and imperfect by nature:
+// unmatched leads show not-booked honestly rather than guessing.
 
 // Calendly direct-booking event-name prefix. Source of truth:
 // ingestion/calendly + lib/db/funnel-calendly.ts (NAME_PREFIX_LC).
@@ -63,21 +65,25 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
   const sb = createAdminClient()
   const leadIds = rows.map((r) => r.leadId)
 
-  // 2. Lead identity (emails + names) from close_leads.contacts jsonb.
+  // 2. Lead identity (emails + names) + qualified — all from close_leads.
+  //    `investment` is the budget answer Close stores from the Typeform
+  //    submission (and overwrites on each opt-in → most-recent wins).
   //    Chunked .in to stay under PostgREST's URI budget.
-  const leadEmails = new Map<string, string[]>() // leadId → normalized emails
-  const leadNames = new Map<string, string>()       // leadId → normalized name
+  const leadEmails = new Map<string, string[]>()       // leadId → normalized emails
+  const leadNames = new Map<string, string>()          // leadId → normalized name
+  const leadQualified = new Map<string, Qualification>() // leadId → qualified
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts')
+      .select('close_id, display_name, contacts, investment')
       .in('close_id', chunk)
-    if (error) throw new Error(`leads: close_leads contacts read failed: ${error.message}`)
+    if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       close_id: string
       display_name: string | null
       contacts: unknown
+      investment: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -90,43 +96,11 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
       }
       leadEmails.set(r.close_id, Array.from(emails))
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
+      leadQualified.set(r.close_id, qualFromInvestment(r.investment))
     }
   }
 
-  // 3. Qualified — Typeform responses around the opt-in window. Latest
-  //    submission per email wins. classifyResponse reads the budget
-  //    field ref (single live funnel: SFedWelr).
-  const qualByEmail = new Map<string, Qualification>()
-  {
-    const start = new Date(new Date(range.startUtcIso).getTime() - 2 * DAY_MS).toISOString()
-    const end = new Date(new Date(range.endUtcIso).getTime() + DAY_MS).toISOString()
-    let from = 0
-    for (;;) {
-      const { data, error } = await sb
-        .from('typeform_responses' as never)
-        .select('form_id, submitted_at, answers')
-        .gte('submitted_at', start)
-        .lt('submitted_at', end)
-        .order('submitted_at', { ascending: true }) // ascending → last write wins = most recent
-        .range(from, from + 999)
-      if (error) throw new Error(`leads: typeform read failed: ${error.message}`)
-      const trows = (data ?? []) as unknown as Array<{ form_id: string; submitted_at: string; answers: unknown }>
-      if (trows.length === 0) break
-      for (const t of trows) {
-        const email = emailFromAnswers(t.answers)
-        if (!email) continue
-        // classifyResponse only reads `answers`; full TfRow shape for the type.
-        qualByEmail.set(
-          email,
-          classifyResponse({ response_id: '', form_id: t.form_id, landed_at: null, submitted_at: t.submitted_at, answers: t.answers }),
-        )
-      }
-      if (trows.length < 1000) break
-      from += 1000
-    }
-  }
-
-  // 4. Booked — Calendly invitees on the strategy-call link, for events
+  // 3. Booked — Calendly invitees on the strategy-call link, for events
   //    created from the window start onward (a lead opting in this window
   //    books during/after it, sometimes for a future date). Build booked
   //    email + name sets, match the cohort against them.
@@ -170,7 +144,7 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
     }
   }
 
-  // 5. Assemble.
+  // 4. Assemble.
   let qualifiedCount = 0
   let bookedCount = 0
   let newCount = 0
@@ -179,11 +153,7 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
 
-    let qualified: Qualification = 'unknown'
-    for (const e of emails) {
-      const q = qualByEmail.get(e)
-      if (q) { qualified = q; break }
-    }
+    const qualified = leadQualified.get(r.leadId) ?? 'unknown'
 
     let booked = false
     for (const e of emails) {
@@ -209,11 +179,11 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadsResult> {
   }
 }
 
-// Extract the first email answer from a Typeform answers[] array.
-function emailFromAnswers(answers: unknown): string | null {
-  if (!Array.isArray(answers)) return null
-  for (const a of answers as Array<{ type?: string; email?: string }>) {
-    if (a?.type === 'email' && a.email) return norm(a.email)
-  }
-  return null
+// Qualified from the Close lead's `investment` budget band.
+// "Under $2,000" → non-qualified; any higher band → qualified; unset →
+// unknown. Drake's rule (2026-05-29): under $2k investment = unqualified.
+function qualFromInvestment(investment: string | null): Qualification {
+  if (!investment || !investment.trim()) return 'unknown'
+  if (/^under\s/i.test(investment.trim())) return 'non-qualified'
+  return 'qualified'
 }
