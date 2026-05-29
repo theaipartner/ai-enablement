@@ -8,9 +8,10 @@ import { todayEtDate } from './funnel-window'
 //
 // Range semantics (driven by the page's date-range picker):
 //   - Lower bound: max(user-picked start, ADS_FLOOR_ET).
-//   - Upper bound: min(user-picked end, yesterday ET). Meta's daily
-//     row for "today" lands the morning AFTER, so the most recent
-//     complete day is always yesterday.
+//   - Upper bound: min(user-picked end, today ET). Since the cutover
+//     to the Cortana API (2026-05-29) today's row is populated
+//     intraday (3-hour cron) and restates as Meta finalizes, so the
+//     high end is no longer clamped back to yesterday.
 
 // Hard floor — first day Zain's fixed source-sheet started landing
 // usable data. Anything earlier is pre-process and excluded.
@@ -31,28 +32,19 @@ export type MetaAdDailyRow = {
 
 export type AdsRange = {
   startEtDate: string  // YYYY-MM-DD, inclusive (>= ADS_FLOOR_ET)
-  endEtDate: string    // YYYY-MM-DD, inclusive (<= yesterday)
-  // True when start > end (e.g. selected window = today, but today's
-  // data lands tomorrow → no days in range yet). UI surfaces this so
-  // the empty state reads "data lands tomorrow" instead of just "0".
+  endEtDate: string    // YYYY-MM-DD, inclusive (<= today)
+  // True when start > end (e.g. user picked a start after today). UI
+  // surfaces this as an empty state rather than a misleading 0.
   isEmptyRange: boolean
-}
-
-function yesterdayEtDate(): string {
-  const today = todayEtDate()
-  const [y, m, d] = today.split('-').map((n) => parseInt(n, 10))
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  dt.setUTCDate(dt.getUTCDate() - 1)
-  return dt.toISOString().slice(0, 10)
 }
 
 // Clamp a user-picked start/end pair into the effective range:
 //   - lower bound: ADS_FLOOR_ET
-//   - upper bound: yesterday ET (today's data lands tomorrow)
+//   - upper bound: today ET (Cortana populates today intraday)
 export function clampAdsRange(startEtDate: string, endEtDate: string): AdsRange {
   const start = startEtDate < ADS_FLOOR_ET ? ADS_FLOOR_ET : startEtDate
-  const yesterday = yesterdayEtDate()
-  const end = endEtDate > yesterday ? yesterday : endEtDate
+  const today = todayEtDate()
+  const end = endEtDate > today ? today : endEtDate
   return {
     startEtDate: start,
     endEtDate: end,

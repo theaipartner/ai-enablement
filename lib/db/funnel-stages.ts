@@ -88,29 +88,22 @@ export type FunnelActivity = {
   roas: PulseTile[]
 }
 
-// Default range = yesterday ET. Picked because Meta lands the morning
-// after, so "yesterday" is the most-recent fully-populated day across
-// every source.
-function yesterdayEtDate(): string {
-  const today = todayEtDate()
-  const [y, m, d] = today.split('-').map((n) => parseInt(n, 10))
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  dt.setUTCDate(dt.getUTCDate() - 1)
-  return dt.toISOString().slice(0, 10)
-}
-
+// Default range = TODAY ET (Drake 2026-05-29). Since the Cortana
+// cutover, ads populate today intraday, so the pulse opens on the
+// current day; every source's today-so-far is shown and restates as
+// the day fills in.
 export function resolveFunnelRange(
   startEtDate: string | undefined,
   endEtDate: string | undefined,
 ): DateRange {
-  const yesterday = yesterdayEtDate()
-  const s = startEtDate ?? yesterday
-  const e = endEtDate ?? yesterday
+  const today = todayEtDate()
+  const s = startEtDate ?? today
+  const e = endEtDate ?? today
   return dateRangeFromExplicit(s, e)
 }
 
 export async function getFunnelActivity(range: DateRange): Promise<FunnelActivity> {
-  // Ads clamp: ADS_FLOOR_ET on the low end, yesterday on the high end.
+  // Ads clamp: ADS_FLOOR_ET on the low end, today on the high end.
   // Spend value drives the cost-per math in every box that wires it.
   const adsRange: AdsRange = clampAdsRange(range.startEtDate, range.endEtDate)
 
@@ -156,7 +149,7 @@ export async function getFunnelActivity(range: DateRange): Promise<FunnelActivit
     ],
     footer: adSpend > 0
       ? undefined
-      : 'Meta lands the morning after — pick yesterday\'s date for real ad math.',
+      : 'Today\'s spend builds through the day as Meta finalizes — pick a past day for a complete picture.',
   }
 
   // ─── Landing Page ──────────────────────────────────────────────────────

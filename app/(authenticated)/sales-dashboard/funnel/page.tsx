@@ -28,9 +28,9 @@ import { DateRangePicker } from './landing-pages/date-range-picker'
 // two tiles (cash landed + revenue), separated visually so it reads
 // as a roll-up rather than another funnel stage.
 //
-// Default range = yesterday ET. Meta lands the morning after, so
-// yesterday is the most-recent fully-populated day across every
-// source.
+// Default range = today ET (Drake 2026-05-29). Since the Cortana
+// cutover, ads populate intraday; every source's today-so-far shows
+// and restates as the day finalizes.
 
 export const dynamic = 'force-dynamic'
 
