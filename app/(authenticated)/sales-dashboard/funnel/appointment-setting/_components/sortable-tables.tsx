@@ -339,10 +339,31 @@ export function SpeedToLeadDrillTable({
           >
             <span
               className="geg-serif"
-              style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              style={{ fontSize: 13, color: 'var(--color-geg-text-2)', letterSpacing: '-0.002em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}
               title={r.leadId}
             >
-              {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
+              </span>
+              {r.optInType === 'reoptin' ? (
+                <span
+                  className="geg-mono"
+                  title={`Re-opt-in — existing Close lead, opted in again ${formatEtTimestamp(r.optInAt)} (speed measured from there)`}
+                  style={{
+                    flexShrink: 0,
+                    fontSize: 8.5,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--color-geg-accent)',
+                    border: '1px solid var(--color-geg-accent)',
+                    borderRadius: 4,
+                    padding: '1px 4px',
+                    lineHeight: 1.3,
+                  }}
+                >
+                  re-opt-in
+                </span>
+              ) : null}
             </span>
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
               {formatEtTimestamp(r.leadCreatedAt)}

@@ -1056,7 +1056,18 @@ function classifyStatusFlip(newStatusId: string): Outcome | null {
 export type SpeedToLeadCohortRow = {
   leadId: string
   prospectName: string | null
-  leadCreatedAt: string             // ISO UTC
+  // 'new'    = first-ever opt-in landed in the window (fresh lead).
+  // 'reoptin' = lead already existed in Close (first opt-in predates
+  //             the window) but opted in AGAIN during the window. We
+  //             still dial them, so they belong in the list. Drake
+  //             2026-05-29.
+  optInType: 'new' | 'reoptin'
+  leadCreatedAt: string             // ISO UTC — Close account creation
+  // The opt-in moment this row is anchored to: date_created for new
+  // leads, latest_opt_in_date for re-opt-ins. Speed-to-lead is measured
+  // from here (Drake #1: re-opt-in speed runs from the re-opt-in, not
+  // the original account creation).
+  optInAt: string                   // ISO UTC
   firstCallAt: string | null        // null if no outbound call yet
   // True if EITHER of the first two outbound dials had duration >= 90s.
   // Drake's setting policy is "double-dial" so this captures the
@@ -1120,7 +1131,22 @@ export async function getSpeedToLeadCohort(
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
-  // Cohort: leads created in window with qualifying initial status.
+  // Cohort = NEW opt-ins (account created in window, qualifying initial
+  // status — the junk/test filter) UNION RE-OPT-INS (account predates
+  // the window but opted in AGAIN during it). Re-opt-ins are still
+  // dialed, so they belong in the list; their speed-to-lead anchors to
+  // latest_opt_in_date, not the old account-creation date. Drake
+  // 2026-05-29.
+  type CohortLead = {
+    close_id: string
+    display_name: string | null
+    date_created: string
+    status_id: string | null
+    optInType: 'new' | 'reoptin'
+    optInAt: string
+  }
+
+  // --- NEW opt-ins: created in window ---
   const { data: leads, error: leadsErr } = await sb
     .from('close_leads' as never)
     .select('close_id, display_name, date_created, status_id')
@@ -1128,22 +1154,18 @@ export async function getSpeedToLeadCohort(
     .lt('date_created', range.endUtcIso)
     .range(0, 9999)
   if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-  const leadRows = (leads ?? []) as unknown as Array<{
+  const newLeadRows = (leads ?? []) as unknown as Array<{
     close_id: string
     display_name: string | null
     date_created: string
     status_id: string | null
   }>
-  if (leadRows.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
-  }
-  const leadIdSet = new Set(leadRows.map((l) => l.close_id))
+  const newLeadIdSet = new Set(newLeadRows.map((l) => l.close_id))
 
-  // Initial-status qualification — same logic as the per-rep speed
-  // calc (earliest old_status_id from status changes, or current
-  // status_id if no change exists).
+  // Initial-status qualification for NEW leads (earliest old_status_id
+  // from status changes, or current status_id if no change exists).
   const earliestOld = new Map<string, string | null>()
-  {
+  if (newLeadRows.length > 0) {
     const scStart = range.startUtcIso
     const scEnd = new Date(new Date(range.endUtcIso).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
     let scFrom = 0
@@ -1159,20 +1181,56 @@ export async function getSpeedToLeadCohort(
       const rows = (page ?? []) as unknown as Array<{ lead_id: string; old_status_id: string | null; date_created: string }>
       if (rows.length === 0) break
       for (const r of rows) {
-        if (!leadIdSet.has(r.lead_id)) continue
+        if (!newLeadIdSet.has(r.lead_id)) continue
         if (!earliestOld.has(r.lead_id)) earliestOld.set(r.lead_id, r.old_status_id)
       }
       if (rows.length < 1000) break
       scFrom += 1000
     }
   }
-  const qualifyingLeads = leadRows.filter((l) => {
+  const cohortLeads: CohortLead[] = []
+  for (const l of newLeadRows) {
     const initial = earliestOld.has(l.close_id) ? earliestOld.get(l.close_id) : l.status_id
-    return initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)
-  })
-  if (qualifyingLeads.length === 0) {
+    if (initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)) {
+      cohortLeads.push({ ...l, optInType: 'new', optInAt: l.date_created })
+    }
+  }
+
+  // --- RE-OPT-INS: first opt-in before the window, latest opt-in in it.
+  // No junk filter (established leads returning). date_first_opted_in is
+  // a `date` column → compare to the ET calendar start.
+  {
+    const { data: reopt, error: reErr } = await sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, date_created, status_id, latest_opt_in_date')
+      .lt('date_first_opted_in', range.startEtDate)
+      .gte('latest_opt_in_date', range.startUtcIso)
+      .lt('latest_opt_in_date', range.endUtcIso)
+      .range(0, 9999)
+    if (reErr) throw new Error(`close_leads re-opt-in read failed: ${reErr.message}`)
+    for (const r of (reopt ?? []) as unknown as Array<{
+      close_id: string
+      display_name: string | null
+      date_created: string
+      status_id: string | null
+      latest_opt_in_date: string
+    }>) {
+      if (newLeadIdSet.has(r.close_id)) continue // disjoint by construction; defensive
+      cohortLeads.push({
+        close_id: r.close_id,
+        display_name: r.display_name,
+        date_created: r.date_created,
+        status_id: r.status_id,
+        optInType: 'reoptin',
+        optInAt: r.latest_opt_in_date,
+      })
+    }
+  }
+
+  if (cohortLeads.length === 0) {
     return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
   }
+  const qualifyingLeads = cohortLeads
   const qualifyingMap = new Map(qualifyingLeads.map((l) => [l.close_id, l]))
 
   // First outbound call per qualifying lead (any caller).
@@ -1261,7 +1319,9 @@ export async function getSpeedToLeadCohort(
     const second = secondCallByLead.get(lead.close_id)
     let speedSec: number | null = null
     if (call) {
-      const dt = (new Date(call.activity_at).getTime() - new Date(lead.date_created).getTime()) / 1000
+      // Speed runs from the opt-in moment (account-creation for new
+      // leads, latest_opt_in_date for re-opt-ins), not account creation.
+      const dt = (new Date(call.activity_at).getTime() - new Date(lead.optInAt).getTime()) / 1000
       if (Number.isFinite(dt) && dt >= 0) speedSec = dt
     }
     const firstConnected = call ? (call.duration ?? 0) >= 90 : false
@@ -1269,7 +1329,9 @@ export async function getSpeedToLeadCohort(
     allRows.push({
       leadId: lead.close_id,
       prospectName: prospectFromForm.get(lead.close_id) ?? lead.display_name ?? null,
+      optInType: lead.optInType,
       leadCreatedAt: lead.date_created,
+      optInAt: lead.optInAt,
       firstCallAt: call?.activity_at ?? null,
       firstTwoDialsConnected: firstConnected || secondConnected,
       anyCallConnected: leadsWithAnyConnect.has(lead.close_id),
