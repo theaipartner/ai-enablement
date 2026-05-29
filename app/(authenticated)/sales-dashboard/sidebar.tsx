@@ -29,6 +29,10 @@ const NAV: NavItem[] = [
       { href: '/sales-dashboard/funnel/closed', label: 'Closing' },
     ],
   },
+  // Leads = view-only roster of every lead opted-in in the timeframe
+  // (new + re-opt-in), with qualified + booked tags. Mirror of the
+  // appointment-setting dial list, read-only.
+  { href: '/sales-dashboard/leads', label: 'Leads' },
   { href: '/sales-dashboard/revenue', label: 'Revenue' },
   // Calls = setter/closer-setter call recordings transcribed via Deepgram,
   // rendered raw for V1 (AI review layer comes after golden-set selection).
