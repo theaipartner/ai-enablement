@@ -201,6 +201,14 @@ function Dot({ color }: { color: string }) {
 }
 
 function EventBody({ ev }: { ev: LeadTimelineEvent }) {
+  if (ev.kind === 'optin') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <Dot color="var(--color-geg-text-3)" />
+        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)' }}>Opted in</span>
+      </span>
+    )
+  }
   if (ev.kind === 'dials') {
     return (
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}>
@@ -235,6 +243,9 @@ function EventBody({ ev }: { ev: LeadTimelineEvent }) {
         <span className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-accent)', borderRadius: 4, padding: '1px 5px' }}>
           {label}
         </span>
+        {ev.bookedBy ? (
+          <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>by {ev.bookedBy}</span>
+        ) : null}
       </span>
     )
   }

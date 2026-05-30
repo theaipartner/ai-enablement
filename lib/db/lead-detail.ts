@@ -36,9 +36,10 @@ export type LeadCallEntry = {
 // runs; connected calls link to their review; bookings + form dispositions are
 // their own rows.
 export type LeadTimelineEvent =
+  | { kind: 'optin'; at: string }
   | { kind: 'dials'; at: string; count: number }
   | { kind: 'connected'; at: string; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
-  | { kind: 'booking'; at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }
+  | { kind: 'booking'; at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string; bookedBy: string | null }
   | { kind: 'disposition'; at: string; label: string; source: 'closer' | 'triage' }
 
 export type LeadDetail = {
@@ -328,16 +329,32 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }
   }
   {
+    type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null }
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
-      .select('call_outcome, date_time_of_call')
+      .select('call_outcome, date_time_of_call, airtable_created_at')
       .eq('form_type', 'New')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ call_outcome: string | null; date_time_of_call: string | null }>) {
+    const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
+    for (const r of forms) {
       if (outcomeShowed(r.call_outcome)) showed = true
       if (outcomeClosed(r.call_outcome)) closed = true
-      if (r.date_time_of_call && r.call_outcome) dispositions.push({ at: r.date_time_of_call, label: r.call_outcome, source: 'closer' })
+    }
+    // Dedup duplicate forms for the SAME call (within 90 min) — keep the
+    // latest-submitted, so a re-filed / double-filed closer form shows once.
+    const withTime = forms.filter((r): r is CForm & { date_time_of_call: string } => !!r.date_time_of_call)
+    withTime.sort((a, b) => (a.date_time_of_call < b.date_time_of_call ? -1 : 1))
+    const CLUSTER_MS = 90 * 60 * 1000
+    const clusters: (CForm & { date_time_of_call: string })[][] = []
+    for (const r of withTime) {
+      const last = clusters[clusters.length - 1]
+      if (last && Math.abs(new Date(r.date_time_of_call).getTime() - new Date(last[0].date_time_of_call).getTime()) <= CLUSTER_MS) last.push(r)
+      else clusters.push([r])
+    }
+    for (const group of clusters) {
+      const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
+      dispositions.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer' })
     }
   }
 
@@ -346,11 +363,21 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   //    collapse consecutive (non-connected) dials into runs.
   const inWindow = (at: string) => !sinceIso || at >= sinceIso
   type RawEv =
+    | { at: string; t: 'optin' }
     | { at: string; t: 'dial' }
     | { at: string; t: 'connected'; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
-    | { at: string; t: 'booking'; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }
+    | { at: string; t: 'booking'; link: 'direct' | 'setter' | 'sync' | 'other'; name: string; bookedBy: string | null }
     | { at: string; t: 'disposition'; label: string; source: 'closer' | 'triage' }
+  // "Booked by" = the setter on the most recent connected call before the
+  // booking (the person who talked to them and set it up).
+  const connectedSetters = calls.filter((c) => c.connected).map((c) => ({ at: c.activityAt, caller: c.setterName }))
+  const bookedByFor = (bAt: string): string | null => {
+    let best: { at: string; caller: string | null } | null = null
+    for (const cc of connectedSetters) if (cc.at <= bAt && (!best || cc.at > best.at)) best = cc
+    return best?.caller ?? primaryCallerName
+  }
   const raw: RawEv[] = []
+  if (sinceIso) raw.push({ at: sinceIso, t: 'optin' })
   for (const c of calls) {
     if (c.connected) {
       raw.push({ at: c.activityAt, t: 'connected', closeCallId: c.closeCallId, caller: c.setterName, durationSec: c.durationSec, hasReview: c.hasTranscript || c.review !== null })
@@ -358,7 +385,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       raw.push({ at: c.activityAt, t: 'dial' })
     }
   }
-  for (const b of bookings) if (inWindow(b.at)) raw.push({ at: b.at, t: 'booking', link: b.link, name: b.name })
+  for (const b of bookings) if (inWindow(b.at)) raw.push({ at: b.at, t: 'booking', link: b.link, name: b.name, bookedBy: bookedByFor(b.at) })
   for (const d of dispositions) if (inWindow(d.at)) raw.push({ at: d.at, t: 'disposition', label: d.label, source: d.source })
   raw.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
 
@@ -371,11 +398,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       while (j < raw.length && raw[j].t === 'dial') { count++; j++ }
       timeline.push({ kind: 'dials', at: e.at, count })
       i = j
+    } else if (e.t === 'optin') {
+      timeline.push({ kind: 'optin', at: e.at })
+      i++
     } else if (e.t === 'connected') {
       timeline.push({ kind: 'connected', at: e.at, closeCallId: e.closeCallId, caller: e.caller, durationSec: e.durationSec, hasReview: e.hasReview })
       i++
     } else if (e.t === 'booking') {
-      timeline.push({ kind: 'booking', at: e.at, link: e.link, name: e.name })
+      timeline.push({ kind: 'booking', at: e.at, link: e.link, name: e.name, bookedBy: e.bookedBy })
       i++
     } else {
       timeline.push({ kind: 'disposition', at: e.at, label: e.label, source: e.source })
