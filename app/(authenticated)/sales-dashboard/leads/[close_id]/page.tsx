@@ -1,8 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
-import { getLeadDetail, type LeadCallEntry } from '@/lib/db/lead-detail'
-import type { SetterCallReviewFull } from '@/lib/db/setter-calls'
+import { getLeadDetail, type LeadTimelineEvent } from '@/lib/db/lead-detail'
 
 // Per-lead detail page. One Close lead's opt-in facts + full call history,
 // each call collapsed by default and expanding to its setter-call review.
@@ -50,33 +49,15 @@ export default async function LeadDetailPage({
 
       <FactStrip lead={lead} />
 
-      <SectionHeading>Calls</SectionHeading>
-      {lead.calls.length === 0 ? (
-        <Empty>No calls logged for this lead.</Empty>
-      ) : (
-        <div style={{ marginTop: 4 }}>
-          {lead.calls.map((c) => (
-            <CallEntry key={c.closeCallId} call={c} />
-          ))}
-        </div>
-      )}
-
-      <SectionHeading>Closing call</SectionHeading>
-      <div
-        className="geg-mono"
-        style={{
-          marginTop: 4,
-          padding: '18px 16px',
-          border: '1px dashed var(--color-geg-border)',
-          borderRadius: 8,
-          fontSize: 11,
-          letterSpacing: '0.06em',
-          color: 'var(--color-geg-text-faint)',
-          textAlign: 'center',
-        }}
-      >
-        Closing-call detail coming soon.
+      <SectionHeading>Lifecycle</SectionHeading>
+      <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
+        newest first · since latest opt-in
       </div>
+      {lead.timeline.length === 0 ? (
+        <Empty>No activity since the latest opt-in.</Empty>
+      ) : (
+        <Lifecycle events={lead.timeline} />
+      )}
     </div>
   )
 }
@@ -187,229 +168,93 @@ function Fact({ label, value, valueColor }: { label: string; value: string; valu
 // Call entry — collapsible when a review exists, plain row otherwise
 // ----------------------------------------------------------------------
 
-function CallEntry({ call }: { call: LeadCallEntry }) {
-  const summary = <CallSummary call={call} expandable={call.review !== null} />
-
-  if (call.review === null) {
-    // No review to open — plain row, with a transcript link when one exists.
-    return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '11px 12px',
-          borderBottom: '1px dashed var(--color-geg-border)',
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>{summary}</div>
-        {call.hasTranscript ? <TranscriptLink id={call.closeCallId} /> : null}
-      </div>
-    )
-  }
-
-  return (
-    <details style={{ borderBottom: '1px dashed var(--color-geg-border)' }}>
-      <summary
-        style={{
-          listStyle: 'none',
-          cursor: 'pointer',
-          padding: '11px 12px',
-          display: 'block',
-        }}
-      >
-        {summary}
-      </summary>
-      <div style={{ padding: '4px 12px 18px' }}>
-        <ReviewBody review={call.review} />
-        {call.hasTranscript ? (
-          <div style={{ marginTop: 12 }}>
-            <TranscriptLink id={call.closeCallId} />
-          </div>
-        ) : null}
-      </div>
-    </details>
-  )
-}
-
-function CallSummary({ call, expandable }: { call: LeadCallEntry; expandable: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-      {expandable ? (
-        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', width: 10 }}>
-          ▸
-        </span>
-      ) : (
-        <span style={{ width: 10 }} />
-      )}
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.03em', width: 132, flexShrink: 0 }}>
-        {formatEtTimestamp(call.activityAt)}
-      </span>
-      <DirectionTag direction={call.direction} />
-      <span
-        className="geg-numeric-serif"
-        style={{ fontSize: 13, color: call.connected ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)', width: 64, flexShrink: 0 }}
-        title={call.connected ? 'Connected (≥90s)' : 'Did not connect (<90s)'}
-      >
-        {formatDuration(call.durationSec)}
-      </span>
-      <span className="geg-serif" style={{ fontSize: 12, color: 'var(--color-geg-text-3)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {call.setterName ?? '—'}
-      </span>
-      {call.review ? (
-        <ScorePill score={call.review.lead_score} dq={call.review.should_be_dqd} />
-      ) : (
-        <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', flexShrink: 0 }}>
-          no review
-        </span>
-      )}
-    </div>
-  )
-}
-
-function DirectionTag({ direction }: { direction: string | null }) {
-  const inbound = direction === 'inbound'
-  const label = direction === 'inbound' ? 'in' : direction === 'outbound' ? 'out' : '—'
-  return (
-    <span
-      className="geg-mono"
-      style={{
-        fontSize: 8.5,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: 'var(--color-geg-text-faint)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 4,
-        padding: '1px 5px',
-        width: 34,
-        textAlign: 'center',
-        flexShrink: 0,
-      }}
-      title={inbound ? 'Inbound call' : direction === 'outbound' ? 'Outbound dial' : 'Unknown direction'}
-    >
-      {label}
-    </span>
-  )
-}
-
-function ScorePill({ score, dq }: { score: number; dq: boolean }) {
-  const color = score <= 3 ? 'var(--color-geg-neg)' : score >= 7 ? 'var(--color-geg-pos)' : 'var(--color-geg-text-2)'
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-      {dq ? (
-        <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-neg)', border: '1px solid var(--color-geg-neg-border)', borderRadius: 4, padding: '1px 4px' }}>
-          DQ
-        </span>
-      ) : null}
-      <span className="geg-numeric-serif" style={{ fontSize: 13, color }} title="Lead score / 10">
-        {score}<span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>/10</span>
-      </span>
-    </span>
-  )
-}
-
-function TranscriptLink({ id }: { id: string }) {
-  return (
-    <Link
-      href={`/sales-dashboard/calls/${encodeURIComponent(id)}`}
-      className="geg-mono"
-      style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--color-geg-accent)', textDecoration: 'none', flexShrink: 0 }}
-    >
-      transcript →
-    </Link>
-  )
-}
-
 // ----------------------------------------------------------------------
-// Review body — mirrors the call detail page's ReviewBox sections
+// Lifecycle timeline — newest first; dial-runs, connected calls (link to the
+// review), bookings, and form dispositions as rows.
 // ----------------------------------------------------------------------
 
-function ReviewBody({ review }: { review: SetterCallReviewFull }) {
+function Lifecycle({ events }: { events: LeadTimelineEvent[] }) {
   return (
-    <div>
-      <ReviewSection title="Sentiment">
-        <p className="geg-serif" style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--color-geg-text)', margin: 0 }}>
-          {review.sentiment}
-        </p>
-      </ReviewSection>
-
-      <ReviewSection title={`Why this score · ${review.lead_score} / 10`}>
-        <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--color-geg-text)', margin: 0 }}>
-          {review.lead_score_reason}
-        </p>
-      </ReviewSection>
-
-      {review.setter_strengths.length > 0 ? (
-        <ReviewSection title="Setter strengths" count={review.setter_strengths.length}>
-          <ReviewList items={review.setter_strengths} />
-        </ReviewSection>
-      ) : null}
-
-      {review.setter_weaknesses.length > 0 ? (
-        <ReviewSection title="Setter weaknesses" count={review.setter_weaknesses.length}>
-          <ReviewList items={review.setter_weaknesses} />
-        </ReviewSection>
-      ) : null}
-
-      {review.lead_attributes.length > 0 ? (
-        <ReviewSection title="Lead attributes">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {review.lead_attributes.map((attr) => (
-              <span
-                key={attr}
-                className="geg-mono"
-                style={{ fontSize: 10, letterSpacing: '0.04em', color: 'var(--color-geg-text-2)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '2px 7px' }}
-              >
-                {attr}
-              </span>
-            ))}
-          </div>
-        </ReviewSection>
-      ) : null}
-
-      {review.booked === false && review.no_book_reason ? (
-        <ReviewSection title="Why didn't book">
-          <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--color-geg-text)', margin: 0, paddingLeft: 12, borderLeft: '2px solid var(--color-geg-neg-border)' }}>
-            {review.no_book_reason}
-          </p>
-        </ReviewSection>
-      ) : null}
-    </div>
-  )
-}
-
-function ReviewSection({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <h4
-        className="geg-mono"
-        style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-text-2)', margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}
-      >
-        {title}
-        {count !== undefined ? <span style={{ color: 'var(--color-geg-text-faint)' }}>{count}</span> : null}
-      </h4>
-      {children}
-    </div>
-  )
-}
-
-function ReviewList({ items }: { items: SetterCallReviewFull['setter_strengths'] }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {items.map((it, i) => (
-        <div key={i} style={{ paddingLeft: 12, borderLeft: '2px solid var(--color-geg-border)' }}>
-          <div className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)', lineHeight: 1.5 }}>
-            {it.point}
-          </div>
-          {it.evidence ? (
-            <div className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)', marginTop: 3, lineHeight: 1.45, fontStyle: 'italic' }}>
-              {it.evidence}
-            </div>
-          ) : null}
-        </div>
+    <div style={{ marginTop: 4 }}>
+      {events.map((e, i) => (
+        <TimelineRow key={i} ev={e} />
       ))}
     </div>
   )
+}
+
+function TimelineRow({ ev }: { ev: LeadTimelineEvent }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '9px 12px', borderBottom: '1px dashed var(--color-geg-border)' }}>
+      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.03em', width: 120, flexShrink: 0 }}>
+        {formatEtTimestamp(ev.at)}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <EventBody ev={ev} />
+      </div>
+    </div>
+  )
+}
+
+function Dot({ color }: { color: string }) {
+  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+}
+
+function EventBody({ ev }: { ev: LeadTimelineEvent }) {
+  if (ev.kind === 'dials') {
+    return (
+      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}>
+        {ev.count} dial{ev.count === 1 ? '' : 's'}
+      </span>
+    )
+  }
+  if (ev.kind === 'connected') {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Dot color="var(--color-geg-pos)" />
+        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Connected call</span>
+        <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>
+          {ev.caller ?? '—'} · {formatDuration(ev.durationSec)}
+        </span>
+        <Link
+          href={`/sales-dashboard/calls/${encodeURIComponent(ev.closeCallId)}`}
+          className="geg-mono"
+          style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--color-geg-accent)', textDecoration: 'none' }}
+        >
+          {ev.hasReview ? 'review →' : 'open →'}
+        </Link>
+      </span>
+    )
+  }
+  if (ev.kind === 'booking') {
+    const label = ev.link === 'direct' ? 'Direct' : ev.link === 'setter' ? 'Setter-led' : ev.link === 'sync' ? 'Sync follow-up' : 'Call'
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <Dot color="var(--color-geg-accent)" />
+        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Booked</span>
+        <span className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-accent)', borderRadius: 4, padding: '1px 5px' }}>
+          {label}
+        </span>
+      </span>
+    )
+  }
+  const color = dispositionColor(ev.label)
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <Dot color={color} />
+      <span className="geg-serif" style={{ fontSize: 13, color }}>{ev.label}</span>
+      <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{ev.source}</span>
+    </span>
+  )
+}
+
+function dispositionColor(label: string): string {
+  const v = label.toLowerCase()
+  if (v.includes('closed')) return 'var(--color-geg-pos)'
+  if (v.includes('ghost') || v.includes('no show') || v.includes('dq') || v.includes('cancel') || v.includes('lost') || v.includes('interest')) return 'var(--color-geg-neg)'
+  if (v.includes('follow') || v.includes('reschedul') || v.includes('pipeline') || v.includes('deposit')) return 'var(--color-geg-warn)'
+  if (v.includes('confirm') || v.includes('book')) return 'var(--color-geg-accent)'
+  return 'var(--color-geg-text-2)'
 }
 
 // ----------------------------------------------------------------------

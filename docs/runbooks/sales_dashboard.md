@@ -385,8 +385,14 @@ drill, or the `/leads` roster (the per-rep drill rows were repointed from
   Reschedules (`calendly_invitees.rescheduled`), Follow-ups ("AI Partner Sync"
   bookings), primary caller. Booking-path + stages computed in `getLeadDetail`
   the same way as the roster (bookings by email/name, forms by lead_id). Bare
-  dates render in UTC (the date_first_opted_in ET-shift-back-a-day bug). **The
-  lifecycle timeline (body) is the next build — scoped from latest opt-in.**
+  dates render in UTC (the date_first_opted_in ET-shift-back-a-day bug).
+- **Lifecycle timeline (body, 2026-05-30):** `getLeadDetail` builds a
+  `timeline` (newest-first, scoped from latest opt-in) merging four sources —
+  close_calls (dials grouped into runs / connected ≥90s calls), Calendly
+  bookings (direct/setter/sync), and form dispositions (closer `call_outcome` +
+  triage `call_status`). Connected-call rows link to `/calls/[id]` for the
+  review. Dials collapse into `×N` runs between non-dial events. Sync/follow-up
+  link = the "AI Partner Sync" Calendly event.
 - The lead's full call history, newest-first, each **collapsed by
   default** and expanding to its setter-call review (sentiment, score +
   reason, strengths/weaknesses, lead attributes, no-book reason). Reviews

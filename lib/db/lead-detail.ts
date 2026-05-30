@@ -32,6 +32,15 @@ export type LeadCallEntry = {
   review: SetterCallReviewFull | null
 }
 
+// One row in the lifecycle timeline (newest first). Dials are collapsed into
+// runs; connected calls link to their review; bookings + form dispositions are
+// their own rows.
+export type LeadTimelineEvent =
+  | { kind: 'dials'; at: string; count: number }
+  | { kind: 'connected'; at: string; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
+  | { kind: 'booking'; at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }
+  | { kind: 'disposition'; at: string; label: string; source: 'closer' | 'triage' }
+
 export type LeadDetail = {
   leadId: string
   prospectName: string | null
@@ -55,6 +64,8 @@ export type LeadDetail = {
   followUpCount: number       // "AI Partner Sync" bookings
   primaryCallerName: string | null
   calls: LeadCallEntry[]
+  // Lifecycle timeline, newest first, scoped from the latest opt-in.
+  timeline: LeadTimelineEvent[]
 }
 
 function qualFromMarketingQualified(mq: string | null): Qualification {
@@ -257,48 +268,99 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   let hasDirect = false
   let hasPartnership = false
   let followUpCount = 0
+  const bookings: Array<{ at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }> = []
   for (let i = 0; i < eventUris.length; i += 100) {
     const chunk = eventUris.slice(i, i + 100)
     const { data, error } = await sb
       .from('calendly_scheduled_events' as never)
-      .select('uri, name, event_type_uri')
+      .select('uri, name, event_type_uri, start_time')
       .in('uri', chunk)
     if (error) throw new Error(`lead-detail: events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null }>) {
+    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null }>) {
       const nm = norm(e.name)
-      if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) hasDirect = true
-      else if (nm.startsWith('partnership call w/')) hasPartnership = true
-      else if (nm.startsWith('ai partner sync')) followUpCount++
+      let link: 'direct' | 'setter' | 'sync' | 'other' = 'other'
+      if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) { hasDirect = true; link = 'direct' }
+      else if (nm.startsWith('partnership call w/')) { hasPartnership = true; link = 'setter' }
+      else if (nm.startsWith('ai partner sync')) { followUpCount++; link = 'sync' }
+      if (e.start_time) bookings.push({ at: e.start_time, link, name: e.name })
     }
   }
   const bookingType: BookingType =
     hasDirect && hasPartnership ? 'reactivation' : hasDirect ? 'direct' : hasPartnership ? 'setter' : null
 
-  // 7. Funnel stages from the lead's forms (matched by lead_id).
+  // 7. Funnel stages + disposition rows from the lead's forms (by lead_id).
   let confirmed = false
   let showed = false
   let closed = false
+  const dispositions: Array<{ at: string; label: string; source: 'closer' | 'triage' }> = []
   {
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('call_status')
-      .eq('form_type', 'Closer Triage Form')
+      .select('call_status, form_type, event_date_time, confirmed_call_date_time, submitted_at')
       .eq('lead_id', closeId)
-    if (error) throw new Error(`lead-detail: confirmation forms read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ call_status: string | null }>) {
-      if (norm(r.call_status).startsWith('confirmed')) confirmed = true
+    if (error) throw new Error(`lead-detail: triage forms read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{
+      call_status: string | null; form_type: string | null
+      event_date_time: string | null; confirmed_call_date_time: string | null; submitted_at: string | null
+    }>) {
+      if (r.form_type === 'Closer Triage Form' && norm(r.call_status).startsWith('confirmed')) confirmed = true
+      const at = r.event_date_time ?? r.confirmed_call_date_time ?? r.submitted_at
+      if (at && r.call_status) dispositions.push({ at, label: r.call_status, source: 'triage' })
     }
   }
   {
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
-      .select('call_outcome')
+      .select('call_outcome, date_time_of_call')
       .eq('form_type', 'New')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ call_outcome: string | null }>) {
+    for (const r of (data ?? []) as unknown as Array<{ call_outcome: string | null; date_time_of_call: string | null }>) {
       if (outcomeShowed(r.call_outcome)) showed = true
       if (outcomeClosed(r.call_outcome)) closed = true
+      if (r.date_time_of_call && r.call_outcome) dispositions.push({ at: r.date_time_of_call, label: r.call_outcome, source: 'closer' })
+    }
+  }
+
+  // 8. Lifecycle timeline — merge dials / connected calls / bookings /
+  //    dispositions, scope to the latest opt-in, sort newest-first, and
+  //    collapse consecutive (non-connected) dials into runs.
+  const inWindow = (at: string) => !sinceIso || at >= sinceIso
+  type RawEv =
+    | { at: string; t: 'dial' }
+    | { at: string; t: 'connected'; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
+    | { at: string; t: 'booking'; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }
+    | { at: string; t: 'disposition'; label: string; source: 'closer' | 'triage' }
+  const raw: RawEv[] = []
+  for (const c of calls) {
+    if (c.connected) {
+      raw.push({ at: c.activityAt, t: 'connected', closeCallId: c.closeCallId, caller: c.setterName, durationSec: c.durationSec, hasReview: c.hasTranscript || c.review !== null })
+    } else {
+      raw.push({ at: c.activityAt, t: 'dial' })
+    }
+  }
+  for (const b of bookings) if (inWindow(b.at)) raw.push({ at: b.at, t: 'booking', link: b.link, name: b.name })
+  for (const d of dispositions) if (inWindow(d.at)) raw.push({ at: d.at, t: 'disposition', label: d.label, source: d.source })
+  raw.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+
+  const timeline: LeadTimelineEvent[] = []
+  for (let i = 0; i < raw.length; ) {
+    const e = raw[i]
+    if (e.t === 'dial') {
+      let j = i
+      let count = 0
+      while (j < raw.length && raw[j].t === 'dial') { count++; j++ }
+      timeline.push({ kind: 'dials', at: e.at, count })
+      i = j
+    } else if (e.t === 'connected') {
+      timeline.push({ kind: 'connected', at: e.at, closeCallId: e.closeCallId, caller: e.caller, durationSec: e.durationSec, hasReview: e.hasReview })
+      i++
+    } else if (e.t === 'booking') {
+      timeline.push({ kind: 'booking', at: e.at, link: e.link, name: e.name })
+      i++
+    } else {
+      timeline.push({ kind: 'disposition', at: e.at, label: e.label, source: e.source })
+      i++
     }
   }
 
@@ -321,5 +383,6 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     followUpCount,
     primaryCallerName,
     calls,
+    timeline,
   }
 }
