@@ -124,13 +124,12 @@ type AggSortKey =
   | 'calls'
   | 'direct'
   | 'setter'
-  | 'followup'
   | 'showed'
   | 'closed'
   | 'noShows'
   | 'upfront'
 
-const AGG_COLS = '1.4fr 0.6fr 0.6fr 0.6fr 0.6fr 1.0fr 1.2fr 0.6fr 0.8fr'
+const AGG_COLS = '1.4fr 0.6fr 0.6fr 0.6fr 1.0fr 1.2fr 0.6fr 0.8fr'
 
 export function CloserScheduledTables({
   closers,
@@ -155,7 +154,6 @@ export function CloserScheduledTables({
         case 'calls': return r.calls
         case 'direct': return r.directCalls
         case 'setter': return r.setterCalls
-        case 'followup': return r.followupCalls
         case 'showed': return r.showed
         case 'closed': return r.closed
         case 'noShows': return r.noShows
@@ -173,7 +171,6 @@ export function CloserScheduledTables({
         <SortableHeader label="Calls" sortKey="calls" state={state} onToggle={onToggle} />
         <SortableHeader label="Direct" sortKey="direct" state={state} onToggle={onToggle} />
         <SortableHeader label="Setter" sortKey="setter" state={state} onToggle={onToggle} />
-        <SortableHeader label="Follow up" sortKey="followup" state={state} onToggle={onToggle} />
         <SortableHeader label="Showed" sortKey="showed" state={state} onToggle={onToggle} />
         <SortableHeader label="Closes (HT/DC)" sortKey="closed" state={state} onToggle={onToggle} />
         <SortableHeader label="No shows" sortKey="noShows" state={state} onToggle={onToggle} />
@@ -188,7 +185,6 @@ export function CloserScheduledTables({
         <Num value={aggregate.calls} accent />
         <Num value={aggregate.directCalls} />
         <Num value={aggregate.setterCalls} />
-        <Num value={aggregate.followupCalls} />
         <ShowedCell calls={aggregate.calls} showed={aggregate.showed} />
         <ClosesCell showed={aggregate.showed} closed={aggregate.closed} ht={aggregate.closedHt} dc={aggregate.closedDc} />
         <Num value={aggregate.noShows} />
@@ -228,7 +224,6 @@ export function CloserScheduledTables({
                   <Num value={c.calls} accent />
                   <Num value={c.directCalls} />
                   <Num value={c.setterCalls} />
-                  <Num value={c.followupCalls} />
                   <ShowedCell calls={c.calls} showed={c.showed} />
                   <ClosesCell showed={c.showed} closed={c.closed} ht={c.closedHt} dc={c.closedDc} />
                   <Num value={c.noShows} />
@@ -305,7 +300,7 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
         className="geg-mono"
         style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 10 }}
       >
-        {closerName} · scheduled calls · {calls.length} {calls.length === 1 ? 'row' : 'rows'} {state.dir === null ? '(most recent first)' : `· sorted ${state.dir}`}
+        {closerName} · scheduled calls · {calls.length} {calls.length === 1 ? 'lead' : 'leads'} {state.dir === null ? '(most recent first)' : `· sorted ${state.dir}`}
       </div>
       {calls.length === 0 ? (
         <div className="geg-serif" style={{ padding: '14px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}>
@@ -323,13 +318,13 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
             <SortableHeader label="Upfront" sortKey="upfront" state={state} onToggle={onToggle} />
           </div>
           {sorted.map((c) => {
-            const dimmed = c.bookingStatus !== 'active'
+            const dimmed = c.cancelled
             return (
               <div
                 key={c.eventUri}
                 style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
               >
-                <ProspectCell name={c.prospectName} bookingStatus={c.bookingStatus} />
+                <ProspectCell name={c.prospectName} cancelled={c.cancelled} rebookings={c.rebookings} />
                 <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
                 <Cell text={callTypeLabel(c.callType)} mono />
                 <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
@@ -443,7 +438,6 @@ function ClosesCell({ showed, closed, ht, dc }: { showed: number; closed: number
 function callTypeLabel(t: CloserScheduledDrillRow['callType']): string {
   if (t === 'direct') return 'Direct'
   if (t === 'setter') return 'Setter'
-  if (t === 'rebook') return 'Follow up'
   return t
 }
 
@@ -528,16 +522,21 @@ function MissingTag() {
   )
 }
 
-// Prospect cell with an optional booking-lifecycle badge. Canceled /
-// rescheduled bookings stay in the drill (so the closer's history is
-// visible) but carry a tag and a dimmed row so they read as "didn't
-// happen" — they're excluded from the closer's aggregate counts.
+// Prospect cell — one row per lead, with an optional state tag:
+//   · cancelled  → every booking fell through, no live slot left (dimmed).
+//   · ×N badge   → the lead rebooked N times (net bookings − 1). Replaces
+//                  the old "Rescheduled" tag with the actual count.
+//   · (nothing)  → a single clean booking.
+// cancelled wins over the count (a fallen-through lead reads as cancelled
+// even if they'd bounced around the calendar first).
 function ProspectCell({
   name,
-  bookingStatus,
+  cancelled,
+  rebookings,
 }: {
   name: string | null
-  bookingStatus: CloserScheduledDrillRow['bookingStatus']
+  cancelled: boolean
+  rebookings: number
 }) {
   const isDash = !name
   return (
@@ -563,24 +562,20 @@ function ProspectCell({
       >
         {name ?? '—'}
       </span>
-      {bookingStatus !== 'active' ? <BookingStatusTag status={bookingStatus} /> : null}
+      {cancelled ? (
+        <CancelledTag />
+      ) : rebookings > 0 ? (
+        <RebookingTag count={rebookings} />
+      ) : null}
     </span>
   )
 }
 
-function BookingStatusTag({ status }: { status: 'canceled' | 'rescheduled' }) {
-  const label = status === 'canceled' ? 'Canceled' : 'Rescheduled'
-  const color = status === 'canceled' ? 'var(--color-geg-neg)' : 'var(--color-geg-text-3)'
-  const border = status === 'canceled' ? 'var(--color-geg-neg-border)' : 'var(--color-geg-border)'
-  const bg = status === 'canceled' ? 'var(--color-geg-neg-fill)' : 'var(--color-geg-bg)'
+function CancelledTag() {
   return (
     <span
       className="geg-mono"
-      title={
-        status === 'canceled'
-          ? 'Booking was canceled — kept for history, not counted in calls/showed/closed.'
-          : 'Booking was rescheduled to a new slot — the new booking appears as its own row.'
-      }
+      title="Every booking for this lead was canceled with no rebooking — fell through. Not counted in calls/showed/closed."
       style={{
         flexShrink: 0,
         fontSize: 8.5,
@@ -588,12 +583,33 @@ function BookingStatusTag({ status }: { status: 'canceled' | 'rescheduled' }) {
         textTransform: 'uppercase',
         padding: '1px 5px',
         borderRadius: 4,
-        border: `1px solid ${border}`,
-        background: bg,
-        color,
+        border: '1px solid var(--color-geg-neg-border)',
+        background: 'var(--color-geg-neg-fill)',
+        color: 'var(--color-geg-neg)',
       }}
     >
-      {label}
+      Cancelled
+    </span>
+  )
+}
+
+function RebookingTag({ count }: { count: number }) {
+  return (
+    <span
+      className="geg-mono"
+      title={`This lead rebooked ${count} ${count === 1 ? 'time' : 'times'} (net bookings on the calendar − 1).`}
+      style={{
+        flexShrink: 0,
+        fontSize: 8.5,
+        letterSpacing: '0.06em',
+        padding: '1px 5px',
+        borderRadius: 4,
+        border: '1px solid var(--color-geg-border)',
+        background: 'var(--color-geg-bg)',
+        color: 'var(--color-geg-text-3)',
+      }}
+    >
+      ×{count}
     </span>
   )
 }

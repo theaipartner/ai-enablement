@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
+import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
 //
@@ -13,12 +14,6 @@ import type { DateRange } from './funnel-window'
 //   3. Cash (upfront / contract / AOV) from the closer form.
 
 export const CLOSING_FLOOR_ET = '2026-05-22'
-
-// Calendly closer-call event names — case-insensitive match because
-// "Ai" vs "AI" both occur in the local data.
-const CLOSER_EVENT_NAMES_LOWER = new Set([
-  'ai partner strategy call',
-])
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,7 +78,7 @@ type InviteeRow = {
   invitee_created_at: string
 }
 
-type EventRow = { uri: string; name: string | null }
+type EventRow = { uri: string; event_type_uri: string | null }
 
 async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingActivity> {
   const sb = createAdminClient()
@@ -109,22 +104,23 @@ async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingAc
     return { newScheduled: 0, rescheduled: 0, canceled: 0 }
   }
 
+  // Key on event_type_uri, not name — the direct funnel link and the
+  // Aman-solo lookalike share the name "Ai/AI Partner Strategy Call"
+  // (casing drifts), so name-matching would over-count. The URI is
+  // unambiguous. See docs/schema/calendly_scheduled_events.md.
   const eventUris = Array.from(new Set(invitees.map((i) => i.event_uri)))
-  const nameByUri = new Map<string, string | null>()
+  const typeByUri = new Map<string, string | null>()
   for (let i = 0; i < eventUris.length; i += 100) {
     const chunk = eventUris.slice(i, i + 100)
     const { data, error } = await sb
       .from('calendly_scheduled_events' as never)
-      .select('uri, name')
+      .select('uri, event_type_uri')
       .in('uri', chunk)
     if (error) throw new Error(`calendly_scheduled_events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as EventRow[]) nameByUri.set(e.uri, e.name)
+    for (const e of (data ?? []) as unknown as EventRow[]) typeByUri.set(e.uri, e.event_type_uri)
   }
 
-  const isCloser = (uri: string) => {
-    const n = nameByUri.get(uri)?.toLowerCase().trim()
-    return !!n && CLOSER_EVENT_NAMES_LOWER.has(n)
-  }
+  const isCloser = (uri: string) => typeByUri.get(uri) === DIRECT_BOOKING_EVENT_TYPE_URI
 
   let newScheduled = 0, rescheduled = 0, canceled = 0
   for (const inv of invitees) {
@@ -338,64 +334,69 @@ export async function getCloserCallsForCloser(range: DateRange, closerName: stri
 }
 
 // ===========================================================================
-// Scheduled-list aggregator (2026-05-27)
+// Scheduled-list aggregator — per-LEAD (2026-05-29 rework)
 // ===========================================================================
 //
-// New surface — replaces the "leaderboard from form data" view with one
-// keyed off Calendly scheduled events. Why: the form is sparsely filled
-// (closers don't always submit the EOC) so the old leaderboard
-// undercounts what the closer team actually shows up to. The new view
-// pulls every scheduled closer event in range, attributes by Calendly
-// host, and joins to the form when present — letting the closer team
-// see "scheduled calls" as the load-bearing number with form-derived
-// outcomes filling in as forms get submitted.
+// Keyed off Calendly scheduled events, collapsed to ONE ROW PER LEAD.
+// Why per-lead (Drake 2026-05-29): a lead who reschedules or rebooks was
+// previously one drill row per calendar event (the canceled leg + the new
+// leg both showed). The closer team wants each lead to appear exactly once
+// with one of three states: no tag / a rebooking-count badge / "cancelled".
 //
-// Event categorization (case-insensitive name prefix):
-//   - "ai partner strategy call"  → 'direct' — round-robin from funnel
-//   - "partnership call"          → 'setter' — setter-booked
-//   - "ai partner sync"           → 'rebook' — follow-up (not in use yet)
+// VALID LINKS ONLY — a booking counts toward the closer view iff it is one
+// of these two Calendly event types, matched on the LINK (event_type_uri /
+// name family), never the bare name (the "Ai" vs "AI" casing collision
+// makes the name ambiguous — see docs/schema/calendly_scheduled_events.md):
+//   - DIRECT funnel self-book → event_type `…9ecaabb3938c`
+//     (`DIRECT_BOOKING_EVENT_TYPE_URI`). Round-robins to whichever closer;
+//     "Success AP" is Aman's overflow ("ghost") calendar — renamed below.
+//   - SETTER-led → the "Partnership Call w/ {closer}" name family.
+// Everything else (the Aman-solo "AI Partner Strategy Call" lookalike, the
+// period variant, Sales Interview, test events, ai-partner-sync follow-ups)
+// is VOID — dropped entirely, never counted.
 //
-// Form match: name (case+trim) + date-of-call within ±48h of event
-// start_time. ~25% match rate today given form-fill discipline; the
-// unmatched rows render with form fields blank ("missing" downstream).
-// Improve later via a fuzzier match or by making form-fill mandatory.
+// REBOOKING COUNT — a reschedule is just a cancel + a new booking in
+// Calendly, so we don't special-case it: we count the lead's NET valid
+// bookings (every invitee.created on a valid link, since the closing
+// floor) and the badge shows `bookings − 1` = number of rebookings. So a
+// clean single booking gets no badge; one reschedule/rebook shows "1".
+//
+// CANCELLED — a lead with NO live (active) valid booking anywhere has
+// fallen through; their row shows the "cancelled" tag instead of a number,
+// and is excluded from the closer's aggregate counts. A cancel that was
+// followed by a new booking is NOT cancelled (the new booking wins).
 
-export type CloserCallType = 'direct' | 'setter' | 'rebook'
+export type CloserCallType = 'direct' | 'setter'
 
 export type CloserScheduledDrillRow = {
-  eventUri: string
+  eventUri: string            // the representative (shown) event
   prospectName: string | null
-  scheduledTime: string       // ISO UTC
+  scheduledTime: string       // ISO UTC — the representative booking's slot
   callType: CloserCallType
-  // For 'setter' bookings: the setter's name pulled from the matched
-  // form's `setter_names[0]`. Null when no form matched. For 'direct'
-  // bookings, the intent is the ad attribution — not wired yet,
-  // always null. For 'rebook' (follow-up), null.
+  // For 'setter' bookings: the setter's name, resolved from the triage
+  // form. Null when unresolved → "Missing". For 'direct' bookings there
+  // is no setter → UI renders "—".
   bookedBy: string | null
-  // Outcomes from the matched Airtable form. null = form not filled
-  // (or unmatchable). Downstream UI renders null as "missing".
+  // Outcomes from the matched Airtable closer form. null = form not filled
+  // (or unmatchable) → UI renders "missing".
   showed: 'yes' | 'no' | 'dq' | null
   closed: 'yes' | 'no' | null
-  // Resolved close type from payment_plan_type when closed='yes'.
-  // null if the close happened but plan unknown, or not closed yet.
   closeType: 'ht' | 'dc' | null
   upfront: number | null
-  // Booking lifecycle. 'active' = still on the calendar. 'canceled' =
-  // hard cancel (booking fell through). 'rescheduled' = the original
-  // slot was moved (Calendly cancels the old leg with reason
-  // "Rescheduled from connected calendar event"; a new active event
-  // exists separately). Canceled + rescheduled rows show in the drill
-  // with a tag but do NOT count toward the closer's aggregates.
-  bookingStatus: 'active' | 'canceled' | 'rescheduled'
+  // Number of REbookings for this lead = (net valid bookings) − 1. 0 means
+  // a single clean booking (no badge). 1+ drives the count badge.
+  rebookings: number
+  // True when the lead has no live booking left (every valid booking
+  // canceled with no rebooking) — shows the "cancelled" tag, excluded
+  // from aggregates.
+  cancelled: boolean
 }
 
 export type CloserScheduledAggregate = {
   closerName: string
-  calls: number        // total scheduled events for this closer in range
-  // Per-call-type breakdown for the new top-bar columns.
+  calls: number        // live leads (one row per lead) hosted by this closer
   directCalls: number
   setterCalls: number
-  followupCalls: number
   showed: number       // matched + showed='Yes'
   noShows: number      // matched + showed='No' (DQs excluded)
   closed: number       // matched + closed='Yes'
@@ -412,25 +413,34 @@ export type CloserScheduledResult = {
 
 const FORM_MATCH_WINDOW_SEC = 48 * 60 * 60
 
-function categorizeEventName(name: string): CloserCallType | null {
-  const n = name.toLowerCase().trim()
-  if (n.startsWith('ai partner strategy call')) return 'direct'
-  if (n.startsWith('partnership call')) return 'setter'
-  if (n.startsWith('ai partner sync')) return 'rebook'
+// Categorize a Calendly event into a closer-call type by its LINK. Returns
+// null for anything that isn't one of the two valid links (→ dropped).
+function categorizeEvent(eventTypeUri: string | null, name: string): CloserCallType | null {
+  if (eventTypeUri === DIRECT_BOOKING_EVENT_TYPE_URI) return 'direct'
+  // The setter-led family has one event type per closer ("Partnership Call
+  // w/ Aman", "…w/ Adam", …). There is no casing-lookalike here, so the
+  // "partnership call w/" name prefix is a safe, closer-agnostic match.
+  if (name.toLowerCase().trim().startsWith('partnership call w/')) return 'setter'
   return null
 }
 
-// Closer-booking lifecycle. Calendly cancels the original leg of a
-// reschedule with the sentinel reason "Rescheduled from connected
-// calendar event"; any other cancellation is a hard cancel. Active
-// events (status != canceled) are live bookings.
-function resolveBookingStatus(
-  status: string | null,
-  cancellation: { reason?: string | null } | null,
-): 'active' | 'canceled' | 'rescheduled' {
-  if (status !== 'canceled') return 'active'
-  const reason = (cancellation?.reason ?? '').toLowerCase()
-  return reason.includes('reschedul') ? 'rescheduled' : 'canceled'
+// "Success AP" is Aman's overflow / ghost calendar (the round-robin routes
+// here when his own calendar is full and a lead would otherwise fall
+// through). Surface it as "Ghost" in Gregory. Drake 2026-05-29.
+function displayHost(host: string | null): string {
+  if (!host) return '(no host)'
+  return host.toLowerCase().trim() === 'success ap' ? 'Ghost' : host
+}
+
+// Lead identity for collapsing events to one row. Email is the strong key;
+// fall back to the (normalized) name; finally to the event URI so two
+// genuinely-anonymous bookings never merge into one phantom lead.
+function leadKeyOf(email: string | null, name: string | null, eventUri: string): string {
+  const e = (email ?? '').toLowerCase().trim()
+  if (e) return `e:${e}`
+  const n = (name ?? '').toLowerCase().trim()
+  if (n) return `n:${n}`
+  return `evt:${eventUri}`
 }
 
 function normalizeShowed(raw: string | null): 'yes' | 'no' | 'dq' | null {
@@ -619,7 +629,6 @@ async function buildBookedByResolver(
     }
     const nm = normName(invitee.name)
     if (nm) {
-      // null = ambiguous; `?? undefined` so `|| ` falls through cleanly.
       const full = byName.get(`${etDate}|${nm}`)
       if (full) return full
       const first = byName.get(`${etDate}|${nm.split(/\s+/)[0]}`)
@@ -629,65 +638,66 @@ async function buildBookedByResolver(
   }
 }
 
+type ValidEvent = {
+  uri: string
+  name: string
+  startTime: string
+  host: string | null
+  status: string | null
+  callType: CloserCallType
+  invitee: { name: string | null; email: string | null; phones: string[] }
+  inRange: boolean
+}
+
+function emptyAggregate(name: string): CloserScheduledAggregate {
+  return {
+    closerName: name,
+    calls: 0, directCalls: 0, setterCalls: 0,
+    showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
+  }
+}
+
 export async function getClosingScheduledList(
   range: DateRange,
 ): Promise<CloserScheduledResult> {
   const sb = createAdminClient()
 
-  // 1. Closer-event scheduled events whose start_time falls in range.
-  //    Pull a wider lookback so we catch events created before range
-  //    but starting in range (rare for partnership calls but possible
-  //    for AI Strategy with long lead time).
+  // 1. Load ALL valid-link closer events since the closing floor — not
+  //    just the view range. We need each lead's full booking history to
+  //    count rebookings (a reschedule's earlier leg can sit outside the
+  //    range), so the count reflects all-time activity regardless of which
+  //    day the user is looking at. The closer dataset is small (low
+  //    hundreds since the floor); one read is cheap. Bounded by the floor.
+  const floorIso = `${CLOSING_FLOOR_ET}T00:00:00.000Z`
   const { data: eventData, error: eventErr } = await sb
     .from('calendly_scheduled_events' as never)
-    .select('uri, name, start_time, host_user_name, status, cancellation')
-    .gte('start_time', range.startUtcIso)
-    .lt('start_time', range.endUtcIso)
+    .select('uri, name, start_time, host_user_name, status, event_type_uri')
+    .gte('start_time', floorIso)
     .order('start_time', { ascending: true })
-    .range(0, 2999)
+    .range(0, 4999)
   if (eventErr) throw new Error(`calendly_scheduled_events read failed: ${eventErr.message}`)
-  const allEvents = (eventData ?? []) as unknown as Array<{
+  const rawEvents = (eventData ?? []) as unknown as Array<{
     uri: string
     name: string
     start_time: string
     host_user_name: string | null
     status: string | null
-    cancellation: { reason?: string | null } | null
+    event_type_uri: string | null
   }>
-  // Categorize + drop non-closer events. Canceled events are KEPT
-  // (Drake 2026-05-28: show them in the drill tagged Canceled /
-  // Rescheduled) — they just don't count toward the aggregates, gated
-  // per-row in the loop below via bookingStatus.
-  const events = allEvents
-    .map((e) => ({
-      ...e,
-      callType: categorizeEventName(e.name),
-      bookingStatus: resolveBookingStatus(e.status, e.cancellation),
-    }))
-    .filter((e) => e.callType !== null) as Array<{
-      uri: string
-      name: string
-      start_time: string
-      host_user_name: string | null
-      status: string | null
-      cancellation: { reason?: string | null } | null
-      callType: CloserCallType
-      bookingStatus: 'active' | 'canceled' | 'rescheduled'
-    }>
 
-  if (events.length === 0) {
-    const emptyAgg: CloserScheduledAggregate = {
-      closerName: 'All closers',
-      calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
-      showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
-    }
-    return { closers: [], aggregate: emptyAgg, drillByCloser: {} }
+  // Categorize by LINK; drop anything that isn't one of the two valid
+  // links (void — never counted).
+  const typed = rawEvents
+    .map((e) => ({ e, callType: categorizeEvent(e.event_type_uri, e.name) }))
+    .filter((x): x is { e: typeof rawEvents[number]; callType: CloserCallType } => x.callType !== null)
+
+  if (typed.length === 0) {
+    return { closers: [], aggregate: emptyAggregate('All closers'), drillByCloser: {} }
   }
 
-  // 2. Invitees for those events (prospect name + email + phone). Phone
-  //    lives in raw_payload.questions_and_answers (a "Phone" Q&A) or
-  //    text_reminder_number — used by the booked-by identity match.
-  const eventUris = events.map((e) => e.uri)
+  // 2. Invitees for those events (identity for lead-keying + form /
+  //    booked-by match). Phone lives in raw_payload.
+  const eventUris = typed.map((t) => t.e.uri)
   const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[] }>()
   for (let i = 0; i < eventUris.length; i += 200) {
     const chunk = eventUris.slice(i, i + 200)
@@ -705,7 +715,6 @@ export async function getClosingScheduledList(
         questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
       } | null
     }>) {
-      // Keep the first invitee per event (1:1 in practice).
       if (!inviteeByEvent.has(r.event_uri)) {
         const rawPhones: string[] = []
         const trn = r.raw_payload?.text_reminder_number
@@ -723,14 +732,7 @@ export async function getClosingScheduledList(
     }
   }
 
-  // 2b. Booked-by source: setter triage forms with a Confirmed Call
-  //     Date&Time. A setter "books" a closing call by filing a triage
-  //     EOC with a Confirmed HT/DC Booking, which carries that date.
-  //     We attribute the Calendly closer event to that setter when the
-  //     ET date of confirmed_call_date_time equals the ET date of the
-  //     event AND the lead identity matches (email → phone → name).
-  //     No match → null → "Missing" in the UI (prompts setters to fill
-  //     the confirmed-call field). Drake 2026-05-28.
+  // 2b. Booked-by resolver (setter attribution for the representative row).
   const bookedByResolver = await buildBookedByResolver(sb, range)
 
   // 3. Closer forms covering the event window (±48h on either side for
@@ -760,8 +762,6 @@ export async function getClosingScheduledList(
     setter_names: string[] | null
   }>
 
-  // Build a name → forms multimap for fast lookup. Keys are
-  // case-insensitive trimmed names.
   const formsByName = new Map<string, typeof forms>()
   for (const f of forms) {
     if (!f.prospect_name) continue
@@ -771,9 +771,6 @@ export async function getClosingScheduledList(
     formsByName.set(key, arr)
   }
 
-  // 4. For each event, find the matching form (if any). Best match =
-  //    name-case-insensitive equal AND date_time_of_call closest to
-  //    event.start_time within ±48h.
   function matchForm(
     eventStartIso: string,
     inviteeName: string | null,
@@ -796,35 +793,63 @@ export async function getClosingScheduledList(
     return best
   }
 
-  // 5. Build per-closer aggregates + drill rows.
+  // 4. Group valid events by LEAD (across all hosts / both link types).
+  const eventsByLead = new Map<string, ValidEvent[]>()
+  for (const { e, callType } of typed) {
+    const invitee = inviteeByEvent.get(e.uri) ?? { name: null, email: null, phones: [] }
+    const inRange = e.start_time >= range.startUtcIso && e.start_time < range.endUtcIso
+    const key = leadKeyOf(invitee.email, invitee.name, e.uri)
+    const arr = eventsByLead.get(key) ?? []
+    arr.push({
+      uri: e.uri,
+      name: e.name,
+      startTime: e.start_time,
+      host: e.host_user_name,
+      status: e.status,
+      callType,
+      invitee,
+      inRange,
+    })
+    eventsByLead.set(key, arr)
+  }
+
+  // 5. One drill row per lead that has at least one booking in the view
+  //    range. Aggregates count live (non-cancelled) leads only.
   const closerMap = new Map<string, CloserScheduledAggregate>()
   const drillByCloser: Record<string, CloserScheduledDrillRow[]> = {}
-
   function bumpAgg(name: string): CloserScheduledAggregate {
     let agg = closerMap.get(name)
     if (!agg) {
-      agg = {
-        closerName: name,
-        calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
-        showed: 0, noShows: 0, closed: 0,
-        closedHt: 0, closedDc: 0, upfront: 0,
-      }
+      agg = emptyAggregate(name)
       closerMap.set(name, agg)
       drillByCloser[name] = []
     }
     return agg
   }
 
-  for (const ev of events) {
-    const closer = ev.host_user_name ?? '(no host)'
-    const agg = bumpAgg(closer)
-    const active = ev.bookingStatus === 'active'
+  const latest = (evs: ValidEvent[]) =>
+    evs.reduce((a, b) => (a.startTime >= b.startTime ? a : b))
 
-    const invitee = inviteeByEvent.get(ev.uri) ?? { name: null, email: null, phones: [] }
+  for (const evs of Array.from(eventsByLead.values())) {
+    const inRangeEvs = evs.filter((e) => e.inRange)
+    if (inRangeEvs.length === 0) continue // lead has no booking in this view
 
-    // Outcomes (showed/closed/cash) only apply to calls that actually
-    // happened. A canceled or rescheduled slot has no closer outcome.
-    const form = active ? matchForm(ev.start_time, invitee.name) : null
+    const bookingCount = evs.length                    // net valid bookings (since floor)
+    const rebookings = Math.max(0, bookingCount - 1)
+    const hasActive = evs.some((e) => e.status !== 'canceled')
+    const cancelled = !hasActive
+
+    // Representative = the call shown for this lead in this range: prefer
+    // a live (active) in-range booking, else the most-recent in-range one.
+    const activeInRange = inRangeEvs.filter((e) => e.status !== 'canceled')
+    const rep = latest(activeInRange.length ? activeInRange : inRangeEvs)
+
+    const host = displayHost(rep.host)
+    const agg = bumpAgg(host)
+    const invitee = rep.invitee
+
+    // Outcomes only for live leads — a cancelled lead has no closer outcome.
+    const form = cancelled ? null : matchForm(rep.startTime, invitee.name)
     const showed = form ? normalizeShowed(form.showed) : null
     const closed = form ? normalizeClosed(form.closed) : null
     const upfront =
@@ -833,28 +858,16 @@ export async function getClosingScheduledList(
         : form && typeof form.amount_paid_today_currency === 'string'
           ? Number(form.amount_paid_today_currency) || null
           : null
-    const plan = form ? form.payment_plan_type : null
-    const planClass = classifyPlan(plan)
-    const closeType: 'ht' | 'dc' | null =
-      closed === 'yes' ? planClass : null
+    const planClass = classifyPlan(form ? form.payment_plan_type : null)
+    const closeType: 'ht' | 'dc' | null = closed === 'yes' ? planClass : null
 
-    // "Booked by" — only meaningful for setter-booked calls (the
-    // "Partnership Call" event type). Direct ad bookings ("Ai Partner
-    // Strategy Call", carrying utm ad-attribution) and rebooks have no
-    // setter, so we don't resolve one — the UI renders "—" for those.
-    // Resolved even for canceled/rescheduled bookings so Drake can see
-    // whose booking fell through. null → "Missing".
     const bookedBy: string | null =
-      ev.callType === 'setter' ? bookedByResolver(ev.start_time, invitee) : null
+      rep.callType === 'setter' ? bookedByResolver(rep.startTime, invitee) : null
 
-    // Aggregates count active bookings only — canceled/rescheduled
-    // didn't happen, so they stay out of calls/showed/closed/cash but
-    // still appear in the drill with their tag.
-    if (active) {
+    if (!cancelled) {
       agg.calls++
-      if (ev.callType === 'direct') agg.directCalls++
-      else if (ev.callType === 'setter') agg.setterCalls++
-      else if (ev.callType === 'rebook') agg.followupCalls++
+      if (rep.callType === 'direct') agg.directCalls++
+      else agg.setterCalls++
       if (showed === 'yes') agg.showed++
       if (showed === 'no') agg.noShows++
       if (closed === 'yes') {
@@ -865,17 +878,18 @@ export async function getClosingScheduledList(
       if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
     }
 
-    drillByCloser[closer].push({
-      eventUri: ev.uri,
+    drillByCloser[host].push({
+      eventUri: rep.uri,
       prospectName: invitee.name,
-      scheduledTime: ev.start_time,
-      callType: ev.callType,
+      scheduledTime: rep.startTime,
+      callType: rep.callType,
       bookedBy,
       showed,
       closed,
       closeType,
       upfront,
-      bookingStatus: ev.bookingStatus,
+      rebookings,
+      cancelled,
     })
   }
 
@@ -888,26 +902,18 @@ export async function getClosingScheduledList(
 
   // 7. Closer list sorted by calls desc; aggregate "All closers" sums.
   const closers = Array.from(closerMap.values()).sort((a, b) => b.calls - a.calls)
-  const aggregate: CloserScheduledAggregate = closers.reduce<CloserScheduledAggregate>(
-    (acc, c) => ({
-      closerName: 'All closers',
-      calls: acc.calls + c.calls,
-      directCalls: acc.directCalls + c.directCalls,
-      setterCalls: acc.setterCalls + c.setterCalls,
-      followupCalls: acc.followupCalls + c.followupCalls,
-      showed: acc.showed + c.showed,
-      noShows: acc.noShows + c.noShows,
-      closed: acc.closed + c.closed,
-      closedHt: acc.closedHt + c.closedHt,
-      closedDc: acc.closedDc + c.closedDc,
-      upfront: acc.upfront + c.upfront,
-    }),
-    {
-      closerName: 'All closers',
-      calls: 0, directCalls: 0, setterCalls: 0, followupCalls: 0,
-      showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
-    },
-  )
+  const aggregate = closers.reduce<CloserScheduledAggregate>((acc, c) => ({
+    closerName: 'All closers',
+    calls: acc.calls + c.calls,
+    directCalls: acc.directCalls + c.directCalls,
+    setterCalls: acc.setterCalls + c.setterCalls,
+    showed: acc.showed + c.showed,
+    noShows: acc.noShows + c.noShows,
+    closed: acc.closed + c.closed,
+    closedHt: acc.closedHt + c.closedHt,
+    closedDc: acc.closedDc + c.closedDc,
+    upfront: acc.upfront + c.upfront,
+  }), emptyAggregate('All closers'))
 
   return { closers, aggregate, drillByCloser }
 }
