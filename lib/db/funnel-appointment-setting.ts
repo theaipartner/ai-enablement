@@ -1090,6 +1090,13 @@ export type SpeedToLeadCohortRow = {
   callerUserId: string | null
   callerName: string | null
   speedSec: number | null           // null if no first call
+  // Sum of durations (seconds) across this lead's connected (>=90s)
+  // outbound calls — total talk time behind the "Connected" column.
+  // 0 when no call ever connected. Same call set as anyCallConnected.
+  totalConnectedDurationSec: number
+  // Count of this lead's connected (>=90s) outbound calls. Drives the
+  // ×N multi-call tag on the lead list (shown at >=2; 0/1 = no tag).
+  connectedCallCount: number
 }
 
 export type SpeedToLeadCohortResult = {
@@ -1253,6 +1260,11 @@ export async function getSpeedToLeadCohort(
   const firstCallByLead = new Map<string, { userId: string | null; activity_at: string; duration: number | null }>()
   const secondCallByLead = new Map<string, { duration: number | null }>()
   const leadsWithAnyConnect = new Set<string>()
+  // Per-lead total talk time + count across connected (>=90s) calls —
+  // populated in the same pass as leadsWithAnyConnect so they share the
+  // exact call set the "Connected" column reflects.
+  const connectedDurationByLead = new Map<string, number>()
+  const connectedCallCountByLead = new Map<string, number>()
   const dialCountByLead = new Map<string, number>()
   const nameByUser = new Map<string, string>()
   {
@@ -1286,6 +1298,8 @@ export async function getSpeedToLeadCohort(
         }
         if ((r.duration ?? 0) >= 90) {
           leadsWithAnyConnect.add(r.lead_id)
+          connectedDurationByLead.set(r.lead_id, (connectedDurationByLead.get(r.lead_id) ?? 0) + (r.duration ?? 0))
+          connectedCallCountByLead.set(r.lead_id, (connectedCallCountByLead.get(r.lead_id) ?? 0) + 1)
         }
         dialCountByLead.set(r.lead_id, (dialCountByLead.get(r.lead_id) ?? 0) + 1)
       }
@@ -1343,6 +1357,8 @@ export async function getSpeedToLeadCohort(
       callerUserId: call?.userId ?? null,
       callerName: call?.userId ? (nameByUser.get(call.userId) ?? null) : null,
       speedSec,
+      totalConnectedDurationSec: connectedDurationByLead.get(lead.close_id) ?? 0,
+      connectedCallCount: connectedCallCountByLead.get(lead.close_id) ?? 0,
     })
   }
 
