@@ -387,6 +387,29 @@ drill, or the `/leads` roster (the per-rep drill rows were repointed from
 The standalone `/sales-dashboard/calls` feed + its `/calls/[id]` detail
 page are intentionally left untouched (eventual retirement, not now).
 
+## Leads page booking funnels (2026-05-30)
+
+Under the Leads / Qualified header, two funnel boxes — **Direct bookings** and
+**Setter-led bookings** — each a 4-stage funnel: Booked → Confirmed → Showed →
+Closed. Built incrementally:
+
+- **Direct · Booked** = `directBooked` (the utm_term/email/name Calendly match).
+- **Direct · Confirmed** = a direct booking whose **confirmation call form** says
+  confirmed. The confirmation form is the `airtable_setter_triage_calls` row with
+  `form_type = 'Closer Triage Form'` (a confirmation call, almost always Aman),
+  matched to the lead by `lead_id`. "Confirmed" = `call_status` starting with
+  `"Confirmed"` (covers `Confirmed Booking` + the confirmed-different-time
+  option; excludes DQ / Setter pipeline, and the stray `High Ticket booking`
+  values left on a few rows by a `form_type` backfill). The form is the sole
+  decider — no ≥90s call gate (a sub-90s confirmation call still files a form).
+  Computed in `lib/db/leads.ts` as `directConfirmed = directBooked && <confirmed
+  form>`, so Confirmed ≤ Booked (monotonic funnel).
+- **Direct · Showed / Closed and the whole Setter-led box** are pending
+  placeholders (`—`) until their flows are defined.
+
+`call_status` is already a typed column on `airtable_setter_triage_calls` (the
+parser maps it since the 2026-05-26 form redesign) — no migration needed.
+
 ## Calendly → Close lead matching via utm_term (2026-05-30)
 
 Calendly bookings now carry a per-lead token in `raw_payload.tracking.utm_term`

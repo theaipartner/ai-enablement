@@ -32,6 +32,10 @@ export type Qualification = 'qualified' | 'non-qualified' | 'unknown'
 export type LeadRow = SpeedToLeadCohortRow & {
   qualified: Qualification
   directBooked: boolean
+  // A direct booking the confirmation call (Closer Triage Form, always
+  // Aman) marked confirmed. Subset of directBooked so the funnel stays
+  // monotonic (Confirmed ≤ Booked).
+  directConfirmed: boolean
 }
 
 function norm(s: string | null | undefined): string {
@@ -126,7 +130,31 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     }
   }
 
-  // 4. Assemble.
+  // 4. Confirmed direct bookings — the confirmation call's form (the
+  //    Closer Triage Form, a confirmation call that's almost always Aman),
+  //    matched to the lead by lead_id. "Confirmed" = a Call Status starting
+  //    with "Confirmed" (covers "Confirmed Booking" + the confirmed-for-a-
+  //    different-time option). Other statuses (DQ / Setter pipeline, and the
+  //    stray "High Ticket booking" left over from a form_type backfill) do
+  //    NOT count. The form is the sole decider — no call-duration gate, since
+  //    a sub-90s confirmation call still warrants a filed form.
+  const confirmedLeadIds = new Set<string>()
+  for (let i = 0; i < leadIds.length; i += 100) {
+    const chunk = leadIds.slice(i, i + 100)
+    const { data, error } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('lead_id, call_status')
+      .eq('form_type', 'Closer Triage Form')
+      .in('lead_id', chunk)
+    if (error) throw new Error(`leads: confirmation form read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null }>) {
+      if (r.lead_id && (r.call_status ?? '').trim().toLowerCase().startsWith('confirmed')) {
+        confirmedLeadIds.add(r.lead_id)
+      }
+    }
+  }
+
+  // 5. Assemble.
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
@@ -139,7 +167,8 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
       }
     }
     if (!directBooked && name && directNames.has(name)) directBooked = true
-    return { ...r, qualified, directBooked }
+    const directConfirmed = directBooked && confirmedLeadIds.has(r.leadId)
+    return { ...r, qualified, directBooked, directConfirmed }
   })
 }
 

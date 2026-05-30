@@ -49,6 +49,7 @@ export default async function SalesDashboardLeadsPage({
     unqualified: rows.filter((r) => r.qualified === 'non-qualified').length,
     unknown: rows.filter((r) => r.qualified === 'unknown').length,
     direct: rows.filter((r) => r.directBooked).length,
+    directConfirmed: rows.filter((r) => r.directConfirmed).length,
   }
 
   return (
@@ -152,14 +153,14 @@ function FunnelHeader({
 // the booking-confirmation matching flow is built.
 // ---------------------------------------------------------------------------
 
-function BookingFunnels({ c }: { c: { direct: number } }) {
+function BookingFunnels({ c }: { c: { direct: number; directConfirmed: number } }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
       <BookingFunnelBox
         label="Direct bookings"
-        sublabel="Ai Partner Strategy Call · confirmed/showed/closed pending"
+        sublabel="Ai Partner Strategy Call · showed/closed pending"
         booked={c.direct}
-        confirmed={null}
+        confirmed={c.directConfirmed}
         showed={null}
         closed={null}
       />
