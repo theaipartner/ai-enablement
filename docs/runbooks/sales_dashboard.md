@@ -378,8 +378,15 @@ clicking any row on the appointment-setting lead list, the per-rep call
 drill, or the `/leads` roster (the per-rep drill rows were repointed from
 `/calls/[id]` to here, keyed by `lead_id`). Shows:
 
-- A facts strip (qualified, first/latest opt-in, opt-in count, total
-  calls, connected count + talk time, primary caller).
+- A facts strip (2026-05-30 header rework): qualified, first/latest opt-in,
+  opt-in count, **Stage** (booking path direct/reactivation/setter + the
+  Booked→[Confirmed]→Showed→Closed chips, Confirmed only on direct), Dials
+  (incl. inbound, scoped from latest opt-in), Connected count + talk time,
+  Reschedules (`calendly_invitees.rescheduled`), Follow-ups ("AI Partner Sync"
+  bookings), primary caller. Booking-path + stages computed in `getLeadDetail`
+  the same way as the roster (bookings by email/name, forms by lead_id). Bare
+  dates render in UTC (the date_first_opted_in ET-shift-back-a-day bug). **The
+  lifecycle timeline (body) is the next build — scoped from latest opt-in.**
 - The lead's full call history, newest-first, each **collapsed by
   default** and expanding to its setter-call review (sentiment, score +
   reason, strengths/weaknesses, lead attributes, no-book reason). Reviews

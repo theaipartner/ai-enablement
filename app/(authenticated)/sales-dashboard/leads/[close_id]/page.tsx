@@ -105,7 +105,8 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
       <Fact label="First opted in" value={lead.dateFirstOptedIn ? formatEtDate(lead.dateFirstOptedIn) : '—'} />
       <Fact label="Latest opt-in" value={lead.latestOptInDate ? formatEtTimestamp(lead.latestOptInDate) : '—'} />
       <Fact label="Opt-ins" value={optIns != null ? String(optIns) : '—'} />
-      <Fact label="Calls" value={String(lead.totalCalls)} />
+      <StageFact lead={lead} />
+      <Fact label="Dials" value={String(lead.totalCalls)} />
       <Fact
         label="Connected"
         value={
@@ -115,7 +116,56 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
         }
         valueColor={lead.connectedCount > 0 ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'}
       />
+      <Fact label="Reschedules" value={String(lead.rescheduleCount)} />
+      <Fact label="Follow-ups" value={String(lead.followUpCount)} />
       <Fact label="Caller" value={lead.primaryCallerName ?? '—'} />
+    </div>
+  )
+}
+
+// Booking path + funnel progress (Booked → [Confirmed] → Showed → Closed;
+// Confirmed only on the direct path).
+function StageFact({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
+  const bt = lead.bookingType
+  const typeLabel = bt === 'direct' ? 'Direct' : bt === 'reactivation' ? 'Reactivation' : bt === 'setter' ? 'Setter-led' : null
+  const stages: Array<{ label: string; hit: boolean }> = bt
+    ? [
+        { label: 'Booked', hit: true },
+        ...(bt === 'direct' ? [{ label: 'Confirmed', hit: lead.confirmed }] : []),
+        { label: 'Showed', hit: lead.showed },
+        { label: 'Closed', hit: lead.closed },
+      ]
+    : []
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
+        Stage{typeLabel ? ` · ${typeLabel}` : ''}
+      </span>
+      {bt ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {stages.map((s, i) => (
+            <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              {i > 0 ? <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 9 }}>›</span> : null}
+              <span
+                className="geg-mono"
+                style={{
+                  fontSize: 9,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  border: `1px solid ${s.hit ? 'var(--color-geg-pos)' : 'var(--color-geg-border)'}`,
+                  color: s.hit ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)',
+                }}
+              >
+                {s.label}
+              </span>
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-faint)' }}>Not booked</span>
+      )}
     </div>
   )
 }
@@ -403,10 +453,14 @@ function formatEtTimestamp(iso: string): string {
 
 function formatEtDate(iso: string): string {
   if (!iso) return '—'
-  // date_first_opted_in is a bare `date` — append midnight so it parses,
-  // and render in ET without a time component.
-  const d = iso.length <= 10 ? new Date(`${iso}T00:00:00`) : new Date(iso)
-  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' }).format(d)
+  // A bare `date` (YYYY-MM-DD, e.g. date_first_opted_in) is a calendar day, NOT
+  // an instant — parse + render in UTC so it stays on its day. (Rendering it in
+  // ET shifts UTC-midnight back a day; the Rahul Chakri "new opt-in, two
+  // different dates" symptom. ADR 0003.)
+  if (iso.length <= 10) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${iso}T00:00:00Z`))
+  }
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(iso))
 }
 
 function formatDuration(sec: number): string {

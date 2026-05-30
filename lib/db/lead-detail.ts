@@ -2,6 +2,8 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SetterCallReviewFull } from './setter-calls'
+import type { BookingType } from './leads'
+import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 
 // Per-lead detail (the /sales-dashboard/leads/[close_id] page). Pulls one
 // Close lead's identity + opt-in facts, its FULL call history (both
@@ -38,11 +40,19 @@ export type LeadDetail = {
   latestOptInDate: string | null
   numberOfOptIns: number | null
   qualified: Qualification
-  // Aggregates over the lead's connected (>=90s) calls — matches the
-  // "Connected" semantics on the lead list it was opened from.
-  totalCalls: number
+  // Booking path (ever) + per-lead funnel stages, same source/logic as the
+  // leads roster + funnel boxes. booked = bookingType !== null.
+  bookingType: BookingType
+  confirmed: boolean
+  showed: boolean
+  closed: boolean
+  // Journey metrics. Dials + connected are scoped from the latest opt-in (the
+  // lifecycle window). Reschedules + follow-ups are over the lead's bookings.
+  totalCalls: number          // dials incl. inbound, since latest opt-in
   connectedCount: number
   totalConnectedDurationSec: number
+  rescheduleCount: number     // Calendly invitees flagged rescheduled
+  followUpCount: number       // "AI Partner Sync" bookings
   primaryCallerName: string | null
   calls: LeadCallEntry[]
 }
@@ -52,6 +62,22 @@ function qualFromMarketingQualified(mq: string | null): Qualification {
   if (v === 'yes') return 'qualified'
   if (v === 'no') return 'non-qualified'
   return 'unknown'
+}
+
+function norm(s: string | null | undefined): string {
+  return (s ?? '').trim().toLowerCase()
+}
+
+// Mirror leads.ts: showed = attended (any outcome except no-show/reschedule/
+// cancel); closed = a full close (Deposit not counted).
+function outcomeShowed(co: string | null): boolean {
+  const v = norm(co)
+  if (!v) return false
+  return !(v.includes('ghost') || v.includes('no show') || v.includes('reschedul') || v.includes('cancel'))
+}
+function outcomeClosed(co: string | null): boolean {
+  const v = norm(co)
+  return v.includes('high ticket closed') || v.includes('digital college closed')
 }
 
 const CONNECTED_SEC = 90
@@ -64,7 +90,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     .from('close_leads' as never)
     .select(
       'close_id, display_name, date_created, date_first_opted_in, ' +
-        'latest_opt_in_date, number_of_opt_ins, marketing_qualified',
+        'latest_opt_in_date, number_of_opt_ins, marketing_qualified, contacts, utm_term',
     )
     .eq('close_id' as never, closeId)
     .maybeSingle()
@@ -78,7 +104,23 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     latest_opt_in_date: string | null
     number_of_opt_ins: number | null
     marketing_qualified: string | null
+    contacts: unknown
+    utm_term: string | null
   }
+
+  // Lead identity for matching Calendly bookings (email / utm_term / name).
+  const leadEmails = new Set<string>()
+  if (Array.isArray(lead.contacts)) {
+    for (const c of lead.contacts as Array<{ emails?: Array<{ email?: string }> }>) {
+      for (const e of c.emails ?? []) {
+        const n = norm(e?.email)
+        if (n) leadEmails.add(n)
+      }
+    }
+  }
+  const leadNameLc = norm(lead.display_name)
+  // Lifecycle window: scope dials/connected to the latest opt-in onward.
+  const sinceIso = lead.latest_opt_in_date ?? null
 
   // 2. Full call history for this lead (both directions), newest first.
   type CallRaw = {
@@ -92,10 +134,12 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const callRows: CallRaw[] = []
   let from = 0
   for (;;) {
-    const { data, error } = await sb
+    let q = sb
       .from('close_calls' as never)
       .select('close_id, activity_at, duration, direction, user_id, raw_payload')
       .eq('lead_id' as never, closeId)
+    if (sinceIso) q = q.gte('activity_at', sinceIso)
+    const { data, error } = await q
       .order('activity_at', { ascending: false })
       .range(from, from + 999)
     if (error) throw new Error(`lead-detail: close_calls read failed: ${error.message}`)
@@ -182,6 +226,82 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     calls.find((c) => c.setterName)?.setterName ??
     null
 
+  // 6. Calendly bookings — this lead's invitees (by email, then name),
+  //    classified by link family. Reschedules = invitees flagged rescheduled;
+  //    follow-ups = "AI Partner Sync" bookings.
+  const inviteeByUri = new Map<string, { eventUri: string; rescheduled: boolean }>()
+  const addInvitees = (rows: Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>) => {
+    for (const r of rows) {
+      if (!inviteeByUri.has(r.uri)) inviteeByUri.set(r.uri, { eventUri: r.event_uri, rescheduled: r.rescheduled === true })
+    }
+  }
+  if (leadEmails.size > 0) {
+    const { data, error } = await sb
+      .from('calendly_invitees' as never)
+      .select('uri, event_uri, rescheduled')
+      .in('email', Array.from(leadEmails))
+    if (error) throw new Error(`lead-detail: invitees (email) read failed: ${error.message}`)
+    addInvitees((data ?? []) as unknown as Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>)
+  }
+  if (leadNameLc) {
+    const { data, error } = await sb
+      .from('calendly_invitees' as never)
+      .select('uri, event_uri, rescheduled')
+      .ilike('name', leadNameLc)
+    if (error) throw new Error(`lead-detail: invitees (name) read failed: ${error.message}`)
+    addInvitees((data ?? []) as unknown as Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>)
+  }
+  const rescheduleCount = Array.from(inviteeByUri.values()).filter((i) => i.rescheduled).length
+
+  const eventUris = Array.from(new Set(Array.from(inviteeByUri.values()).map((i) => i.eventUri)))
+  let hasDirect = false
+  let hasPartnership = false
+  let followUpCount = 0
+  for (let i = 0; i < eventUris.length; i += 100) {
+    const chunk = eventUris.slice(i, i + 100)
+    const { data, error } = await sb
+      .from('calendly_scheduled_events' as never)
+      .select('uri, name, event_type_uri')
+      .in('uri', chunk)
+    if (error) throw new Error(`lead-detail: events read failed: ${error.message}`)
+    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null }>) {
+      const nm = norm(e.name)
+      if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) hasDirect = true
+      else if (nm.startsWith('partnership call w/')) hasPartnership = true
+      else if (nm.startsWith('ai partner sync')) followUpCount++
+    }
+  }
+  const bookingType: BookingType =
+    hasDirect && hasPartnership ? 'reactivation' : hasDirect ? 'direct' : hasPartnership ? 'setter' : null
+
+  // 7. Funnel stages from the lead's forms (matched by lead_id).
+  let confirmed = false
+  let showed = false
+  let closed = false
+  {
+    const { data, error } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('call_status')
+      .eq('form_type', 'Closer Triage Form')
+      .eq('lead_id', closeId)
+    if (error) throw new Error(`lead-detail: confirmation forms read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ call_status: string | null }>) {
+      if (norm(r.call_status).startsWith('confirmed')) confirmed = true
+    }
+  }
+  {
+    const { data, error } = await sb
+      .from('airtable_full_closer_report' as never)
+      .select('call_outcome')
+      .eq('form_type', 'New')
+      .eq('lead_id', closeId)
+    if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ call_outcome: string | null }>) {
+      if (outcomeShowed(r.call_outcome)) showed = true
+      if (outcomeClosed(r.call_outcome)) closed = true
+    }
+  }
+
   return {
     leadId: lead.close_id,
     prospectName: lead.display_name,
@@ -190,9 +310,15 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     latestOptInDate: lead.latest_opt_in_date,
     numberOfOptIns: lead.number_of_opt_ins,
     qualified: qualFromMarketingQualified(lead.marketing_qualified),
+    bookingType,
+    confirmed,
+    showed,
+    closed,
     totalCalls: calls.length,
     connectedCount: connected.length,
     totalConnectedDurationSec,
+    rescheduleCount,
+    followUpCount,
     primaryCallerName,
     calls,
   }
