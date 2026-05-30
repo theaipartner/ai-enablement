@@ -286,11 +286,16 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
         case 'scheduled': return r.scheduledTime
         case 'callType': return r.callType
         case 'bookedBy': return r.bookedBy ?? null
-        // Encode tri-state for sorting: yes > no > dq > missing
+        // Encode for sorting: showed-best → no-show → missing.
         case 'showed':
-          return r.showed === 'yes' ? 3 : r.showed === 'no' ? 2 : r.showed === 'dq' ? 1 : null
+          return r.showed === 'yes' ? 6
+            : r.showed === 'short_follow' ? 5
+            : r.showed === 'long_follow' ? 4
+            : r.showed === 'reschedule' ? 3
+            : r.showed === 'dq' ? 2
+            : r.showed === 'no' ? 1 : null
         case 'closed':
-          return r.closed === 'yes' ? 2 : r.closed === 'no' ? 1 : null
+          return r.closed === 'yes' ? 3 : r.closed === 'deposit' ? 2 : r.closed === 'no' ? 1 : null
         case 'upfront': return r.upfront
         default: return null
       }
@@ -524,15 +529,17 @@ function BookedByCell({
   )
 }
 
-function YesNoCell({ value }: { value: 'yes' | 'no' | 'dq' | null }) {
+function YesNoCell({ value }: { value: CloserScheduledDrillRow['showed'] }) {
   if (value === null) return <MissingTag />
-  const text = value === 'yes' ? 'Yes' : value === 'no' ? 'No' : 'DQ'
-  const color =
-    value === 'yes'
-      ? 'var(--color-geg-pos)'
-      : value === 'no'
-        ? 'var(--color-geg-neg)'
-        : 'var(--color-geg-text-faint)'
+  const map: Record<NonNullable<CloserScheduledDrillRow['showed']>, { text: string; color: string }> = {
+    yes: { text: 'Yes', color: 'var(--color-geg-pos)' },
+    no: { text: 'No', color: 'var(--color-geg-neg)' },
+    dq: { text: 'DQ', color: 'var(--color-geg-text-faint)' },
+    reschedule: { text: 'Resched', color: 'var(--color-geg-text-3)' },
+    short_follow: { text: 'ST follow', color: 'var(--color-geg-text-2)' },
+    long_follow: { text: 'LT follow', color: 'var(--color-geg-text-2)' },
+  }
+  const { text, color } = map[value]
   return (
     <span className="geg-mono" style={{ fontSize: 11, color, letterSpacing: '0.04em' }}>
       {text}
@@ -544,7 +551,7 @@ function ClosedTypeCell({
   closed,
   closeType,
 }: {
-  closed: 'yes' | 'no' | null
+  closed: CloserScheduledDrillRow['closed']
   closeType: 'ht' | 'dc' | null
 }) {
   if (closed === null) return <MissingTag />
@@ -552,6 +559,17 @@ function ClosedTypeCell({
     return (
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-neg)', letterSpacing: '0.04em' }}>
         No
+      </span>
+    )
+  }
+  if (closed === 'deposit') {
+    return (
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, color: 'var(--color-geg-warn)', letterSpacing: '0.04em' }}
+        title="Deposit taken — partial, not a full close"
+      >
+        Deposit
       </span>
     )
   }

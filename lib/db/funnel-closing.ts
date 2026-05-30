@@ -381,14 +381,16 @@ export type CloserScheduledDrillRow = {
   prospectName: string | null
   scheduledTime: string       // ISO UTC — the representative booking's slot
   callType: CloserCallType
-  // For 'setter' bookings: the setter's name, resolved from the triage
-  // form. Null when unresolved → "Missing". For 'direct' bookings there
-  // is no setter → UI renders "—".
+  // For 'setter' bookings: the setter's name. Preferred from the matched
+  // closer form's own Setter Name (resolved id→name), falling back to the
+  // triage-form resolver. Null when unresolved → "Missing". 'direct' → "—".
   bookedBy: string | null
-  // Outcomes from the matched Airtable closer form. null = form not filled
-  // (or unmatchable) → UI renders "missing".
-  showed: 'yes' | 'no' | 'dq' | null
-  closed: 'yes' | 'no' | null
+  // Outcomes from the matched Airtable closer form. New-form (Form Type =
+  // New) rows derive these from Call Outcome — showed gains reschedule /
+  // follow-up states, closed gains deposit. Old rows still map yes/no/dq.
+  // null = no matched form → UI renders "missing".
+  showed: 'yes' | 'no' | 'dq' | 'reschedule' | 'short_follow' | 'long_follow' | null
+  closed: 'yes' | 'no' | 'deposit' | null
   closeType: 'ht' | 'dc' | null
   upfront: number | null
   // Net count of valid bookings this lead has had (every booking attempt
@@ -480,6 +482,82 @@ function classifyPlan(plan: string | null): 'ht' | 'dc' | null {
   if (v.includes('ticket')) return 'ht'
   if (v.includes('college')) return 'dc'
   return null
+}
+
+function toNum(v: number | string | null | undefined): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string') { const n = Number(v); return Number.isFinite(n) ? n : null }
+  return null
+}
+
+// New-form (Form Type = New) disposition: derive showed / closed / closeType
+// from the single Call Outcome field. Mapping per Drake 2026-05-30:
+//   closed  = High Ticket Closed (ht) | Digital College Closed (dc); Deposit
+//             is its own 'deposit' state (showed, NOT closed).
+//   showed  = the closes + Deposit + DQ/Bad Fit (= 'yes'); Short-/Long-Term
+//             Follow get their own states; Ghosted/Cancelled = 'no';
+//             Rescheduled = 'reschedule'.
+function deriveNewOutcome(callOutcome: string | null): {
+  showed: CloserScheduledDrillRow['showed']
+  closed: CloserScheduledDrillRow['closed']
+  closeType: 'ht' | 'dc' | null
+} {
+  const v = (callOutcome ?? '').toLowerCase().trim()
+  if (v.includes('high ticket closed')) return { showed: 'yes', closed: 'yes', closeType: 'ht' }
+  if (v.includes('digital college closed')) return { showed: 'yes', closed: 'yes', closeType: 'dc' }
+  if (v === 'deposit') return { showed: 'yes', closed: 'deposit', closeType: null }
+  if (v.includes('short-term follow') || v.includes('short term follow')) return { showed: 'short_follow', closed: 'no', closeType: null }
+  if (v.includes('long-term follow') || v.includes('long term follow')) return { showed: 'long_follow', closed: 'no', closeType: null }
+  if (v.includes('dq') || v.includes('bad fit')) return { showed: 'yes', closed: 'no', closeType: null }
+  if (v.includes('ghost') || v.includes('no show')) return { showed: 'no', closed: 'no', closeType: null }
+  if (v.includes('reschedul')) return { showed: 'reschedule', closed: 'no', closeType: null }
+  if (v.includes('cancel')) return { showed: 'no', closed: 'no', closeType: null }
+  return { showed: null, closed: null, closeType: null }
+}
+
+// Resolve Airtable Setter/Closer record-ids → display names. The new closer
+// form carries Setter Name as record-ids only (the Name lookup was dropped),
+// so we learn id→name from every (record-id, name) pair our mirror already
+// has: closer forms' Closer/Setter name arrays + triage setter arrays.
+async function buildSetterNameResolver(
+  sb: ReturnType<typeof createAdminClient>,
+): Promise<(ids: string[] | null) => string | null> {
+  const idToName = new Map<string, string>()
+  const learn = (ids: string[] | null, names: string[] | null) => {
+    if (!ids || !names) return
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i] && names[i] && !idToName.has(ids[i])) idToName.set(ids[i], names[i])
+    }
+  }
+  // Closer forms — closer + setter pairs.
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb
+      .from('airtable_full_closer_report' as never)
+      .select('closer_record_ids, closer_names, setter_record_ids, setter_names')
+      .range(from, from + 999)
+    if (error) throw new Error(`setter-name resolver (closer) read failed: ${error.message}`)
+    const rows = (data ?? []) as unknown as Array<{
+      closer_record_ids: string[] | null; closer_names: string[] | null
+      setter_record_ids: string[] | null; setter_names: string[] | null
+    }>
+    for (const r of rows) { learn(r.closer_record_ids, r.closer_names); learn(r.setter_record_ids, r.setter_names) }
+    if (rows.length < 1000) break
+  }
+  // Triage forms — setter pairs (covers setters who never close).
+  {
+    const { data, error } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('setter_record_ids, setter_names')
+      .range(0, 4999)
+    if (error) throw new Error(`setter-name resolver (triage) read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ setter_record_ids: string[] | null; setter_names: string[] | null }>) {
+      learn(r.setter_record_ids, r.setter_names)
+    }
+  }
+  return (ids) => {
+    if (!ids || ids.length === 0) return null
+    return idToName.get(ids[0]) ?? null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +844,9 @@ export async function getClosingScheduledList(
 
   // 2b. Booked-by resolver (setter attribution for the representative row).
   const bookedByResolver = await buildBookedByResolver(sb, range)
+  // 2c. Setter id→name resolver — the new closer form carries Setter Name as
+  //     record-ids only, so resolve them to display names for "Booked by".
+  const setterNameResolver = await buildSetterNameResolver(sb)
 
   // 3. Closer forms covering the event window (±48h on either side for
   //    matching). Pull as a single windowed read; small table.
@@ -777,7 +858,9 @@ export async function getClosingScheduledList(
     .from('airtable_full_closer_report' as never)
     .select(
       'record_id, lead_id, prospect_name, date_time_of_call, showed, closed, ' +
-      'amount_paid_today_currency, payment_plan_type, closer_names, setter_names',
+      'amount_paid_today_currency, amount_paid_today_number, deposit_amount, ' +
+      'payment_plan_type, closer_names, setter_names, setter_record_ids, ' +
+      'form_type, call_outcome',
     )
     .gte('date_time_of_call', widenStartIso)
     .lt('date_time_of_call', widenEndIso)
@@ -790,9 +873,14 @@ export async function getClosingScheduledList(
     showed: string | null
     closed: string | null
     amount_paid_today_currency: number | string | null
+    amount_paid_today_number: number | string | null
+    deposit_amount: number | string | null
     payment_plan_type: string | null
     closer_names: string[] | null
     setter_names: string[] | null
+    setter_record_ids: string[] | null
+    form_type: string | null
+    call_outcome: string | null
   }>
 
   const formsByName = new Map<string, typeof forms>()
@@ -910,30 +998,50 @@ export async function getClosingScheduledList(
 
     // Outcomes only for live leads — a cancelled lead has no closer outcome.
     const form = cancelled ? null : matchForm(rep.startTime, invitee.leadId, invitee.name)
-    const showed = form ? normalizeShowed(form.showed) : null
-    const closed = form ? normalizeClosed(form.closed) : null
-    const upfront =
-      form && typeof form.amount_paid_today_currency === 'number'
-        ? form.amount_paid_today_currency
-        : form && typeof form.amount_paid_today_currency === 'string'
-          ? Number(form.amount_paid_today_currency) || null
-          : null
-    const planClass = classifyPlan(form ? form.payment_plan_type : null)
-    const closeType: 'ht' | 'dc' | null = closed === 'yes' ? planClass : null
 
+    // New form (Form Type = New) → derive from Call Outcome; old form → the
+    // legacy Showed?/Closed? fields. Call type (direct/setter), scheduled
+    // time, and the closer grouping all stay Calendly-sourced regardless.
+    let showed: CloserScheduledDrillRow['showed'] = null
+    let closed: CloserScheduledDrillRow['closed'] = null
+    let closeType: 'ht' | 'dc' | null = null
+    let upfront: number | null = null
+    if (form && form.form_type === 'New') {
+      const d = deriveNewOutcome(form.call_outcome)
+      showed = d.showed
+      closed = d.closed
+      closeType = d.closeType
+      // Upfront = cash collected; for a Deposit, that's the deposit amount.
+      const paid = toNum(form.amount_paid_today_number) ?? toNum(form.amount_paid_today_currency)
+      upfront = closed === 'deposit' ? (toNum(form.deposit_amount) ?? paid) : paid
+    } else if (form) {
+      showed = normalizeShowed(form.showed)
+      closed = normalizeClosed(form.closed)
+      closeType = closed === 'yes' ? classifyPlan(form.payment_plan_type) : null
+      upfront = toNum(form.amount_paid_today_currency)
+    }
+
+    // Setter name: prefer the matched form's own Setter Name (id→name),
+    // fall back to the triage-form resolver. Only for setter-led calls;
+    // direct bookings have no setter → "—".
     const bookedBy: string | null =
-      rep.callType === 'setter' ? bookedByResolver(rep.startTime, invitee) : null
+      rep.callType === 'setter'
+        ? (form ? setterNameResolver(form.setter_record_ids) : null) ?? bookedByResolver(rep.startTime, invitee)
+        : null
 
     if (!cancelled) {
       agg.calls++
       if (rep.callType === 'direct') agg.directCalls++
       else agg.setterCalls++
-      if (showed === 'yes') agg.showed++
+      // Showed = actually attended: a close/deposit/DQ ('yes') or a
+      // follow-up. Reschedule/no/dq-old are not "showed". No-shows = 'no'.
+      if (showed === 'yes' || showed === 'short_follow' || showed === 'long_follow') agg.showed++
       if (showed === 'no') agg.noShows++
+      // Closed = a full close only — Deposit is tracked separately, not closed.
       if (closed === 'yes') {
         agg.closed++
-        if (planClass === 'ht') agg.closedHt++
-        if (planClass === 'dc') agg.closedDc++
+        if (closeType === 'ht') agg.closedHt++
+        if (closeType === 'dc') agg.closedDc++
       }
       if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
     }

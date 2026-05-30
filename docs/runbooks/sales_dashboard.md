@@ -410,6 +410,28 @@ Closed. Built incrementally:
 `call_status` is already a typed column on `airtable_setter_triage_calls` (the
 parser maps it since the 2026-05-26 form redesign) — no migration needed.
 
+## Closer drill — new-form outcome wiring (2026-05-30)
+
+The Closing per-closer drill (`getClosingScheduledList` in `lib/db/funnel-closing.ts`,
+rendered by `closer-tables.tsx`) derives Showed / Closed / Upfront / Booked-by from
+the matched closer form. For `form_type = 'New'` rows it reads `call_outcome`
+(`deriveNewOutcome`); old rows keep the legacy `showed`/`closed`/`payment_plan_type`.
+Scheduled time, Call type (direct/setter), and the per-closer grouping stay
+Calendly-sourced — never from the form.
+
+- **Showed** states: `yes` (any close / Deposit / DQ-Bad-Fit), `reschedule`,
+  `short_follow`, `long_follow`, `no` (Ghosted / Cancelled). Aggregate "showed"
+  counts `yes` + the two follow-ups; `no` counts no-shows.
+- **Closed** states: `yes` (High Ticket / Digital College Closed), `deposit`
+  (its own state — NOT counted as a close), `no`. `closeType` ht/dc from the
+  closed outcome.
+- **Upfront** = cash collected (`amount_paid_today_number` ?? `_currency`); for a
+  Deposit outcome, the `deposit_amount`.
+- **Booked-by (setter)** = the matched form's own `setter_record_ids` resolved
+  id→name (`buildSetterNameResolver`, learned from closer/triage name pairs since
+  the new form dropped the Setter Name lookup), falling back to the triage
+  resolver. Setter-led calls only; direct → "—".
+
 ## Calendly → Close lead matching via utm_term (2026-05-30)
 
 Calendly bookings now carry a per-lead token in `raw_payload.tracking.utm_term`
