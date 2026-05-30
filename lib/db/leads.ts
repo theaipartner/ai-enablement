@@ -36,10 +36,31 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // Aman) marked confirmed. Subset of directBooked so the funnel stays
   // monotonic (Confirmed ≤ Booked).
   directConfirmed: boolean
+  // Direct booking whose closer form (form_type=New) shows they attended /
+  // closed, derived from Call Outcome. Subsets of directBooked; closed ⊆
+  // showed (a close implies a show).
+  directShowed: boolean
+  directClosed: boolean
 }
 
 function norm(s: string | null | undefined): string {
   return (s ?? '').trim().toLowerCase()
+}
+
+// New-form Call Outcome → did they attend the call? Everything except a
+// no-show / reschedule / cancel counts as showed (closes, deposit, DQ/Bad
+// Fit, and the follow-ups all mean they were on the call).
+function outcomeShowed(callOutcome: string | null): boolean {
+  const v = (callOutcome ?? '').trim().toLowerCase()
+  if (!v) return false
+  if (v.includes('ghost') || v.includes('no show') || v.includes('reschedul') || v.includes('cancel')) return false
+  return true
+}
+
+// New-form Call Outcome → a full close (Deposit is NOT a close).
+function outcomeClosed(callOutcome: string | null): boolean {
+  const v = (callOutcome ?? '').trim().toLowerCase()
+  return v.includes('high ticket closed') || v.includes('digital college closed')
 }
 
 export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
@@ -154,7 +175,28 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     }
   }
 
-  // 5. Assemble.
+  // 5. Showed / Closed — the closer EOC form (form_type=New), matched to the
+  //    lead by lead_id, derived from Call Outcome (same mapping as the closer
+  //    drill). The form is the sole decider, mirroring the confirmation flow.
+  //    A lead with ANY New closer form whose outcome shows/closes counts.
+  const showedLeadIds = new Set<string>()
+  const closedLeadIds = new Set<string>()
+  for (let i = 0; i < leadIds.length; i += 100) {
+    const chunk = leadIds.slice(i, i + 100)
+    const { data, error } = await sb
+      .from('airtable_full_closer_report' as never)
+      .select('lead_id, call_outcome')
+      .eq('form_type', 'New')
+      .in('lead_id', chunk)
+    if (error) throw new Error(`leads: closer form read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; call_outcome: string | null }>) {
+      if (!r.lead_id) continue
+      if (outcomeShowed(r.call_outcome)) showedLeadIds.add(r.lead_id)
+      if (outcomeClosed(r.call_outcome)) closedLeadIds.add(r.lead_id)
+    }
+  }
+
+  // 6. Assemble.
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
@@ -168,7 +210,9 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     }
     if (!directBooked && name && directNames.has(name)) directBooked = true
     const directConfirmed = directBooked && confirmedLeadIds.has(r.leadId)
-    return { ...r, qualified, directBooked, directConfirmed }
+    const directShowed = directBooked && showedLeadIds.has(r.leadId)
+    const directClosed = directBooked && closedLeadIds.has(r.leadId)
+    return { ...r, qualified, directBooked, directConfirmed, directShowed, directClosed }
   })
 }
 

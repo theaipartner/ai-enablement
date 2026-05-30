@@ -410,8 +410,18 @@ Closed. Built incrementally:
   decider — no ≥90s call gate (a sub-90s confirmation call still files a form).
   Computed in `lib/db/leads.ts` as `directConfirmed = directBooked && <confirmed
   form>`, so Confirmed ≤ Booked (monotonic funnel).
-- **Direct · Showed / Closed and the whole Setter-led box** are pending
-  placeholders (`—`) until their flows are defined.
+- **Direct · Showed** = a direct booking with a closer EOC form (`form_type=New`)
+  whose `call_outcome` shows attendance (anything except no-show / reschedule /
+  cancel). **Direct · Closed** = `call_outcome` is High Ticket / Digital College
+  Closed (Deposit does NOT count as a close). Matched by `lead_id`, sole decider,
+  subsets of directBooked → monotonic Booked ≥ Showed ≥ Closed. Helpers
+  `outcomeShowed` / `outcomeClosed` in `lib/db/leads.ts` mirror the closer drill's
+  `deriveNewOutcome`.
+- **The whole Setter-led box** is still pending placeholders (`—`).
+
+Cross-form caveat: Confirmed comes from the confirmation form, Showed/Closed from
+the closer form — so Confirmed is not guaranteed ≥ Showed (a lead can have a closer
+form without a confirmation form). Each stage is independently a subset of Booked.
 
 `call_status` is already a typed column on `airtable_setter_triage_calls` (the
 parser maps it since the 2026-05-26 form redesign) — no migration needed.
