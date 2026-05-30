@@ -326,7 +326,7 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
               <div
                 style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
               >
-                <ProspectCell name={c.prospectName} cancelled={c.cancelled} rebookings={c.rebookings} />
+                <ProspectCell name={c.prospectName} cancelled={c.cancelled} bookingCount={c.bookingCount} />
                 <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
                 <Cell text={callTypeLabel(c.callType)} mono />
                 <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
@@ -579,23 +579,32 @@ function MissingTag() {
   )
 }
 
-// Prospect cell — one row per lead, with an optional state tag:
-//   · cancelled  → every booking fell through, no live slot left (dimmed).
-//   · ×N badge   → the lead rebooked N times (net bookings − 1). Replaces
-//                  the old "Rescheduled" tag with the actual count.
+// Prospect cell — one row per lead, with an optional state tag. The
+// number is the lead's net booking count (every attempt on a valid link,
+// across calendars; a cancel / no-show / reschedule each made a fresh
+// booking), shown only at ≥2:
+//   · Cancelled / Cancelled ×N → no live slot left (every booking canceled
+//        or no-showed). ×N shows total attempts so you can see how many
+//        times they bailed. Dimmed; excluded from aggregates.
+//   · ×N badge   → still live, but booked N times (rescheduled/rebooked).
 //   · (nothing)  → a single clean booking.
 // cancelled wins over the count (a fallen-through lead reads as cancelled
 // even if they'd bounced around the calendar first).
 function ProspectCell({
   name,
   cancelled,
-  rebookings,
+  bookingCount,
 }: {
   name: string | null
   cancelled: boolean
-  rebookings: number
+  bookingCount: number
 }) {
   const isDash = !name
+  // The badge number is the lead's net booking count (every attempt on a
+  // valid link, across calendars). Shown only when they've booked ≥2× —
+  // a single clean booking gets nothing. cancelled (no live slot left, a
+  // no-show counts as cancel) shows the red tag, otherwise the neutral one.
+  const showCount = bookingCount >= 2
   return (
     <span
       style={{
@@ -620,19 +629,23 @@ function ProspectCell({
         {name ?? '—'}
       </span>
       {cancelled ? (
-        <CancelledTag />
-      ) : rebookings > 0 ? (
-        <RebookingTag count={rebookings} />
+        <CancelledTag count={showCount ? bookingCount : null} />
+      ) : showCount ? (
+        <RebookingTag count={bookingCount} />
       ) : null}
     </span>
   )
 }
 
-function CancelledTag() {
+function CancelledTag({ count }: { count: number | null }) {
   return (
     <span
       className="geg-mono"
-      title="Every booking for this lead was canceled with no rebooking — fell through. Not counted in calls/showed/closed."
+      title={
+        count
+          ? `Fell through — no live booking left. This lead booked ${count} times total (cancels + no-shows + rebookings). Excluded from calls/showed/closed.`
+          : 'Booking was canceled / no-showed with no rebooking — fell through. Excluded from calls/showed/closed.'
+      }
       style={{
         flexShrink: 0,
         fontSize: 8.5,
@@ -645,7 +658,7 @@ function CancelledTag() {
         color: 'var(--color-geg-neg)',
       }}
     >
-      Cancelled
+      {count ? `Cancelled ×${count}` : 'Cancelled'}
     </span>
   )
 }
@@ -654,7 +667,7 @@ function RebookingTag({ count }: { count: number }) {
   return (
     <span
       className="geg-mono"
-      title={`This lead rebooked ${count} ${count === 1 ? 'time' : 'times'} (net bookings on the calendar − 1).`}
+      title={`This lead has booked ${count} times (every booking attempt on a valid link, across calendars).`}
       style={{
         flexShrink: 0,
         fontSize: 8.5,

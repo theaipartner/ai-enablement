@@ -127,9 +127,9 @@ export default async function FunnelClosedPage({
 
 function CalendlySection({ bookings }: { bookings: CalendlyBookingActivity }) {
   return (
-    <SectionBox eyebrow="CALENDLY BOOKINGS" title="AI Partner Strategy Call · invitee-created in range.">
+    <SectionBox eyebrow="CALENDLY BOOKINGS" title="Closer bookings booked in range (direct + setter, excl. hidden).">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-        <Tile label="New scheduled" value={bookings.newScheduled} />
+        <Tile label="Total bookings" value={bookings.total} />
         <Tile label="Rescheduled" value={bookings.rescheduled} />
         <Tile label="Canceled" value={bookings.canceled} />
       </div>

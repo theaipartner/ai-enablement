@@ -20,9 +20,9 @@ export const CLOSING_FLOOR_ET = '2026-05-22'
 // ---------------------------------------------------------------------------
 
 export type CalendlyBookingActivity = {
-  newScheduled: number   // invitees rescheduled=false, status=active
-  rescheduled: number    // invitees rescheduled=true
-  canceled: number       // invitees status=canceled
+  total: number          // all valid-link bookings created in range (excl. hidden)
+  rescheduled: number    // of those, invitees rescheduled=true
+  canceled: number       // of those, invitees status=canceled
 }
 
 export type CloserLeaderboardRow = {
@@ -78,7 +78,7 @@ type InviteeRow = {
   invitee_created_at: string
 }
 
-type EventRow = { uri: string; event_type_uri: string | null }
+type EventRow = { uri: string; event_type_uri: string | null; name: string | null; excluded_at: string | null }
 
 async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingActivity> {
   const sb = createAdminClient()
@@ -101,35 +101,42 @@ async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingAc
   }
 
   if (invitees.length === 0) {
-    return { newScheduled: 0, rescheduled: 0, canceled: 0 }
+    return { total: 0, rescheduled: 0, canceled: 0 }
   }
 
-  // Key on event_type_uri, not name — the direct funnel link and the
-  // Aman-solo lookalike share the name "Ai/AI Partner Strategy Call"
-  // (casing drifts), so name-matching would over-count. The URI is
-  // unambiguous. See docs/schema/calendly_scheduled_events.md.
+  // Resolve each invitee's event to decide whether it counts. A valid
+  // closer booking is one of the two links (direct funnel URI + the
+  // "Partnership Call w/" setter family) and NOT creator-hidden
+  // (excluded_at). Key on the LINK, never the bare name — the direct
+  // funnel link and the Aman-solo lookalike share the name "Ai/AI
+  // Partner Strategy Call" (casing drifts). See migration 0061 +
+  // docs/schema/calendly_scheduled_events.md.
   const eventUris = Array.from(new Set(invitees.map((i) => i.event_uri)))
-  const typeByUri = new Map<string, string | null>()
+  const eventByUri = new Map<string, EventRow>()
   for (let i = 0; i < eventUris.length; i += 100) {
     const chunk = eventUris.slice(i, i + 100)
     const { data, error } = await sb
       .from('calendly_scheduled_events' as never)
-      .select('uri, event_type_uri')
+      .select('uri, event_type_uri, name, excluded_at')
       .in('uri', chunk)
     if (error) throw new Error(`calendly_scheduled_events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as EventRow[]) typeByUri.set(e.uri, e.event_type_uri)
+    for (const e of (data ?? []) as unknown as EventRow[]) eventByUri.set(e.uri, e)
   }
 
-  const isCloser = (uri: string) => typeByUri.get(uri) === DIRECT_BOOKING_EVENT_TYPE_URI
+  const isValidBooking = (uri: string) => {
+    const e = eventByUri.get(uri)
+    if (!e || e.excluded_at) return false
+    return categorizeEvent(e.event_type_uri, e.name ?? '') !== null
+  }
 
-  let newScheduled = 0, rescheduled = 0, canceled = 0
+  let total = 0, rescheduled = 0, canceled = 0
   for (const inv of invitees) {
-    if (!isCloser(inv.event_uri)) continue
+    if (!isValidBooking(inv.event_uri)) continue
+    total++
     if (inv.status === 'canceled') canceled++
-    else if (inv.rescheduled) rescheduled++
-    else newScheduled++
+    if (inv.rescheduled) rescheduled++
   }
-  return { newScheduled, rescheduled, canceled }
+  return { total, rescheduled, canceled }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,12 +390,16 @@ export type CloserScheduledDrillRow = {
   closed: 'yes' | 'no' | null
   closeType: 'ht' | 'dc' | null
   upfront: number | null
-  // Number of REbookings for this lead = (net valid bookings) − 1. 0 means
-  // a single clean booking (no badge). 1+ drives the count badge.
-  rebookings: number
-  // True when the lead has no live booking left (every valid booking
-  // canceled with no rebooking) — shows the "cancelled" tag, excluded
-  // from aggregates.
+  // Net count of valid bookings this lead has had (every booking attempt
+  // on a valid link, since the floor, across both calendars — a cancel /
+  // no-show / reschedule each made a fresh booking, so they all add up).
+  // 1 = a single clean booking (no badge). ≥2 drives the count badge on
+  // whichever tag applies (live → neutral, dead → cancelled).
+  bookingCount: number
+  // True when the lead has no LIVE booking left — every booking canceled
+  // OR no-showed (a no-show is treated as a fallen-through booking, same
+  // as a cancel). Shows the "cancelled" tag (with the count when ≥2) and
+  // is excluded from aggregates.
   cancelled: boolean
 }
 
@@ -645,8 +656,12 @@ type ValidEvent = {
   host: string | null
   status: string | null
   callType: CloserCallType
-  invitee: { name: string | null; email: string | null; phones: string[] }
+  invitee: { name: string | null; email: string | null; phones: string[]; noShow: boolean }
   inRange: boolean
+  // A booking is "dead" (not a live slot) if it was canceled OR no-showed.
+  // Drake 2026-05-29: a no-show counts the same as a cancel for deciding
+  // whether the lead still has a live booking.
+  dead: boolean
 }
 
 function emptyAggregate(name: string): CloserScheduledAggregate {
@@ -699,18 +714,19 @@ export async function getClosingScheduledList(
   // 2. Invitees for those events (identity for lead-keying + form /
   //    booked-by match). Phone lives in raw_payload.
   const eventUris = typed.map((t) => t.e.uri)
-  const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[] }>()
+  const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[]; noShow: boolean }>()
   for (let i = 0; i < eventUris.length; i += 200) {
     const chunk = eventUris.slice(i, i + 200)
     const { data, error } = await sb
       .from('calendly_invitees' as never)
-      .select('event_uri, name, email, raw_payload')
+      .select('event_uri, name, email, no_show, raw_payload')
       .in('event_uri', chunk)
     if (error) throw new Error(`calendly_invitees read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       event_uri: string
       name: string | null
       email: string | null
+      no_show: boolean | null
       raw_payload: {
         text_reminder_number?: string | null
         questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
@@ -728,7 +744,7 @@ export async function getClosingScheduledList(
         const phones = rawPhones
           .map(normalizePhone)
           .filter((p): p is string => p !== null)
-        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones })
+        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones, noShow: r.no_show === true })
       }
     }
   }
@@ -797,7 +813,7 @@ export async function getClosingScheduledList(
   // 4. Group valid events by LEAD (across all hosts / both link types).
   const eventsByLead = new Map<string, ValidEvent[]>()
   for (const { e, callType } of typed) {
-    const invitee = inviteeByEvent.get(e.uri) ?? { name: null, email: null, phones: [] }
+    const invitee = inviteeByEvent.get(e.uri) ?? { name: null, email: null, phones: [], noShow: false }
     const inRange = e.start_time >= range.startUtcIso && e.start_time < range.endUtcIso
     const key = leadKeyOf(invitee.email, invitee.name, e.uri)
     const arr = eventsByLead.get(key) ?? []
@@ -810,6 +826,7 @@ export async function getClosingScheduledList(
       callType,
       invitee,
       inRange,
+      dead: e.status === 'canceled' || invitee.noShow,
     })
     eventsByLead.set(key, arr)
   }
@@ -835,15 +852,16 @@ export async function getClosingScheduledList(
     const inRangeEvs = evs.filter((e) => e.inRange)
     if (inRangeEvs.length === 0) continue // lead has no booking in this view
 
-    const bookingCount = evs.length                    // net valid bookings (since floor)
-    const rebookings = Math.max(0, bookingCount - 1)
-    const hasActive = evs.some((e) => e.status !== 'canceled')
-    const cancelled = !hasActive
+    const bookingCount = evs.length                    // net valid bookings (since floor, both calendars)
+    const hasLive = evs.some((e) => !e.dead)           // any booking that isn't canceled/no-showed
+    const cancelled = !hasLive
 
     // Representative = the call shown for this lead in this range: prefer
-    // a live (active) in-range booking, else the most-recent in-range one.
-    const activeInRange = inRangeEvs.filter((e) => e.status !== 'canceled')
-    const rep = latest(activeInRange.length ? activeInRange : inRangeEvs)
+    // a live in-range booking, else the most-recent in-range one. (A lead
+    // with a live future booking still shows today's in-range slot here,
+    // with the count badge reflecting the rebooking.)
+    const liveInRange = inRangeEvs.filter((e) => !e.dead)
+    const rep = latest(liveInRange.length ? liveInRange : inRangeEvs)
 
     const host = displayHost(rep.host)
     const agg = bumpAgg(host)
@@ -889,7 +907,7 @@ export async function getClosingScheduledList(
       closed,
       closeType,
       upfront,
-      rebookings,
+      bookingCount,
       cancelled,
     })
   }
