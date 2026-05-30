@@ -388,7 +388,7 @@ function CallActivityStacked({
     <div>
       <div style={{ display: 'grid', gap: 14 }}>
         <PerRepCallActivityTable
-          label="Setters"
+          label="Triage (Setter)"
           variant="setter"
           aggregate={settersAggregate}
           rows={setters}
@@ -397,7 +397,7 @@ function CallActivityStacked({
           canDelete={canDelete}
         />
         <PerRepCallActivityTable
-          label="Closers"
+          label="Confirmation Calls (Closer)"
           variant="closer"
           aggregate={closersAggregate}
           rows={closers}
