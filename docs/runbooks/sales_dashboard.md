@@ -1,5 +1,11 @@
 # Sales Dashboard
 
+> **Architecture & code map:** see `docs/sales-dashboard-architecture.md` for the
+> route topology, data-layer modules, mirror-table model, the Calendly↔lead /
+> booking-funnel / closer-outcome logic, and the environment traps (local-vs-cloud
+> creds, migration apply, Airtable schema API). Read that first for "how the code
+> is structured"; this runbook is the metric catalog + per-feature wiring notes.
+
 Admin-tier page at `/sales-dashboard`. Visualizes the Engine sheet
 (`Data Sheet - Overall Engine.csv` at repo root) — 9 sections, ~117
 metrics — against the seven ingested mirror tables. v1 reads
