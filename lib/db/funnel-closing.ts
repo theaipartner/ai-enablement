@@ -860,7 +860,7 @@ export async function getClosingScheduledList(
       'record_id, lead_id, prospect_name, date_time_of_call, showed, closed, ' +
       'amount_paid_today_currency, amount_paid_today_number, deposit_amount, ' +
       'payment_plan_type, closer_names, setter_names, setter_record_ids, ' +
-      'form_type, call_outcome',
+      'form_type, call_outcome, airtable_created_at',
     )
     .gte('date_time_of_call', widenStartIso)
     .lt('date_time_of_call', widenEndIso)
@@ -881,6 +881,7 @@ export async function getClosingScheduledList(
     setter_record_ids: string[] | null
     form_type: string | null
     call_outcome: string | null
+    airtable_created_at: string | null
   }>
 
   const formsByName = new Map<string, typeof forms>()
@@ -898,28 +899,35 @@ export async function getClosingScheduledList(
     formsByName.set(key, arr)
   }
 
-  // Pick the closer form closest in time to the event (within the ±48h
-  // window) from a candidate list.
-  function closestForm(
+  // From a lead's candidate forms, pick the one for THIS event. Candidacy =
+  // within the ±48h window of the event (ties a form to the right booking
+  // when a lead has calls on different days). Among those, prefer a New
+  // (redesigned single-disposition) form over an Old/legacy one, then the
+  // most recently SUBMITTED — so a re-filled correction and the new
+  // disposition both win over a stale duplicate. (Drake 2026-05-30: a lead
+  // with both an old and a new form, or duplicate new forms, was previously
+  // decided by raw time-proximity, which let the wrong/old form win.)
+  function pickForm(
     candidates: typeof forms,
     eventMs: number,
   ): (typeof forms)[number] | null {
-    let best: (typeof forms)[number] | null = null
-    let bestDelta = Number.POSITIVE_INFINITY
-    for (const c of candidates) {
-      if (!c.date_time_of_call) continue
-      const delta = Math.abs(new Date(c.date_time_of_call).getTime() - eventMs)
-      if (delta <= FORM_MATCH_WINDOW_SEC * 1000 && delta < bestDelta) {
-        best = c
-        bestDelta = delta
-      }
-    }
-    return best
+    const inWindow = candidates.filter(
+      (c) =>
+        c.date_time_of_call &&
+        Math.abs(new Date(c.date_time_of_call).getTime() - eventMs) <= FORM_MATCH_WINDOW_SEC * 1000,
+    )
+    if (inWindow.length === 0) return null
+    return inWindow.reduce((best, c) => {
+      const bestIsNew = best.form_type === 'New' ? 1 : 0
+      const cIsNew = c.form_type === 'New' ? 1 : 0
+      if (cIsNew !== bestIsNew) return cIsNew > bestIsNew ? c : best
+      return (c.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? c : best
+    })
   }
 
   // Match a Calendly event to its closer form. Lead_id (from the booking's
   // utm_term token) is tried first; falls back to prospect-name. Both are
-  // disambiguated by the ±48h time window.
+  // scoped to the ±48h window; the winner is the newest form (see pickForm).
   function matchForm(
     eventStartIso: string,
     leadId: string | null,
@@ -929,14 +937,14 @@ export async function getClosingScheduledList(
     if (leadId) {
       const byLead = formsByLeadId.get(leadId)
       if (byLead) {
-        const hit = closestForm(byLead, eventMs)
+        const hit = pickForm(byLead, eventMs)
         if (hit) return hit
       }
     }
     if (!inviteeName) return null
     const candidates = formsByName.get(inviteeName.toLowerCase().trim())
     if (!candidates) return null
-    return closestForm(candidates, eventMs)
+    return pickForm(candidates, eventMs)
   }
 
   // 4. Group valid events by LEAD (across all hosts / both link types).

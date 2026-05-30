@@ -447,6 +447,11 @@ Calendly-sourced — never from the form.
   id→name (`buildSetterNameResolver`, learned from closer/triage name pairs since
   the new form dropped the Setter Name lookup), falling back to the triage
   resolver. Setter-led calls only; direct → "—".
+- **Form selection** (`pickForm`): when a lead has multiple closer forms in the
+  ±48h match window (old + new, or duplicate new), the winner is **New over Old,
+  then the most recently submitted** (`airtable_created_at`). Previously it was raw
+  time-proximity, which let a stale/old form beat the new disposition (the Walters
+  old-form-wins / Colton duplicate-form cases, 2026-05-30).
 
 ## Calendly → Close lead matching via utm_term (2026-05-30)
 
