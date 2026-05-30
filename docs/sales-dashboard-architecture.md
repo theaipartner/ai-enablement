@@ -16,6 +16,125 @@ Companion docs:
 
 ---
 
+## ⚡ CONTINUATION — START HERE (handoff 2026-05-30, sales-dashboard sprint)
+
+A fresh instance picks up here. This captures a long working session so you can
+continue cold. Read this whole section, then §0 (traps), then dive in.
+
+### How we work — IGNORE CLAUDE.md's process machinery
+**Disregard the entire Director/Builder workflow in CLAUDE.md** — the specs in
+`docs/specs/`, reports in `docs/reports/`, ADRs, the four-gate ceremony, "Builder
+pulls a spec," EOD cleanup, all of it. For this sales-dashboard work Drake and I
+work **directly and iteratively**:
+- Drake describes what he wants in plain language, often **refining mid-stream**
+  (he'll interrupt to add/change requirements — roll with it).
+- I build it, **verify** with `npx tsc --noEmit`, `npx next lint --file <paths>`,
+  and `npm run build`, then `git add` + `git commit` + `git push origin main`
+  **straight to main** (Vercel auto-deploys). No specs, no reports, no asking
+  permission to push.
+- I **surface genuine ambiguities or landmines BEFORE building** (Drake explicitly
+  values honest pushback — e.g. the utm_term unique-mapping trap, the "latest form
+  un-sets showed" edge case). For clear directives, just execute.
+- Commit trailer: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` (strip
+  "(1M context)").
+- Migrations are the one careful path — see §0.2.
+- The stack is Next.js 14 (TS, server components) + Supabase (Postgres). Styling
+  uses `geg-*` classes + `var(--color-geg-*)` tokens (see `app/globals.css`).
+
+### What shipped this session (all live on main)
+1. **Calendly→lead matching via utm_term token** (`lib/db/calendly-lead-match.ts`)
+   — a per-lead `aaid_<uuid>` in `calendly_invitees.raw_payload.tracking.utm_term`
+   == `close_leads.utm_term`. **Unique-mapping guard is mandatory** (generic terms
+   like "Broad" map to thousands of leads). Used as the primary key (then
+   email/name) in directBooked + the closer drill.
+2. **New closer form ingestion** — migration **0062** added `call_outcome` +
+   `form_type` (New|Old) + ~21 plan/payment columns to `airtable_full_closer_report`;
+   `parse_full_closer` maps them; live via webhook + cron. The form redesigned
+   around a single **`Call Outcome`** disposition.
+3. **Closer drill** (`/funnel/closed`, `funnel-closing.ts` + `closer-tables.tsx`)
+   reads new-form `call_outcome` for Showed/Closed/Upfront/Setter. `pickForm`
+   selects the form per lead: **New over Old, then newest `airtable_created_at`**.
+4. **/leads booking funnels** — three mutually-exclusive boxes by `bookingType`
+   (which Calendly links the lead EVER had): **direct** (direct-only) / **setter**
+   (partnership-only) / **reactivation** (both — a direct lead a setter re-booked).
+   Direct has a Confirmed stage; the others don't. Showed/Closed are **per-lead**
+   from the new closer form. Roster shows a per-lead booking tag.
+5. **Per-lead page** (`/leads/[close_id]`, `lib/db/lead-detail.ts` +
+   `[close_id]/page.tsx`): a header (qualified, opt-in dates, **Stage** chip-funnel,
+   dials, connected count+duration, reschedules, follow-ups, caller) + a
+   **lifecycle timeline** (newest-first, scoped from latest opt-in). Bookings
+   matched to the lead by email + name + **unique utm_term token**.
+6. **Lead search bar** (`?q=`, `lead-search.tsx` + `lib/db/lead-search.ts`) — search
+   any lead by name → per-lead page.
+7. **Lifecycle fixes** — "Opted in" anchor, **booked-by** (setter from the preceding
+   connected call), and **dedup** of duplicate closer forms (same call within 90min,
+   keep latest submission).
+
+### 🎯 THE NEXT TASK — Option A: absorb dispositions into the lifecycle
+The lifecycle currently shows form dispositions as **separate floating rows**, which
+reads disjointed. Drake chose **Option A**: absorb each form disposition INTO the
+call or booking it describes.
+- **Triage outcomes** (`airtable_setter_triage_calls.call_status`: e.g.
+  `Confirmed Booked with Closer`, `Setter pipeline / Follow up`, `High Ticket
+  booking`, `DQ / Un-interested`) = the result of a **connected call** (the setter's
+  triage call). Show inline on the connected-call row:
+  `Connected call · {caller} · {duration} → {outcome}`.
+- **Closer outcomes** (`airtable_full_closer_report` form_type=New `call_outcome`:
+  `High Ticket Closed` / `Digital College Closed` / `Deposit` / `Short-Term Follow
+  Up` / `Long-Term Follow` / `Client Ghosted (no show)` / `Call Rescheduled` / `Call
+  Cancelled` / `DQ / Bad Fit`) = the result of a **booked meeting**. Show on/under
+  the **Booked** row.
+- For **direct** bookings: also show **Confirmed** (from the confirmation form =
+  `airtable_setter_triage_calls` `form_type='Closer Triage Form'`, `call_status`
+  starting "Confirmed"). Direct should read Booked → Confirmed → Showed → Closed.
+- **Matching:** time-proximity within a **±48h window** — mirror the closer drill's
+  `matchForm` / `pickForm` in `funnel-closing.ts` (prefer New form, newest
+  submission). A form that doesn't match any call/booking **falls back to its own
+  row** (don't drop it).
+- Build it in `lib/db/lead-detail.ts` (the timeline assembly, step 8) + the render
+  (`EventBody` in `[close_id]/page.tsx`). Connected/booking timeline events gain an
+  optional `outcome`/`confirmed` field.
+
+**OPEN — confirm with Drake at the very start of the next session:** for **direct**,
+does the Booked row **accumulate inline** (one evolving row: `Booked → Confirmed →
+Showed → Closed`) or stay as a Booked row with Confirmed/Showed/Closed as separate
+rows beneath it? Drake hasn't decided. Ask before building.
+
+### Other open decisions / refinements noted (not blocking)
+- **Booking timestamp** is the call's `start_time` (so a Booked row sits next to its
+  outcome), not `event_created_at` (when they actually booked). Revisit if Drake
+  wants the booking shown at book-time.
+- **Header scoping:** dials/connected are scoped from latest opt-in; bookingType,
+  reschedules, follow-ups are all-time. Could journey-scope the latter.
+- **Lead search** is name-only. Email/phone need a jsonb query on
+  `close_leads.contacts`.
+- **Funnel Showed/Closed + reactivation/setter stages read ~0** until real New
+  closer forms with REAL `lead_id`s flow in. Drake's test forms used placeholder
+  lead_ids ("1234"); real ones (e.g. Colton, `lead_fK6V…`) work.
+- **`.env.local` active `SUPABASE_URL` = local (stale)** — Drake should refresh the
+  local DB or repoint so local dev/diagnostics match prod (see §0.1). It cost real
+  time this session.
+
+### Files for the per-lead / funnel work
+- `lib/db/lead-detail.ts` — `getLeadDetail` (header + timeline). **THE file for
+  Option A.**
+- `app/(authenticated)/sales-dashboard/leads/[close_id]/page.tsx` — per-lead render
+  (`EventBody` = the timeline row renderer). **THE render file for Option A.**
+- `lib/db/funnel-closing.ts` — closer drill: `deriveNewOutcome` (call_outcome →
+  showed/closed), `matchForm`/`pickForm` (form↔booking matching to MIRROR),
+  `buildSetterNameResolver` (Airtable rec-id → name), `buildBookedByResolver`.
+- `lib/db/leads.ts` — `getLeadsForRange`: `bookingType`, `confirmed/showed/closed`,
+  `outcomeShowed`/`outcomeClosed`.
+- `lib/db/calendly-lead-match.ts` — utm_term resolver (+ unique guard).
+- `lib/db/lead-search.ts` / `leads/lead-search.tsx` — search.
+- `app/(authenticated)/sales-dashboard/leads/page.tsx` — roster + funnels + search.
+
+Event-link cheat sheet: **direct** = `DIRECT_BOOKING_EVENT_TYPE_URI`
+("Ai Partner Strategy Call", in `funnel-calendly.ts`); **setter** = event name
+starts `"partnership call w/"`; **sync/follow-up** = `"AI Partner Sync"`.
+
+---
+
 ## 0. READ THIS FIRST — the traps (environment & ops)
 
 These are the things that are NOT obvious from the code and that will waste your
