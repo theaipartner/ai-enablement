@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
+import { hideTestCloserBooking } from '../actions'
 import type {
   CloserScheduledAggregate,
   CloserScheduledDrillRow,
@@ -137,6 +138,7 @@ export function CloserScheduledTables({
   selectedCloser,
   drill,
   baseParams,
+  canDelete,
 }: {
   closers: CloserScheduledAggregate[]
   aggregate: CloserScheduledAggregate
@@ -145,6 +147,7 @@ export function CloserScheduledTables({
   // Serialized as a flat string so the server can hand a snapshot of
   // the URL params to a client component. We re-parse here.
   baseParams: string
+  canDelete?: boolean
 }) {
   const { sorted, state, onToggle } = useColumnSort<CloserScheduledAggregate, AggSortKey>(
     closers,
@@ -230,7 +233,7 @@ export function CloserScheduledTables({
                   <Num value={compactUsd(c.upfront)} />
                 </div>
               </RowLink>
-              {isSelected ? <CloserDrill calls={drill} closerName={c.closerName} /> : null}
+              {isSelected ? <CloserDrill calls={drill} closerName={c.closerName} canDelete={canDelete} /> : null}
             </div>
           )
         })
@@ -274,7 +277,7 @@ type DrillSortKey =
 
 const DRILL_COLS = '1.3fr 1fr 0.7fr 1fr 0.6fr 0.9fr 0.7fr'
 
-function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; closerName: string }) {
+function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledDrillRow[]; closerName: string; canDelete?: boolean }) {
   const { sorted, state, onToggle } = useColumnSort<CloserScheduledDrillRow, DrillSortKey>(
     calls,
     (r, k) => {
@@ -319,9 +322,8 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
           </div>
           {sorted.map((c) => {
             const dimmed = c.cancelled
-            return (
+            const rowInner = (
               <div
-                key={c.eventUri}
                 style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
               >
                 <ProspectCell name={c.prospectName} cancelled={c.cancelled} rebookings={c.rebookings} />
@@ -333,10 +335,65 @@ function CloserDrill({ calls, closerName }: { calls: CloserScheduledDrillRow[]; 
                 <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
               </div>
             )
+            // Non-creators see the row exactly as before. The creator
+            // gets a fixed trailing gutter with a "hide test booking" ×
+            // (acts on the backing calendly_scheduled_events row).
+            if (!canDelete) return <div key={c.eventUri}>{rowInner}</div>
+            return (
+              <div key={c.eventUri} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>{rowInner}</div>
+                <div style={{ width: 22, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                  <HideTestBookingButton eventUri={c.eventUri} />
+                </div>
+              </div>
+            )
           })}
         </div>
       )}
     </div>
+  )
+}
+
+// Creator-only "hide test booking" ×. Soft-hides the backing Calendly
+// event (server action re-checks creator tier). Confirms first to guard
+// against misclicks; revalidatePath in the action refreshes the page.
+function HideTestBookingButton({ eventUri }: { eventUri: string }) {
+  const [pending, startTransition] = useTransition()
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm('Hide this as a test booking? It will be removed from the per-closer drill and counts. (Soft-hide — recoverable in the database.)')) {
+      return
+    }
+    startTransition(async () => {
+      const res = await hideTestCloserBooking(eventUri)
+      if (!res.ok) window.alert(`Could not hide this booking: ${res.error}`)
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={pending}
+      title="Hide this test booking (creator only)"
+      aria-label="Hide this test booking"
+      className="geg-mono"
+      style={{
+        cursor: pending ? 'default' : 'pointer',
+        border: '1px solid var(--color-geg-border)',
+        background: 'var(--color-geg-bg-elev)',
+        color: 'var(--color-geg-text-faint)',
+        borderRadius: 4,
+        width: 18,
+        height: 18,
+        lineHeight: '14px',
+        fontSize: 12,
+        padding: 0,
+        opacity: pending ? 0.5 : 1,
+      }}
+    >
+      {pending ? '·' : '×'}
+    </button>
   )
 }
 

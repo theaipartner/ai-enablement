@@ -17,6 +17,7 @@ import {
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from '../landing-pages/date-range-picker'
+import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 
 // Funnel · Closing — three sections:
 //   1. Calendly bookings · AI Partner Strategy Call (new / resched / cancel)
@@ -69,6 +70,11 @@ export default async function FunnelClosedPage({
     ? scheduled.drillByCloser[selectedCloser] ?? []
     : ([] as CloserScheduledDrillRow[])
 
+  // Creator-only "hide test booking" affordance on the per-closer drill.
+  // getCurrentUserAccessTier is React.cache()d (layout already called it).
+  const access = await getCurrentUserAccessTier()
+  const canDelete = access?.tier === 'creator'
+
   // Build a base query string for closer-link toggles that preserves
   // the active start/end params.
   const baseParams = new URLSearchParams()
@@ -106,6 +112,7 @@ export default async function FunnelClosedPage({
             selectedCloser={selectedCloser}
             drill={drill}
             baseParams={baseParams.toString()}
+            canDelete={canDelete}
           />
         </SectionBox>
         <CashSection money={data.money} />

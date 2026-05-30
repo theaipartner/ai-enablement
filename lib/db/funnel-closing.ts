@@ -672,6 +672,7 @@ export async function getClosingScheduledList(
   const { data: eventData, error: eventErr } = await sb
     .from('calendly_scheduled_events' as never)
     .select('uri, name, start_time, host_user_name, status, event_type_uri')
+    .is('excluded_at', null)   // creator-hidden test bookings drop out of the closer drill + aggregates
     .gte('start_time', floorIso)
     .order('start_time', { ascending: true })
     .range(0, 4999)
