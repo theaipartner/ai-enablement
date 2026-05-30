@@ -1,35 +1,55 @@
+import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type LeadRow, type Qualification } from '@/lib/db/leads'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
+import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
+import { DeleteLeadButton } from './delete-lead-button'
 
-// Sales Dashboard — Leads (view-only roster).
+// Sales Dashboard — Leads (top-of-funnel + roster).
 //
-// Every lead that opted in during the selected timeframe — new opt-ins
-// AND re-opt-ins (existing Close account, opted in again) — with the
-// same per-lead metrics the appointment-setting dial list shows, plus
-// three roster columns: opt-in type, qualified (Typeform budget), and
-// booked (Calendly strategy call). Read-only; the dial list on the
-// Appointment Setting page is the working surface. Shares the cohort
-// via getLeadsForRange → getSpeedToLeadCohort so the two can't drift.
+// Funnel header: Leads (toggle all ↔ unique/new-only) → Qualified vs
+// Unqualified → Direct bookings. Then the per-lead roster table. A
+// lead = a Close lead that opted in during the window (new OR re-opt-in);
+// the cohort already drops creator-soft-hidden (fake) leads. Creators get
+// an × to hide a fake lead. Shares the cohort via getLeadsForRange →
+// getSpeedToLeadCohort so the Leads page + dial list can't drift.
 
 export const dynamic = 'force-dynamic'
 
-const COLS = '1.6fr 0.9fr 1.1fr 1fr 0.7fr 1.2fr 0.9fr 0.8fr 1fr'
+type View = 'all' | 'unique'
 
 export default async function SalesDashboardLeadsPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[] }
+  searchParams?: { start?: string | string[]; end?: string | string[]; view?: string | string[] }
 }) {
   const start = parseEtDateString(searchParams?.start)
   const end = parseEtDateString(searchParams?.end)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
+  const view: View = pickView(searchParams?.view)
 
-  const result = await getLeadsForRange(range)
+  const [allRows, access] = await Promise.all([
+    getLeadsForRange(range),
+    getCurrentUserAccessTier(),
+  ])
+  const canDelete = access?.tier === 'creator'
+
+  // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
+  const rows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
+
+  const c = {
+    leads: rows.length,
+    newCount: rows.filter((r) => r.optInType === 'new').length,
+    reoptin: rows.filter((r) => r.optInType === 'reoptin').length,
+    qualified: rows.filter((r) => r.qualified === 'qualified').length,
+    unqualified: rows.filter((r) => r.qualified === 'non-qualified').length,
+    unknown: rows.filter((r) => r.qualified === 'unknown').length,
+    direct: rows.filter((r) => r.directBooked).length,
+  }
 
   return (
     <div>
@@ -38,25 +58,21 @@ export default async function SalesDashboardLeadsPage({
         title="Leads."
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <DateRangePicker
-              startEtDate={range.startEtDate}
-              endEtDate={range.endEtDate}
-              todayEt={todayEt}
-            />
+            <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
             <PersonPill label="EST · Nabeel" />
           </div>
         }
       />
 
-      <SummaryStrip result={result} />
+      <FunnelHeader c={c} view={view} searchParams={searchParams} />
 
       <div style={{ marginTop: 22 }}>
         <HeaderRow />
         <div style={{ marginTop: 4 }}>
-          {result.rows.length === 0 ? (
+          {rows.length === 0 ? (
             <EmptyState />
           ) : (
-            result.rows.map((r) => <LeadRowView key={r.leadId} r={r} />)
+            rows.map((r) => <LeadRowView key={r.leadId} r={r} canDelete={canDelete} />)
           )}
         </div>
       </div>
@@ -64,70 +80,138 @@ export default async function SalesDashboardLeadsPage({
   )
 }
 
-function SummaryStrip({ result }: { result: Awaited<ReturnType<typeof getLeadsForRange>> }) {
-  const items: Array<{ label: string; value: number; accent?: boolean }> = [
-    { label: 'Leads', value: result.total, accent: true },
-    { label: 'New opt-ins', value: result.newCount },
-    { label: 'Re-opt-ins', value: result.reoptinCount },
-    { label: 'Qualified', value: result.qualifiedCount },
-    { label: 'Booked', value: result.bookedCount },
-  ]
+function pickView(raw: string | string[] | undefined): View {
+  const v = Array.isArray(raw) ? raw[0] : raw
+  return v === 'unique' ? 'unique' : 'all'
+}
+
+// Build a /sales-dashboard/leads href preserving the date range + setting view.
+function leadsHref(searchParams: { start?: string | string[]; end?: string | string[] } | undefined, view: View): string {
+  const p = new URLSearchParams()
+  const s = Array.isArray(searchParams?.start) ? searchParams?.start[0] : searchParams?.start
+  const e = Array.isArray(searchParams?.end) ? searchParams?.end[0] : searchParams?.end
+  if (s) p.set('start', s)
+  if (e) p.set('end', e)
+  p.set('view', view)
+  return `/sales-dashboard/leads?${p.toString()}`
+}
+
+// ---------------------------------------------------------------------------
+// Funnel header — three stages: Leads · Qualified⟋Unqualified · Direct bookings
+// ---------------------------------------------------------------------------
+
+function FunnelHeader({
+  c,
+  view,
+  searchParams,
+}: {
+  c: { leads: number; newCount: number; reoptin: number; qualified: number; unqualified: number; unknown: number; direct: number }
+  view: View
+  searchParams: { start?: string | string[]; end?: string | string[] } | undefined
+}) {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))`,
-        gap: 12,
-        marginTop: 24,
-      }}
-    >
-      {items.map((it) => (
-        <div
-          key={it.label}
-          style={{
-            padding: '14px 16px',
-            background: 'var(--color-geg-bg-elev)',
-            border: '1px solid var(--color-geg-border)',
-            borderRadius: 8,
-          }}
-        >
-          <div
-            className="geg-mono"
-            style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}
-          >
-            {it.label}
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 12, marginTop: 24 }}>
+      {/* 1. Leads — value in smaller font; click to toggle all ↔ unique */}
+      <Link href={leadsHref(searchParams, view === 'all' ? 'unique' : 'all')} style={{ textDecoration: 'none' }}>
+        <Box>
+          <BoxLabel>
+            Leads
+            <ToggleChip active={view} />
+          </BoxLabel>
+          <div className="geg-numeric-serif" style={{ marginTop: 6, fontSize: 22, letterSpacing: '-0.02em', color: 'var(--color-geg-accent)' }}>
+            {c.leads.toLocaleString('en-US')}
           </div>
-          <div
-            className="geg-numeric-serif"
-            style={{ marginTop: 6, fontSize: 28, letterSpacing: '-0.02em', color: it.accent ? 'var(--color-geg-accent)' : 'var(--color-geg-text)' }}
-          >
-            {it.value.toLocaleString('en-US')}
-          </div>
+          <SubLine>
+            {view === 'unique'
+              ? 'new opt-ins only'
+              : `${c.newCount.toLocaleString('en-US')} new · ${c.reoptin.toLocaleString('en-US')} re-opt-in`}
+          </SubLine>
+        </Box>
+      </Link>
+
+      {/* 2. Qualified ⟋ Unqualified — split, equal opposing halves */}
+      <Box>
+        <BoxLabel>Qualified ⟋ Unqualified</BoxLabel>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr', alignItems: 'center', marginTop: 6 }}>
+          <SplitHalf value={c.qualified} caption="Qualified" color="var(--color-geg-pos)" align="left" />
+          <div style={{ height: 36, background: 'var(--color-geg-border)' }} />
+          <SplitHalf value={c.unqualified} caption="Unqualified" color="var(--color-geg-text-3)" align="right" />
         </div>
-      ))}
+        {c.unknown > 0 ? <SubLine>+{c.unknown.toLocaleString('en-US')} unknown</SubLine> : null}
+      </Box>
+
+      {/* 3. Direct bookings */}
+      <Box>
+        <BoxLabel>Direct bookings</BoxLabel>
+        <div className="geg-numeric-serif" style={{ marginTop: 6, fontSize: 28, letterSpacing: '-0.02em', color: 'var(--color-geg-text)' }}>
+          {c.direct.toLocaleString('en-US')}
+        </div>
+        <SubLine>Ai Partner Strategy Call · ever</SubLine>
+      </Box>
     </div>
   )
 }
 
-const HEADERS = ['Prospect', 'Opt-in', 'Opted in (ET)', 'Qualified', 'Booked', 'Time to call', 'Connected', 'Intensity', 'Caller']
+function Box({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ padding: '14px 16px', background: 'var(--color-geg-bg-elev)', border: '1px solid var(--color-geg-border)', borderRadius: 8, height: '100%' }}>
+      {children}
+    </div>
+  )
+}
+
+function BoxLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="geg-mono"
+      style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', display: 'flex', alignItems: 'center', gap: 8 }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function SubLine({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="geg-mono" style={{ marginTop: 6, fontSize: 9.5, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
+      {children}
+    </div>
+  )
+}
+
+function ToggleChip({ active }: { active: View }) {
+  return (
+    <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>
+      {active === 'all' ? 'all · tap for unique' : 'unique · tap for all'}
+    </span>
+  )
+}
+
+function SplitHalf({ value, caption, color, align }: { value: number; caption: string; color: string; align: 'left' | 'right' }) {
+  return (
+    <div style={{ textAlign: align, padding: align === 'left' ? '0 10px 0 0' : '0 0 0 10px' }}>
+      <div className="geg-numeric-serif" style={{ fontSize: 26, letterSpacing: '-0.02em', color }}>
+        {value.toLocaleString('en-US')}
+      </div>
+      <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
+        {caption}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Roster table
+// ---------------------------------------------------------------------------
+
+const COLS = '1.6fr 0.8fr 1.1fr 0.9fr 1fr 1.2fr 0.85fr 0.7fr 1fr 0.35fr'
+const HEADERS = ['Prospect', 'Opt-in', 'Opted in (ET)', 'Qualified', 'Direct bookings', 'Time to call', 'Connected', 'Intensity', 'Caller', '']
 
 function HeaderRow() {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: COLS,
-        gap: 10,
-        padding: '0 0 8px',
-        borderBottom: '1px solid var(--color-geg-border)',
-      }}
-    >
-      {HEADERS.map((h) => (
-        <span
-          key={h}
-          className="geg-mono"
-          style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}
-        >
+    <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '0 0 8px', borderBottom: '1px solid var(--color-geg-border)' }}>
+      {HEADERS.map((h, i) => (
+        <span key={h || `c${i}`} className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}>
           {h}
         </span>
       ))}
@@ -135,72 +219,37 @@ function HeaderRow() {
   )
 }
 
-function LeadRowView({ r }: { r: LeadRow }) {
+function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: COLS,
-        gap: 10,
-        padding: '8px 0',
-        borderBottom: '1px dashed var(--color-geg-border)',
-        alignItems: 'center',
-      }}
-    >
-      <span
-        className="geg-serif"
-        style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-        title={r.leadId}
-      >
+    <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}>
+      <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.leadId}>
         {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
       </span>
-      <span>
-        <OptInBadge type={r.optInType} />
-      </span>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-        {formatEt(r.optInAt)}
-      </span>
-      <span>
-        <QualifiedTag q={r.qualified} />
-      </span>
-      <span
-        className="geg-mono"
-        style={{ fontSize: 11, letterSpacing: '0.04em', color: r.booked ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)' }}
-      >
-        {r.booked ? 'Yes' : 'No'}
+      <span><OptInBadge type={r.optInType} /></span>
+      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
+      <span><QualifiedTag q={r.qualified} /></span>
+      <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.04em', color: r.directBooked ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)' }}>
+        {r.directBooked ? 'Yes' : 'No'}
       </span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
           <>
             {formatDuration(r.speedSec)}
-            {/* (yes/no) = connected on either of the first two dials —
-                same signal as the appointment-setting dial list. */}
-            <span style={{ color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
-              ({r.firstTwoDialsConnected ? 'yes' : 'no'})
-            </span>
+            <span style={{ color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>({r.firstTwoDialsConnected ? 'yes' : 'no'})</span>
           </>
         ) : (
           <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>
         )}
       </span>
-      <span
-        className="geg-mono"
-        style={{
-          fontSize: 11,
-          letterSpacing: '0.04em',
-          color: r.anyCallConnected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)',
-        }}
-      >
+      <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.04em', color: r.anyCallConnected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
         {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
       </span>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-        {r.intensity}
-      </span>
-      <span
-        className="geg-serif"
-        style={{ fontSize: 12, color: 'var(--color-geg-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-      >
+      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{r.intensity}</span>
+      <span className="geg-serif" style={{ fontSize: 12, color: 'var(--color-geg-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {r.callerName ?? '—'}
+      </span>
+      <span style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {canDelete ? <DeleteLeadButton closeId={r.leadId} /> : null}
       </span>
     </div>
   )
@@ -209,18 +258,7 @@ function LeadRowView({ r }: { r: LeadRow }) {
 function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
   const reoptin = type === 'reoptin'
   return (
-    <span
-      className="geg-mono"
-      style={{
-        fontSize: 8.5,
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        color: reoptin ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)',
-        border: `1px solid ${reoptin ? 'var(--color-geg-accent)' : 'var(--color-geg-border)'}`,
-        borderRadius: 4,
-        padding: '1px 5px',
-      }}
-    >
+    <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: reoptin ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)', border: `1px solid ${reoptin ? 'var(--color-geg-accent)' : 'var(--color-geg-border)'}`, borderRadius: 4, padding: '1px 5px' }}>
       {reoptin ? 're-opt-in' : 'new'}
     </span>
   )
@@ -228,10 +266,9 @@ function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
 
 function QualifiedTag({ q }: { q: Qualification }) {
   const text = q === 'qualified' ? 'Qualified' : q === 'non-qualified' ? 'Not qualified' : '—'
-  const color =
-    q === 'qualified' ? 'var(--color-geg-pos)' : q === 'non-qualified' ? 'var(--color-geg-text-3)' : 'var(--color-geg-text-faint)'
+  const color = q === 'qualified' ? 'var(--color-geg-pos)' : q === 'non-qualified' ? 'var(--color-geg-text-3)' : 'var(--color-geg-text-faint)'
   return (
-    <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.03em', color }} title={q === 'unknown' ? 'No matching Typeform response' : undefined}>
+    <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.03em', color }} title={q === 'unknown' ? 'No marketing_qualified flag on the Close lead' : undefined}>
       {text}
     </span>
   )
@@ -239,25 +276,16 @@ function QualifiedTag({ q }: { q: Qualification }) {
 
 function EmptyState() {
   return (
-    <div
-      className="geg-mono"
-      style={{ padding: '40px 0', textAlign: 'center', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}
-    >
+    <div className="geg-mono" style={{ padding: '40px 0', textAlign: 'center', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
       No leads opted in for this range.
     </div>
   )
 }
 
-// --- formatters (ET date, mm/ss duration) — local, view-only ---
+// --- formatters (ET date, mm/ss duration) — local ---
 
 function formatEt(iso: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(iso))
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
 }
 
 function formatDuration(sec: number): string {
