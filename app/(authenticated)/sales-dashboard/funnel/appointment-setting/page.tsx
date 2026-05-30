@@ -23,6 +23,7 @@ import {
   PerRepCallActivityTable,
   SpeedToLeadDrillTable,
 } from './_components/sortable-tables'
+import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 
 // Funnel · Appointment Setting — consolidated detail page.
 //
@@ -69,6 +70,12 @@ export default async function FunnelApptSettingPage({
     getSpeedToLeadCohort(range, speedCaller),
   ])
 
+  // Creator-only "hide test call" affordance on the per-rep drill.
+  // getCurrentUserAccessTier is React.cache()d, so this reuses the
+  // layout's lookup rather than re-querying.
+  const access = await getCurrentUserAccessTier()
+  const canDelete = access?.tier === 'creator'
+
   return (
     <StageDetailLayout
       eyebrow="FUNNEL · APPOINTMENT SETTING"
@@ -104,6 +111,7 @@ export default async function FunnelApptSettingPage({
           totalFormsInWindow={activity.totalFormsInWindow}
           selectedRep={selectedRep}
           drill={drill}
+          canDelete={canDelete}
         />
       </StageSection>
     </StageDetailLayout>
@@ -365,6 +373,7 @@ function CallActivityStacked({
   totalFormsInWindow,
   selectedRep,
   drill,
+  canDelete,
 }: {
   setters: CallActivityRepRow[]
   closers: CallActivityRepRow[]
@@ -373,6 +382,7 @@ function CallActivityStacked({
   totalFormsInWindow: number
   selectedRep: string | null
   drill: CallActivityDrillRow[]
+  canDelete?: boolean
 }) {
   return (
     <div>
@@ -384,6 +394,7 @@ function CallActivityStacked({
           rows={setters}
           selectedRep={selectedRep}
           drill={drill}
+          canDelete={canDelete}
         />
         <PerRepCallActivityTable
           label="Closers"
@@ -392,6 +403,7 @@ function CallActivityStacked({
           rows={closers}
           selectedRep={selectedRep}
           drill={drill}
+          canDelete={canDelete}
         />
       </div>
       <div

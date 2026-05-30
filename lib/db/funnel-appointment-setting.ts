@@ -1540,6 +1540,11 @@ export type CallActivityDrillRow = {
   // dialed the same lead multiple times within 1 day and we collapsed
   // them into one row (UI shows a "×N" tag).
   groupedCallCount?: number
+  // Airtable record_id of the EOC triage form backing this row, when
+  // one exists (matched-form rows + form-only rows). Null for calls
+  // with no form. Drives the creator-only "hide test call" × — only
+  // form-backed rows can be hidden (the × acts on this record).
+  formRecordId?: string | null
 }
 
 export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
@@ -1714,6 +1719,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
         .select('record_id, lead_id, form_type, call_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .is('excluded_at', null)   // creator-hidden test entries drop out of per-rep counts
         .gte('airtable_created_at', formWindowStartIso)
         .lt('airtable_created_at', formWindowEndIso)
         .range(from, from + 999)
@@ -2001,6 +2007,7 @@ export async function getCallActivityForUser(
       const { data, error } = await sb
         .from('airtable_setter_triage_calls' as never)
         .select('record_id, lead_id, prospect_name, form_type, call_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .is('excluded_at', null)   // creator-hidden test entries drop out of the per-rep drill
         .gte('airtable_created_at', formWindowStart)
         .lt('airtable_created_at', formWindowEnd)
         .range(from, from + 999)
@@ -2123,6 +2130,7 @@ export async function getCallActivityForUser(
       bookingStatus: status.label,
       bucket: status.bucket,
       groupedCallCount: session.callIds.length,
+      formRecordId: form?.record_id ?? null,
     }
   })
 
@@ -2143,6 +2151,7 @@ export async function getCallActivityForUser(
       bookingStatus: status.label,
       bucket: status.bucket,
       noMatchingCall: true,
+      formRecordId: r.record_id,
     })
   }
 

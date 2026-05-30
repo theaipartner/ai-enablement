@@ -1,13 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import type {
   CallActivityDrillRow,
   CallActivityRepRow,
   SpeedToLeadCohortRow,
 } from '@/lib/db/funnel-appointment-setting'
 import { RepLinkPreservingParams } from '../rep-link'
+import { hideTestTriageCall } from '../actions'
 
 // Sortable drill / aggregate tables for the appointment-setting page.
 // Each table owns local sort state via the shared `useColumnSort`
@@ -411,9 +412,11 @@ const CALL_DRILL_COLS = '1.6fr 0.8fr 1.4fr 1.2fr'
 export function CallActivityDrillTable({
   calls,
   repName,
+  canDelete,
 }: {
   calls: CallActivityDrillRow[]
   repName: string
+  canDelete?: boolean
 }) {
   const { sorted, state, onToggle } = useColumnSort<CallActivityDrillRow, CallSortKey>(
     calls,
@@ -485,7 +488,7 @@ export function CallActivityDrillTable({
               // transcript so we render a plain div. The detail page
               // 404s gracefully if a transcript hasn't landed yet
               // (cron may not have caught up — runs every 15 min).
-              <CallDrillRow key={c.callId} call={c} />
+              <CallDrillRow key={c.callId} call={c} canDelete={canDelete} />
             ))}
           </ScrollBody>
         </>
@@ -498,7 +501,7 @@ export function CallActivityDrillTable({
 // the outer element between a Next/Link (when the row maps to a real
 // Close call that should be transcribed) and a plain div (when the row
 // is a form-only artifact with no audio).
-function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
+function CallDrillRow({ call: c, canDelete }: { call: CallActivityDrillRow; canDelete?: boolean }) {
   const baseStyle: React.CSSProperties = {
     display: 'grid',
     gridTemplateColumns: CALL_DRILL_COLS,
@@ -584,18 +587,74 @@ function CallDrillRow({ call: c }: { call: CallActivityDrillRow }) {
     </>
   )
 
-  // Form-only rows: no audio, render a static div.
-  if (c.noMatchingCall) {
-    return <div style={baseStyle}>{cells}</div>
-  }
-
-  return (
+  // Form-only rows: no audio, render a static div. Call-backed rows
+  // link to the setter-call detail page.
+  const inner = c.noMatchingCall ? (
+    <div style={baseStyle}>{cells}</div>
+  ) : (
     <Link
       href={`/sales-dashboard/calls/${encodeURIComponent(c.callId)}`}
       style={{ ...baseStyle, textDecoration: 'none', color: 'inherit' }}
     >
       {cells}
     </Link>
+  )
+
+  // Non-creators see exactly the original row. For the creator, reserve
+  // a fixed trailing gutter (keeps columns aligned across rows) and show
+  // the "hide test call" × only on form-backed rows — the test entry is
+  // the airtable_setter_triage_calls record behind the row.
+  if (!canDelete) return inner
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>{inner}</div>
+      <div style={{ width: 22, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+        {c.formRecordId ? <HideTestButton recordId={c.formRecordId} /> : null}
+      </div>
+    </div>
+  )
+}
+
+// Creator-only "hide test call" ×. Soft-hides the backing triage form
+// row (server action re-checks creator tier). Confirms first to guard
+// against misclicks; revalidatePath in the action refreshes the page.
+function HideTestButton({ recordId }: { recordId: string }) {
+  const [pending, startTransition] = useTransition()
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm('Hide this as a test call? It will be removed from the per-rep counts and drill. (Soft-hide — recoverable in the database.)')) {
+      return
+    }
+    startTransition(async () => {
+      const res = await hideTestTriageCall(recordId)
+      if (!res.ok) window.alert(`Could not hide this call: ${res.error}`)
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={pending}
+      title="Hide this test call (creator only)"
+      aria-label="Hide this test call"
+      className="geg-mono"
+      style={{
+        cursor: pending ? 'default' : 'pointer',
+        border: '1px solid var(--color-geg-border)',
+        background: 'var(--color-geg-bg-elev)',
+        color: 'var(--color-geg-text-faint)',
+        borderRadius: 4,
+        width: 18,
+        height: 18,
+        lineHeight: '14px',
+        fontSize: 12,
+        padding: 0,
+        opacity: pending ? 0.5 : 1,
+      }}
+    >
+      {pending ? '·' : '×'}
+    </button>
   )
 }
 
@@ -640,6 +699,7 @@ export function PerRepCallActivityTable({
   rows,
   selectedRep,
   drill,
+  canDelete,
 }: {
   label: string
   variant: 'setter' | 'closer'
@@ -647,6 +707,7 @@ export function PerRepCallActivityTable({
   rows: CallActivityRepRow[]
   selectedRep: string | null
   drill: CallActivityDrillRow[]
+  canDelete?: boolean
 }) {
   const { sorted, state, onToggle } = useColumnSort<CallActivityRepRow, RepSortKey>(
     rows,
@@ -810,6 +871,7 @@ export function PerRepCallActivityTable({
                     <CallActivityDrillTable
                       calls={drill}
                       repName={r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
+                      canDelete={canDelete}
                     />
                   ) : null}
                 </div>
