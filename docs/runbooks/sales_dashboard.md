@@ -346,7 +346,48 @@ auto-promotes on the next request.
 - **Window switcher**. The window pill is decorative chrome today —
   no click handler.
 
-### Playwright verifier — sales v2
+### Lead list + per-lead page (2026-05-30)
+
+The per-lead surfaces all sit on the SAME cohort (`getSpeedToLeadCohort`
+in `lib/db/funnel-appointment-setting.ts`) so the appointment-setting
+"Speed-to-Lead" lead list and the `/sales-dashboard/leads` roster can't
+drift.
+
+**Lead-list columns added (both surfaces):**
+
+- **Connected total talk time + ×N tag.** The cohort row now carries
+  `totalConnectedDurationSec` (sum of the lead's ≥90s outbound calls) and
+  `connectedCallCount` (how many connected). The Connected cell renders
+  `Yes (12m 30s) ×2` — the bracket is combined talk time, the `×N` pill
+  (shown at ≥2) is how many calls connected. Both derive from the exact
+  same call set as `anyCallConnected`, so the numbers reconcile.
+- **Re-opt-in date in "Created".** On the appointment-setting list only,
+  the Created column shows `optInAt` (the re-opt-in moment =
+  `latest_opt_in_date`) for `optInType === 'reoptin'`, else
+  `leadCreatedAt`. The `/leads` roster already showed opt-in date.
+
+**Per-lead page — `/sales-dashboard/leads/[close_id]`.** New route backed
+by `getLeadDetail(closeId)` in `lib/db/lead-detail.ts`. Reached by
+clicking any row on the appointment-setting lead list, the per-rep call
+drill, or the `/leads` roster (the per-rep drill rows were repointed from
+`/calls/[id]` to here, keyed by `lead_id`). Shows:
+
+- A facts strip (qualified, first/latest opt-in, opt-in count, total
+  calls, connected count + talk time, primary caller).
+- The lead's full call history, newest-first, each **collapsed by
+  default** and expanding to its setter-call review (sentiment, score +
+  reason, strengths/weaknesses, lead attributes, no-book reason). Reviews
+  + transcripts only exist for transcribed setter calls (≥90s, since the
+  2026-05-24 horizon) — older / sub-90s / closer calls render as a
+  non-expandable row with no review. A call with a transcript links out
+  to the per-call detail page (`/calls/[id]`).
+- A stubbed **Closing call** section (placeholder) — closing-call detail
+  is a later build-out.
+
+The standalone `/sales-dashboard/calls` feed + its `/calls/[id]` detail
+page are intentionally left untouched (eventual retirement, not now).
+
+## Playwright verifier — sales v2
 
 `scripts/verify-sales-dashboard-v2-preview.ts`. Hits 6 routes
 (overview, advertising, content/all-NC, funnels, closing, states),

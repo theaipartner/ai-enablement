@@ -195,6 +195,31 @@ function formatDuration(sec: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
+// ×N pill marking a lead reached on more than one connected call — the
+// total-duration bracket beside it is the sum across those N calls.
+// Mirrors the per-session ×N tag in the per-rep drill.
+function MultiCallTag({ count }: { count: number }) {
+  return (
+    <span
+      className="geg-mono"
+      title={`${count} separate calls to this lead connected (≥90s). The bracketed duration is their combined talk time.`}
+      style={{
+        flexShrink: 0,
+        fontSize: 9,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        padding: '1px 5px',
+        borderRadius: 4,
+        border: '1px solid var(--color-geg-border)',
+        color: 'var(--color-geg-text-faint)',
+        background: 'var(--color-geg-bg)',
+      }}
+    >
+      ×{count}
+    </span>
+  )
+}
+
 function formatEtTimestamp(iso: string): string {
   if (!iso) return '—'
   return new Intl.DateTimeFormat('en-US', {
@@ -225,7 +250,7 @@ type SpeedSortKey = 'prospect' | 'created' | 'speed' | 'over90s' | 'intensity' |
 // Six columns now: Prospect / Created / Time to call / Connected /
 // Intensity / Caller. Intensity is a tight numeric so it gets a
 // narrow fraction; took 0.1 off Prospect and Caller to make room.
-const SPEED_COLS = '1.4fr 1.05fr 0.95fr 0.8fr 0.7fr 1.1fr'
+const SPEED_COLS = '1.4fr 1.05fr 0.95fr 1.35fr 0.6fr 1.0fr'
 
 export function SpeedToLeadDrillTable({
   rows,
@@ -303,8 +328,9 @@ export function SpeedToLeadDrillTable({
       </div>
       <ScrollBody maxHeight={520}>
         {sorted.map((r) => (
-          <div
+          <Link
             key={r.leadId}
+            href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`}
             style={{
               display: 'grid',
               gridTemplateColumns: SPEED_COLS,
@@ -312,6 +338,9 @@ export function SpeedToLeadDrillTable({
               padding: '8px 0',
               borderBottom: '1px dashed var(--color-geg-border)',
               alignItems: 'center',
+              textDecoration: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
             }}
           >
             <span
@@ -342,8 +371,12 @@ export function SpeedToLeadDrillTable({
                 </span>
               ) : null}
             </span>
-            <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-              {formatEtTimestamp(r.leadCreatedAt)}
+            <span
+              className="geg-mono"
+              style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}
+              title={r.optInType === 'reoptin' ? 'Re-opt-in date (latest opt-in) — re-opt-ins anchor to their return, not the original account creation' : undefined}
+            >
+              {formatEtTimestamp(r.optInType === 'reoptin' ? r.optInAt : r.leadCreatedAt)}
             </span>
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
               {r.speedSec !== null ? (
@@ -363,18 +396,24 @@ export function SpeedToLeadDrillTable({
             </span>
             <span
               className="geg-mono"
-              style={{
-                fontSize: 11,
-                letterSpacing: '0.04em',
-                color: r.anyCallConnected
-                  ? 'var(--color-geg-pos)'
-                  : r.firstCallAt
-                    ? 'var(--color-geg-neg)'
-                    : 'var(--color-geg-text-faint)',
-              }}
-              title="Yes when ANY outbound call to this lead has connected (>=90s) at any time."
+              style={{ fontSize: 11, letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              title="Yes when ANY outbound call to this lead has connected (>=90s) at any time. Bracket = total connected talk time; ×N = how many calls connected."
             >
-              {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
+              <span
+                style={{
+                  color: r.anyCallConnected
+                    ? 'var(--color-geg-pos)'
+                    : r.firstCallAt
+                      ? 'var(--color-geg-neg)'
+                      : 'var(--color-geg-text-faint)',
+                }}
+              >
+                {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
+              </span>
+              {r.anyCallConnected && r.totalConnectedDurationSec > 0 ? (
+                <span style={{ color: 'var(--color-geg-text-faint)' }}>({formatDuration(r.totalConnectedDurationSec)})</span>
+              ) : null}
+              {r.connectedCallCount >= 2 ? <MultiCallTag count={r.connectedCallCount} /> : null}
             </span>
             <span
               className="geg-mono"
@@ -390,7 +429,7 @@ export function SpeedToLeadDrillTable({
             <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
               {r.callerName ?? (r.callerUserId ? r.callerUserId.slice(0, 13) + '…' : <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>—</span>)}
             </span>
-          </div>
+          </Link>
         ))}
       </ScrollBody>
     </div>
@@ -587,17 +626,18 @@ function CallDrillRow({ call: c, canDelete }: { call: CallActivityDrillRow; canD
     </>
   )
 
-  // Form-only rows: no audio, render a static div. Call-backed rows
-  // link to the setter-call detail page.
-  const inner = c.noMatchingCall ? (
-    <div style={baseStyle}>{cells}</div>
-  ) : (
+  // Every row links to the lead's page (its full call history + reviews),
+  // keyed by lead_id — both call-backed and form-only rows. A row with no
+  // lead_id (shouldn't happen) falls back to a static div.
+  const inner = c.leadId ? (
     <Link
-      href={`/sales-dashboard/calls/${encodeURIComponent(c.callId)}`}
+      href={`/sales-dashboard/leads/${encodeURIComponent(c.leadId)}`}
       style={{ ...baseStyle, textDecoration: 'none', color: 'inherit' }}
     >
       {cells}
     </Link>
+  ) : (
+    <div style={baseStyle}>{cells}</div>
   )
 
   // Non-creators see exactly the original row. For the creator, reserve

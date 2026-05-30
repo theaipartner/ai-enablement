@@ -221,7 +221,7 @@ function HeaderRow() {
 
 function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}>
+    <Link href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
       <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.leadId}>
         {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
       </span>
@@ -250,8 +250,18 @@ function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
           <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>
         )}
       </span>
-      <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.04em', color: r.anyCallConnected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
-        {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
+      <span
+        className="geg-mono"
+        style={{ fontSize: 11, letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        title="Yes when ANY outbound call to this lead has connected (≥90s). Bracket = total connected talk time; ×N = how many calls connected."
+      >
+        <span style={{ color: r.anyCallConnected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
+          {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
+        </span>
+        {r.anyCallConnected && r.totalConnectedDurationSec > 0 ? (
+          <span style={{ color: 'var(--color-geg-text-faint)' }}>({formatDuration(r.totalConnectedDurationSec)})</span>
+        ) : null}
+        {r.connectedCallCount >= 2 ? <MultiCallTag count={r.connectedCallCount} /> : null}
       </span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{r.intensity}</span>
       <span className="geg-serif" style={{ fontSize: 12, color: 'var(--color-geg-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -260,7 +270,21 @@ function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
       <span style={{ display: 'flex', justifyContent: 'flex-end' }}>
         {canDelete ? <DeleteLeadButton closeId={r.leadId} /> : null}
       </span>
-    </div>
+    </Link>
+  )
+}
+
+// ×N pill marking a lead reached on >1 connected call; the bracketed
+// duration beside it sums talk time across those calls.
+function MultiCallTag({ count }: { count: number }) {
+  return (
+    <span
+      className="geg-mono"
+      title={`${count} separate calls to this lead connected (≥90s). The bracketed duration is their combined talk time.`}
+      style={{ flexShrink: 0, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: 4, border: '1px solid var(--color-geg-border)', color: 'var(--color-geg-text-faint)', background: 'var(--color-geg-bg)' }}
+    >
+      ×{count}
+    </span>
   )
 }
 
