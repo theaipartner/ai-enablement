@@ -262,6 +262,25 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     if (error) throw new Error(`lead-detail: invitees (name) read failed: ${error.message}`)
     addInvitees((data ?? []) as unknown as Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>)
   }
+  // utm_term token — ONLY safe when the token is unique to this lead. A generic
+  // ad term (e.g. "Broad", shared by thousands) would pull in other leads'
+  // bookings, so we gate on the same unique-mapping rule as the funnel match.
+  if (lead.utm_term) {
+    const { data: dup, error: dupErr } = await sb
+      .from('close_leads' as never)
+      .select('close_id')
+      .eq('utm_term', lead.utm_term)
+      .limit(2)
+    if (dupErr) throw new Error(`lead-detail: utm_term uniqueness read failed: ${dupErr.message}`)
+    if (((dup ?? []) as unknown[]).length === 1) {
+      const { data, error } = await sb
+        .from('calendly_invitees' as never)
+        .select('uri, event_uri, rescheduled')
+        .eq('raw_payload->tracking->>utm_term', lead.utm_term)
+      if (error) throw new Error(`lead-detail: invitees (utm_term) read failed: ${error.message}`)
+      addInvitees((data ?? []) as unknown as Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>)
+    }
+  }
   const rescheduleCount = Array.from(inviteeByUri.values()).filter((i) => i.rescheduled).length
 
   const eventUris = Array.from(new Set(Array.from(inviteeByUri.values()).map((i) => i.eventUri)))
