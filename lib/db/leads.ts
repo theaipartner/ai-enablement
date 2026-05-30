@@ -7,7 +7,7 @@ import {
   type SpeedToLeadCohortRow,
 } from './funnel-appointment-setting'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
-import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
+import { buildCalendlyLeadResolver, inviteeUtmTerm, type CalendlyLeadResolver } from './calendly-lead-match'
 
 // Leads list + funnel (the /sales-dashboard/leads page). Built on the
 // SAME cohort as the appointment-setting lead list (getSpeedToLeadCohort
@@ -19,32 +19,105 @@ import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match
 //                     Yes/No flag (≡ the under/over-$2,000 rule). Close
 //                     overwrites it on each opt-in, so a re-opt-in resolves
 //                     to its MOST RECENT submission. No Typeform join.
-//   - directBooked  — the lead has an "Ai Partner Strategy Call" (the DIRECT
-//                     funnel link) Calendly booking EVER, any status (incl.
-//                     canceled). That marks them a direct self-book. Match
-//                     by email, else name. Drake 2026-05-29.
+//   - bookingType   — direct / reactivation / setter / null, by which Calendly
+//                     link(s) the lead has EVER had (utm_term → email → name).
+//   - confirmed / showed / closed — per-lead form signals (confirmation form +
+//                     New closer form's Call Outcome).
 //
-// Returns the rows; the page derives the funnel counts (and the
-// all/unique toggle) from them.
+// Returns the rows; the page derives the three funnel counts + the per-lead
+// booking tag from them.
 
 export type Qualification = 'qualified' | 'non-qualified' | 'unknown'
 
+// Booking path, by which Calendly link(s) the lead has EVER had:
+//   direct       = direct link only ("Ai Partner Strategy Call" self-book)
+//   setter       = partnership link only ("Partnership Call w/ …", setter-led)
+//   reactivation = BOTH — a direct lead a setter re-booked with a partnership
+//                  link after it fell through. Once reactivated, a lead never
+//                  reverts to pure direct. (Drake 2026-05-30.)
+//   null         = no qualifying booking.
+export type BookingType = 'direct' | 'reactivation' | 'setter' | null
+
 export type LeadRow = SpeedToLeadCohortRow & {
   qualified: Qualification
-  directBooked: boolean
-  // A direct booking the confirmation call (Closer Triage Form, always
-  // Aman) marked confirmed. Subset of directBooked so the funnel stays
-  // monotonic (Confirmed ≤ Booked).
-  directConfirmed: boolean
-  // Direct booking whose closer form (form_type=New) shows they attended /
-  // closed, derived from Call Outcome. Subsets of directBooked; closed ⊆
-  // showed (a close implies a show).
-  directShowed: boolean
-  directClosed: boolean
+  bookingType: BookingType
+  // Per-lead form signals (NOT per-call). The page gates these by bookingType
+  // to build each funnel's stages.
+  confirmed: boolean // confirmation form (Closer Triage Form) marked confirmed
+  showed: boolean    // any New closer form shows attendance
+  closed: boolean    // any New closer form is a full close (HT/DC)
 }
 
 function norm(s: string | null | undefined): string {
   return (s ?? '').trim().toLowerCase()
+}
+
+// Email/name/lead-id signals for one Calendly link family, used to test
+// whether a lead has ever booked via that link.
+type BookingSignals = { leadIds: Set<string>; emails: Set<string>; names: Set<string> }
+
+// Pull every scheduled-event URI for a link family: 'direct' = the exact
+// DIRECT event type; 'partnership' = the setter-led "Partnership Call w/ …"
+// name family (one event type per closer, so matched by name prefix).
+async function fetchEventUris(
+  sb: ReturnType<typeof createAdminClient>,
+  kind: 'direct' | 'partnership',
+): Promise<string[]> {
+  const uris: string[] = []
+  for (let from = 0; ; from += 1000) {
+    const base = sb.from('calendly_scheduled_events' as never).select('uri')
+    const q =
+      kind === 'direct'
+        ? base.eq('event_type_uri', DIRECT_BOOKING_EVENT_TYPE_URI)
+        : base.ilike('name', 'Partnership Call w/%')
+    const { data, error } = await q.range(from, from + 999)
+    if (error) throw new Error(`leads: calendly events (${kind}) read failed: ${error.message}`)
+    const evs = (data ?? []) as unknown as Array<{ uri: string }>
+    for (const e of evs) uris.push(e.uri)
+    if (evs.length < 1000) break
+  }
+  return uris
+}
+
+// Collect lead-id (utm_term) + email + name signals from a set of events'
+// invitees — the keys we test cohort leads against.
+async function collectBookingSignals(
+  sb: ReturnType<typeof createAdminClient>,
+  leadResolver: CalendlyLeadResolver,
+  eventUris: string[],
+): Promise<BookingSignals> {
+  const leadIds = new Set<string>()
+  const emails = new Set<string>()
+  const names = new Set<string>()
+  for (let i = 0; i < eventUris.length; i += 100) {
+    const chunk = eventUris.slice(i, i + 100)
+    const { data, error } = await sb
+      .from('calendly_invitees' as never)
+      .select('email, name, raw_payload')
+      .in('event_uri', chunk)
+    if (error) throw new Error(`leads: calendly invitees read failed: ${error.message}`)
+    for (const inv of (data ?? []) as unknown as Array<{
+      email: string | null
+      name: string | null
+      raw_payload: { tracking?: { utm_term?: string | null } | null } | null
+    }>) {
+      const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
+      if (lid) leadIds.add(lid)
+      const e = norm(inv.email)
+      if (e) emails.add(e)
+      const n = norm(inv.name)
+      if (n) names.add(n)
+    }
+  }
+  return { leadIds, emails, names }
+}
+
+// Did this lead ever book via the link family? lead-id (utm_term) first,
+// then email, then name.
+function matchesSignals(sig: BookingSignals, leadId: string, emails: string[], name: string): boolean {
+  if (sig.leadIds.has(leadId)) return true
+  for (const e of emails) if (sig.emails.has(e)) return true
+  return !!name && sig.names.has(name)
 }
 
 // New-form Call Outcome → did they attend the call? Everything except a
@@ -104,52 +177,15 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     }
   }
 
-  // 3. Direct booked — invitees on the DIRECT funnel link (the exact
-  //    "Ai Partner Strategy Call" event type), ANY status, EVER. Resolve
-  //    each booking to a Close lead by its utm_term token first (the
-  //    strong key), and also build email + name sets as fallbacks. A
-  //    cohort lead matching any of the three was a direct book.
+  // 3. Booking signals — the DIRECT link ("Ai Partner Strategy Call") and the
+  //    SETTER/PARTNERSHIP link family ("Partnership Call w/ …"), ANY status,
+  //    EVER. A lead is classified by which it has had: direct-only = 'direct',
+  //    partnership-only = 'setter', BOTH = 'reactivation' (a direct lead a
+  //    setter re-booked after it fell through — and once reactivated it never
+  //    reverts to pure direct). Match by utm_term token → email → name.
   const leadResolver = await buildCalendlyLeadResolver(sb)
-  const directLeadIds = new Set<string>()
-  const directEmails = new Set<string>()
-  const directNames = new Set<string>()
-  {
-    const eventUris: string[] = []
-    let from = 0
-    for (;;) {
-      const { data, error } = await sb
-        .from('calendly_scheduled_events' as never)
-        .select('uri')
-        .eq('event_type_uri', DIRECT_BOOKING_EVENT_TYPE_URI)
-        .range(from, from + 999)
-      if (error) throw new Error(`leads: calendly events read failed: ${error.message}`)
-      const evs = (data ?? []) as unknown as Array<{ uri: string }>
-      if (evs.length === 0) break
-      for (const e of evs) eventUris.push(e.uri)
-      if (evs.length < 1000) break
-      from += 1000
-    }
-    for (let i = 0; i < eventUris.length; i += 100) {
-      const chunk = eventUris.slice(i, i + 100)
-      const { data, error } = await sb
-        .from('calendly_invitees' as never)
-        .select('email, name, raw_payload')
-        .in('event_uri', chunk)
-      if (error) throw new Error(`leads: calendly invitees read failed: ${error.message}`)
-      for (const inv of (data ?? []) as unknown as Array<{
-        email: string | null
-        name: string | null
-        raw_payload: { tracking?: { utm_term?: string | null } | null } | null
-      }>) {
-        const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
-        if (lid) directLeadIds.add(lid)
-        const e = norm(inv.email)
-        if (e) directEmails.add(e)
-        const n = norm(inv.name)
-        if (n) directNames.add(n)
-      }
-    }
-  }
+  const directSig = await collectBookingSignals(sb, leadResolver, await fetchEventUris(sb, 'direct'))
+  const partnershipSig = await collectBookingSignals(sb, leadResolver, await fetchEventUris(sb, 'partnership'))
 
   // 4. Confirmed direct bookings — the confirmation call's form (the
   //    Closer Triage Form, a confirmation call that's almost always Aman),
@@ -196,23 +232,29 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     }
   }
 
-  // 6. Assemble.
+  // 7. Assemble — classify each lead by which booking links it has ever had.
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
     const qualified = leadQualified.get(r.leadId) ?? 'unknown'
-    // Lead-id (utm_term token) first, then email, then name.
-    let directBooked = directLeadIds.has(r.leadId)
-    if (!directBooked) {
-      for (const e of emails) {
-        if (directEmails.has(e)) { directBooked = true; break }
-      }
+    const hasDirect = matchesSignals(directSig, r.leadId, emails, name)
+    const hasPartnership = matchesSignals(partnershipSig, r.leadId, emails, name)
+    const bookingType: BookingType =
+      hasDirect && hasPartnership
+        ? 'reactivation'
+        : hasDirect
+          ? 'direct'
+          : hasPartnership
+            ? 'setter'
+            : null
+    return {
+      ...r,
+      qualified,
+      bookingType,
+      confirmed: confirmedLeadIds.has(r.leadId),
+      showed: showedLeadIds.has(r.leadId),
+      closed: closedLeadIds.has(r.leadId),
     }
-    if (!directBooked && name && directNames.has(name)) directBooked = true
-    const directConfirmed = directBooked && confirmedLeadIds.has(r.leadId)
-    const directShowed = directBooked && showedLeadIds.has(r.leadId)
-    const directClosed = directBooked && closedLeadIds.has(r.leadId)
-    return { ...r, qualified, directBooked, directConfirmed, directShowed, directClosed }
   })
 }
 

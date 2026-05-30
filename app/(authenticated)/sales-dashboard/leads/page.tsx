@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
-import { getLeadsForRange, type LeadRow, type Qualification } from '@/lib/db/leads'
+import { getLeadsForRange, type LeadRow, type Qualification, type BookingType } from '@/lib/db/leads'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
@@ -48,10 +48,18 @@ export default async function SalesDashboardLeadsPage({
     qualified: rows.filter((r) => r.qualified === 'qualified').length,
     unqualified: rows.filter((r) => r.qualified === 'non-qualified').length,
     unknown: rows.filter((r) => r.qualified === 'unknown').length,
-    direct: rows.filter((r) => r.directBooked).length,
-    directConfirmed: rows.filter((r) => r.directConfirmed).length,
-    directShowed: rows.filter((r) => r.directShowed).length,
-    directClosed: rows.filter((r) => r.directClosed).length,
+    // Mutually exclusive booking buckets (direct = direct-only, reactivation =
+    // both links, setter = partnership-only). Showed/Closed are per-lead.
+    direct: rows.filter((r) => r.bookingType === 'direct').length,
+    directConfirmed: rows.filter((r) => r.bookingType === 'direct' && r.confirmed).length,
+    directShowed: rows.filter((r) => r.bookingType === 'direct' && r.showed).length,
+    directClosed: rows.filter((r) => r.bookingType === 'direct' && r.closed).length,
+    react: rows.filter((r) => r.bookingType === 'reactivation').length,
+    reactShowed: rows.filter((r) => r.bookingType === 'reactivation' && r.showed).length,
+    reactClosed: rows.filter((r) => r.bookingType === 'reactivation' && r.closed).length,
+    setter: rows.filter((r) => r.bookingType === 'setter').length,
+    setterShowed: rows.filter((r) => r.bookingType === 'setter' && r.showed).length,
+    setterClosed: rows.filter((r) => r.bookingType === 'setter' && r.closed).length,
   }
 
   return (
@@ -149,35 +157,48 @@ function FunnelHeader({
 }
 
 // ---------------------------------------------------------------------------
-// Booking funnels — Direct + Setter-led, each a 4-stage funnel:
-// Booked → Confirmed → Showed → Closed. Only Direct "Booked" is wired today
-// (the existing directBooked count); the rest are pending placeholders until
-// the booking-confirmation matching flow is built.
+// Booking funnels — three mutually-exclusive pipelines by the lead's booking
+// path. Direct has a Confirmed stage (a self-book gets a confirmation call);
+// Reactivation + Setter-led skip Confirmed (a partnership/setter call is
+// confirmed by nature). Showed/Closed are per-lead (any New closer form).
 // ---------------------------------------------------------------------------
 
-function BookingFunnels({ c }: { c: { direct: number; directConfirmed: number; directShowed: number; directClosed: number } }) {
+type FunnelCounts = {
+  direct: number; directConfirmed: number; directShowed: number; directClosed: number
+  react: number; reactShowed: number; reactClosed: number
+  setter: number; setterShowed: number; setterClosed: number
+}
+
+function BookingFunnels({ c }: { c: FunnelCounts }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
       <BookingFunnelBox
         label="Direct bookings"
-        sublabel="Ai Partner Strategy Call · from confirmation + closer forms"
+        sublabel="Ai Partner Strategy Call only"
         booked={c.direct}
         confirmed={c.directConfirmed}
         showed={c.directShowed}
         closed={c.directClosed}
       />
       <BookingFunnelBox
+        label="Direct reactivations"
+        sublabel="Direct, then re-booked via a Partnership link"
+        booked={c.react}
+        showed={c.reactShowed}
+        closed={c.reactClosed}
+      />
+      <BookingFunnelBox
         label="Setter-led bookings"
-        sublabel="Partnership Call w/ · pending"
-        booked={null}
-        confirmed={null}
-        showed={null}
-        closed={null}
+        sublabel="Partnership Call w/ only"
+        booked={c.setter}
+        showed={c.setterShowed}
+        closed={c.setterClosed}
       />
     </div>
   )
 }
 
+// `confirmed` omitted → a 3-stage funnel (Booked → Showed → Closed).
 function BookingFunnelBox({
   label,
   sublabel,
@@ -189,21 +210,28 @@ function BookingFunnelBox({
   label: string
   sublabel: string
   booked: number | null
-  confirmed: number | null
+  confirmed?: number | null
   showed: number | null
   closed: number | null
 }) {
+  const stages: Array<{ value: number | null; caption: string; accent?: boolean }> = [
+    { value: booked, caption: 'Booked', accent: true },
+  ]
+  if (confirmed !== undefined) stages.push({ value: confirmed, caption: 'Confirmed' })
+  stages.push({ value: showed, caption: 'Showed' }, { value: closed, caption: 'Closed' })
+
+  const cols = stages.map(() => '1fr').join(' auto ')
+  const cells: React.ReactNode[] = []
+  stages.forEach((s, i) => {
+    if (i > 0) cells.push(<Chevron key={`ch${i}`} />)
+    cells.push(<FunnelStage key={s.caption} value={s.value} caption={s.caption} accent={s.accent} />)
+  })
+
   return (
     <Box>
       <BoxLabel>{label}</BoxLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr auto 1fr', alignItems: 'center', gap: 4, marginTop: 12 }}>
-        <FunnelStage value={booked} caption="Booked" accent />
-        <Chevron />
-        <FunnelStage value={confirmed} caption="Confirmed" />
-        <Chevron />
-        <FunnelStage value={showed} caption="Showed" />
-        <Chevron />
-        <FunnelStage value={closed} caption="Closed" />
+      <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, marginTop: 12 }}>
+        {cells}
       </div>
       <SubLine>{sublabel}</SubLine>
     </Box>
@@ -285,7 +313,7 @@ function SplitHalf({ value, caption, color, align }: { value: number; caption: s
 // ---------------------------------------------------------------------------
 
 const COLS = '1.6fr 0.8fr 1.1fr 0.9fr 1fr 1.2fr 0.85fr 0.7fr 1fr 0.35fr'
-const HEADERS = ['Prospect', 'Opt-in', 'Opted in (ET)', 'Qualified', 'Direct bookings', 'Time to call', 'Connected', 'Intensity', 'Caller', '']
+const HEADERS = ['Prospect', 'Opt-in', 'Opted in (ET)', 'Qualified', 'Booking', 'Time to call', 'Connected', 'Intensity', 'Caller', '']
 
 function HeaderRow() {
   return (
@@ -308,18 +336,7 @@ function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
       <span><OptInBadge type={r.optInType} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
       <span><QualifiedTag q={r.qualified} /></span>
-      <span>
-        {r.directBooked ? (
-          <span
-            className="geg-mono"
-            style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-pos)', border: '1px solid var(--color-geg-pos)', borderRadius: 4, padding: '1px 5px' }}
-          >
-            direct
-          </span>
-        ) : (
-          <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
-        )}
-      </span>
+      <span><BookingTag type={r.bookingType} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
           <>
@@ -383,6 +400,26 @@ function QualifiedTag({ q }: { q: Qualification }) {
   return (
     <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.03em', color }} title={q === 'unknown' ? 'No marketing_qualified flag on the Close lead' : undefined}>
       {text}
+    </span>
+  )
+}
+
+// Per-lead booking-path tag — direct / reactivated / setter-led.
+function BookingTag({ type }: { type: BookingType }) {
+  if (type === null) {
+    return <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
+  }
+  const cfg = {
+    direct: { label: 'direct', color: 'var(--color-geg-pos)' },
+    reactivation: { label: 'reactivated', color: 'var(--color-geg-warn)' },
+    setter: { label: 'setter-led', color: 'var(--color-geg-accent)' },
+  }[type]
+  return (
+    <span
+      className="geg-mono"
+      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: cfg.color, border: `1px solid ${cfg.color}`, borderRadius: 4, padding: '1px 5px' }}
+    >
+      {cfg.label}
     </span>
   )
 }

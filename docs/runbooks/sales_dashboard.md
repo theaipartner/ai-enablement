@@ -395,36 +395,38 @@ page are intentionally left untouched (eventual retirement, not now).
 
 ## Leads page booking funnels (2026-05-30)
 
-Under the Leads / Qualified header, two funnel boxes — **Direct bookings** and
-**Setter-led bookings** — each a 4-stage funnel: Booked → Confirmed → Showed →
-Closed. Built incrementally:
+Under the Leads / Qualified header, **three mutually-exclusive** funnel boxes, one
+per booking path. Each cohort lead is tagged `bookingType` in `lib/db/leads.ts` by
+which Calendly link(s) it has EVER had (matched utm_term → email → name):
 
-- **Direct · Booked** = `directBooked` (the utm_term/email/name Calendly match).
-- **Direct · Confirmed** = a direct booking whose **confirmation call form** says
-  confirmed. The confirmation form is the `airtable_setter_triage_calls` row with
-  `form_type = 'Closer Triage Form'` (a confirmation call, almost always Aman),
-  matched to the lead by `lead_id`. "Confirmed" = `call_status` starting with
-  `"Confirmed"` (covers `Confirmed Booking` + the confirmed-different-time
-  option; excludes DQ / Setter pipeline, and the stray `High Ticket booking`
-  values left on a few rows by a `form_type` backfill). The form is the sole
-  decider — no ≥90s call gate (a sub-90s confirmation call still files a form).
-  Computed in `lib/db/leads.ts` as `directConfirmed = directBooked && <confirmed
-  form>`, so Confirmed ≤ Booked (monotonic funnel).
-- **Direct · Showed** = a direct booking with a closer EOC form (`form_type=New`)
-  whose `call_outcome` shows attendance (anything except no-show / reschedule /
-  cancel). **Direct · Closed** = `call_outcome` is High Ticket / Digital College
-  Closed (Deposit does NOT count as a close). Matched by `lead_id`, sole decider,
-  subsets of directBooked → monotonic Booked ≥ Showed ≥ Closed. Helpers
-  `outcomeShowed` / `outcomeClosed` in `lib/db/leads.ts` mirror the closer drill's
-  `deriveNewOutcome`.
-- **The whole Setter-led box** is still pending placeholders (`—`).
+- **`direct`** = the direct link only ("Ai Partner Strategy Call" / event type
+  `DIRECT_BOOKING_EVENT_TYPE_URI`).
+- **`setter`** = the partnership link only ("Partnership Call w/ …", matched by
+  name prefix — one event type per closer).
+- **`reactivation`** = BOTH links. A direct lead a setter re-booked via a
+  partnership link after it fell through. Once reactivated, it never reverts to
+  pure direct. Surfaced as a per-lead **tag** on the roster (`BookingTag`).
 
-Cross-form caveat: Confirmed comes from the confirmation form, Showed/Closed from
-the closer form — so Confirmed is not guaranteed ≥ Showed (a lead can have a closer
-form without a confirmation form). Each stage is independently a subset of Booked.
+The boxes:
+- **Direct bookings**: Booked → **Confirmed** → Showed → Closed (4-stage).
+- **Direct reactivations**: Booked → Showed → Closed (3-stage, no Confirmed).
+- **Setter-led bookings**: Booked → Showed → Closed (3-stage, no Confirmed).
 
-`call_status` is already a typed column on `airtable_setter_triage_calls` (the
-parser maps it since the 2026-05-26 form redesign) — no migration needed.
+Confirmed only exists on Direct (a self-book gets a confirmation call); a
+partnership/setter call is confirmed by nature. Sources:
+- **Confirmed** = `airtable_setter_triage_calls` row, `form_type='Closer Triage
+  Form'` (confirmation call, ~always Aman), `call_status` starting with
+  `"Confirmed"`, matched by `lead_id`.
+- **Showed / Closed** = the New closer EOC form's `call_outcome`, **per-lead** (any
+  New form for the lead): showed = attended (anything except no-show / reschedule /
+  cancel); closed = High Ticket / Digital College Closed (Deposit is NOT a close).
+  Helpers `outcomeShowed` / `outcomeClosed` mirror the closer drill's
+  `deriveNewOutcome`. Per-lead (not per-call) is fine because the buckets are
+  mutually exclusive — a reactivated lead's no-show direct call and showed
+  partnership call both live under one `reactivation` tag.
+
+`call_status` and `call_outcome` are already typed columns (no migration). Reads
+~0 on Showed/Closed until real New closer forms with real lead IDs flow in.
 
 ## Closer drill — new-form outcome wiring (2026-05-30)
 
