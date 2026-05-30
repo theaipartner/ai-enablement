@@ -61,6 +61,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any
 
+from ingestion.close.client import CloseClient
 from ingestion.close.pipeline import (
     load_lead_cf_id_to_name,
     upsert_call_from_payload,
@@ -338,6 +339,18 @@ def _synthesize_webhook_id(wh_ts: str, body: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Lazily-built Close client, reused across lead re-fetches in one warm
+# invocation. Built from CLOSE_API_KEY in the environment.
+_CLOSE_CLIENT: CloseClient | None = None
+
+
+def _close_client() -> CloseClient:
+    global _CLOSE_CLIENT
+    if _CLOSE_CLIENT is None:
+        _CLOSE_CLIENT = CloseClient.from_env()
+    return _CLOSE_CLIENT
+
+
 def _route_event(
     db,
     event_type: str,
@@ -349,14 +362,28 @@ def _route_event(
     Raises only on unhandled exceptions — unknown event types are not
     failures; they return (None, 'unknown:<type>').
 
-    `event_data` is the FULL new object per Close's webhook docs — we
-    upsert directly without an extra API fetch.
+    `event_data` is the FULL new object per Close's webhook docs — BUT for
+    leads the payload OMITS `contacts` (verified 2026-05-29), so those events
+    re-fetch the full lead from the API below; other object types upsert the
+    payload directly.
     """
-    # Leads + lead merges land in close_leads. Merged events also include
-    # the lead's new state in `data`, so the same upsert path applies.
+    # Leads + lead merges land in close_leads. The webhook lead payload has
+    # no `contacts` array, so re-fetch the full lead from the API to capture
+    # emails/phones. On fetch failure, fall back to the payload — the parser
+    # preserves existing contacts when the input lacks them (no wipe).
     if event_type in ("lead.created", "lead.updated", "lead.merged"):
         cf_map = load_lead_cf_id_to_name(db)
-        return upsert_lead_from_payload(db, event_data, cf_map), "close_leads"
+        lead_json = event_data
+        lead_id = event_data.get("id")
+        if lead_id:
+            try:
+                lead_json = _close_client().get_lead(lead_id)
+            except Exception as exc:  # noqa: BLE001 - fall back to payload
+                logger.warning(
+                    "close_webhook: lead re-fetch failed for %s — using payload: %s",
+                    lead_id, exc,
+                )
+        return upsert_lead_from_payload(db, lead_json, cf_map), "close_leads"
 
     # Opportunities (Drake-override 2026-05-23 — IN scope).
     if event_type in ("opportunity.created", "opportunity.updated"):

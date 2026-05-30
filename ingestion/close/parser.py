@@ -181,6 +181,17 @@ def parse_lead(lead_json: dict[str, Any]) -> dict[str, Any]:
         "custom_fields_raw": {},
     }
 
+    # Defensive: Close's lead WEBHOOK payload omits `contacts`/`addresses`
+    # entirely (verified 2026-05-29 — every lead webhook has contacts=None),
+    # so upserting `[]` would WIPE a lead's emails/phones on every update.
+    # When the input carries none, drop the key so the upsert leaves the
+    # stored value untouched. The full `/lead/` API fetch (backfill +
+    # webhook re-fetch) does include contacts, so those paths still set them.
+    if not lead_json.get("contacts"):
+        row.pop("contacts", None)
+    if not lead_json.get("addresses"):
+        row.pop("addresses", None)
+
     cf_raw: dict[str, Any] = {}
     # Build a name-lookup over the cf_* defs the lead carries. The lead
     # JSON has both:
