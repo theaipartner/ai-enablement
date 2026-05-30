@@ -7,6 +7,7 @@ import {
   type SpeedToLeadCohortRow,
 } from './funnel-appointment-setting'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
+import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
 
 // Leads list + funnel (the /sales-dashboard/leads page). Built on the
 // SAME cohort as the appointment-setting lead list (getSpeedToLeadCohort
@@ -79,8 +80,12 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
   }
 
   // 3. Direct booked — invitees on the DIRECT funnel link (the exact
-  //    "Ai Partner Strategy Call" event type), ANY status, EVER. Build
-  //    email + name sets; a cohort lead matching either was a direct book.
+  //    "Ai Partner Strategy Call" event type), ANY status, EVER. Resolve
+  //    each booking to a Close lead by its utm_term token first (the
+  //    strong key), and also build email + name sets as fallbacks. A
+  //    cohort lead matching any of the three was a direct book.
+  const leadResolver = await buildCalendlyLeadResolver(sb)
+  const directLeadIds = new Set<string>()
   const directEmails = new Set<string>()
   const directNames = new Set<string>()
   {
@@ -103,10 +108,16 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
       const chunk = eventUris.slice(i, i + 100)
       const { data, error } = await sb
         .from('calendly_invitees' as never)
-        .select('email, name')
+        .select('email, name, raw_payload')
         .in('event_uri', chunk)
       if (error) throw new Error(`leads: calendly invitees read failed: ${error.message}`)
-      for (const inv of (data ?? []) as unknown as Array<{ email: string | null; name: string | null }>) {
+      for (const inv of (data ?? []) as unknown as Array<{
+        email: string | null
+        name: string | null
+        raw_payload: { tracking?: { utm_term?: string | null } | null } | null
+      }>) {
+        const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
+        if (lid) directLeadIds.add(lid)
         const e = norm(inv.email)
         if (e) directEmails.add(e)
         const n = norm(inv.name)
@@ -120,9 +131,12 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
     const qualified = leadQualified.get(r.leadId) ?? 'unknown'
-    let directBooked = false
-    for (const e of emails) {
-      if (directEmails.has(e)) { directBooked = true; break }
+    // Lead-id (utm_term token) first, then email, then name.
+    let directBooked = directLeadIds.has(r.leadId)
+    if (!directBooked) {
+      for (const e of emails) {
+        if (directEmails.has(e)) { directBooked = true; break }
+      }
     }
     if (!directBooked && name && directNames.has(name)) directBooked = true
     return { ...r, qualified, directBooked }
