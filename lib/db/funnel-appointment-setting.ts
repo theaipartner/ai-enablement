@@ -1147,9 +1147,12 @@ export async function getSpeedToLeadCohort(
   }
 
   // --- NEW opt-ins: created in window ---
+  // `excluded_at is null` drops creator-soft-hidden (fake) leads from the
+  // lead list — here + the Leads page. Per-rep Call Activity is unaffected.
   const { data: leads, error: leadsErr } = await sb
     .from('close_leads' as never)
     .select('close_id, display_name, date_created, status_id')
+    .is('excluded_at', null)
     .gte('date_created', range.startUtcIso)
     .lt('date_created', range.endUtcIso)
     .range(0, 9999)
@@ -1203,6 +1206,7 @@ export async function getSpeedToLeadCohort(
     const { data: reopt, error: reErr } = await sb
       .from('close_leads' as never)
       .select('close_id, display_name, date_created, status_id, latest_opt_in_date')
+      .is('excluded_at', null)
       .lt('date_first_opted_in', range.startEtDate)
       .gte('latest_opt_in_date', range.startUtcIso)
       .lt('latest_opt_in_date', range.endUtcIso)
