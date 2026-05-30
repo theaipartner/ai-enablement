@@ -130,13 +130,15 @@ def parse_setter_triage(record: dict[str, Any]) -> dict[str, Any] | None:
         "lead_id": _to_str(fields.get("Lead ID")),
         "prospect_name": _to_str(fields.get("Prospect Name")),
         "outcome": _to_str(fields.get("Outcome")),
-        # Legacy single-field disposition (kept for backward compat with
-        # forms filed before the 2026-05-27 Airtable redesign — Aman's
-        # earlier submissions reference this only).
+        # CURRENT disposition (form redesign ~2026-05-26): ONE form with
+        # a Form Type discriminator + a shared Call Status outcome.
+        "form_type": _to_str(fields.get("Form Type")),
+        "call_status": _to_str(fields.get("Call Status")),
+        # Legacy fields, no longer populated on the Airtable side after
+        # the 2026-05-26 redesign (kept for pre-redesign rows): the older
+        # single Booking Status, and the 2026-05-27 Setter/Closer Status
+        # split that Call Status now supersedes.
         "booking_status": _to_str(fields.get("Booking Status")),
-        # New split disposition (introduced 2026-05-27). Setter-filled
-        # forms populate Setter Status; closer-filled forms populate
-        # Closer Status. Mutually exclusive on a single record.
         "setter_status": _to_str(fields.get("Setter Status")),
         "closer_status": _to_str(fields.get("Closer Status")),
         "showed_pct": _to_bool(fields.get("Showed %")),
