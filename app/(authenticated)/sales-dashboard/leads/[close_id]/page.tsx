@@ -29,9 +29,21 @@ export default async function LeadDetailPage({
           <Link
             href="/sales-dashboard/leads"
             className="geg-mono"
-            style={{ fontSize: 11, letterSpacing: '0.06em', color: 'var(--color-geg-text-3)', textDecoration: 'none' }}
+            style={{
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              color: 'var(--color-geg-text-2)',
+              textDecoration: 'none',
+              border: '1px solid var(--color-geg-border)',
+              borderRadius: 6,
+              padding: '6px 12px',
+              background: 'var(--color-geg-bg-elev)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
           >
-            ← all leads
+            ← Back to leads
           </Link>
         }
       />
