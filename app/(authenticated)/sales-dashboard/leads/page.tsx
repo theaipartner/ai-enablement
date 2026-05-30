@@ -228,8 +228,17 @@ function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
       <span><OptInBadge type={r.optInType} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
       <span><QualifiedTag q={r.qualified} /></span>
-      <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.04em', color: r.directBooked ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)' }}>
-        {r.directBooked ? 'Yes' : 'No'}
+      <span>
+        {r.directBooked ? (
+          <span
+            className="geg-mono"
+            style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-pos)', border: '1px solid var(--color-geg-pos)', borderRadius: 4, padding: '1px 5px' }}
+          >
+            direct
+          </span>
+        ) : (
+          <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
+        )}
       </span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
