@@ -171,6 +171,35 @@ ORDER BY day DESC;
 -- a categorization mechanism, query call_notes_lost + categorize.
 ```
 
+## New-form columns (migration 0062, 2026-05-30)
+
+The Full Closer Report form was redesigned around a single **`Call Outcome`**
+disposition with conditional sub-fields, distinguished from the legacy form by
+**`Form Type`** (`New` | `Old`). These columns populate only on new-form rows
+(old rows leave them NULL and keep using `showed`/`closed`):
+
+- `form_type` — `New` | `Old`. Filter to `New` for the redesigned form.
+- `call_outcome` — the single disposition. 9 values: `Call Rescheduled`,
+  `Call Cancelled`, `Client Ghosted (no show)`, `Deposit`, `Short-Term Follow Up`,
+  `Long-Term Follow`, `Digital College Closed`, `High Ticket Closed`, `DQ / Bad Fit`.
+  Dashboard derives showed/closed/rescheduled from this: **closed** = `High Ticket
+  Closed` | `Digital College Closed`; **showed** = those + `Deposit` + the two
+  Follow Ups + `DQ / Bad Fit`; `Client Ghosted (no show)` = not showed; `Call
+  Rescheduled` = its own bucket; `Call Cancelled` = not showed. Deposit counts as
+  showed but NOT closed (its own slot).
+- `cancel_reason` — `Closer cancelled` | `Prospect un-interested` (Call Cancelled).
+- `digital_college_closed` (Yes/No); `dc_plans` (text[]) — Base/Wix × Monthly/Yearly.
+- `normal_plan` (`$4k x 2` / `$3k x 3` / `$2k x 4`); `payment_type` (`Deposit` |
+  `Paid In Full`); `payments_same_date`; `creative_plan_months`.
+- `deposit_topup_amount`, `contract_amount_to_send` (numeric).
+- `follow_up_date`, `likely_start_date` (date).
+- `payment_1..5_amount` (numeric) + `payment_1..5_date` (date) — installment schedule.
+
+Promotion is partial by design — the long tail (partner info, age, VSL, the
+financing-typo variants, duplicate date fields) stays in `fields_raw`, still fully
+ingested and promotable later. Parser: `parse_full_closer` in
+`ingestion/airtable/parser.py`.
+
 ## Operational notes
 
 - Same HTTP/2 ConnectionTerminated mitigation as Setter Triage — `_upsert_batch` retries once with a fresh supabase client.

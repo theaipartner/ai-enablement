@@ -262,6 +262,45 @@ def parse_full_closer(
         # Provisional derived attribution (flagged in schema comment)
         "is_setter_led": is_setter_led,
 
+        # New-form (2026-05-30 redesign) disposition + plan/payment fields.
+        # Old rows leave these None. Form Type discriminates New vs Old;
+        # Call Outcome is the single disposition the dashboard derives
+        # showed/closed/rescheduled from. Everything else here is the
+        # conditional sub-fields per outcome.
+        "form_type": _to_str(fields.get("Form Type")),
+        "call_outcome": _to_str(fields.get("Call Outcome")),
+        "cancel_reason": _to_str(fields.get("Reason")),
+        "digital_college_closed": _to_str(fields.get("Digital College Closed")),
+        "dc_plans": _to_str_array(
+            fields.get("What plan did we get them on? (select multiple)"),
+        ),
+        "normal_plan": _to_str(fields.get("Select normal plan")),
+        "payment_type": _to_str(fields.get("What type of payment was it?")),
+        "payments_same_date": _to_str(
+            fields.get("Will all payment be made on same date of each month?"),
+        ),
+        "creative_plan_months": _to_str(
+            fields.get("How many monthly payments will there be? (creative plan)"),
+        ),
+        "deposit_topup_amount": _to_numeric(
+            fields.get("How much to collect on top of this deposit to get them started?"),
+        ),
+        "contract_amount_to_send": _to_numeric(
+            fields.get("What contract amount should be sent to the client?"),
+        ),
+        "follow_up_date": _to_iso_date(fields.get("Follow Up Date?")),
+        "likely_start_date": _to_iso_date(fields.get("What's their likely start date?")),
+        "payment_1_amount": _to_numeric(fields.get("Amount of 1st payment?")),
+        "payment_1_date": _to_iso_date(fields.get("Date of 1st payment?")),
+        "payment_2_amount": _to_numeric(fields.get("Amount of 2nd payment?")),
+        "payment_2_date": _to_iso_date(fields.get("Date of 2nd payment?")),
+        "payment_3_amount": _to_numeric(fields.get("Amount of 3rd payment?")),
+        "payment_3_date": _to_iso_date(fields.get("Date of 3rd payment?")),
+        "payment_4_amount": _to_numeric(fields.get("Amount of 4th payment?")),
+        "payment_4_date": _to_iso_date(fields.get("Date of 4th payment?")),
+        "payment_5_amount": _to_numeric(fields.get("Amount of 5th payment?")),
+        "payment_5_date": _to_iso_date(fields.get("Date of 5th payment?")),
+
         # Catch-all — SOURCE OF TRUTH for every field, including:
         #   - the 5 aggregation-layer-pending ambiguities
         #   - the 10 payment-installment fields
