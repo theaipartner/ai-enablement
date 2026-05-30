@@ -387,6 +387,43 @@ drill, or the `/leads` roster (the per-rep drill rows were repointed from
 The standalone `/sales-dashboard/calls` feed + its `/calls/[id]` detail
 page are intentionally left untouched (eventual retirement, not now).
 
+## Calendly → Close lead matching via utm_term (2026-05-30)
+
+Calendly bookings now carry a per-lead token in `raw_payload.tracking.utm_term`
+(format `aaid_<uuid>`), the same value mirrored onto `close_leads.utm_term`.
+`lib/db/calendly-lead-match.ts` (`buildCalendlyLeadResolver`) builds a
+`utm_term → close_id` map and is used as the **primary** match key ahead of
+email/phone/name in the direct-booking + closer-drill matchers.
+
+**Critical safety rule — unique mapping only.** `utm_term` is overloaded:
+most leads carry a generic ad-targeting term (`Broad` = 2,591 leads, dated
+campaign labels, …) shared across thousands of leads. The resolver keeps
+ONLY terms that map to exactly one Close lead; shared terms resolve to
+`null` and the matcher falls back to email/phone/name. This is why the
+guard is non-negotiable — matching on a shared term would mis-attribute a
+booking to a random one of thousands of leads.
+
+- **Coverage:** ~20% of mirrored bookings resolve via the token today
+  (299/1458 carry a `utm_term`; 276 resolve uniquely). Grows as new
+  bookings carry it. Older / direct self-books with no token fall back to
+  identity matching exactly as before — the change is purely additive.
+- **Correctness:** spot-checked 276 resolved bookings — 99% share a name
+  token with the resolved lead (the rest are junk/test bookings).
+- **Wired into** (`lead_id` first, then email/phone/name):
+  - `lib/db/leads.ts` — `directBooked` (the `/leads` "Direct bookings" count).
+  - `lib/db/funnel-closing.ts` — `leadKeyOf` (event→lead collapse),
+    `buildBookedByResolver` (setter attribution via triage `lead_id`), and
+    `matchForm` (event→closer-form via the form's `lead_id`).
+- **Not yet wired:** the Python scripts (`match_closer_funnel_bookings.py`,
+  `build_fresh_bookings_tabs.py`) still use identity-only matching.
+
+**To get full coverage** (every lead with a unique token): the booking-link /
+funnel setup must inject a per-lead value on every link — ideally the Close
+`lead_id` (`lead_xxx`, guaranteed unique) in a dedicated param rather than
+overloading `utm_term`. That's a Close/Calendly config change (Zain), not a
+code change. The `aaid_` tokens are already unique per lead (1,056/1,058);
+the 2 collisions are same-day duplicate leads.
+
 ## Playwright verifier — sales v2
 
 `scripts/verify-sales-dashboard-v2-preview.ts`. Hits 6 routes

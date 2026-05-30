@@ -3,6 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
+import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
 //
@@ -443,10 +444,12 @@ function displayHost(host: string | null): string {
   return host.toLowerCase().trim() === 'success ap' ? 'Ghost' : host
 }
 
-// Lead identity for collapsing events to one row. Email is the strong key;
-// fall back to the (normalized) name; finally to the event URI so two
+// Lead identity for collapsing events to one row. The Close lead_id
+// (resolved from the booking's utm_term token) is the strongest key;
+// then email; then the (normalized) name; finally the event URI so two
 // genuinely-anonymous bookings never merge into one phantom lead.
-function leadKeyOf(email: string | null, name: string | null, eventUri: string): string {
+function leadKeyOf(leadId: string | null, email: string | null, name: string | null, eventUri: string): string {
+  if (leadId) return `l:${leadId}`
   const e = (email ?? '').toLowerCase().trim()
   if (e) return `e:${e}`
   const n = (name ?? '').toLowerCase().trim()
@@ -511,7 +514,7 @@ function normName(n: string | null | undefined): string | null {
   return v || null
 }
 
-type BookedByInvitee = { name: string | null; email: string | null; phones: string[] }
+type BookedByInvitee = { name: string | null; email: string | null; phones: string[]; leadId: string | null }
 
 // Builds a closure that resolves a Calendly event's "booked by" setter.
 // Pulls triage forms with a confirmed call date in/around the range,
@@ -597,6 +600,9 @@ async function buildBookedByResolver(
   // the lookup returns "Missing" instead of guessing wrong — names are
   // the weakest signal (Calendly gives first-name only) and contacts
   // are currently empty so name carries most matches today.
+  // Lead-id key (etDate|close_id) — the strong one, since the triage form
+  // carries lead_id directly. Tried before email/phone/name below.
+  const byLeadId = new Map<string, string>()
   const byEmail = new Map<string, string>()
   const byPhone = new Map<string, string>()
   const byName = new Map<string, string | null>()
@@ -612,6 +618,7 @@ async function buildBookedByResolver(
     if (!t.confirmed_call_date_time) continue
     const setter = t.setter_names[0]
     const etDate = etDateString(t.confirmed_call_date_time)
+    if (t.lead_id) byLeadId.set(`${etDate}|${t.lead_id}`, setter)
     const keys = t.lead_id ? leadKeys.get(t.lead_id) : undefined
     for (const e of keys?.emails ?? []) byEmail.set(`${etDate}|${e}`, setter)
     for (const p of keys?.phones ?? []) byPhone.set(`${etDate}|${p}`, setter)
@@ -629,6 +636,10 @@ async function buildBookedByResolver(
 
   return (eventStartIso: string, invitee: BookedByInvitee): string | null => {
     const etDate = etDateString(eventStartIso)
+    if (invitee.leadId) {
+      const hit = byLeadId.get(`${etDate}|${invitee.leadId}`)
+      if (hit) return hit
+    }
     const email = invitee.email ? invitee.email.toLowerCase().trim() : null
     if (email) {
       const hit = byEmail.get(`${etDate}|${email}`)
@@ -656,7 +667,7 @@ type ValidEvent = {
   host: string | null
   status: string | null
   callType: CloserCallType
-  invitee: { name: string | null; email: string | null; phones: string[]; noShow: boolean }
+  invitee: { name: string | null; email: string | null; phones: string[]; noShow: boolean; leadId: string | null }
   inRange: boolean
   // A booking is "dead" (not a live slot) if it was canceled OR no-showed.
   // Drake 2026-05-29: a no-show counts the same as a cancel for deciding
@@ -712,9 +723,11 @@ export async function getClosingScheduledList(
   }
 
   // 2. Invitees for those events (identity for lead-keying + form /
-  //    booked-by match). Phone lives in raw_payload.
+  //    booked-by match). Phone lives in raw_payload; the utm_term token
+  //    resolves the Close lead_id (the strong key, tried before identity).
+  const leadResolver = await buildCalendlyLeadResolver(sb)
   const eventUris = typed.map((t) => t.e.uri)
-  const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[]; noShow: boolean }>()
+  const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[]; noShow: boolean; leadId: string | null }>()
   for (let i = 0; i < eventUris.length; i += 200) {
     const chunk = eventUris.slice(i, i + 200)
     const { data, error } = await sb
@@ -730,6 +743,7 @@ export async function getClosingScheduledList(
       raw_payload: {
         text_reminder_number?: string | null
         questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
+        tracking?: { utm_term?: string | null } | null
       } | null
     }>) {
       if (!inviteeByEvent.has(r.event_uri)) {
@@ -744,7 +758,8 @@ export async function getClosingScheduledList(
         const phones = rawPhones
           .map(normalizePhone)
           .filter((p): p is string => p !== null)
-        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones, noShow: r.no_show === true })
+        const leadId = leadResolver(inviteeUtmTerm(r.raw_payload))
+        inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones, noShow: r.no_show === true, leadId })
       }
     }
   }
@@ -761,7 +776,7 @@ export async function getClosingScheduledList(
   const { data: formData, error: formErr } = await sb
     .from('airtable_full_closer_report' as never)
     .select(
-      'record_id, prospect_name, date_time_of_call, showed, closed, ' +
+      'record_id, lead_id, prospect_name, date_time_of_call, showed, closed, ' +
       'amount_paid_today_currency, payment_plan_type, closer_names, setter_names',
     )
     .gte('date_time_of_call', widenStartIso)
@@ -769,6 +784,7 @@ export async function getClosingScheduledList(
   if (formErr) throw new Error(`airtable_full_closer_report read failed: ${formErr.message}`)
   const forms = (formData ?? []) as unknown as Array<{
     record_id: string
+    lead_id: string | null
     prospect_name: string | null
     date_time_of_call: string | null
     showed: string | null
@@ -780,7 +796,13 @@ export async function getClosingScheduledList(
   }>
 
   const formsByName = new Map<string, typeof forms>()
+  const formsByLeadId = new Map<string, typeof forms>()
   for (const f of forms) {
+    if (f.lead_id) {
+      const arr = formsByLeadId.get(f.lead_id) ?? []
+      arr.push(f)
+      formsByLeadId.set(f.lead_id, arr)
+    }
     if (!f.prospect_name) continue
     const key = f.prospect_name.toLowerCase().trim()
     const arr = formsByName.get(key) ?? []
@@ -788,15 +810,12 @@ export async function getClosingScheduledList(
     formsByName.set(key, arr)
   }
 
-  function matchForm(
-    eventStartIso: string,
-    inviteeName: string | null,
+  // Pick the closer form closest in time to the event (within the ±48h
+  // window) from a candidate list.
+  function closestForm(
+    candidates: typeof forms,
+    eventMs: number,
   ): (typeof forms)[number] | null {
-    if (!inviteeName) return null
-    const key = inviteeName.toLowerCase().trim()
-    const candidates = formsByName.get(key)
-    if (!candidates) return null
-    const eventMs = new Date(eventStartIso).getTime()
     let best: (typeof forms)[number] | null = null
     let bestDelta = Number.POSITIVE_INFINITY
     for (const c of candidates) {
@@ -810,12 +829,34 @@ export async function getClosingScheduledList(
     return best
   }
 
+  // Match a Calendly event to its closer form. Lead_id (from the booking's
+  // utm_term token) is tried first; falls back to prospect-name. Both are
+  // disambiguated by the ±48h time window.
+  function matchForm(
+    eventStartIso: string,
+    leadId: string | null,
+    inviteeName: string | null,
+  ): (typeof forms)[number] | null {
+    const eventMs = new Date(eventStartIso).getTime()
+    if (leadId) {
+      const byLead = formsByLeadId.get(leadId)
+      if (byLead) {
+        const hit = closestForm(byLead, eventMs)
+        if (hit) return hit
+      }
+    }
+    if (!inviteeName) return null
+    const candidates = formsByName.get(inviteeName.toLowerCase().trim())
+    if (!candidates) return null
+    return closestForm(candidates, eventMs)
+  }
+
   // 4. Group valid events by LEAD (across all hosts / both link types).
   const eventsByLead = new Map<string, ValidEvent[]>()
   for (const { e, callType } of typed) {
-    const invitee = inviteeByEvent.get(e.uri) ?? { name: null, email: null, phones: [], noShow: false }
+    const invitee = inviteeByEvent.get(e.uri) ?? { name: null, email: null, phones: [], noShow: false, leadId: null }
     const inRange = e.start_time >= range.startUtcIso && e.start_time < range.endUtcIso
-    const key = leadKeyOf(invitee.email, invitee.name, e.uri)
+    const key = leadKeyOf(invitee.leadId, invitee.email, invitee.name, e.uri)
     const arr = eventsByLead.get(key) ?? []
     arr.push({
       uri: e.uri,
@@ -868,7 +909,7 @@ export async function getClosingScheduledList(
     const invitee = rep.invitee
 
     // Outcomes only for live leads — a cancelled lead has no closer outcome.
-    const form = cancelled ? null : matchForm(rep.startTime, invitee.name)
+    const form = cancelled ? null : matchForm(rep.startTime, invitee.leadId, invitee.name)
     const showed = form ? normalizeShowed(form.showed) : null
     const closed = form ? normalizeClosed(form.closed) : null
     const upfront =
