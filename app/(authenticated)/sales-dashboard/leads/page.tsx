@@ -4,6 +4,8 @@ import { getLeadsForRange, type LeadRow, type Qualification, type BookingType } 
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
+import { searchLeads, type LeadSearchResult } from '@/lib/db/lead-search'
+import { LeadSearch } from './lead-search'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { DeleteLeadButton } from './delete-lead-button'
@@ -24,8 +26,20 @@ type View = 'all' | 'unique'
 export default async function SalesDashboardLeadsPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[]; view?: string | string[] }
+  searchParams?: { start?: string | string[]; end?: string | string[]; view?: string | string[]; q?: string | string[] }
 }) {
+  const q = (Array.isArray(searchParams?.q) ? searchParams?.q[0] : searchParams?.q) ?? ''
+  if (q.trim().length >= 2) {
+    const results = await searchLeads(q)
+    return (
+      <div>
+        <HeaderBand eyebrow="SALES · LEADS" title="Leads." />
+        <LeadSearch initial={q} />
+        <SearchResults results={results} query={q.trim()} />
+      </div>
+    )
+  }
+
   const start = parseEtDateString(searchParams?.start)
   const end = parseEtDateString(searchParams?.end)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
@@ -75,6 +89,8 @@ export default async function SalesDashboardLeadsPage({
         }
       />
 
+      <LeadSearch initial="" />
+
       <FunnelHeader c={c} view={view} searchParams={searchParams} />
 
       <BookingFunnels c={c} />
@@ -96,6 +112,39 @@ export default async function SalesDashboardLeadsPage({
 function pickView(raw: string | string[] | undefined): View {
   const v = Array.isArray(raw) ? raw[0] : raw
   return v === 'unique' ? 'unique' : 'all'
+}
+
+// Global lead search results (any lead, not just the window's cohort). Each
+// links to the per-lead page.
+function SearchResults({ results, query }: { results: LeadSearchResult[]; query: string }) {
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 8 }}>
+        {results.length} {results.length === 1 ? 'match' : 'matches'} for &ldquo;{query}&rdquo;
+      </div>
+      {results.length === 0 ? (
+        <div className="geg-mono" style={{ padding: '28px 0', textAlign: 'center', fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
+          No leads match.
+        </div>
+      ) : (
+        results.map((r) => (
+          <Link
+            key={r.leadId}
+            href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`}
+            style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr', gap: 10, padding: '10px 8px', borderBottom: '1px dashed var(--color-geg-border)', textDecoration: 'none', color: 'inherit', alignItems: 'center' }}
+          >
+            <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text)' }}>
+              {r.name ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
+            </span>
+            <span><QualifiedTag q={r.qualified} /></span>
+            <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)', letterSpacing: '0.04em' }}>
+              {r.dateCreated ? formatEt(r.dateCreated) : '—'}
+            </span>
+          </Link>
+        ))
+      )}
+    </div>
+  )
 }
 
 // Build a /sales-dashboard/leads href preserving the date range + setting view.
