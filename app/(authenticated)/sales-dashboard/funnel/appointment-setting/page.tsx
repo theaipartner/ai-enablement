@@ -420,7 +420,7 @@ function CallActivityStacked({
         from the triage form <code>Call Status</code> field, routed by{' '}
         <code>Form Type</code> — Setter Triage Form (HT Book / DC Book / Setter
         pipeline / DQ) into the setter list, Closer Triage Form (Confirmed /
-        Confirmed new time / Downsold / Setter pipeline / DQ) into the closer
+        Rescheduled / Downsold / Setter pipeline / DQ) into the closer
         list. Forms predating the 2026-05-26 redesign (no Form Type) show as NA
         in the drill. Speed-to-lead = avg of the earliest call each rep made to
         each lead, minus lead creation (24h cap on outliers).

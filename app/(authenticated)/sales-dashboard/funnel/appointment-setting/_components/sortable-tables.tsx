@@ -772,7 +772,7 @@ export function PerRepCallActivityTable({
           ) : (
             <>
               <SortableHeader label="Confirmed" sortKey="confirmedBooks" state={state} onToggle={onToggle} />
-              <SortableHeader label="Confirmed new time" sortKey="confirmedNewTime" state={state} onToggle={onToggle} />
+              <SortableHeader label="Rescheduled" sortKey="confirmedNewTime" state={state} onToggle={onToggle} />
               <SortableHeader label="Downsold" sortKey="downsellsOnCall" state={state} onToggle={onToggle} />
               <SortableHeader label="Setter pipeline" sortKey="followUps" state={state} onToggle={onToggle} />
               <SortableHeader label="DQ" sortKey="dqs" state={state} onToggle={onToggle} />
