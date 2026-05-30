@@ -136,30 +136,6 @@ function Num({ value, accent }: { value: string; accent?: boolean }) {
   )
 }
 
-// Reconfirms cell — count of triage forms this rep filed with
-// outcome = "Re-confirm" (the call confirmed a lead's existing
-// booking). Driven entirely by the form's booking_status. Muted
-// faint when 0 so it doesn't compete with the active numeric columns.
-function ReconfirmsCell({ reconfirms }: { reconfirms: number }) {
-  return (
-    <span
-      title="Triage forms with outcome = Re-confirm — the call confirmed a lead's existing booking. Attributed to whoever filled the form."
-      style={{ display: 'inline-block', textAlign: 'right' }}
-    >
-      <span
-        className="geg-numeric-serif"
-        style={{
-          fontSize: 14,
-          color: reconfirms === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
-          letterSpacing: '-0.01em',
-        }}
-      >
-        {reconfirms}
-      </span>
-    </span>
-  )
-}
-
 // Connected-count cell with an inline connect-rate decoration on the
 // left. Rendered as `→{pct}% {count}` inside the existing Connected
 // column — no column widening, no new column. The arrow points from
@@ -638,25 +614,24 @@ type RepSortKey =
   // setter-only
   | 'htBookings'
   | 'dcBookings'
-  | 'followUps'
-  | 'reconfirms'
   // closer-only
   | 'confirmedBooks'
-  | 'reschedules'
+  | 'confirmedNewTime'
   | 'downsellsOnCall'
-  | 'handToSetter'
-  // shared
+  // shared (both forms offer these)
+  | 'followUps'
   | 'dqs'
   | 'missing'
 
 // Setter column order: Rep | Dials | Connected | HT Book | DC Book |
-// Follow-up | DQs | Reconfirms | Missing. Reconfirms is rare so it's
-// pushed near the end, per Drake.
-const SETTER_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.8fr 0.7fr 0.85fr 0.8fr'
+// Setter pipeline | DQ | Missing. (Call Status options on the Setter
+// Triage Form; 2026-05-26 redesign — no more Reconfirm.)
+const SETTER_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.95fr 0.7fr 0.8fr'
 
-// Closer column order: Rep | Dials | Connected | Confirmed Book |
-// Reschedule | Downsell | Hand down | DQs | Missing.
-const CLOSER_COLS = '1.5fr 0.7fr 0.85fr 0.85fr 0.8fr 0.7fr 0.85fr 0.7fr 0.8fr'
+// Closer column order: Rep | Dials | Connected | Confirmed | Confirmed
+// new time | Downsold | Setter pipeline | DQ | Missing. (Call Status
+// options on the Closer Triage Form.)
+const CLOSER_COLS = '1.5fr 0.7fr 0.85fr 0.8fr 0.95fr 0.8fr 0.95fr 0.7fr 0.8fr'
 
 export function PerRepCallActivityTable({
   label,
@@ -683,11 +658,9 @@ export function PerRepCallActivityTable({
         case 'htBookings': return r.htBookings
         case 'dcBookings': return r.dcBookings
         case 'followUps': return r.followUps
-        case 'reconfirms': return r.reconfirms
         case 'confirmedBooks': return r.confirmedBooks
-        case 'reschedules': return r.reschedules
+        case 'confirmedNewTime': return r.confirmedNewTime
         case 'downsellsOnCall': return r.downsellsOnCall
-        case 'handToSetter': return r.handToSetter
         case 'dqs': return r.dqs
         case 'missing': return r.missing
         default: return null
@@ -732,17 +705,16 @@ export function PerRepCallActivityTable({
             <>
               <SortableHeader label="HT Book" sortKey="htBookings" state={state} onToggle={onToggle} />
               <SortableHeader label="DC Book" sortKey="dcBookings" state={state} onToggle={onToggle} />
-              <SortableHeader label="Follow-up" sortKey="followUps" state={state} onToggle={onToggle} />
-              <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
-              <SortableHeader label="Reconfirms" sortKey="reconfirms" state={state} onToggle={onToggle} />
+              <SortableHeader label="Setter pipeline" sortKey="followUps" state={state} onToggle={onToggle} />
+              <SortableHeader label="DQ" sortKey="dqs" state={state} onToggle={onToggle} />
             </>
           ) : (
             <>
-              <SortableHeader label="Confirmed Book" sortKey="confirmedBooks" state={state} onToggle={onToggle} />
-              <SortableHeader label="Reschedule" sortKey="reschedules" state={state} onToggle={onToggle} />
-              <SortableHeader label="Downsell" sortKey="downsellsOnCall" state={state} onToggle={onToggle} />
-              <SortableHeader label="Hand down" sortKey="handToSetter" state={state} onToggle={onToggle} />
-              <SortableHeader label="DQs" sortKey="dqs" state={state} onToggle={onToggle} />
+              <SortableHeader label="Confirmed" sortKey="confirmedBooks" state={state} onToggle={onToggle} />
+              <SortableHeader label="Confirmed new time" sortKey="confirmedNewTime" state={state} onToggle={onToggle} />
+              <SortableHeader label="Downsold" sortKey="downsellsOnCall" state={state} onToggle={onToggle} />
+              <SortableHeader label="Setter pipeline" sortKey="followUps" state={state} onToggle={onToggle} />
+              <SortableHeader label="DQ" sortKey="dqs" state={state} onToggle={onToggle} />
             </>
           )}
           <SortableHeader label="Missing" sortKey="missing" state={state} onToggle={onToggle} />
@@ -761,14 +733,13 @@ export function PerRepCallActivityTable({
               <Num value={aggregate.dcBookings.toString()} />
               <Num value={aggregate.followUps.toString()} />
               <Num value={aggregate.dqs.toString()} />
-              <ReconfirmsCell reconfirms={aggregate.reconfirms} />
             </>
           ) : (
             <>
               <Num value={aggregate.confirmedBooks.toString()} />
-              <Num value={aggregate.reschedules.toString()} />
+              <Num value={aggregate.confirmedNewTime.toString()} />
               <Num value={aggregate.downsellsOnCall.toString()} />
-              <Num value={aggregate.handToSetter.toString()} />
+              <Num value={aggregate.followUps.toString()} />
               <Num value={aggregate.dqs.toString()} />
             </>
           )}
@@ -822,14 +793,13 @@ export function PerRepCallActivityTable({
                           <Num value={r.dcBookings.toString()} />
                           <Num value={r.followUps.toString()} />
                           <Num value={r.dqs.toString()} />
-                          <ReconfirmsCell reconfirms={r.reconfirms} />
                         </>
                       ) : (
                         <>
                           <Num value={r.confirmedBooks.toString()} />
-                          <Num value={r.reschedules.toString()} />
+                          <Num value={r.confirmedNewTime.toString()} />
                           <Num value={r.downsellsOnCall.toString()} />
-                          <Num value={r.handToSetter.toString()} />
+                          <Num value={r.followUps.toString()} />
                           <Num value={r.dqs.toString()} />
                         </>
                       )}

@@ -1492,22 +1492,20 @@ export type CallActivityRepRow = {
   // underlying call was <=90s (setter still filed an EOC, real
   // engagement). Drake 2026-05-27.
   totalConnected: number
-  // ── Setter-side outcomes (populated from Airtable `setter_status`) ──
-  // For closer rows these stay 0; for setter rows they hold per-rep
-  // counts. Drake 2026-05-27: forms predating the Setter Status field
-  // contribute nothing here — those rows render as "NA" in the drill.
-  htBookings: number     // 'Confirmed HT Booking'
-  dcBookings: number     // 'Confirmed DC Booking'
-  followUps: number      // 'Follow up'
-  reconfirms: number     // 'Reconfirm' (rare; last column)
-  // ── Closer-side outcomes (populated from Airtable `closer_status`) ──
-  // For setter rows these stay 0.
-  confirmedBooks: number    // 'Confirmed Book'
-  reschedules: number       // 'Reschedule'
-  downsellsOnCall: number   // 'Downsell (on call)'
-  handToSetter: number      // 'Hand to Setter list'
-  // ── Shared ──
-  dqs: number               // 'DQ' on either Setter Status or Closer Status
+  // ── Outcome counts from Airtable `call_status`, routed by `form_type`
+  //    (Setter Triage Form → setter list, Closer Triage Form → closer
+  //    list — Drake 2026-05-29). Each variant's UI shows only its own
+  //    columns; the off-variant fields stay 0.
+  // Setter form columns: htBookings, dcBookings, followUps, dqs.
+  htBookings: number        // 'High Ticket booking'
+  dcBookings: number        // 'Digital College booking'
+  followUps: number         // 'Setter pipeline / Follow up' (+ 'Unresponsive – Setter Handover', merged per Drake)
+  // Closer form columns: confirmedBooks, confirmedNewTime, downsellsOnCall, followUps, dqs.
+  confirmedBooks: number    // 'Confirmed Booking'
+  confirmedNewTime: number  // 'Confirmed Booking – New Time'
+  downsellsOnCall: number   // 'Downsold'
+  // Shared:
+  dqs: number               // 'DQ / Un-interested'
   // Sessions with no EOC form filed — the engagement proxy fired
   // (over-90s call(s) to the same lead in 3h) but no form matched
   // any call in the session. max(0, sessions - matchedSessions) so
@@ -1669,25 +1667,24 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     htBookings: number
     dcBookings: number
     followUps: number
-    reconfirms: number
     confirmedBooks: number
-    reschedules: number
+    confirmedNewTime: number
     downsellsOnCall: number
-    handToSetter: number
     dqs: number
   }
   const newOutcomes = (): Outcomes => ({
     htBookings: 0,
     dcBookings: 0,
     followUps: 0,
-    reconfirms: 0,
     confirmedBooks: 0,
-    reschedules: 0,
+    confirmedNewTime: 0,
     downsellsOnCall: 0,
-    handToSetter: 0,
     dqs: 0,
   })
-  const outcomesByUser = new Map<string, Outcomes>()
+  // Two outcome maps, routed by Form Type: Setter Triage Form → setter,
+  // Closer Triage Form → closer. A rep filing both appears in both lists.
+  const setterOutcomesByUser = new Map<string, Outcomes>()
+  const closerOutcomesByUser = new Map<string, Outcomes>()
   // Per-rep set of session keys that at least one form matched. Used
   // by the "missing" calc — every session without an entry here is
   // missing its EOC. (Sessions, not calls, because multiple chained
@@ -1702,9 +1699,8 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     type FormRow = {
       record_id: string
       lead_id: string | null
-      booking_status: string | null    // legacy field (pre 2026-05-27)
-      setter_status: string | null     // new: "Confirmed HT Booking" etc.
-      closer_status: string | null     // new: "Confirmed Book" etc.
+      form_type: string | null         // 'Setter Triage Form' | 'Closer Triage Form'
+      call_status: string | null       // the shared outcome (2026-05-26 redesign)
       setter_names: string[] | null
       setter_record_ids: string[] | null
       event_date_time: string | null
@@ -1717,7 +1713,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     for (;;) {
       const { data: page, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, booking_status, setter_status, closer_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, form_type, call_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStartIso)
         .lt('airtable_created_at', formWindowEndIso)
         .range(from, from + 999)
@@ -1776,19 +1772,19 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       // owner only, matching dedupe-by-lead semantics elsewhere).
       const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
       if (!uid) return
-      // Pick the role-appropriate classifier. Setter rows that lack
-      // setter_status (pre-redesign Aman forms) classify to
-      // 'unclassified' and are skipped — they show "NA" in the drill
-      // but contribute nothing to the per-rep counters.
-      const role = resolveRole(uid, closerUsers, setterUsers)
-      if (!role) return
-      const bucket =
-        role === 'setter'
-          ? classifySetterStatus(r.setter_status)
-          : classifyCloserStatus(r.closer_status)
+      // Route the outcome by Form Type (Drake 2026-05-29): Setter Triage
+      // Form → setter list, Closer Triage Form → closer list. Rows with
+      // no form_type (pre-2026-05-26 old-form transition entries) are
+      // skipped here — Drake reconciles those manually.
+      const ft = (r.form_type ?? '').toLowerCase()
+      const isCloserForm = ft.includes('closer')
+      const isSetterForm = ft.includes('setter')
+      if (!isCloserForm && !isSetterForm) return
+      const bucket = classifyCallStatus(r.call_status)
       if (bucket === 'unclassified') return
-      if (!outcomesByUser.has(uid)) outcomesByUser.set(uid, newOutcomes())
-      outcomesByUser.get(uid)![bucket]++
+      const target = isCloserForm ? closerOutcomesByUser : setterOutcomesByUser
+      if (!target.has(uid)) target.set(uid, newOutcomes())
+      target.get(uid)![bucket]++
       if (m?.matchedCallId) {
         const sessionKey = sessionKeyByCallIdPerUser.get(uid)?.get(m.matchedCallId)
         if (sessionKey) {
@@ -1812,22 +1808,16 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
   }
 
-  // Compose per-rep rows.
+  // Compose per-rep rows. Volume/sessions are per-rep; outcomes come
+  // from the form-type-routed maps.
   const setters: CallActivityRepRow[] = []
   const closers: CallActivityRepRow[] = []
-  const allUserIds = new Set<string>([
-    ...Array.from(volumeByUser.keys()),
-    ...Array.from(outcomesByUser.keys()),
-  ])
-  allUserIds.forEach((userId) => {
-    const role = resolveRole(userId, closerUsers, setterUsers)
-    if (!role) return
+  const buildRow = (userId: string, o: Outcomes): CallActivityRepRow => {
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
-    const o = outcomesByUser.get(userId) ?? newOutcomes()
     const sessions = sessionCountByUser.get(userId) ?? 0
     const matchedSessions = matchedSessionsByUser.get(userId)?.size ?? 0
     const formOnly = formOnlyByUser.get(userId) ?? 0
-    const row: CallActivityRepRow = {
+    return {
       userId,
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
@@ -1836,17 +1826,27 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       htBookings: o.htBookings,
       dcBookings: o.dcBookings,
       followUps: o.followUps,
-      reconfirms: o.reconfirms,
       confirmedBooks: o.confirmedBooks,
-      reschedules: o.reschedules,
+      confirmedNewTime: o.confirmedNewTime,
       downsellsOnCall: o.downsellsOnCall,
-      handToSetter: o.handToSetter,
       dqs: o.dqs,
       missing: Math.max(0, sessions - matchedSessions),
     }
-    if (role === 'setter') setters.push(row)
-    else closers.push(row)
-  })
+  }
+  // Setter list = reps with Setter Triage Form outcomes; closer list =
+  // reps with Closer Triage Form outcomes. Reps with call volume but no
+  // forms fall back to resolveRole (empty outcomes). A rep filing both
+  // form types appears once in each list with the matching outcomes.
+  const setterUserIds = new Set<string>(setterOutcomesByUser.keys())
+  const closerUserIds = new Set<string>(closerOutcomesByUser.keys())
+  for (const userId of Array.from(volumeByUser.keys())) {
+    if (setterUserIds.has(userId) || closerUserIds.has(userId)) continue
+    const role = resolveRole(userId, closerUsers, setterUsers)
+    if (role === 'setter') setterUserIds.add(userId)
+    else if (role === 'closer') closerUserIds.add(userId)
+  }
+  setterUserIds.forEach((uid) => setters.push(buildRow(uid, setterOutcomesByUser.get(uid) ?? newOutcomes())))
+  closerUserIds.forEach((uid) => closers.push(buildRow(uid, closerOutcomesByUser.get(uid) ?? newOutcomes())))
   setters.sort((a, b) => b.totalCalls - a.totalCalls)
   closers.sort((a, b) => b.totalCalls - a.totalCalls)
 
@@ -1861,8 +1861,8 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
   let calls = 0, over90s = 0, connected = 0, missing = 0
-  let htBookings = 0, dcBookings = 0, followUps = 0, reconfirms = 0
-  let confirmedBooks = 0, reschedules = 0, downsellsOnCall = 0, handToSetter = 0
+  let htBookings = 0, dcBookings = 0, followUps = 0
+  let confirmedBooks = 0, confirmedNewTime = 0, downsellsOnCall = 0
   let dqs = 0
   for (const r of rows) {
     calls += r.totalCalls
@@ -1871,11 +1871,9 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     htBookings += r.htBookings
     dcBookings += r.dcBookings
     followUps += r.followUps
-    reconfirms += r.reconfirms
     confirmedBooks += r.confirmedBooks
-    reschedules += r.reschedules
+    confirmedNewTime += r.confirmedNewTime
     downsellsOnCall += r.downsellsOnCall
-    handToSetter += r.handToSetter
     dqs += r.dqs
     missing += r.missing
   }
@@ -1888,11 +1886,9 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     htBookings,
     dcBookings,
     followUps,
-    reconfirms,
     confirmedBooks,
-    reschedules,
+    confirmedNewTime,
     downsellsOnCall,
-    handToSetter,
     dqs,
     missing,
   }
@@ -1978,7 +1974,6 @@ export async function getCallActivityForUser(
     .is('archived_at', null)
     .maybeSingle()
   const repAirtableId = (tmRow as { airtable_user_id?: string | null } | null)?.airtable_user_id ?? null
-  const repRole = (tmRow as { sales_role?: string | null } | null)?.sales_role ?? null
 
   // Forms filled by this rep — pull airtable_created_at within
   // [range start, range end + 48h] so we catch forms submitted after
@@ -1990,9 +1985,8 @@ export async function getCallActivityForUser(
     record_id: string
     lead_id: string | null
     prospect_name: string | null
-    booking_status: string | null   // legacy single field (pre 2026-05-27)
-    setter_status: string | null    // new
-    closer_status: string | null    // new
+    form_type: string | null        // 'Setter Triage Form' | 'Closer Triage Form'
+    call_status: string | null      // the shared outcome (2026-05-26 redesign)
     setter_names: string[] | null
     setter_record_ids: string[] | null
     event_date_time: string | null
@@ -2006,7 +2000,7 @@ export async function getCallActivityForUser(
     for (;;) {
       const { data, error } = await sb
         .from('airtable_setter_triage_calls' as never)
-        .select('record_id, lead_id, prospect_name, booking_status, setter_status, closer_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .select('record_id, lead_id, prospect_name, form_type, call_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
         .gte('airtable_created_at', formWindowStart)
         .lt('airtable_created_at', formWindowEnd)
         .range(from, from + 999)
@@ -2085,26 +2079,19 @@ export async function getCallActivityForUser(
     }
   })
 
-  // Status-string + bucket per row: pick the role-appropriate Airtable
-  // field. Old forms (pre 2026-05-27 redesign) carry only booking_status,
-  // which we no longer classify — show "NA" so the rep sees the form
-  // is on file but pre-redesign, without inflating any per-rep counter.
+  // Status-string + bucket per row from the form's Call Status. Old
+  // forms (pre-2026-05-26 redesign) carry no call_status — show "NA" so
+  // the rep sees the form is on file but pre-redesign, without inflating
+  // any per-rep counter.
   const NA_LABEL = 'NA'
   const statusFor = (f: FormRow | undefined | null): {
     label: string | null
     bucket: TriageCallDrillRow['bucket']
   } => {
     if (!f) return { label: null, bucket: 'unclassified' }
-    if (repRole === 'setter') {
-      if (f.setter_status) {
-        return { label: f.setter_status, bucket: classifySetterStatus(f.setter_status) }
-      }
-    } else if (repRole === 'closer') {
-      if (f.closer_status) {
-        return { label: f.closer_status, bucket: classifyCloserStatus(f.closer_status) }
-      }
+    if (f.call_status) {
+      return { label: f.call_status, bucket: classifyCallStatus(f.call_status) }
     }
-    // Old form with only booking_status, or role unknown → render NA.
     return { label: NA_LABEL, bucket: 'unclassified' }
   }
 
@@ -2171,11 +2158,9 @@ export type TriageCallDrillRow = {
     | 'htBookings'
     | 'dcBookings'
     | 'followUps'
-    | 'reconfirms'
     | 'confirmedBooks'
-    | 'reschedules'
+    | 'confirmedNewTime'
     | 'downsellsOnCall'
-    | 'handToSetter'
     | 'dqs'
     | 'unclassified'
 }
@@ -2184,33 +2169,24 @@ export type TriageCallDrillRow = {
 // "Confirmed HT Booking" / "Confirmed DC Booking" / "Follow up" /
 // "Reconfirm" / "DQ". Null or unknown → unclassified (drill shows NA,
 // no counter bumped).
-function classifySetterStatus(s: string | null): TriageCallDrillRow['bucket'] {
+// Classify Airtable `Call Status` (shared by both form types) into a
+// bucket. Option set (2026-05-26 redesign):
+//   High Ticket booking · Digital College booking · Confirmed Booking ·
+//   Confirmed Booking – New Time · Setter pipeline / Follow up ·
+//   Unresponsive – Setter Handover · Downsold · DQ / Un-interested.
+// "New Time" is checked BEFORE "Confirmed" (substring guard). Handover
+// folds into Setter pipeline / Follow up (Drake: same thing). Out-of-set
+// values → 'unclassified' (the weird entries Drake fixes manually).
+function classifyCallStatus(s: string | null): TriageCallDrillRow['bucket'] {
   if (!s) return 'unclassified'
   const v = s.toLowerCase()
-  if (v.includes('ht booking') || v.includes('high ticket')) return 'htBookings'
-  if (v.includes('dc booking') || v.includes('digital college')) return 'dcBookings'
-  // Reconfirm before Follow because "follow" substring would otherwise
-  // win if a label ever read "follow-up reconfirm" or similar.
-  if (v.includes('reconfirm') || v.includes('re-confirm')) return 'reconfirms'
-  if (v.includes('follow')) return 'followUps'
-  if (v === 'dq' || v.includes('disqualif')) return 'dqs'
-  return 'unclassified'
-}
-
-// Closer Status dropdown (post 2026-05-27 form redesign).
-// "Confirmed Book" / "Reschedule" / "Downsell (on call)" /
-// "Hand to Setter list" / "DQ". Null or unknown → unclassified.
-function classifyCloserStatus(s: string | null): TriageCallDrillRow['bucket'] {
-  if (!s) return 'unclassified'
-  const v = s.toLowerCase()
-  // "Confirmed Book" — careful not to swallow setter-side "HT Booking" /
-  // "DC Booking" strings; that's prevented by routing closer rows to
-  // this classifier (and setter rows to the other) upstream.
-  if (v.includes('confirmed book')) return 'confirmedBooks'
-  if (v.includes('reschedule')) return 'reschedules'
-  if (v.includes('downsell')) return 'downsellsOnCall'
-  if (v.includes('hand') && v.includes('setter')) return 'handToSetter'
-  if (v === 'dq' || v.includes('disqualif')) return 'dqs'
+  if (v.includes('high ticket') || v.includes('ht booking')) return 'htBookings'
+  if (v.includes('digital college') || v.includes('dc booking')) return 'dcBookings'
+  if (v.includes('downsold') || v.includes('downsell')) return 'downsellsOnCall'
+  if (v.includes('new time')) return 'confirmedNewTime'
+  if (v.includes('confirmed')) return 'confirmedBooks'
+  if (v.includes('pipeline') || v.includes('follow') || v.includes('handover')) return 'followUps'
+  if (v.includes('dq') || v.includes('disqualif') || v.includes('interest')) return 'dqs'
   return 'unclassified'
 }
 

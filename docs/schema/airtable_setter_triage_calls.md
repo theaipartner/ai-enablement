@@ -21,8 +21,10 @@ Airtable's Setter Triage Calls table has **no `lastModifiedTime` or `createdTime
 | `airtable_created_at` | `timestamptz` | NO | Record-level `createdTime` metadata. **Created-only.** Updates to existing records don't change this. |
 | `lead_id` | `text` | YES | Close CRM lead id (text); enables cross-source joins. |
 | `prospect_name` | `text` | YES | PII. |
-| `outcome` | `text` | YES | `'Show'` \| `'No Show'`. Primary triage disposition. |
-| `booking_status` | `text` | YES | `'Confirmed Booked with Closer'` \| `'Disqualified Lead'` \| `'Downsell'`. |
+| `outcome` | `text` | YES | Legacy. Maps Airtable `'Outcome'` (no longer present post-redesign → null on new rows). |
+| `form_type` | `text` | YES | **Discriminator** (2026-05-26 redesign): `'Setter Triage Form'` \| `'Closer Triage Form'`. Routes the row to the setter vs closer per-rep list. Null on pre-redesign rows. |
+| `call_status` | `text` | YES | **The triage outcome** (2026-05-26 redesign), shared by both form types. See § Form Type + Call Status. Supersedes `booking_status`/`setter_status`/`closer_status`. |
+| `booking_status` | `text` | YES | **Legacy** (pre-2026-05-26). `'Confirmed Booked with Closer'` \| `'Disqualified Lead'` \| `'Downsell'`. No longer written. |
 | `showed_pct` | `boolean` | YES | Airtable `'Showed %'` checkbox. Name preserved verbatim. |
 | `no_show_pct` | `boolean` | YES | `'No Show %'` checkbox. |
 | `booked_with_closer` | `boolean` | YES | `'Booked with Closer?'` checkbox. |
@@ -38,6 +40,43 @@ Airtable's Setter Triage Calls table has **no `lastModifiedTime` or `createdTime
 | `updated_at` | `timestamptz` | NO | Maintained by `airtable_setter_triage_calls_set_updated_at` trigger. |
 
 **Primary key:** `record_id`.
+
+## Form Type + Call Status (2026-05-26 redesign)
+
+The form was restructured ~**2026-05-26** into ONE form with a `Form Type`
+discriminator (`Setter Triage Form` | `Closer Triage Form`) and a single
+shared `Call Status` outcome. The old `Setter Status`/`Closer Status`
+(migration 0055) and `Booking Status` fields no longer exist Airtable-side,
+so those columns stop being written for rows on/after the change. Migration:
+`0058_triage_form_type_call_status.sql`.
+
+`Call Status` option set: `High Ticket booking`, `Digital College booking`,
+`Confirmed Booking`, `Confirmed Booking – New Time`, `Setter pipeline /
+Follow up`, `Unresponsive – Setter Handover`, `Downsold`, `DQ / Un-interested`.
+
+The per-rep tables (`lib/db/funnel-appointment-setting.ts`
+`getCallActivityMetrics`) route each row to the setter/closer list by
+`Form Type` and bucket `Call Status` into the **form-specific** columns:
+
+| List | Columns (from `Call Status`) |
+|---|---|
+| **Setter** (Setter Triage Form) | HT Book · DC Book · Setter pipeline · DQ |
+| **Closer** (Closer Triage Form) | Confirmed · Confirmed new time · Downsold · Setter pipeline · DQ |
+
+Notes:
+- **`Unresponsive – Setter Handover` folds into `Setter pipeline / Follow
+  up`** (Drake: same thing).
+- A `Call Status` value outside a list's column set (e.g. a closer row
+  marked "High Ticket booking") is counted nowhere — these are the rare
+  "weird entries" reconciled manually in Airtable.
+- **Form-option changes never break ingestion**: `call_status` is text
+  passthrough + `fields_raw` keeps the whole payload. A deleted option just
+  stops appearing (column → 0); a new/renamed option lands as text and goes
+  uncounted until a column is added.
+- **Backfill cutoff:** new-form data starts ~2026-05-26 (when `Form Type`
+  began populating). Pre-2026-05-26 rows have null `form_type` and are
+  excluded from the new per-rep tables (the transition entries, incl. the
+  old closer entries, are reconciled manually).
 
 **Indexes:**
 

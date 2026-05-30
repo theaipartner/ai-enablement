@@ -5,13 +5,10 @@ import {
   getCallActivityForUser,
   getSpeedToLeadCohort,
   type FmrTimeBlocksResult,
-  type FmrTimeBlock,
   type CallActivityRepRow,
   type CallActivityDrillRow,
   type SpeedToLeadCohortResult,
-  type SpeedToLeadCohortRow,
 } from '@/lib/db/funnel-appointment-setting'
-import { compactCount } from '@/lib/db/sales-dashboard-shared'
 import {
   dateRangeFromExplicit,
   getDateRangeFromWindow,
@@ -170,8 +167,6 @@ function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
   // across the chart so each block's bar reads against it).
   const cohortEverRate =
     fmr.cohortSize > 0 ? fmr.cohortEverReplied / fmr.cohortSize : null
-  const cohortWithin24hRate =
-    fmr.cohortSize > 0 ? fmr.cohortWithin24h / fmr.cohortSize : null
   const groupGap = 14
   const blockCount = fmr.blocks.length
   const groupWidth = (CHART_W - PAD_X * 2 - groupGap * (blockCount - 1)) / blockCount
@@ -409,13 +404,14 @@ function CallActivityStacked({
           lineHeight: 1.5,
         }}
       >
-        Volume + calls over 90s from <code>close_calls</code>. Setter outcomes
-        (HT Book / DC Book / Follow-up / DQ / Reconfirm) come from the form's
-        <code>Setter Status</code>; closer outcomes (Confirmed Book / Reschedule
-        / Downsell / Hand down / DQ) from <code>Closer Status</code>. Forms
-        predating the 2026-05-27 split show as NA in the drill. Speed-to-lead =
-        avg of each rep's earliest call to each lead minus lead creation (24h
-        cap on outliers).
+        Volume + calls over 90s from <code>close_calls</code>. Outcomes come
+        from the triage form <code>Call Status</code> field, routed by{' '}
+        <code>Form Type</code> — Setter Triage Form (HT Book / DC Book / Setter
+        pipeline / DQ) into the setter list, Closer Triage Form (Confirmed /
+        Confirmed new time / Downsold / Setter pipeline / DQ) into the closer
+        list. Forms predating the 2026-05-26 redesign (no Form Type) show as NA
+        in the drill. Speed-to-lead = avg of the earliest call each rep made to
+        each lead, minus lead creation (24h cap on outliers).
         {totalFormsInWindow > 0
           ? ` ${totalFormsInWindow} form${totalFormsInWindow === 1 ? '' : 's'} filled in this range — adoption is still ramping.`
           : ' No Airtable form rows yet in this range.'}
