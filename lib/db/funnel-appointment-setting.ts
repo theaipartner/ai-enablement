@@ -1432,14 +1432,14 @@ export async function getSpeedToLeadCohort(
 // Outcomes attributed to whoever filled the form (setter_names).
 // ---------------------------------------------------------------------------
 
-// Session grouping — multiple over-90s calls to the same lead by the
-// same rep within SESSION_GAP_MS of each other count as ONE session.
-// Setter disconnects and redials a few minutes later → same session →
-// one EOC form → one drill row. Drake 2026-05-27 originally set the
-// gap to 3h; widened to 1 day 2026-05-28 because closer/setter
-// sometimes leave a same-lead callback open across a half-day, and
-// the longer chain matches the "one logical engagement" intent.
-const SESSION_GAP_MS = 24 * 60 * 60 * 1000  // 24 hours
+// Session grouping — ALL over-90s calls to the same lead by the same
+// rep collapse into ONE session, regardless of how far apart they are
+// (Drake 2026-05-29: dedup leads in the per-rep area no matter the
+// timeline). So a rep who calls a lead today and again next week shows
+// one engagement row; the "×N" tag beside the prospect reflects the
+// full call count. History: 3h (2026-05-27) → 1 day (2026-05-28) →
+// unbounded (2026-05-29).
+const SESSION_GAP_MS = Number.POSITIVE_INFINITY
 
 type CallForSession = { callId: string; activityAt: string }
 type CallSession = {
