@@ -66,6 +66,8 @@ export default async function SalesDashboardLeadsPage({
 
       <FunnelHeader c={c} view={view} searchParams={searchParams} />
 
+      <BookingFunnels c={c} />
+
       <div style={{ marginTop: 22 }}>
         <HeaderRow />
         <div style={{ marginTop: 4 }}>
@@ -110,7 +112,7 @@ function FunnelHeader({
   searchParams: { start?: string | string[]; end?: string | string[] } | undefined
 }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 12, marginTop: 24 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: 12, marginTop: 24 }}>
       {/* 1. Leads — value in smaller font; click to toggle all ↔ unique */}
       <Link href={leadsHref(searchParams, view === 'all' ? 'unique' : 'all')} style={{ textDecoration: 'none' }}>
         <Box>
@@ -139,17 +141,92 @@ function FunnelHeader({
         </div>
         {c.unknown > 0 ? <SubLine>+{c.unknown.toLocaleString('en-US')} unknown</SubLine> : null}
       </Box>
-
-      {/* 3. Direct bookings */}
-      <Box>
-        <BoxLabel>Direct bookings</BoxLabel>
-        <div className="geg-numeric-serif" style={{ marginTop: 6, fontSize: 28, letterSpacing: '-0.02em', color: 'var(--color-geg-text)' }}>
-          {c.direct.toLocaleString('en-US')}
-        </div>
-        <SubLine>Ai Partner Strategy Call · ever</SubLine>
-      </Box>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Booking funnels — Direct + Setter-led, each a 4-stage funnel:
+// Booked → Confirmed → Showed → Closed. Only Direct "Booked" is wired today
+// (the existing directBooked count); the rest are pending placeholders until
+// the booking-confirmation matching flow is built.
+// ---------------------------------------------------------------------------
+
+function BookingFunnels({ c }: { c: { direct: number } }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+      <BookingFunnelBox
+        label="Direct bookings"
+        sublabel="Ai Partner Strategy Call · confirmed/showed/closed pending"
+        booked={c.direct}
+        confirmed={null}
+        showed={null}
+        closed={null}
+      />
+      <BookingFunnelBox
+        label="Setter-led bookings"
+        sublabel="Partnership Call w/ · pending"
+        booked={null}
+        confirmed={null}
+        showed={null}
+        closed={null}
+      />
+    </div>
+  )
+}
+
+function BookingFunnelBox({
+  label,
+  sublabel,
+  booked,
+  confirmed,
+  showed,
+  closed,
+}: {
+  label: string
+  sublabel: string
+  booked: number | null
+  confirmed: number | null
+  showed: number | null
+  closed: number | null
+}) {
+  return (
+    <Box>
+      <BoxLabel>{label}</BoxLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr auto 1fr', alignItems: 'center', gap: 4, marginTop: 12 }}>
+        <FunnelStage value={booked} caption="Booked" accent />
+        <Chevron />
+        <FunnelStage value={confirmed} caption="Confirmed" />
+        <Chevron />
+        <FunnelStage value={showed} caption="Showed" />
+        <Chevron />
+        <FunnelStage value={closed} caption="Closed" />
+      </div>
+      <SubLine>{sublabel}</SubLine>
+    </Box>
+  )
+}
+
+function FunnelStage({ value, caption, accent }: { value: number | null; caption: string; accent?: boolean }) {
+  const pending = value === null
+  return (
+    <div style={{ textAlign: 'center', minWidth: 0 }}>
+      <div
+        className="geg-numeric-serif"
+        style={{ fontSize: 22, letterSpacing: '-0.02em', color: pending ? 'var(--color-geg-text-faint)' : accent ? 'var(--color-geg-accent)' : 'var(--color-geg-text)' }}
+        title={pending ? 'Not wired yet — pending the booking-confirmation matching flow' : undefined}
+      >
+        {pending ? '—' : value.toLocaleString('en-US')}
+      </div>
+      <div className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
+        {caption}
+      </div>
+    </div>
+  )
+}
+
+function Chevron() {
+  return <span className="geg-mono" style={{ fontSize: 12, color: 'var(--color-geg-text-faint)', textAlign: 'center' }}>›</span>
 }
 
 function Box({ children }: { children: React.ReactNode }) {
