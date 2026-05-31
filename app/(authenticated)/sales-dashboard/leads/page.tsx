@@ -1,26 +1,31 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type LeadRow, type Qualification, type BookingType } from '@/lib/db/leads'
+import { getLeadsFunnel, type LeadsFunnel } from '@/lib/db/leads-funnel'
 import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { searchLeads, type LeadSearchResult } from '@/lib/db/lead-search'
+import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { FmrTimeBlockChart } from '@/components/sales/fmr-time-block-chart'
 import { SpeedToLeadBoxes } from '@/components/sales/speed-to-lead-boxes'
 import { LeadSearch } from './lead-search'
+import { ViewToggle } from './view-toggle'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { DeleteLeadButton } from './delete-lead-button'
 
 // Sales Dashboard — Leads (top-of-funnel + roster).
 //
-// Funnel header: Leads (toggle all ↔ unique/new-only) → Qualified vs
-// Unqualified → Direct bookings. Then the per-lead roster table. A
-// lead = a Close lead that opted in during the window (new OR re-opt-in);
-// the cohort already drops creator-soft-hidden (fake) leads. Creators get
-// an × to hide a fake lead. Shares the cohort via getLeadsForRange →
-// getSpeedToLeadCohort so the Leads page + dial list can't drift.
+// All↔Unique toggle re-scopes everything. Then a stacked funnel — Total
+// (adspend → opt-ins → dials → connected → books → shows → closes), Direct,
+// Setter-led, Reactivation (getLeadsFunnel) — then the speed-to-lead boxes,
+// the FMR chart, and the per-lead roster. A lead = a Close lead that opted in
+// during the window (new OR re-opt-in); the cohort already drops
+// creator-soft-hidden (fake) leads, and creators get an × to hide one. Shares
+// the cohort via getLeadsForRange → getSpeedToLeadCohort so boxes + roster +
+// dial list can't drift.
 
 export const dynamic = 'force-dynamic'
 // The page now also fans out into the FMR cohort scan + speed-to-lead
@@ -67,26 +72,9 @@ export default async function SalesDashboardLeadsPage({
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
   const rows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
 
-  const c = {
-    leads: rows.length,
-    newCount: rows.filter((r) => r.optInType === 'new').length,
-    reoptin: rows.filter((r) => r.optInType === 'reoptin').length,
-    qualified: rows.filter((r) => r.qualified === 'qualified').length,
-    unqualified: rows.filter((r) => r.qualified === 'non-qualified').length,
-    unknown: rows.filter((r) => r.qualified === 'unknown').length,
-    // Mutually exclusive booking buckets (direct = direct-only, reactivation =
-    // both links, setter = partnership-only). Showed/Closed are per-lead.
-    direct: rows.filter((r) => r.bookingType === 'direct').length,
-    directConfirmed: rows.filter((r) => r.bookingType === 'direct' && r.confirmed).length,
-    directShowed: rows.filter((r) => r.bookingType === 'direct' && r.showed).length,
-    directClosed: rows.filter((r) => r.bookingType === 'direct' && r.closed).length,
-    react: rows.filter((r) => r.bookingType === 'reactivation').length,
-    reactShowed: rows.filter((r) => r.bookingType === 'reactivation' && r.showed).length,
-    reactClosed: rows.filter((r) => r.bookingType === 'reactivation' && r.closed).length,
-    setter: rows.filter((r) => r.bookingType === 'setter').length,
-    setterShowed: rows.filter((r) => r.bookingType === 'setter' && r.showed).length,
-    setterClosed: rows.filter((r) => r.bookingType === 'setter' && r.closed).length,
-  }
+  // Funnel stack (Total / Direct / Setter / Reactivation) over the same,
+  // view-filtered rows — boxes + roster can't drift.
+  const funnel = await getLeadsFunnel(rows, range)
 
   return (
     <div>
@@ -103,9 +91,11 @@ export default async function SalesDashboardLeadsPage({
 
       <LeadSearch initial="" />
 
-      <FunnelHeader c={c} view={view} searchParams={searchParams} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
+        <ViewToggle current={view} />
+      </div>
 
-      <BookingFunnels c={c} />
+      <FunnelStack funnel={funnel} />
 
       <div style={{ marginTop: 26 }}>
         <SectionLabel>Speed to lead · this window</SectionLabel>
@@ -182,138 +172,122 @@ function SearchResults({ results, query }: { results: LeadSearchResult[]; query:
   )
 }
 
-// Build a /sales-dashboard/leads href preserving the date range + setting view.
-function leadsHref(searchParams: { start?: string | string[]; end?: string | string[] } | undefined, view: View): string {
-  const p = new URLSearchParams()
-  const s = Array.isArray(searchParams?.start) ? searchParams?.start[0] : searchParams?.start
-  const e = Array.isArray(searchParams?.end) ? searchParams?.end[0] : searchParams?.end
-  if (s) p.set('start', s)
-  if (e) p.set('end', e)
-  p.set('view', view)
-  return `/sales-dashboard/leads?${p.toString()}`
-}
-
 // ---------------------------------------------------------------------------
-// Funnel header — three stages: Leads · Qualified⟋Unqualified · Direct bookings
+// Funnel stack — Total on top, then Direct / Setter-led / Reactivation, each a
+// full-width horizontal funnel (Drake 2026-05-31). Total carries an adspend
+// node; Setter shows a qual/unqual split on its pool. Counts come from
+// getLeadsFunnel over the view-filtered cohort, so the boxes + roster + the
+// All/Unique toggle all move together.
 // ---------------------------------------------------------------------------
 
-function FunnelHeader({
-  c,
-  view,
-  searchParams,
-}: {
-  c: { leads: number; newCount: number; reoptin: number; qualified: number; unqualified: number; unknown: number; direct: number }
-  view: View
-  searchParams: { start?: string | string[]; end?: string | string[] } | undefined
-}) {
+function FunnelStack({ funnel }: { funnel: LeadsFunnel }) {
+  const { total: t, direct: d, setter: s, reactivation: re } = funnel
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: 12, marginTop: 24 }}>
-      {/* 1. Leads — value in smaller font; click to toggle all ↔ unique */}
-      <Link href={leadsHref(searchParams, view === 'all' ? 'unique' : 'all')} style={{ textDecoration: 'none' }}>
-        <Box>
-          <BoxLabel>
-            Leads
-            <ToggleChip active={view} />
-          </BoxLabel>
-          <div className="geg-numeric-serif" style={{ marginTop: 6, fontSize: 22, letterSpacing: '-0.02em', color: 'var(--color-geg-accent)' }}>
-            {c.leads.toLocaleString('en-US')}
-          </div>
-          <SubLine>
-            {view === 'unique'
-              ? 'new opt-ins only'
-              : `${c.newCount.toLocaleString('en-US')} new · ${c.reoptin.toLocaleString('en-US')} re-opt-in`}
-          </SubLine>
-        </Box>
-      </Link>
-
-      {/* 2. Qualified ⟋ Unqualified — split, equal opposing halves */}
-      <Box>
-        <BoxLabel>Qualified ⟋ Unqualified</BoxLabel>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr', alignItems: 'center', marginTop: 6 }}>
-          <SplitHalf value={c.qualified} caption="Qualified" color="var(--color-geg-pos)" align="left" />
-          <div style={{ height: 36, background: 'var(--color-geg-border)' }} />
-          <SplitHalf value={c.unqualified} caption="Unqualified" color="var(--color-geg-text-3)" align="right" />
-        </div>
-        {c.unknown > 0 ? <SubLine>+{c.unknown.toLocaleString('en-US')} unknown</SubLine> : null}
-      </Box>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Booking funnels — three mutually-exclusive pipelines by the lead's booking
-// path. Direct has a Confirmed stage (a self-book gets a confirmation call);
-// Reactivation + Setter-led skip Confirmed (a partnership/setter call is
-// confirmed by nature). Showed/Closed are per-lead (any New closer form).
-// ---------------------------------------------------------------------------
-
-type FunnelCounts = {
-  direct: number; directConfirmed: number; directShowed: number; directClosed: number
-  react: number; reactShowed: number; reactClosed: number
-  setter: number; setterShowed: number; setterClosed: number
-}
-
-function BookingFunnels({ c }: { c: FunnelCounts }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
-      <BookingFunnelBox
-        label="Direct bookings"
-        sublabel="Ai Partner Strategy Call only"
-        booked={c.direct}
-        confirmed={c.directConfirmed}
-        showed={c.directShowed}
-        closed={c.directClosed}
+    <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
+      <StackedFunnelBox
+        label="Total"
+        sublabel="Every opt-in in the window"
+        adspend={funnel.adspendUsd}
+        stages={[
+          { value: t.optIns, caption: 'Opt-ins', accent: true },
+          { value: t.dials, caption: 'Dials' },
+          { value: t.connected, caption: 'Connected' },
+          { value: t.books, caption: 'Books' },
+          { value: t.shows, caption: 'Shows' },
+          { value: t.closes, caption: 'Closes' },
+        ]}
       />
-      <BookingFunnelBox
-        label="Direct reactivations"
-        sublabel="Direct, then re-booked via a Partnership link"
-        booked={c.react}
-        showed={c.reactShowed}
-        closed={c.reactClosed}
+      <StackedFunnelBox
+        label="Direct"
+        sublabel="Booked a strategy call (includes reactivations)"
+        stages={[
+          { value: d.qualifiedOptIns, caption: 'Qual. opt-ins' },
+          { value: d.books, caption: 'Booked', accent: true },
+          { value: d.connected, caption: 'Connected' },
+          { value: d.confirms, caption: 'Confirms' },
+          { value: d.shows, caption: 'Shows' },
+          { value: d.closes, caption: 'Closes' },
+        ]}
       />
-      <BookingFunnelBox
-        label="Setter-led bookings"
-        sublabel="Partnership Call w/ only"
-        booked={c.setter}
-        showed={c.setterShowed}
-        closed={c.setterClosed}
+      <StackedFunnelBox
+        label="Setter-led"
+        sublabel="Never booked a strategy call"
+        poolSplit={{ qualified: s.qualified, unqualified: s.unqualified }}
+        stages={[
+          { value: s.pool, caption: 'Pool', accent: true },
+          { value: s.dials, caption: 'Dials' },
+          { value: s.connected, caption: 'Connected' },
+          { value: s.books, caption: 'Books' },
+          { value: s.shows, caption: 'Shows' },
+          { value: s.closes, caption: 'Closes' },
+        ]}
+      />
+      <StackedFunnelBox
+        label="Reactivation"
+        sublabel="Direct leads that lost their strat spot · activity counted after the handover"
+        stages={[
+          { value: re.pool, caption: 'Pool', accent: true },
+          { value: re.dials, caption: 'Dials' },
+          { value: re.connected, caption: 'Connected' },
+          { value: re.books, caption: 'Books' },
+          { value: re.shows, caption: 'Shows' },
+          { value: re.closes, caption: 'Closes' },
+        ]}
       />
     </div>
   )
 }
 
-// `confirmed` omitted → a 3-stage funnel (Booked → Showed → Closed).
-function BookingFunnelBox({
+type StageDef = { value: number | null; caption: string; accent?: boolean }
+
+function StackedFunnelBox({
   label,
   sublabel,
-  booked,
-  confirmed,
-  showed,
-  closed,
+  adspend,
+  poolSplit,
+  stages,
 }: {
   label: string
   sublabel: string
-  booked: number | null
-  confirmed?: number | null
-  showed: number | null
-  closed: number | null
+  adspend?: number | null
+  poolSplit?: { qualified: number; unqualified: number }
+  stages: StageDef[]
 }) {
-  const stages: Array<{ value: number | null; caption: string; accent?: boolean }> = [
-    { value: booked, caption: 'Booked', accent: true },
-  ]
-  if (confirmed !== undefined) stages.push({ value: confirmed, caption: 'Confirmed' })
-  stages.push({ value: showed, caption: 'Showed' }, { value: closed, caption: 'Closed' })
-
-  const cols = stages.map(() => '1fr').join(' auto ')
+  // Optional adspend node, then the stages — every node chevron-separated, so
+  // cells alternate node/chevron/node and the grid columns alternate 1fr/auto.
   const cells: React.ReactNode[] = []
+  if (adspend !== undefined) {
+    cells.push(
+      <div key="adspend" style={{ textAlign: 'center', minWidth: 0 }}>
+        <div
+          className="geg-numeric-serif"
+          style={{ fontSize: 22, letterSpacing: '-0.02em', color: adspend == null ? 'var(--color-geg-text-faint)' : 'var(--color-geg-warn)' }}
+        >
+          {adspend == null ? '—' : compactUsd(adspend)}
+        </div>
+        <div className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
+          Adspend
+        </div>
+      </div>,
+    )
+    cells.push(<Chevron key="ch-adspend" />)
+  }
   stages.forEach((s, i) => {
     if (i > 0) cells.push(<Chevron key={`ch${i}`} />)
     cells.push(<FunnelStage key={s.caption} value={s.value} caption={s.caption} accent={s.accent} />)
   })
+  const cols = cells.map((_, i) => (i % 2 === 0 ? '1fr' : 'auto')).join(' ')
 
   return (
     <Box>
-      <BoxLabel>{label}</BoxLabel>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+        <BoxLabel>{label}</BoxLabel>
+        {poolSplit ? (
+          <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
+            {poolSplit.qualified.toLocaleString('en-US')} qual · {poolSplit.unqualified.toLocaleString('en-US')} unqual
+          </span>
+        ) : null}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, marginTop: 12 }}>
         {cells}
       </div>
@@ -367,27 +341,6 @@ function SubLine({ children }: { children: React.ReactNode }) {
   return (
     <div className="geg-mono" style={{ marginTop: 6, fontSize: 9.5, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
       {children}
-    </div>
-  )
-}
-
-function ToggleChip({ active }: { active: View }) {
-  return (
-    <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>
-      {active === 'all' ? 'all · tap for unique' : 'unique · tap for all'}
-    </span>
-  )
-}
-
-function SplitHalf({ value, caption, color, align }: { value: number; caption: string; color: string; align: 'left' | 'right' }) {
-  return (
-    <div style={{ textAlign: align, padding: align === 'left' ? '0 10px 0 0' : '0 0 0 10px' }}>
-      <div className="geg-numeric-serif" style={{ fontSize: 26, letterSpacing: '-0.02em', color }}>
-        {value.toLocaleString('en-US')}
-      </div>
-      <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
-        {caption}
-      </div>
     </div>
   )
 }

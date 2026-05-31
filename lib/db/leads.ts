@@ -46,6 +46,18 @@ export type LeadRow = SpeedToLeadCohortRow & {
   confirmed: boolean // confirmation form (Closer Triage Form) marked confirmed
   showed: boolean    // any New closer form shows attendance
   closed: boolean    // any New closer form is a full close (HT/DC)
+  // Membership signals for the leads-page funnel stack (Drake 2026-05-31):
+  //   - hasDirect: ever booked the direct strategy-call link → a "direct
+  //     booking lead" (includes reactivations).
+  //   - hasPartnership: ever booked a setter/partnership link.
+  //   - reactivatedAt: close_leads.reactivated_at — set once when a direct lead
+  //     lost its strat spot (see migration 0063/0064). null = not reactivated.
+  //   - closeTimeIso: the closing closer-form's date_time_of_call (earliest
+  //     HT/DC close), used to cap raw dials at the close. null = not closed.
+  hasDirect: boolean
+  hasPartnership: boolean
+  reactivatedAt: string | null
+  closeTimeIso: string | null
 }
 
 function norm(s: string | null | undefined): string {
@@ -149,11 +161,12 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
   const leadEmails = new Map<string, string[]>()
   const leadNames = new Map<string, string>()
   const leadQualified = new Map<string, Qualification>()
+  const leadReactivatedAt = new Map<string, string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts, marketing_qualified')
+      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at')
       .in('close_id', chunk)
     if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
@@ -161,6 +174,7 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
       display_name: string | null
       contacts: unknown
       marketing_qualified: string | null
+      reactivated_at: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -174,6 +188,7 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
       leadEmails.set(r.close_id, Array.from(emails))
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
       leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
+      if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
     }
   }
 
@@ -217,18 +232,29 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
   //    A lead with ANY New closer form whose outcome shows/closes counts.
   const showedLeadIds = new Set<string>()
   const closedLeadIds = new Set<string>()
+  // Close moment per lead = the EARLIEST closing (HT/DC) form's meeting time.
+  // Used to cap raw dials at close (post-close fulfillment dials are excluded).
+  const closeTime = new Map<string, string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
-      .select('lead_id, call_outcome')
+      .select('lead_id, call_outcome, date_time_of_call')
       .eq('form_type', 'New')
       .in('lead_id', chunk)
     if (error) throw new Error(`leads: closer form read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; call_outcome: string | null }>) {
+    for (const r of (data ?? []) as unknown as Array<{
+      lead_id: string | null; call_outcome: string | null; date_time_of_call: string | null
+    }>) {
       if (!r.lead_id) continue
       if (outcomeShowed(r.call_outcome)) showedLeadIds.add(r.lead_id)
-      if (outcomeClosed(r.call_outcome)) closedLeadIds.add(r.lead_id)
+      if (outcomeClosed(r.call_outcome)) {
+        closedLeadIds.add(r.lead_id)
+        if (r.date_time_of_call) {
+          const prev = closeTime.get(r.lead_id)
+          if (!prev || r.date_time_of_call < prev) closeTime.set(r.lead_id, r.date_time_of_call)
+        }
+      }
     }
   }
 
@@ -254,6 +280,10 @@ export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
       confirmed: confirmedLeadIds.has(r.leadId),
       showed: showedLeadIds.has(r.leadId),
       closed: closedLeadIds.has(r.leadId),
+      hasDirect,
+      hasPartnership,
+      reactivatedAt: leadReactivatedAt.get(r.leadId) ?? null,
+      closeTimeIso: closeTime.get(r.leadId) ?? null,
     }
   })
 }
