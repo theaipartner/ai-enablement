@@ -144,13 +144,28 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     closes: count((r) => r.closed),
   }
 
+  // Direct funnel — each stage counted ONCE per lead and CUMULATIVE: reaching a
+  // later stage implies every earlier one, so the ladder is monotonic
+  // (books ≥ connected ≥ confirms ≥ shows ≥ closes). A lead that confirmed in
+  // direct, fell through to reactive, then showed/closed still reads
+  // Booked·Confirmed·Showed·Closed here. Why each later stage back-fills the
+  // earlier ones rather than relying on the raw flag:
+  //   - confirmed: confirmation allows a sub-90s call (§5.2), and a showed/closed
+  //     lead necessarily confirmed — so showed/closed back-fill confirms.
+  //   - connected: a strat-call show/close is a Calendly/Zoom meeting, not a ≥90s
+  //     close_calls outbound dial, so anyCallConnected is often false for leads
+  //     who clearly engaged — confirmed/showed/closed back-fill connected to keep
+  //     the rendered ladder from inverting.
+  // A reactive re-book never adds a second direct Booked (books = count(isDirect),
+  // one per lead). showed/closed are optInAt-scoped, so post-reactivation
+  // outcomes already count here (they're originally direct leads).
   const direct: DirectBox = {
     qualifiedOptIns: count((r) => r.qualified === 'qualified'),
     dials: sum(isDirect, dials),
     books: count(isDirect),
-    connected: count((r) => isDirect(r) && r.anyCallConnected),
-    confirms: count((r) => isDirect(r) && r.confirmed),
-    shows: count((r) => isDirect(r) && r.showed),
+    connected: count((r) => isDirect(r) && (r.anyCallConnected || r.confirmed || r.showed || r.closed)),
+    confirms: count((r) => isDirect(r) && (r.confirmed || r.showed || r.closed)),
+    shows: count((r) => isDirect(r) && (r.showed || r.closed)),
     closes: count((r) => isDirect(r) && r.closed),
   }
 
