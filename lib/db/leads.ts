@@ -546,7 +546,10 @@ export async function getLeadsForRange(
       : false
     const reactShowed = reactShowedIds.has(r.leadId)
     const reactClosed = reactClosedIds.has(r.leadId)
-    const isDq = dqLeadIds.has(r.leadId)
+    // A close overrides a DQ — once a lead closed (HT or DC), a stray earlier
+    // DQ form no longer defines them (Drake 2026-05-31, e.g. Jason Bright:
+    // DQ'd 05-25, then DC-closed 05-29 → reads as the close, not DQ).
+    const isDq = dqLeadIds.has(r.leadId) && !closed
     const leadType: LeadRow['leadType'] = isDq
       ? 'dq'
       : reactivatedAt

@@ -622,7 +622,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     closeType,
     closeDetail,
     connected: isConnected,
-    isDq,
+    // A close overrides a DQ — a closed lead is no longer DQ even if an earlier
+    // form DQ'd them (Drake 2026-05-31, e.g. Jason Bright).
+    isDq: isDq && !closed,
     reactConnected,
     reactBooked,
     reactShowed,
