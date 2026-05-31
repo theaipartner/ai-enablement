@@ -33,6 +33,10 @@ const NAV: NavItem[] = [
   // (new + re-opt-in), with qualified + booked tags. Mirror of the
   // appointment-setting dial list, read-only.
   { href: '/sales-dashboard/leads', label: 'Leads' },
+  // People = per-rep views (Call Activity, per-closer scheduled, bookings,
+  // cash) consolidated from the Appointment Setting + Closing pages, under
+  // one date picker.
+  { href: '/sales-dashboard/people', label: 'People' },
   { href: '/sales-dashboard/revenue', label: 'Revenue' },
   // Calls = setter/closer-setter call recordings transcribed via Deepgram,
   // rendered raw for V1 (AI review layer comes after golden-set selection).
