@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
-import { getLeadDetail, type LeadTimelineEvent } from '@/lib/db/lead-detail'
+import { getLeadDetail, type LeadTimelineEvent, type LeadCallEntry } from '@/lib/db/lead-detail'
 
 // Per-lead detail page. One Close lead's opt-in facts + header (qualification,
 // dials/connected counts, booking stage) + a form-driven lifecycle timeline:
@@ -65,12 +65,12 @@ export default async function LeadDetailPage({
 
       <SectionHeading>Lifecycle</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
-        in order · since latest opt-in
+        by day · newest first · since latest opt-in
       </div>
-      {lead.timeline.length === 0 ? (
+      {lead.timeline.length === 0 && lead.calls.length === 0 ? (
         <Empty>No activity since the latest opt-in.</Empty>
       ) : (
-        <Lifecycle events={lead.timeline} />
+        <Lifecycle timeline={lead.timeline} calls={lead.calls} />
       )}
     </div>
   )
@@ -298,70 +298,152 @@ function Fact({ label, value, valueColor }: { label: string; value: string; valu
 }
 
 // ----------------------------------------------------------------------
-// Call entry — collapsible when a review exists, plain row otherwise
+// Lifecycle — grouped BY DAY (newest first), since latest opt-in. Each day
+// lists the calls (time · caller · duration · link to the per-call review) and
+// the forms filled (disposition · source · who filled it), plus opt-in /
+// follow-up markers. Calls and forms are shown side by side, NOT matched.
 // ----------------------------------------------------------------------
 
-// ----------------------------------------------------------------------
-// Lifecycle timeline — form-driven, oldest first: the opt-in anchor, every
-// Airtable form outcome (setter triage / confirmation / closer EOC) in order,
-// and the trailing follow-up booking. No close_calls (no reliable form↔call
-// link) — see lib/db/lead-detail.ts.
-// ----------------------------------------------------------------------
+function etDayKey(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso))
+}
+function etDayHeader(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(iso))
+}
 
-function Lifecycle({ events }: { events: LeadTimelineEvent[] }) {
+type FormEvt = Extract<LeadTimelineEvent, { kind: 'form' }>
+type DayGroup = {
+  key: string
+  at: string // representative instant for sorting/header
+  forms: FormEvt[]
+  calls: LeadCallEntry[]
+  optedIn: boolean
+  followUps: string[]
+}
+
+function Lifecycle({ timeline, calls }: { timeline: LeadTimelineEvent[]; calls: LeadCallEntry[] }) {
+  const byDay = new Map<string, DayGroup>()
+  const get = (iso: string): DayGroup => {
+    const key = etDayKey(iso)
+    let g = byDay.get(key)
+    if (!g) {
+      g = { key, at: iso, forms: [], calls: [], optedIn: false, followUps: [] }
+      byDay.set(key, g)
+    }
+    return g
+  }
+  for (const ev of timeline) {
+    const g = get(ev.at)
+    if (ev.kind === 'form') g.forms.push(ev)
+    else if (ev.kind === 'optin') g.optedIn = true
+    else if (ev.kind === 'followup') g.followUps.push(ev.name)
+  }
+  for (const c of calls) get(c.activityAt).calls.push(c)
+
+  const days = Array.from(byDay.values()).sort((a, b) => (a.key < b.key ? 1 : -1)) // newest first
+  for (const d of days) {
+    d.calls.sort((a, b) => (a.activityAt < b.activityAt ? -1 : 1))
+    d.forms.sort((a, b) => (a.at < b.at ? -1 : 1))
+  }
+
   return (
-    <div style={{ marginTop: 4 }}>
-      {events.map((e, i) => (
-        <TimelineRow key={i} ev={e} />
+    <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {days.map((d) => (
+        <DayBlock key={d.key} day={d} />
       ))}
     </div>
   )
 }
 
-function TimelineRow({ ev }: { ev: LeadTimelineEvent }) {
+function DayBlock({ day }: { day: DayGroup }) {
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '9px 12px', borderBottom: '1px dashed var(--color-geg-border)' }}>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.03em', width: 120, flexShrink: 0 }}>
-        {formatEtTimestamp(ev.at)}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <EventBody ev={ev} />
+    <div style={{ border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
+      <div
+        className="geg-mono"
+        style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', padding: '8px 12px', background: 'var(--color-geg-bg-elev)', borderBottom: '1px solid var(--color-geg-border)', display: 'flex', justifyContent: 'space-between', gap: 8 }}
+      >
+        <span>{etDayHeader(day.at)}</span>
+        <span style={{ color: 'var(--color-geg-text-faint)' }}>
+          {day.calls.length ? `${day.calls.length} call${day.calls.length === 1 ? '' : 's'}` : ''}
+          {day.calls.length && day.forms.length ? ' · ' : ''}
+          {day.forms.length ? `${day.forms.length} form${day.forms.length === 1 ? '' : 's'}` : ''}
+          {day.optedIn ? ' · opted in' : ''}
+        </span>
+      </div>
+      <div style={{ padding: '6px 12px 8px' }}>
+        {day.optedIn ? (
+          <Row time="" >
+            <Dot color="var(--color-geg-text-3)" />
+            <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)' }}>Opted in</span>
+          </Row>
+        ) : null}
+        {day.calls.map((c) => (
+          <CallRow key={c.closeCallId} c={c} />
+        ))}
+        {day.forms.map((f, i) => (
+          <FormRow key={`f${i}`} ev={f} />
+        ))}
+        {day.followUps.map((name, i) => (
+          <Row key={`fu${i}`} time="">
+            <Dot color="var(--color-geg-warn)" />
+            <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Follow-up booked</span>
+            <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>{name}</span>
+          </Row>
+        ))}
       </div>
     </div>
   )
 }
 
-function Dot({ color }: { color: string }) {
-  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+function Row({ time, children }: { time: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '7px 0', borderBottom: '1px dashed var(--color-geg-border)' }}>
+      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.03em', width: 64, flexShrink: 0 }}>{time}</span>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>{children}</div>
+    </div>
+  )
 }
 
-function EventBody({ ev }: { ev: LeadTimelineEvent }) {
-  if (ev.kind === 'optin') {
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-        <Dot color="var(--color-geg-text-3)" />
-        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)' }}>Opted in</span>
-      </span>
-    )
-  }
-  if (ev.kind === 'followup') {
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <Dot color="var(--color-geg-warn)" />
-        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Follow-up booked</span>
-        <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>{ev.name}</span>
-      </span>
-    )
-  }
-  // form outcome (setter triage / confirmation / closer EOC)
+function CallRow({ c }: { c: LeadCallEntry }) {
+  const color = c.connected ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'
+  return (
+    <Row time={formatEtTime(c.activityAt)}>
+      <Dot color={color} />
+      <Link
+        href={`/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}`}
+        className="geg-serif"
+        style={{ fontSize: 13, color: 'var(--color-geg-text)', textDecoration: 'none' }}
+      >
+        {c.direction === 'inbound' ? 'Inbound call' : 'Call'}
+        {c.setterName ? ` · ${c.setterName}` : ''}
+      </Link>
+      <span className="geg-mono" style={{ fontSize: 11, color }}>{formatDuration(c.durationSec)}</span>
+      {!c.connected ? <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>(not connected)</span> : null}
+      <Link
+        href={`/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}`}
+        className="geg-mono"
+        style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 6px', textDecoration: 'none', marginLeft: 'auto' }}
+      >
+        {c.hasTranscript ? 'review →' : 'open →'}
+      </Link>
+    </Row>
+  )
+}
+
+function FormRow({ ev }: { ev: FormEvt }) {
   const color = dispositionColor(ev.label)
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <Row time="">
       <Dot color={color} />
       <span className="geg-serif" style={{ fontSize: 13, color }}>{ev.label}</span>
       <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>{sourceLabel(ev.source)}</span>
-    </span>
+      {ev.by ? <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-3)' }}>by {ev.by}</span> : null}
+    </Row>
   )
+}
+
+function Dot({ color }: { color: string }) {
+  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
 }
 
 function sourceLabel(s: 'triage' | 'confirmation' | 'closer'): string {
@@ -410,6 +492,17 @@ function formatEtTimestamp(iso: string): string {
     timeZone: 'America/New_York',
     month: 'short',
     day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(iso))
+}
+
+// Time-of-day only (ET), for the per-day lifecycle call rows.
+function formatEtTime(iso: string): string {
+  if (!iso) return ''
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,

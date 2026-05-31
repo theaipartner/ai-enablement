@@ -41,7 +41,7 @@ export type LeadCallEntry = {
 // would be guesswork.
 export type LeadTimelineEvent =
   | { kind: 'optin'; at: string }
-  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer'; label: string }
+  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer'; label: string; by: string | null }
   | { kind: 'followup'; at: string; name: string }
 
 export type LeadDetail = {
@@ -362,17 +362,18 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // that reached the lead (any Call Status except Unresponsive – Setter Handover).
   let setterTriaged = false
   let confirmReached = false
-  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' }> = []
+  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer'; by: string | null }> = []
   {
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at')
+      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: triage forms read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       call_status: string | null; form_type: string | null
       event_date_time: string | null; confirmed_call_date_time: string | null
       booked_at: string | null; submitted_at: string | null
+      setter_names: string[] | null
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
       const cs = norm(r.call_status)
@@ -393,15 +394,18 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
         (r.submitted_at ? `${r.submitted_at}T00:00:00Z` : null)
       if (!isConfirmation && afterReact(at)) reactTriaged = true
       if (at && r.call_status) {
-        formEvents.push({ at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage' })
+        // Filler: setter_names holds the form's author for both the setter
+        // triage and the confirmation (the confirming closer, e.g. "Aman Ali").
+        const by = (r.setter_names ?? []).find((n) => typeof n === 'string' && n.trim() && n.trim().toLowerCase() !== 'no setter') ?? null
+        formEvents.push({ at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage', by })
       }
     }
   }
   {
-    type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null }
+    type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null; closer_names: string[] | null }
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
-      .select('call_outcome, date_time_of_call, airtable_created_at')
+      .select('call_outcome, date_time_of_call, airtable_created_at, closer_names')
       .eq('form_type', 'New')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
@@ -432,7 +436,8 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }
     for (const group of clusters) {
       const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
-      formEvents.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer' })
+      const by = (latest.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
+      formEvents.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer', by })
     }
   }
 
@@ -444,7 +449,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const timeline: LeadTimelineEvent[] = []
   if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso })
   for (const f of formEvents) {
-    if (inWindow(f.at)) timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label })
+    if (inWindow(f.at)) timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
   }
   for (const b of bookings) {
     if (b.link === 'sync' && inWindow(b.at)) timeline.push({ kind: 'followup', at: b.at, name: b.name })
