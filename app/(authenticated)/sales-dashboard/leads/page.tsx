@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
-import { matchesLeadFilter, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
+import { matchesLeadFilter, matchesType, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
 import { getFmrSignals, buildFmrBlocks, getSpeedToLeadCohort, summarizeCohortRows } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
@@ -83,12 +83,18 @@ export default async function SalesDashboardLeadsPage({
   // the SAME filtered rows so they track the filter.
   const rows = viewRows.filter((r) => matchesLeadFilter(r, types, stage))
   const filteredCohort = { ...speedCohort, ...summarizeCohortRows(rows), rows }
-  // FMR now follows the WINDOW (not the type/stage filter): bucket the full
-  // window cohort by opt-in hour, so cohortSize matches the Total funnel.
+  // FMR follows the window, and ALSO the type filter — but only the Direct /
+  // Opt-in (setter) values, since "response by hour of opt-in" isn't meaningful
+  // for reactivation (ignored here). No type selected → the full window cohort.
+  const fmrTypes = types.filter((t) => t === 'direct' || t === 'setter')
+  const fmrRows = fmrTypes.length > 0 ? allRows.filter((r) => fmrTypes.some((t) => matchesType(r, t))) : allRows
+  const fmrLabel =
+    (fmrTypes.length === 1 ? (fmrTypes[0] === 'direct' ? 'direct · ' : 'opt-in · ') : '') +
+    `${range.startEtDate} → ${range.endEtDate} ET`
   const fmr = buildFmrBlocks(
-    allRows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt })),
+    fmrRows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt })),
     fmrSignals,
-    `${range.startEtDate} → ${range.endEtDate} ET`,
+    fmrLabel,
   )
 
   // Serialize the current leads-page state (date window, view, filters) so a row
@@ -121,7 +127,10 @@ export default async function SalesDashboardLeadsPage({
       </div>
 
       <div style={{ marginTop: 26 }}>
-        <SectionLabel>First message response · by hour of opt-in · this window</SectionLabel>
+        <SectionLabel>
+          First message response · by hour of opt-in · this window
+          {fmrTypes.length === 1 ? ` · ${fmrTypes[0] === 'direct' ? 'direct' : 'opt-in'} only` : ''}
+        </SectionLabel>
         <FmrTimeBlockChart fmr={fmr} />
       </div>
 
