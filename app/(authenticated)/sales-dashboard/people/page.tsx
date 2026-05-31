@@ -29,6 +29,7 @@ import { CloserScheduledTables } from '../funnel/closed/_components/closer-table
 import { DigitalCollegeTables } from './_components/digital-college-tables'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
+import { PersistPageState } from '@/components/sales/persist-page-state'
 
 // Sales Dashboard — People.
 //
@@ -110,6 +111,7 @@ export default async function SalesPeoplePage({
 
   return (
     <div>
+      <PersistPageState window />
       <HeaderBand
         eyebrow="SALES · TALENT"
         title="Talent."

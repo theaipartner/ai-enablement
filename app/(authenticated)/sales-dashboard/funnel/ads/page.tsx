@@ -22,6 +22,7 @@ import {
 } from '@/lib/db/funnel-window'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from '../landing-pages/date-range-picker'
+import { PersistPageState } from '@/components/sales/persist-page-state'
 
 // Funnel · Ads — LIVE from `meta_ad_daily`.
 //
@@ -55,9 +56,11 @@ export default async function FunnelAdsPage({
     getAdsDaily(dataRange),
   ])
   return (
-    <StageDetailLayout
-      eyebrow="FUNNEL · ADS"
-      title="Ads."
+    <>
+      <PersistPageState window />
+      <StageDetailLayout
+        eyebrow="FUNNEL · ADS"
+        title="Ads."
       backHref={`/sales-dashboard/funnel?start=${picker.startEtDate}&end=${picker.endEtDate}`}
       headline={{
         label: 'Total impressions',
@@ -82,7 +85,8 @@ export default async function FunnelAdsPage({
       </StageSection>
 
       <ComingSoonNote />
-    </StageDetailLayout>
+      </StageDetailLayout>
+    </>
   )
 }
 

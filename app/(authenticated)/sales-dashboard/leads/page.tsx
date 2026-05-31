@@ -14,6 +14,7 @@ import { LeadsFilterBar } from './leads-filter-bar'
 import { LeadRoster } from './lead-roster'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
+import { PersistPageState } from '@/components/sales/persist-page-state'
 
 // Sales Dashboard — Leads (top-of-funnel + roster).
 //
@@ -104,6 +105,7 @@ export default async function SalesDashboardLeadsPage({
 
   return (
     <div>
+      <PersistPageState window filters={['view', 'type', 'stage']} />
       <HeaderBand
         eyebrow="SALES · LEADS"
         title="Leads."

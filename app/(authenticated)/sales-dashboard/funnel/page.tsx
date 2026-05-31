@@ -8,6 +8,7 @@ import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from './landing-pages/date-range-picker'
+import { PersistPageState } from '@/components/sales/persist-page-state'
 
 // Sales Dashboard — Funnel (the top-of-funnel overview).
 //
@@ -40,6 +41,7 @@ export default async function SalesDashboardFunnelPage({
 
   return (
     <div>
+      <PersistPageState window />
       <HeaderBand
         eyebrow="SALES · FUNNEL"
         title="Funnel."

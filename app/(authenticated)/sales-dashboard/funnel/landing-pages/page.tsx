@@ -29,6 +29,7 @@ import {
 } from '@/lib/db/funnel-window'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from './date-range-picker'
+import { PersistPageState } from '@/components/sales/persist-page-state'
 import { VslSelector } from './vsl-selector'
 
 // Funnel · Landing Page — consolidated detail page.
@@ -90,9 +91,11 @@ export default async function FunnelLandingPagesPage({
     })()
 
   return (
-    <StageDetailLayout
-      eyebrow="FUNNEL · LANDING PAGE"
-      title="Landing page."
+    <>
+      <PersistPageState window filters={['vsl']} />
+      <StageDetailLayout
+        eyebrow="FUNNEL · LANDING PAGE"
+        title="Landing page."
       backHref={`/sales-dashboard/funnel?start=${range.startEtDate}&end=${range.endEtDate}`}
       headline={{
         label: `Landing page visits  ·  Meta unique link clicks  ·  ${rangeLabel(range.startEtDate, range.endEtDate)}`,
@@ -132,7 +135,8 @@ export default async function FunnelLandingPagesPage({
       <StageSection eyebrow="CALENDLY · CLOSER BOOKINGS" title='Round-robin "AI Partner Strategy Call" team URL.'>
         <CalendlyBlock calendly={calendly} />
       </StageSection>
-    </StageDetailLayout>
+      </StageDetailLayout>
+    </>
   )
 }
 
