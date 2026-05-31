@@ -20,11 +20,12 @@ Companion docs:
 
 > **2026-05-31 UPDATE:** A large amount has shipped since this 05-30 handoff
 > (reactivation tagging, the stacked lead funnel, the Status column, perf fixes,
-> People-page fixes, sortable roster) **and there is an in-flight plan for the
-> reactivation funnel/status that is NOT yet built.** Before doing anything,
-> read **§ REACTIVATION & LEAD FUNNEL — FULL STATE + PLAN (2026-05-31)** at the
-> BOTTOM of this doc. It is the authoritative current state and the step-by-step
-> plan. This 05-30 section below is now partly historical.
+> People-page fixes, sortable roster). **The reactivation funnel/status plan
+> (§ 5) is now fully BUILT — all 5 steps shipped 2026-05-31.** Before doing
+> anything, read **§ REACTIVATION & LEAD FUNNEL — FULL STATE + PLAN (2026-05-31)**
+> at the BOTTOM of this doc — it remains the authoritative current state; § 5
+> records what each step shipped. This 05-30 section below is now partly
+> historical.
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -668,12 +669,23 @@ One word, in the lead-type colour. `leadType` (drives colour) + `statusWord`
   - DQ: "DQ".
 - Boxed tag; a not-yet-reached status shows a plain "—".
 
-## 5. THE PLAN — remaining reactivation work (NOT YET BUILT)
+## 5. THE PLAN — reactivation work (ALL STEPS SHIPPED 2026-05-31)
 
-Build in this order. The WHY is given for each so a fresh instance understands
-intent, not just mechanics.
+All five build steps shipped 2026-05-31 (step 6 was verify-only, already
+confirmed). The WHY is kept for each so a fresh instance understands intent; a
+**SHIPPED** note records what landed and where. Commits on `main`:
+3h-lapse trigger, Direct funnel cumulative, reactive funnel post-handover,
+roster reactive status, per-lead two-phase journey.
 
-### Step 1 — Add the 3h-lapse trigger (trigger 3 above)
+### Step 1 — Add the 3h-lapse trigger (trigger 3 above) — **SHIPPED**
+**Shipped:** migration `0065` (`create or replace tag_reactivated_leads()` with
+trigger 3 + a showed-block so attended meetings don't lapse-reactivate) +
+the matching extension in `scripts/backfill_reactivated_at.py` (re-run with
+`--apply`: 27 rows set, 30 reactivated total). Calendly→lead resolution in SQL
+mirrors the dashboard's unique utm/email/name chain; soft-hidden events
+excluded; set-once / earliest-wins. Validated: 67 direct events all resolved,
+8 kept (future booking), 8 lapsed-but-attended blocked, 28 lapse fires.
+
 WHY: Aman frequently lets a strat meeting pass without cancelling / handover /
 no-show, so triggers 1 & 2 miss those leads. The 3h-lapse path is the fool-proof
 catch. ADDITIVE — does not change the existing form triggers.
@@ -688,7 +700,7 @@ matched to the lead via invitees by utm_term → email → name — utm often do
 resolve, so email/name fallback is essential, same as the closer-list fix).
 Apply migration via psycopg2 + ledger + dual-verify (§0.2). Re-run the backfill.
 
-### Step 2 — Direct funnel: count each stage ONCE, cumulative
+### Step 2 — Direct funnel: count each stage ONCE, cumulative — **SHIPPED**
 WHY: a lead that reaches Confirmed in direct, falls through to reactive, then
 shows/closes should read Booked·Confirmed·Showed·Closed in the Direct funnel
 (confirm is a prereq to show/close) — but never double-count (a reactive re-book
@@ -697,8 +709,13 @@ WHAT: in `getLeadsFunnel` Direct box — `confirms = count(isDirect && (confirme
 showed || closed))`, `shows = count(isDirect && (showed || closed))`,
 `books = count(isDirect)` (unchanged — already once). showed/closed already
 include post-reactivation (they're optInAt-scoped). This is the main Direct change.
+**Shipped:** `lib/db/leads-funnel.ts`. Also made `connected` cumulative
+(`anyCallConnected || confirmed || showed || closed`) — a strat-call show/close
+is a Calendly/Zoom meeting, not a ≥90s `close_calls` dial, so leaving connected
+raw inverted the rendered ladder (verified against real data). The whole Direct
+ladder is now monotonic: books ≥ connected ≥ confirms ≥ shows ≥ closes.
 
-### Step 3 — Reactive funnel: fully post-reactivation
+### Step 3 — Reactive funnel: fully post-reactivation — **SHIPPED**
 WHY: the reactive funnel should reflect only what happened AFTER the lead lost
 its spot; pre-reactivation connects/books belong to Direct.
 WHAT: in `getLeadsFunnel` Reactivation box, scope books/shows/closes/connected to
@@ -708,8 +725,14 @@ lost the strat meeting, so any show/close is via the setter pipeline after) — 
 in practice `showed`/`closed`/`hasPartnership` ≈ post-reactivation already;
 verify against real data and tighten only if needed. Reactive Connected = 0 when
 they only connected pre-reactivation is CORRECT (that connect counts in Direct).
+**Shipped:** `lib/db/leads.ts` gained `reactBooked` / `reactShowed` /
+`reactClosed` (a partnership booking or show/close at-or-after `reactivated_at`);
+the funnel box uses them. Verification found the NOTE held for shows/closes (0
+of 30 pre-react) but NOT for partnership books — **2 real leads** booked a
+partnership BEFORE the handover, so the tighten was needed (they no longer count
+as reactive-phase books). Kept cumulative/monotonic like Direct.
 
-### Step 4 — Roster status for reactivated leads = post-reactivation, floor "Eligible"
+### Step 4 — Roster status for reactivated leads = post-reactivation, floor "Eligible" — **SHIPPED**
 WHY: the Status column should show the lead's CURRENT (reactive-phase) progress,
 not the carried-over direct progress. A reactivated lead with no activity since
 reactivation should read **"Eligible"** (not "Connected").
@@ -717,13 +740,16 @@ WHAT: in `getLeadsForRange` (`lib/db/leads.ts`), for `leadType==='reactivation'`
 compute `statusWord` from POST-reactivation signals: closed→"Closed",
 showed→"Showed", booked(post)→"Booked", connected(post)→"Connected", else
 **"Eligible"**. This needs a post-reactivation connected signal per reactivated
-lead (few leads — cheap). `statusWord` is currently computed in `leads.ts` which
-has no call data; either (a) add a small post-reactivation call scan there for
-reactivated leads, or (b) compute the reactive statusWord in `leads-funnel.ts`
-(which already scans calls via `scanDialWindows` → `postReactConnected`) and
-thread it back onto the row. DQ still wins the colour.
+lead (few leads — cheap).
+**Shipped via option (a):** `lib/db/leads.ts` adds a small targeted ≥90s-dial
+scan over just the reactivated cohort leads → `postReactConnectedIds`, and the
+reactivation `statusWord` branch uses the post-react signals (reactClosed /
+reactShowed / reactBooked / postReactConnected), flooring at "Eligible". (Chose
+(a) over (b) because importing `scanDialWindows` into `leads.ts` would create a
+module cycle.) Today: 2 of 30 reactivated read "Connected", ~28 read "Eligible".
+DQ still wins the colour.
 
-### Step 5 — Per-lead page: two-phase journey
+### Step 5 — Per-lead page: two-phase journey — **SHIPPED**
 WHY: see the lead's direct-funnel progress THEN their reactive-funnel progress
 (and for DQ leads, surface their progress up to the DQ — DQ wins the roster tag
 but the per-lead page should still show how far they got).
@@ -731,6 +757,14 @@ WHAT: `leads/[close_id]/page.tsx` + `lib/db/lead-detail.ts` — render a
 two-segment progress (direct stages reached, then reactive stages reached). The
 existing per-lead timeline already shows the form-driven journey; this adds an
 explicit funnel-progress view. DQ leads show their progress + the DQ.
+**Shipped:** new "Journey" section replaces the compact header Stage chip. A
+Direct segment (Booked → Confirmed → Showed → Closed) and, for a reactivated
+lead, a second Reactivation segment under a "↓ lost spot" divider (Eligible →
+Connected → Booked → Showed → Closed) from the post-handover signals; setter-only
+leads show a single Setter-led ladder; a terminal red DQ chip when DQ'd.
+`lead-detail.ts` gained `isDq` + `reactConnected` / `reactBooked` / `reactShowed`
+/ `reactClosed`. The Direct segment always renders when `reactivatedAt` is set
+(reactivated ⇒ direct), even if the Calendly booking match didn't resolve here.
 
 ### Step 6 — #2 verify-only (DONE, no change)
 The May 24-31 "3 reactive in list vs counter 4" is correct: the 4th is **Presley
