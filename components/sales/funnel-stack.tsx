@@ -31,6 +31,10 @@ function adsHref(range: Range): string {
 export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Range }) {
   const { total: t, direct: d, setter: s, reactivation: re } = funnel
   const dials = (n: number) => `${n.toLocaleString('en-US')} dials`
+  // Closes node bracket — split high-ticket vs Digital College so each is
+  // visible. Shown only when there are closes.
+  const closeSplit = (ht: number, dc: number): string | undefined =>
+    ht + dc > 0 ? `${ht} HT / ${dc} DC` : undefined
   return (
     <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
       <StackedFunnelBox
@@ -46,7 +50,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
           { value: t.connected, caption: 'Connected', stage: 'connected' },
           { value: t.books, caption: 'Books', stage: 'booked' },
           { value: t.shows, caption: 'Shows', stage: 'showed' },
-          { value: t.closes, caption: 'Closes', stage: 'closed' },
+          { value: t.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(t.closesHt, t.closesDc) },
         ]}
       />
       <StackedFunnelBox
@@ -61,7 +65,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
           { value: d.connected, caption: 'Connected', stage: 'connected' },
           { value: d.confirms, caption: 'Confirms', stage: 'confirmed' },
           { value: d.shows, caption: 'Shows', stage: 'showed' },
-          { value: d.closes, caption: 'Closes', stage: 'closed' },
+          { value: d.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(d.closesHt, d.closesDc) },
         ]}
       />
       <StackedFunnelBox
@@ -76,7 +80,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
           { value: s.connected, caption: 'Connected', stage: 'connected' },
           { value: s.books, caption: 'Books', stage: 'booked' },
           { value: s.shows, caption: 'Shows', stage: 'showed' },
-          { value: s.closes, caption: 'Closes', stage: 'closed' },
+          { value: s.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(s.closesHt, s.closesDc) },
         ]}
       />
       <StackedFunnelBox
@@ -90,7 +94,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
           { value: re.connected, caption: 'Connected', stage: 'connected' },
           { value: re.books, caption: 'Books', stage: 'booked' },
           { value: re.shows, caption: 'Shows', stage: 'showed' },
-          { value: re.closes, caption: 'Closes', stage: 'closed' },
+          { value: re.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(re.closesHt, re.closesDc) },
         ]}
       />
     </div>

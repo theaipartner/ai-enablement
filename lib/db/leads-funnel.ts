@@ -32,15 +32,21 @@ import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 //     lost its strat spot, so any later partnership book / show / close is
 //     inherently post-handover — no extra time-scoping needed.
 
+// closesHt / closesDc split the closes node so each offer is visible
+// (closesHt + closesDc === closes). DC closes feed connected/booked/shows
+// monotonically via reachedStage, same as HT.
 export type TotalBox = {
-  optIns: number; dials: number; connected: number; books: number; shows: number; closes: number
+  optIns: number; dials: number; connected: number; books: number; shows: number
+  closes: number; closesHt: number; closesDc: number
 }
 export type DirectBox = {
-  qualifiedOptIns: number; dials: number; books: number; connected: number; confirms: number; shows: number; closes: number
+  qualifiedOptIns: number; dials: number; books: number; connected: number; confirms: number; shows: number
+  closes: number; closesHt: number; closesDc: number
 }
 export type PoolFunnelBox = {
   pool: number; qualified: number; unqualified: number
-  dials: number; connected: number; books: number; shows: number; closes: number
+  dials: number; connected: number; books: number; shows: number
+  closes: number; closesHt: number; closesDc: number
 }
 
 export type LeadsFunnel = {
@@ -252,6 +258,17 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
   const sum = (pred: (r: LeadRow) => boolean, val: (r: LeadRow) => number) =>
     rows.reduce((acc, r) => (pred(r) ? acc + val(r) : acc), 0)
   const count = (pred: (r: LeadRow) => boolean) => rows.reduce((acc, r) => (pred(r) ? acc + 1 : acc), 0)
+  // Closes split by offer for a given funnel type: a lead that reached the
+  // closed stage, counted into ht/dc by its closeType.
+  const closesOf = (type: LeadFilterType | null, member: (r: LeadRow) => boolean = () => true) => {
+    let ht = 0, dc = 0
+    for (const r of rows) {
+      if (!member(r) || !reachedStage(r, type, 'closed')) continue
+      if (r.closeType === 'dc') dc++
+      else ht++ // 'ht' or null (a close with unknown offer falls to HT)
+    }
+    return { closes: ht + dc, closesHt: ht, closesDc: dc }
+  }
 
   // Adspend for the window (Meta mirror). Provisional/empty → null.
   let adspendUsd: number | null = null
@@ -272,7 +289,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     connected: count((r) => reachedStage(r, null, 'connected')),
     books: count((r) => reachedStage(r, null, 'booked')),
     shows: count((r) => reachedStage(r, null, 'showed')),
-    closes: count((r) => reachedStage(r, null, 'closed')),
+    ...closesOf(null),
   }
 
   // Direct funnel — each stage counted ONCE per lead and CUMULATIVE: reaching a
@@ -297,7 +314,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     connected: count((r) => isDirect(r) && reachedStage(r, 'direct', 'connected')),
     confirms: count((r) => isDirect(r) && reachedStage(r, 'direct', 'confirmed')),
     shows: count((r) => isDirect(r) && reachedStage(r, 'direct', 'showed')),
-    closes: count((r) => isDirect(r) && reachedStage(r, 'direct', 'closed')),
+    ...closesOf('direct', isDirect),
   }
 
   const setter: PoolFunnelBox = {
@@ -308,7 +325,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     connected: count((r) => isSetter(r) && reachedStage(r, 'setter', 'connected')),
     books: count((r) => isSetter(r) && reachedStage(r, 'setter', 'booked')),
     shows: count((r) => isSetter(r) && reachedStage(r, 'setter', 'showed')),
-    closes: count((r) => isSetter(r) && reachedStage(r, 'setter', 'closed')),
+    ...closesOf('setter', isSetter),
   }
 
   // Reactivation funnel — fully POST-handover: every stage counts only activity
@@ -328,7 +345,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     connected: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'connected')),
     books: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'booked')),
     shows: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'showed')),
-    closes: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'closed')),
+    ...closesOf('reactivation', isReact),
   }
 
   const funnel: LeadsFunnel = { adspendUsd, total, direct, setter, reactivation, warnings: [] }
