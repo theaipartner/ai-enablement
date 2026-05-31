@@ -59,78 +59,120 @@ export type LeadRow = SpeedToLeadCohortRow & {
   hasPartnership: boolean
   reactivatedAt: string | null
   closeTimeIso: string | null
+  // Current Close lead status label (e.g. "New Opt-in", "Confirmed Booking",
+  // "Client"). Surfaced in the roster's Status column.
+  latestStatus: string | null
 }
 
 function norm(s: string | null | undefined): string {
   return (s ?? '').trim().toLowerCase()
 }
 
-// Email/name/lead-id signals for one Calendly link family, used to test
-// whether a lead has ever booked via that link.
-type BookingSignals = { leadIds: Set<string>; emails: Set<string>; names: Set<string> }
+// Booking signals for one Calendly link family, keyed by lead-id (utm_term),
+// email, and name — each mapped to the list of booking times (event_created_at)
+// for that key. Times let us ask not just "did they ever book this link" but
+// "did they book it AFTER their latest opt-in" (the direct/strategy test —
+// Drake 2026-05-31: a strat call booked before a re-opt-in shouldn't classify
+// the current journey as direct).
+type TimedSignals = {
+  byLeadId: Map<string, (string | null)[]>
+  byEmail: Map<string, (string | null)[]>
+  byName: Map<string, (string | null)[]>
+}
 
-// Pull every scheduled-event URI for a link family: 'direct' = the exact
-// DIRECT event type; 'partnership' = the setter-led "Partnership Call w/ …"
-// name family (one event type per closer, so matched by name prefix).
-async function fetchEventUris(
+function pushTime(map: Map<string, (string | null)[]>, key: string, t: string | null): void {
+  if (!key) return
+  const arr = map.get(key)
+  if (arr) arr.push(t)
+  else map.set(key, [t])
+}
+
+// Pull every scheduled-event (uri + when it was booked) for a link family:
+// 'direct' = the exact DIRECT event type; 'partnership' = the setter-led
+// "Partnership Call w/ …" name family (one event type per closer, name prefix).
+async function fetchEvents(
   sb: ReturnType<typeof createAdminClient>,
   kind: 'direct' | 'partnership',
-): Promise<string[]> {
-  const uris: string[] = []
+): Promise<Array<{ uri: string; createdAt: string | null }>> {
+  const out: Array<{ uri: string; createdAt: string | null }> = []
   for (let from = 0; ; from += 1000) {
-    const base = sb.from('calendly_scheduled_events' as never).select('uri')
+    const base = sb.from('calendly_scheduled_events' as never).select('uri, event_created_at')
     const q =
       kind === 'direct'
         ? base.eq('event_type_uri', DIRECT_BOOKING_EVENT_TYPE_URI)
         : base.ilike('name', 'Partnership Call w/%')
     const { data, error } = await q.range(from, from + 999)
     if (error) throw new Error(`leads: calendly events (${kind}) read failed: ${error.message}`)
-    const evs = (data ?? []) as unknown as Array<{ uri: string }>
-    for (const e of evs) uris.push(e.uri)
+    const evs = (data ?? []) as unknown as Array<{ uri: string; event_created_at: string | null }>
+    for (const e of evs) out.push({ uri: e.uri, createdAt: e.event_created_at })
     if (evs.length < 1000) break
   }
-  return uris
+  return out
 }
 
-// Collect lead-id (utm_term) + email + name signals from a set of events'
-// invitees — the keys we test cohort leads against.
-async function collectBookingSignals(
+// Collect lead-id / email / name → booking-time signals from a set of events'
+// invitees. Each invitee inherits its event's event_created_at.
+async function collectTimedSignals(
   sb: ReturnType<typeof createAdminClient>,
   leadResolver: CalendlyLeadResolver,
-  eventUris: string[],
-): Promise<BookingSignals> {
-  const leadIds = new Set<string>()
-  const emails = new Set<string>()
-  const names = new Set<string>()
-  for (let i = 0; i < eventUris.length; i += 100) {
-    const chunk = eventUris.slice(i, i + 100)
+  events: Array<{ uri: string; createdAt: string | null }>,
+): Promise<TimedSignals> {
+  const byLeadId = new Map<string, (string | null)[]>()
+  const byEmail = new Map<string, (string | null)[]>()
+  const byName = new Map<string, (string | null)[]>()
+  const createdByUri = new Map(events.map((e) => [e.uri, e.createdAt]))
+  const uris = events.map((e) => e.uri)
+  for (let i = 0; i < uris.length; i += 100) {
+    const chunk = uris.slice(i, i + 100)
     const { data, error } = await sb
       .from('calendly_invitees' as never)
-      .select('email, name, raw_payload')
+      .select('email, name, raw_payload, event_uri')
       .in('event_uri', chunk)
     if (error) throw new Error(`leads: calendly invitees read failed: ${error.message}`)
     for (const inv of (data ?? []) as unknown as Array<{
       email: string | null
       name: string | null
       raw_payload: { tracking?: { utm_term?: string | null } | null } | null
+      event_uri: string
     }>) {
+      const t = createdByUri.get(inv.event_uri) ?? null
       const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
-      if (lid) leadIds.add(lid)
-      const e = norm(inv.email)
-      if (e) emails.add(e)
-      const n = norm(inv.name)
-      if (n) names.add(n)
+      if (lid) pushTime(byLeadId, lid, t)
+      pushTime(byEmail, norm(inv.email), t)
+      pushTime(byName, norm(inv.name), t)
     }
   }
-  return { leadIds, emails, names }
+  return { byLeadId, byEmail, byName }
 }
 
-// Did this lead ever book via the link family? lead-id (utm_term) first,
-// then email, then name.
-function matchesSignals(sig: BookingSignals, leadId: string, emails: string[], name: string): boolean {
-  if (sig.leadIds.has(leadId)) return true
-  for (const e of emails) if (sig.emails.has(e)) return true
-  return !!name && sig.names.has(name)
+// All booking times for a lead across its keys (lead-id, emails, name).
+function bookingTimes(sig: TimedSignals, leadId: string, emails: string[], name: string): (string | null)[] {
+  const out: (string | null)[] = []
+  const a = sig.byLeadId.get(leadId)
+  if (a) out.push(...a)
+  for (const e of emails) {
+    const x = sig.byEmail.get(e)
+    if (x) out.push(...x)
+  }
+  if (name) {
+    const y = sig.byName.get(name)
+    if (y) out.push(...y)
+  }
+  return out
+}
+
+// Did this lead EVER book via the link family?
+function bookedEver(sig: TimedSignals, leadId: string, emails: string[], name: string): boolean {
+  return bookingTimes(sig, leadId, emails, name).length > 0
+}
+
+// Did this lead book via the link family AT OR AFTER `sinceIso` (its latest
+// opt-in)? Used for the direct/strategy test so a stale pre-re-opt-in booking
+// doesn't classify the current journey.
+function bookedSince(sig: TimedSignals, leadId: string, emails: string[], name: string, sinceIso: string): boolean {
+  const since = new Date(sinceIso).getTime()
+  if (!Number.isFinite(since)) return bookedEver(sig, leadId, emails, name)
+  return bookingTimes(sig, leadId, emails, name).some((t) => t != null && new Date(t).getTime() >= since)
 }
 
 // New-form Call Outcome → did they attend the call? Everything except a
@@ -170,11 +212,12 @@ export async function getLeadsForRange(
   const leadNames = new Map<string, string>()
   const leadQualified = new Map<string, Qualification>()
   const leadReactivatedAt = new Map<string, string>()
+  const leadStatus = new Map<string, string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at')
+      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, status_label')
       .in('close_id', chunk)
     if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
@@ -183,6 +226,7 @@ export async function getLeadsForRange(
       contacts: unknown
       marketing_qualified: string | null
       reactivated_at: string | null
+      status_label: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -197,6 +241,7 @@ export async function getLeadsForRange(
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
       leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
       if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
+      if (r.status_label) leadStatus.set(r.close_id, r.status_label)
     }
   }
 
@@ -206,9 +251,12 @@ export async function getLeadsForRange(
   //    partnership-only = 'setter', BOTH = 'reactivation' (a direct lead a
   //    setter re-booked after it fell through — and once reactivated it never
   //    reverts to pure direct). Match by utm_term token → email → name.
+  //    The DIRECT test is time-gated to the lead's latest opt-in (a strat call
+  //    booked before a re-opt-in shouldn't classify the current journey —
+  //    Drake 2026-05-31); PARTNERSHIP stays ever-based.
   const leadResolver = await buildCalendlyLeadResolver(sb)
-  const directSig = await collectBookingSignals(sb, leadResolver, await fetchEventUris(sb, 'direct'))
-  const partnershipSig = await collectBookingSignals(sb, leadResolver, await fetchEventUris(sb, 'partnership'))
+  const directSig = await collectTimedSignals(sb, leadResolver, await fetchEvents(sb, 'direct'))
+  const partnershipSig = await collectTimedSignals(sb, leadResolver, await fetchEvents(sb, 'partnership'))
 
   // 4. Confirmed direct bookings — the confirmation call's form (the
   //    Closer Triage Form, a confirmation call that's almost always Aman),
@@ -271,8 +319,8 @@ export async function getLeadsForRange(
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
     const qualified = leadQualified.get(r.leadId) ?? 'unknown'
-    const hasDirect = matchesSignals(directSig, r.leadId, emails, name)
-    const hasPartnership = matchesSignals(partnershipSig, r.leadId, emails, name)
+    const hasDirect = bookedSince(directSig, r.leadId, emails, name, r.optInAt)
+    const hasPartnership = bookedEver(partnershipSig, r.leadId, emails, name)
     const bookingType: BookingType =
       hasDirect && hasPartnership
         ? 'reactivation'
@@ -292,6 +340,7 @@ export async function getLeadsForRange(
       hasPartnership,
       reactivatedAt: leadReactivatedAt.get(r.leadId) ?? null,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
+      latestStatus: leadStatus.get(r.leadId) ?? null,
     }
   })
 }
