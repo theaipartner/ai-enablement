@@ -1,10 +1,13 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type LeadRow, type Qualification, type BookingType } from '@/lib/db/leads'
+import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { searchLeads, type LeadSearchResult } from '@/lib/db/lead-search'
+import { FmrTimeBlockChart } from '@/components/sales/fmr-time-block-chart'
+import { SpeedToLeadBoxes } from '@/components/sales/speed-to-lead-boxes'
 import { LeadSearch } from './lead-search'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
@@ -20,6 +23,10 @@ import { DeleteLeadButton } from './delete-lead-button'
 // getSpeedToLeadCohort so the Leads page + dial list can't drift.
 
 export const dynamic = 'force-dynamic'
+// The page now also fans out into the FMR cohort scan + speed-to-lead
+// cohort (close_leads / close_sms / close_calls), same as the
+// appointment-setting page; 60s headroom prevents a cold-start 500.
+export const maxDuration = 60
 
 type View = 'all' | 'unique'
 
@@ -46,9 +53,14 @@ export default async function SalesDashboardLeadsPage({
   const todayEt = todayEtDate()
   const view: View = pickView(searchParams?.view)
 
-  const [allRows, access] = await Promise.all([
+  const [allRows, access, fmr, speedCohort] = await Promise.all([
     getLeadsForRange(range),
     getCurrentUserAccessTier(),
+    // FMR is cohort-wide (since May 24, NOT range-scoped). The speed-to-lead
+    // boxes ARE scoped to this page's date range — same cohort getLeadsForRange
+    // builds, so the boxes and roster can't drift.
+    getFmrTimeBlocks(),
+    getSpeedToLeadCohort(range),
   ])
   const canDelete = access?.tier === 'creator'
 
@@ -95,7 +107,17 @@ export default async function SalesDashboardLeadsPage({
 
       <BookingFunnels c={c} />
 
-      <div style={{ marginTop: 22 }}>
+      <div style={{ marginTop: 26 }}>
+        <SectionLabel>Speed to lead · this window</SectionLabel>
+        <SpeedToLeadBoxes cohort={speedCohort} />
+      </div>
+
+      <div style={{ marginTop: 26 }}>
+        <SectionLabel>First message response · by hour of creation · since May 24 ET</SectionLabel>
+        <FmrTimeBlockChart fmr={fmr} />
+      </div>
+
+      <div style={{ marginTop: 26 }}>
         <HeaderRow />
         <div style={{ marginTop: 4 }}>
           {rows.length === 0 ? (
@@ -105,6 +127,19 @@ export default async function SalesDashboardLeadsPage({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// Eyebrow heading for the metric sections added to the leads page (speed
+// boxes + FMR chart).
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="geg-mono"
+      style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 10 }}
+    >
+      {children}
     </div>
   )
 }
