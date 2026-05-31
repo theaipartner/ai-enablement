@@ -457,17 +457,27 @@ function QualifiedTag({ q }: { q: Qualification }) {
   )
 }
 
-// Status cell — the lead's funnel classification (matching the stacked
-// funnels' coats: Direct green, New opt-in yellow, Reactivation pale blue) plus
-// its current Close status label. Reactivation wins over Direct (a reactivated
-// lead is no longer counted as currently-direct for the badge).
+// Status cell — the lead's funnel classification, four types matching the
+// stacked-funnel coats: Direct (green), Reactivated (pale blue), Opt-in
+// (yellow), DQ (red). Precedence DQ > Reactivated > Direct > Opt-in (DQ is the
+// current Close terminal state; reactivation a direct lead that lost its spot).
+//
+// Secondary line: for Opt-in / Reactivation leads who CONNECTED but stalled —
+// didn't book / show / close, and aren't DQ (i.e. follow-up / setter-pipeline)
+// — surface their funnel position as "Connected". Direct leads don't get this
+// (they confirm or get handed down). Otherwise show the Close status label.
 function StatusCell({ r }: { r: LeadRow }) {
-  const kind = r.reactivatedAt ? 'reactivation' : r.hasDirect ? 'direct' : 'new'
+  const isDq = (r.latestStatus ?? '').toLowerCase().includes('disqualif')
+  const kind = isDq ? 'dq' : r.reactivatedAt ? 'reactivation' : r.hasDirect ? 'direct' : 'optin'
   const cfg = {
     direct: { label: 'Direct', color: 'var(--color-geg-pos)' },
-    new: { label: 'New opt-in', color: 'var(--color-geg-warn)' },
-    reactivation: { label: 'Reactivation', color: '#7ea8dd' },
+    reactivation: { label: 'Reactivated', color: '#7ea8dd' },
+    optin: { label: 'Opt-in', color: 'var(--color-geg-warn)' },
+    dq: { label: 'DQ', color: 'var(--color-geg-neg)' },
   }[kind]
+  const showConnected =
+    (kind === 'optin' || kind === 'reactivation') &&
+    r.anyCallConnected && !r.hasPartnership && !r.showed && !r.closed
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
       <span
@@ -476,7 +486,11 @@ function StatusCell({ r }: { r: LeadRow }) {
       >
         {cfg.label}
       </span>
-      {r.latestStatus ? (
+      {showConnected ? (
+        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-pos)', letterSpacing: '0.03em' }}>
+          Connected
+        </span>
+      ) : kind !== 'dq' && r.latestStatus ? (
         <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.latestStatus}>
           {r.latestStatus}
         </span>
