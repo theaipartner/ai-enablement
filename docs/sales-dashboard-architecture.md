@@ -273,16 +273,25 @@ the filter bar (`leads-filter-bar.tsx`) also sets them manually. Contract:
 - **Single source of truth:** `reachedStage(row, type, stage)` + `matchesType` +
   `matchesLeadFilter` in `lib/db/leads-funnel.ts`. The funnel box COUNTS and the
   roster FILTER both go through it, so a bar's number equals the roster it opens.
-- **"Connected" = one definition everywhere (`row.connected`, set in `leads.ts`):**
-  a ≥90s outbound dial OR a setter triage form OR a confirmation (Closer Triage
-  Form) that reached the lead — *every* Call Status EXCEPT `Unresponsive – Setter
-  Handover` (the only no-answer outcome; `Setter pipeline / Follow up` counts —
-  they answered). Aggregate surfaces (funnel boxes, the speed-to-lead "Connected
-  rate") count it *cumulatively* (booked/showed/closed back-fill it, so the
-  stacked funnel can't invert and the speed box matches the funnel). Per-lead
-  surfaces (roster Connected column, per-lead header + Journey) show the raw
-  signal — "did we actually reach them" — so a self-booked-but-unreached lead
-  reads Booked-without-Connected, which is factually correct.
+- **"Connected" = one definition everywhere (`row.connectedEffective`, set in
+  `leads.ts`):** raw connect evidence (`row.connected` = a ≥90s dial OR a setter
+  triage form OR a confirmation that reached the lead — *every* Closer-Triage
+  Call Status EXCEPT `Unresponsive – Setter Handover`, the only no-answer
+  outcome; `Setter pipeline / Follow up` counts) **OR** a setter/reactive booking
+  (`hasPartnership`) **OR** a show/close. A **pure self-booked direct booking is
+  NOT a connection** — so in the **Total** funnel **Books can exceed Connected**
+  (intended). Setter + Reactivation bookings DO count as connected (booking them
+  took a conversation). The Direct box keeps its own connected (direct-phase
+  signal only; a direct booking still isn't a connect). The roster column,
+  per-lead header, speed box, and Total funnel all read `connectedEffective`.
+  In the per-lead **Journey**, Connected surfaces in the LATEST lane (the
+  Reactivation segment for a reactivated lead — a DQ always implies a connect —
+  the Direct segment otherwise).
+- **Integrity guard:** `validateFunnel` (leads-funnel.ts) runs inside
+  `getLeadsFunnel` and the Funnel page shows a red banner if any invariant
+  breaks — per-lead-once (no duplicate cohort rows), per-box monotonicity (Total
+  exempt on Books>Connected), Direct+Setter partition the cohort, Reactivation ⊂
+  Direct. Always-on; clean = no banner.
 - The per-lead **Back to leads** button preserves the full window+filter via a
   `ret` querystring carried on each row link.
 
