@@ -46,6 +46,11 @@ TARGET_TABLES: dict[str, tuple[str, str | None, str]] = {
         "AUS",
         "airtable_full_closer_report",
     ),
+    "tbljmzRoMoE5B26lt": (
+        "Digital College",
+        None,
+        "airtable_digital_college_sales",
+    ),
 }
 
 

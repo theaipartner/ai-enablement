@@ -327,3 +327,50 @@ def parse_full_closer(
         #   - any AUS-only field
         "fields_raw": fields,
     }
+
+
+# ---------------------------------------------------------------------------
+# Digital College (low-ticket) sale form parser
+# ---------------------------------------------------------------------------
+
+
+def parse_digital_college(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one Airtable record from tbljmzRoMoE5B26lt (the Digital College
+    sale form) to a row dict for airtable_digital_college_sales.
+
+    The dedicated low-ticket closer (Robby Bryant) fills this form
+    end-to-end. Closer/Setter names resolve INLINE via the lookup fields
+    ('Name (from Closer Name)' / 'Name (from Setter)') — no record-id->name
+    resolver needed here (unlike the Full Closer Report, whose new form
+    dropped the closer-name lookup).
+
+    Close model: `Closed?` = Yes is the explicit close flag; `plans`
+    (Base/Wix x Monthly/Yearly) gives the per-product breakdown. There is
+    no no-show field on the form, so show/no-show is derived downstream
+    (a filed form = showed).
+
+    Returns None on missing id."""
+    record_id = record.get("id")
+    if not record_id:
+        return None
+
+    fields = record.get("fields") or {}
+    created_time = record.get("createdTime")
+
+    return {
+        "record_id": record_id,
+        "airtable_created_at": created_time,
+        "lead_id": _to_lead_id(fields.get("Lead ID")),
+        "prospect_name": _to_str(fields.get("Prospect Name")),
+        "date_time_of_call": _to_iso_dt(fields.get("Date & Time of Call")),
+        "closer_record_ids": _to_str_array(fields.get("Closer Name")),
+        "closer_names": _to_str_array(fields.get("Name (from Closer Name)")),
+        "setter_record_ids": _to_str_array(fields.get("Setter")),
+        "setter_names": _to_str_array(fields.get("Name (from Setter)")),
+        "closed": _to_str(fields.get("Closed?")),
+        "plans": _to_str_array(fields.get("What plan did we get them on?")),
+        "follow_up": _to_str(fields.get("Follow Up?")),
+        "follow_up_date": _to_iso_date(fields.get("Follow Up Date")),
+        "call_notes": _to_str(fields.get("Call Notes")),
+        "fields_raw": fields,
+    }

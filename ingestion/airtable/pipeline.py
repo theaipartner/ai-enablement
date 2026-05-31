@@ -38,6 +38,7 @@ from typing import Any
 from ingestion.airtable import TARGET_TABLES
 from ingestion.airtable.client import AirtableAPIError, AirtableClient
 from ingestion.airtable.parser import (
+    parse_digital_college,
     parse_full_closer,
     parse_setter_triage,
 )
@@ -70,6 +71,8 @@ def _parse_for_table(
     """Dispatch to the right per-table parser."""
     if table_id == "tblaoMsiE3FSkHjQt":
         return parse_setter_triage(record)
+    if table_id == "tbljmzRoMoE5B26lt":
+        return parse_digital_college(record)
     if table_id in ("tblYsh3fxTpXuPdIW", "tblcC25y6lMrtgcty"):
         # Region is supplied by caller via TARGET_TABLES — None would
         # be a config bug, not a runtime case.
