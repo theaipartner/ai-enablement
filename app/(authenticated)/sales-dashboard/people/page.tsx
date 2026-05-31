@@ -14,6 +14,10 @@ import {
   type ClosingMoney,
 } from '@/lib/db/funnel-closing'
 import {
+  getDigitalCollegeActivity,
+  type DcDrillRow,
+} from '@/lib/db/funnel-digital-college'
+import {
   parseEtDateString,
   todayEtDate,
   dateRangeFromExplicit,
@@ -22,6 +26,7 @@ import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { PerRepCallActivityTable } from '../funnel/appointment-setting/_components/sortable-tables'
 import { CloserScheduledTables } from '../funnel/closed/_components/closer-tables'
+import { DigitalCollegeTables } from './_components/digital-college-tables'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
 
@@ -65,6 +70,7 @@ export default async function SalesPeoplePage({
     end?: string | string[]
     rep?: string | string[]
     closer?: string | string[]
+    dccloser?: string | string[]
   }
 }) {
   const start = parseEtDateString(searchParams?.start)
@@ -76,16 +82,20 @@ export default async function SalesPeoplePage({
   const selectedRep = typeof selectedRepRaw === 'string' && selectedRepRaw.startsWith('user_') ? selectedRepRaw : null
   const selectedCloserRaw = Array.isArray(searchParams?.closer) ? searchParams?.closer[0] : searchParams?.closer
   const selectedCloser = typeof selectedCloserRaw === 'string' && selectedCloserRaw.length > 0 ? selectedCloserRaw : null
+  const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
+  const selectedDcCloser = typeof selectedDcCloserRaw === 'string' && selectedDcCloserRaw.length > 0 ? selectedDcCloserRaw : null
 
-  const [activity, repDrill, scheduled, closingData, access] = await Promise.all([
+  const [activity, repDrill, scheduled, closingData, digitalCollege, access] = await Promise.all([
     getCallActivityMetrics(range),
     selectedRep ? getCallActivityForUser(range, selectedRep) : Promise.resolve([] as CallActivityDrillRow[]),
     getClosingScheduledList(range),
     getClosingActivity(range),
+    getDigitalCollegeActivity(range),
     getCurrentUserAccessTier(),
   ])
   const canDelete = access?.tier === 'creator'
   const closerDrill = selectedCloser ? scheduled.drillByCloser[selectedCloser] ?? [] : ([] as CloserScheduledDrillRow[])
+  const dcDrill = selectedDcCloser ? digitalCollege.drillByCloser[selectedDcCloser] ?? [] : ([] as DcDrillRow[])
 
   // Closer-link toggles preserve the active range + the rep drill so
   // switching a closer doesn't drop the Call Activity expansion.
@@ -93,6 +103,10 @@ export default async function SalesPeoplePage({
   if (start) baseParams.set('start', start)
   if (end) baseParams.set('end', end)
   if (selectedRep) baseParams.set('rep', selectedRep)
+  // Carry the other table's selection so toggling a closer/DC-closer doesn't
+  // collapse the other expanded drill.
+  if (selectedCloser) baseParams.set('closer', selectedCloser)
+  if (selectedDcCloser) baseParams.set('dccloser', selectedDcCloser)
 
   return (
     <div>
@@ -137,6 +151,19 @@ export default async function SalesPeoplePage({
             baseParams={baseParams.toString()}
             canDelete={canDelete}
           />
+        </SectionBox>
+
+        <SectionBox eyebrow="DIGITAL COLLEGE" title="Low-ticket closer (Robby) · dials, meetings, shows, plans, closes — click to drill, a column to sort.">
+          <DigitalCollegeTables
+            closers={digitalCollege.closers}
+            aggregate={digitalCollege.aggregate}
+            selectedCloser={selectedDcCloser}
+            drill={dcDrill}
+            baseParams={baseParams.toString()}
+          />
+          <div className="geg-mono" style={{ marginTop: 12, fontSize: 10, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)', lineHeight: 1.5 }}>
+            Dials from <code>close_calls</code> (Robby&apos;s outbound). Meetings = his <code>airtable_digital_college_sales</code> forms unioned with his Calendly bookings; a booked call with no form yet is a meeting but not a show. Show = a form was filed (the DC form has no no-show field). Closes = <code>Closed? = Yes</code>; plans (Base44 / Wix × Monthly / Yearly) come from the form&apos;s plan multi-select. Aman&apos;s downsell DC closes live on the closer report, not here.
+          </div>
         </SectionBox>
 
         <CashSection money={closingData.money} />
