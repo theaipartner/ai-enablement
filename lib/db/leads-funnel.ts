@@ -35,7 +35,7 @@ export type TotalBox = {
   optIns: number; dials: number; connected: number; books: number; shows: number; closes: number
 }
 export type DirectBox = {
-  qualifiedOptIns: number; books: number; connected: number; confirms: number; shows: number; closes: number
+  qualifiedOptIns: number; dials: number; books: number; connected: number; confirms: number; shows: number; closes: number
 }
 export type PoolFunnelBox = {
   pool: number; qualified: number; unqualified: number
@@ -141,6 +141,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
 
   const direct: DirectBox = {
     qualifiedOptIns: count((r) => r.qualified === 'qualified'),
+    dials: sum(isDirect, dials),
     books: count(isDirect),
     connected: count((r) => isDirect(r) && r.anyCallConnected),
     confirms: count((r) => isDirect(r) && r.confirmed),
