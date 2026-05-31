@@ -1003,7 +1003,11 @@ funnel bar's number always equals the roster it opens when clicked**:
 Lanes (each stage is a chip, lit/unlit):
 - **Direct** (when `isDirect` or `reactivatedAt`): Booked → Connected → Confirmed
   → Showed → Closed.
-- **Setter-led** (setter-only): Connected → Booked → Showed → Closed.
+- **Opt-in** (every non-direct, non-reactivated lead — incl. ones we haven't
+  connected with): Connected → Booked → Showed → Closed. ALWAYS surfaced (no
+  "not booked" empty state) — the full ladder shows unlit, starting at Connected,
+  for a lead that just opted in. Booked lights only once a partnership is actually
+  booked (`bookingType === 'setter'`).
 - **Reactivation** (when reactivated, under a "↓ lost spot · {date}" divider):
   Eligible → Connected → Booked → Showed → Closed. Eligible is ALWAYS lit (lost
   the spot = eligible). Booked/Showed/Closed use the post-handover signals
