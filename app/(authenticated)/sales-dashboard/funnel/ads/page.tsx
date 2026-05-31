@@ -58,6 +58,7 @@ export default async function FunnelAdsPage({
     <StageDetailLayout
       eyebrow="FUNNEL · ADS"
       title="Ads."
+      backHref={`/sales-dashboard/funnel?start=${picker.startEtDate}&end=${picker.endEtDate}`}
       headline={{
         label: 'Total impressions',
         value: impressions,

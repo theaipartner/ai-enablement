@@ -21,6 +21,7 @@ export function StageDetailLayout({
   windowSwitcher,
   personPill,
   children,
+  backHref = '/sales-dashboard/funnel',
 }: {
   eyebrow: string
   title: string
@@ -30,13 +31,16 @@ export function StageDetailLayout({
   windowSwitcher: ReactNode
   personPill: ReactNode
   children: ReactNode
+  // "Back to Funnel" target — pass the windowed href so the Funnel page keeps
+  // its date range when you return from a stage detail page.
+  backHref?: string
 }) {
   return (
     <div>
       <HeaderBand
         eyebrow={eyebrow}
         title={title}
-        backlink={{ href: '/sales-dashboard/funnel', label: 'BACK TO FUNNEL' }}
+        backlink={{ href: backHref, label: 'BACK TO FUNNEL' }}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {windowSwitcher}

@@ -93,6 +93,7 @@ export default async function FunnelLandingPagesPage({
     <StageDetailLayout
       eyebrow="FUNNEL · LANDING PAGE"
       title="Landing page."
+      backHref={`/sales-dashboard/funnel?start=${range.startEtDate}&end=${range.endEtDate}`}
       headline={{
         label: `Landing page visits  ·  Meta unique link clicks  ·  ${rangeLabel(range.startEtDate, range.endEtDate)}`,
         value: metaUniqueClicks,
