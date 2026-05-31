@@ -50,6 +50,12 @@ export default async function LeadDetailPage({
 
       <FactStrip lead={lead} />
 
+      <SectionHeading>Journey</SectionHeading>
+      <div className="geg-mono" style={{ marginTop: 2, marginBottom: 10, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
+        funnel progress · direct phase{lead.reactivatedAt ? ' → reactive phase' : ''}
+      </div>
+      <JourneyProgress lead={lead} />
+
       <SectionHeading>Lifecycle</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
         in order · since latest opt-in
@@ -87,7 +93,6 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
       <Fact label="First opted in" value={lead.dateFirstOptedIn ? formatEtDate(lead.dateFirstOptedIn) : '—'} />
       <Fact label="Latest opt-in" value={lead.latestOptInDate ? formatEtTimestamp(lead.latestOptInDate) : '—'} />
       <Fact label="Opt-ins" value={optIns != null ? String(optIns) : '—'} />
-      <StageFact lead={lead} />
       {lead.reactivatedAt ? (
         <Fact label="Reactivated" value={formatEtDate(lead.reactivatedAt)} valueColor="var(--color-geg-warn)" />
       ) : null}
@@ -108,50 +113,149 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
   )
 }
 
-// Booking path + funnel progress (Booked → [Confirmed] → Showed → Closed;
-// Confirmed only on the direct path).
-function StageFact({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
+// ----------------------------------------------------------------------
+// Journey — explicit funnel-progress view. One segment for the lead's primary
+// path (Direct or Setter-led); a SECOND "Reactivation" segment when the lead
+// lost its direct strat spot, showing post-handover progress (Drake Step 5).
+// DQ leads still render their progress with a terminal "DQ" marker (DQ wins the
+// roster colour, but the page shows how far they got).
+// ----------------------------------------------------------------------
+
+// Reactivation pale blue (no palette token — matches the leads funnel coat).
+const REACT_BLUE = '#7ea8dd'
+
+type JStage = { label: string; hit: boolean }
+type JSegment = { label: string; color: string; stages: JStage[]; since?: string | null }
+
+function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
   const bt = lead.bookingType
-  const typeLabel = bt === 'direct' ? 'Direct' : bt === 'reactivation' ? 'Reactivation' : bt === 'setter' ? 'Setter-led' : null
-  const stages: Array<{ label: string; hit: boolean }> = bt
-    ? [
+  const segments: JSegment[] = []
+
+  // Primary path. A direct or reactivation lead booked the strat link → Direct
+  // phase (Booked → Confirmed → Showed → Closed, cumulative). A setter-only
+  // lead → Setter-led (Booked → Showed → Closed, no Confirmed stage). A
+  // reactivated lead is direct by definition, so it always gets the Direct phase
+  // even if the Calendly booking match didn't resolve here.
+  if (bt === 'direct' || bt === 'reactivation' || lead.reactivatedAt) {
+    segments.push({
+      label: 'Direct',
+      color: 'var(--color-geg-pos)',
+      stages: [
         { label: 'Booked', hit: true },
-        ...(bt === 'direct' ? [{ label: 'Confirmed', hit: lead.confirmed }] : []),
-        { label: 'Showed', hit: lead.showed },
+        { label: 'Confirmed', hit: lead.confirmed || lead.showed || lead.closed },
+        { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
-      ]
-    : []
+      ],
+    })
+  } else if (bt === 'setter') {
+    segments.push({
+      label: 'Setter-led',
+      color: 'var(--color-geg-warn)',
+      stages: [
+        { label: 'Booked', hit: true },
+        { label: 'Showed', hit: lead.showed || lead.closed },
+        { label: 'Closed', hit: lead.closed },
+      ],
+    })
+  }
+
+  // Reactive phase — only when the lead lost its spot. Floors at "Eligible"
+  // (always hit: being reactivated = eligible), then the post-handover ladder.
+  if (lead.reactivatedAt) {
+    segments.push({
+      label: 'Reactivation',
+      color: REACT_BLUE,
+      since: lead.reactivatedAt,
+      stages: [
+        { label: 'Eligible', hit: true },
+        { label: 'Connected', hit: lead.reactConnected || lead.reactBooked || lead.reactShowed || lead.reactClosed },
+        { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
+        { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
+        { label: 'Closed', hit: lead.reactClosed },
+      ],
+    })
+  }
+
+  if (segments.length === 0) {
+    return (
+      <div className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-faint)', padding: '4px 0' }}>
+        Not booked{lead.isDq ? ' · ' : ''}
+        {lead.isDq ? <DqChip /> : null}
+      </div>
+    )
+  }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
-        Stage{typeLabel ? ` · ${typeLabel}` : ''}
-      </span>
-      {bt ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          {stages.map((s, i) => (
-            <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              {i > 0 ? <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 9 }}>›</span> : null}
-              <span
-                className="geg-mono"
-                style={{
-                  fontSize: 9,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  border: `1px solid ${s.hit ? 'var(--color-geg-pos)' : 'var(--color-geg-border)'}`,
-                  color: s.hit ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)',
-                }}
-              >
-                {s.label}
-              </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {segments.map((seg, si) => (
+        <div key={seg.label}>
+          {si > 0 ? (
+            <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', margin: '0 0 8px 2px' }}>
+              ↓ lost spot{seg.since ? ` · ${formatEtDate(seg.since)}` : ''}
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: seg.color, width: 92, flexShrink: 0 }}>
+              {seg.label}
             </span>
-          ))}
-        </span>
-      ) : (
-        <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-faint)' }}>Not booked</span>
-      )}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {seg.stages.map((s, i) => (
+                <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  {i > 0 ? <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>›</span> : null}
+                  <StageChip label={s.label} hit={s.hit} color={seg.color} />
+                </span>
+              ))}
+              {/* DQ terminal marker on the last segment */}
+              {lead.isDq && si === segments.length - 1 ? (
+                <>
+                  <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>·</span>
+                  <DqChip />
+                </>
+              ) : null}
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
+  )
+}
+
+function StageChip({ label, hit, color }: { label: string; hit: boolean; color: string }) {
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        fontSize: 9,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+        padding: '3px 8px',
+        borderRadius: 4,
+        border: `1px solid ${hit ? color : 'var(--color-geg-border)'}`,
+        color: hit ? color : 'var(--color-geg-text-faint)',
+        background: hit ? 'color-mix(in srgb, ' + color + ' 10%, transparent)' : 'transparent',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
+function DqChip() {
+  return (
+    <span
+      className="geg-mono"
+      style={{
+        fontSize: 9,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        padding: '3px 8px',
+        borderRadius: 4,
+        border: '1px solid var(--color-geg-neg)',
+        color: 'var(--color-geg-neg)',
+      }}
+    >
+      DQ
+    </span>
   )
 }
 

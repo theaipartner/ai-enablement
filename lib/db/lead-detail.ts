@@ -57,11 +57,24 @@ export type LeadDetail = {
   // null = not reactivated.
   reactivatedAt: string | null
   // Booking path (ever) + per-lead funnel stages, same source/logic as the
-  // leads roster + funnel boxes. booked = bookingType !== null.
+  // leads roster + funnel boxes. booked = bookingType !== null. confirmed /
+  // showed / closed are the DIRECT-phase stages (and, for a reactivated lead,
+  // include the post-handover show/close — they're originally direct).
   bookingType: BookingType
   confirmed: boolean
   showed: boolean
   closed: boolean
+  // DQ — any form DQ'd this lead (lifecycle-scoped). Shown as the terminal
+  // marker on the journey even though it doesn't reactivate.
+  isDq: boolean
+  // Reactive-phase stages — only meaningful when reactivatedAt is set. Each is
+  // an event AFTER the handover (a ≥90s outbound dial / partnership booking /
+  // showed / closed past reactivatedAt). The journey renders these as the
+  // second segment; "Eligible" is the floor when none are hit.
+  reactConnected: boolean
+  reactBooked: boolean
+  reactShowed: boolean
+  reactClosed: boolean
   // Journey metrics. Dials + connected are scoped from the latest opt-in (the
   // lifecycle window). Reschedules + follow-ups are over the lead's bookings.
   totalCalls: number          // dials incl. inbound, since latest opt-in
@@ -295,19 +308,26 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   let hasDirect = false
   let hasPartnership = false
   let followUpCount = 0
+  // Partnership booking created-times — for the reactive-phase "Booked" stage
+  // (a partnership booked AFTER the handover). Created-time mirrors the funnel's
+  // bookedSince logic (leads.ts), not the meeting start_time.
+  const partnershipCreatedTimes: string[] = []
   const bookings: Array<{ at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }> = []
   for (let i = 0; i < eventUris.length; i += 100) {
     const chunk = eventUris.slice(i, i + 100)
     const { data, error } = await sb
       .from('calendly_scheduled_events' as never)
-      .select('uri, name, event_type_uri, start_time')
+      .select('uri, name, event_type_uri, start_time, event_created_at')
       .in('uri', chunk)
     if (error) throw new Error(`lead-detail: events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null }>) {
+    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null; event_created_at: string | null }>) {
       const nm = norm(e.name)
       let link: 'direct' | 'setter' | 'sync' | 'other' = 'other'
       if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) { hasDirect = true; link = 'direct' }
-      else if (nm.startsWith('partnership call w/')) { hasPartnership = true; link = 'setter' }
+      else if (nm.startsWith('partnership call w/')) {
+        hasPartnership = true; link = 'setter'
+        if (e.event_created_at) partnershipCreatedTimes.push(e.event_created_at)
+      }
       else if (nm.startsWith('ai partner sync')) { followUpCount++; link = 'sync' }
       if (e.start_time) bookings.push({ at: e.start_time, link, name: e.name })
     }
@@ -320,9 +340,17 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   //    triage / confirmation (airtable_setter_triage_calls) + closer EOC
   //    (airtable_full_closer_report, form_type=New). confirmed/showed/closed
   //    still feed the header stage chip.
+  // Reactive phase reference instant (null when never reactivated).
+  const reactMs = lead.reactivated_at ? new Date(lead.reactivated_at).getTime() : null
+  const afterReact = (iso: string | null): boolean =>
+    reactMs != null && iso != null && new Date(iso).getTime() >= reactMs
+
   let confirmed = false
   let showed = false
   let closed = false
+  let isDq = false
+  let reactShowed = false
+  let reactClosed = false
   const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' }> = []
   {
     const { data, error } = await sb
@@ -337,6 +365,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
       if (isConfirmation && norm(r.call_status).startsWith('confirmed')) confirmed = true
+      if (norm(r.call_status).includes('dq')) isDq = true
       // Order by the meeting time itself, falling back through the form's other
       // timestamps. submitted_at is a bare date — anchor it at UTC midnight so
       // it sorts as an instant.
@@ -360,8 +389,15 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
     for (const r of forms) {
-      if (outcomeShowed(r.call_outcome)) showed = true
-      if (outcomeClosed(r.call_outcome)) closed = true
+      if (norm(r.call_outcome).includes('dq')) isDq = true
+      if (outcomeShowed(r.call_outcome)) {
+        showed = true
+        if (afterReact(r.airtable_created_at)) reactShowed = true
+      }
+      if (outcomeClosed(r.call_outcome)) {
+        closed = true
+        if (afterReact(r.airtable_created_at)) reactClosed = true
+      }
     }
     // Dedup duplicate forms for the SAME meeting (within 90 min) — keep the
     // latest-submitted. Distinct reschedule forms (different meeting times) stay
@@ -397,6 +433,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   }
   timeline.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
 
+  // Reactive-phase connected/booked — a ≥90s outbound dial / partnership
+  // booking after the handover. (Calls are already loaded since latest opt-in,
+  // which precedes reactivation, so post-handover calls are present.)
+  const reactConnected = calls.some(
+    (c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt),
+  )
+  const reactBooked = partnershipCreatedTimes.some((t) => afterReact(t))
+
   return {
     leadId: lead.close_id,
     prospectName: lead.display_name,
@@ -410,6 +454,11 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     confirmed,
     showed,
     closed,
+    isDq,
+    reactConnected,
+    reactBooked,
+    reactShowed,
+    reactClosed,
     totalCalls: calls.length,
     connectedCount: connected.length,
     totalConnectedDurationSec,
