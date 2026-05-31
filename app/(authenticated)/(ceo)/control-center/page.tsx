@@ -77,19 +77,20 @@ export default async function CeoControlCenterPage() {
 // forms land. Hidden entirely when nothing is overdue.
 function MissingFormsPanel({ setter, closer }: { setter: MissingFormFlag[]; closer: MissingFormFlag[] }) {
   const total = setter.length + closer.length
-  if (total === 0) return null
+  const clean = total === 0
+  const accent = clean ? 'var(--color-geg-pos)' : 'var(--color-geg-warn)'
   return (
     <div
       style={{
         marginTop: 28,
         padding: '20px 24px 22px',
-        background: 'color-mix(in srgb, var(--color-geg-warn) 7%, transparent)',
-        border: '1px solid var(--color-geg-warn-border)',
+        background: `color-mix(in srgb, ${accent} 7%, transparent)`,
+        border: `1px solid ${clean ? 'var(--color-geg-border)' : 'var(--color-geg-warn-border)'}`,
         borderRadius: 10,
       }}
     >
-      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-warn)', marginBottom: 14 }}>
-        ⚠ Forms not filled · today · {total}
+      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: accent, marginBottom: 14 }}>
+        {clean ? '✓ Forms · today · all filled' : `⚠ Forms not filled · today · ${total}`}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 24 }}>
         <FlagColumn title="Setter · connected call, no triage form (15 min)" flags={setter} />
