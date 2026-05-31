@@ -1,4 +1,4 @@
--- 0068_airtable_digital_college_sales.sql
+-- 0066_airtable_digital_college_sales.sql
 --
 -- Digital College (low-ticket) sale form mirror. Source = the Airtable
 -- "Digital College" table (tbljmzRoMoE5B26lt) in the sales base
