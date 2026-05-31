@@ -27,6 +27,7 @@ Cast helpers are defensive: bad/missing values become None, never raise.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger("ai_enablement.airtable.parser")
@@ -43,6 +44,21 @@ def _to_str(v: Any) -> str | None:
     if isinstance(v, str):
         return v or None
     return str(v)
+
+
+# Close lead ids are `lead_<alnum>`. Setters sometimes paste the full Close
+# lead URL (https://app.close.com/lead/lead_XXX/) into the form's Lead ID field
+# instead of the bare id, which then matches nothing downstream. Extract the
+# bare `lead_*` token. (SARRA paste error, 2026-05-31.)
+_LEAD_ID_RE = re.compile(r"lead_[A-Za-z0-9]+")
+
+
+def _to_lead_id(v: Any) -> str | None:
+    s = _to_str(v)
+    if s is None:
+        return None
+    m = _LEAD_ID_RE.search(s)
+    return m.group(0) if m else s
 
 
 def _to_bool(v: Any) -> bool | None:
@@ -127,7 +143,7 @@ def parse_setter_triage(record: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "record_id": record_id,
         "airtable_created_at": created_time,
-        "lead_id": _to_str(fields.get("Lead ID")),
+        "lead_id": _to_lead_id(fields.get("Lead ID")),
         "prospect_name": _to_str(fields.get("Prospect Name")),
         "outcome": _to_str(fields.get("Outcome")),
         # CURRENT disposition (form redesign ~2026-05-26): ONE form with
@@ -207,7 +223,7 @@ def parse_full_closer(
         "airtable_created_at": created_time,
 
         # Identity
-        "lead_id": _to_str(fields.get("Lead ID")),
+        "lead_id": _to_lead_id(fields.get("Lead ID")),
         "prospect_name": _to_str(fields.get("Prospect Name")),
         "prospect_email": _to_str(fields.get("Prospect Email")),
         "prospect_phone": _to_str(fields.get("Prospect Phone")),
