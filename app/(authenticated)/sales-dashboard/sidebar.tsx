@@ -26,8 +26,9 @@ const NAV: NavItem[] = [
   // Leads = the roster of every lead opted-in in the window (new + re-opt-in),
   // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },
-  // People = per-rep views (Call Activity, per-closer scheduled, bookings, cash).
-  { href: '/sales-dashboard/people', label: 'People' },
+  // Talent = per-rep views (Call Activity, per-closer scheduled, bookings, cash).
+  // Route stays /people; only the display name is "Talent".
+  { href: '/sales-dashboard/people', label: 'Talent' },
   // Calls = setter/closer-setter call recordings (raw V1).
   { href: '/sales-dashboard/calls', label: 'Calls' },
 ]

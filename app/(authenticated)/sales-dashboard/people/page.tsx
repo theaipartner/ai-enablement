@@ -97,8 +97,8 @@ export default async function SalesPeoplePage({
   return (
     <div>
       <HeaderBand
-        eyebrow="SALES · PEOPLE"
-        title="People."
+        eyebrow="SALES · TALENT"
+        title="Talent."
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <DateRangePicker
