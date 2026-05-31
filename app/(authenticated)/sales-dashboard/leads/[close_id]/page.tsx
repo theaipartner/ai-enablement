@@ -88,6 +88,9 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
       <Fact label="Latest opt-in" value={lead.latestOptInDate ? formatEtTimestamp(lead.latestOptInDate) : '—'} />
       <Fact label="Opt-ins" value={optIns != null ? String(optIns) : '—'} />
       <StageFact lead={lead} />
+      {lead.reactivatedAt ? (
+        <Fact label="Reactivated" value={formatEtDate(lead.reactivatedAt)} valueColor="var(--color-geg-warn)" />
+      ) : null}
       <Fact label="Dials" value={String(lead.totalCalls)} />
       <Fact
         label="Connected"

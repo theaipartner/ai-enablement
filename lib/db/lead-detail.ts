@@ -52,6 +52,10 @@ export type LeadDetail = {
   latestOptInDate: string | null
   numberOfOptIns: number | null
   qualified: Qualification
+  // Reactivation tag (close_leads.reactivated_at). Set once when a direct lead
+  // lost its strat spot (handover / ghost / cancel — see migration 0063/0064).
+  // null = not reactivated.
+  reactivatedAt: string | null
   // Booking path (ever) + per-lead funnel stages, same source/logic as the
   // leads roster + funnel boxes. booked = bookingType !== null.
   bookingType: BookingType
@@ -104,7 +108,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     .from('close_leads' as never)
     .select(
       'close_id, display_name, date_created, date_first_opted_in, ' +
-        'latest_opt_in_date, number_of_opt_ins, marketing_qualified, contacts, utm_term',
+        'latest_opt_in_date, number_of_opt_ins, marketing_qualified, contacts, utm_term, reactivated_at',
     )
     .eq('close_id' as never, closeId)
     .maybeSingle()
@@ -120,6 +124,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     marketing_qualified: string | null
     contacts: unknown
     utm_term: string | null
+    reactivated_at: string | null
   }
 
   // Lead identity for matching Calendly bookings (email / utm_term / name).
@@ -400,6 +405,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     latestOptInDate: lead.latest_opt_in_date,
     numberOfOptIns: lead.number_of_opt_ins,
     qualified: qualFromMarketingQualified(lead.marketing_qualified),
+    reactivatedAt: lead.reactivated_at,
     bookingType,
     confirmed,
     showed,
