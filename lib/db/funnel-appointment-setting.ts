@@ -1514,6 +1514,10 @@ export type CallActivityRepRow = {
   // Setter form columns: htBookings, dcBookings, followUps, dqs.
   htBookings: number        // 'High Ticket booking'
   dcBookings: number        // 'Digital College booking'
+  // DC closes credited to the booking setter — a DC meeting they booked that
+  // closed (Robby's DC form OR an Aman downsell). Setter family only; 0 for
+  // closers. Sourced separately from the close forms, not the triage status.
+  dcCloses: number
   followUps: number         // 'Setter pipeline / Follow up' (+ 'Unresponsive – Setter Handover', merged per Drake)
   // Closer form columns: confirmedBooks, confirmedNewTime, downsellsOnCall, followUps, dqs.
   confirmedBooks: number    // 'Confirmed Booking'
@@ -1840,6 +1844,66 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     }
   }
 
+  // DC-close credit per booking setter (Drake 2026-05-31). A Digital College
+  // close is credited back to the setter who booked the meeting, from BOTH
+  // DC-close paths: Robby's dedicated DC sale form (airtable_digital_college_sales,
+  // Closed?=Yes) and Aman's downsell on the closer report (call_outcome =
+  // 'Digital College Closed'). Setter resolved by the same record-id→user
+  // resolver as the triage forms. Deduped by lead so a lead counts once;
+  // range-filtered by the close's effective time. (Booking credit stays on the
+  // existing triage-sourced "DC Book" column — this adds the missing closes.)
+  const dcClosesBySetterUser = new Map<string, number>()
+  {
+    // (setterUserId, leadId) pairs already counted — dedupe across both sources.
+    const counted = new Set<string>()
+    const credit = (
+      uid: string | null,
+      leadId: string | null,
+      effIso: string | null,
+    ) => {
+      if (!uid) return
+      if (!effIso || effIso < range.startUtcIso || effIso >= range.endUtcIso) return
+      const key = `${uid}::${leadId ?? ''}`
+      if (leadId && counted.has(key)) return
+      if (leadId) counted.add(key)
+      dcClosesBySetterUser.set(uid, (dcClosesBySetterUser.get(uid) ?? 0) + 1)
+    }
+    // (a) Robby's DC sale form.
+    {
+      const { data, error } = await sb
+        .from('airtable_digital_college_sales' as never)
+        .select('lead_id, closed, setter_record_ids, setter_names, date_time_of_call, airtable_created_at')
+        .is('excluded_at', null)
+      if (error) throw new Error(`digital_college_sales (setter credit) read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{
+        lead_id: string | null; closed: string | null
+        setter_record_ids: string[] | null; setter_names: string[] | null
+        date_time_of_call: string | null; airtable_created_at: string | null
+      }>) {
+        if ((r.closed ?? '').trim().toLowerCase() !== 'yes') continue
+        const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+        credit(uid, r.lead_id, r.date_time_of_call ?? r.airtable_created_at)
+      }
+    }
+    // (b) Aman-downsell DC closes on the closer report.
+    {
+      const { data, error } = await sb
+        .from('airtable_full_closer_report' as never)
+        .select('lead_id, call_outcome, setter_record_ids, setter_names, date_time_of_call, airtable_created_at')
+        .eq('form_type', 'New')
+      if (error) throw new Error(`closer_report (DC setter credit) read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{
+        lead_id: string | null; call_outcome: string | null
+        setter_record_ids: string[] | null; setter_names: string[] | null
+        date_time_of_call: string | null; airtable_created_at: string | null
+      }>) {
+        if (!(r.call_outcome ?? '').toLowerCase().includes('digital college closed')) continue
+        const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+        credit(uid, r.lead_id, r.date_time_of_call ?? r.airtable_created_at)
+      }
+    }
+  }
+
   // Compose per-rep rows. Volume/sessions are per-rep; outcomes come
   // from the form-type-routed maps.
   const setters: CallActivityRepRow[] = []
@@ -1863,6 +1927,9 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       totalConnected: familySessions + familyFormOnly,
       htBookings: o.htBookings,
       dcBookings: o.dcBookings,
+      // DC-close credit applies to the setter who booked the meeting; closers
+      // are credited as the closer elsewhere, so this stays setter-only.
+      dcCloses: family === 'setter' ? (dcClosesBySetterUser.get(userId) ?? 0) : 0,
       followUps: o.followUps,
       confirmedBooks: o.confirmedBooks,
       confirmedNewTime: o.confirmedNewTime,
@@ -1899,7 +1966,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
   let calls = 0, over90s = 0, connected = 0, missing = 0
-  let htBookings = 0, dcBookings = 0, followUps = 0
+  let htBookings = 0, dcBookings = 0, dcCloses = 0, followUps = 0
   let confirmedBooks = 0, confirmedNewTime = 0, downsellsOnCall = 0
   let dqs = 0
   for (const r of rows) {
@@ -1908,6 +1975,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     connected += r.totalConnected
     htBookings += r.htBookings
     dcBookings += r.dcBookings
+    dcCloses += r.dcCloses
     followUps += r.followUps
     confirmedBooks += r.confirmedBooks
     confirmedNewTime += r.confirmedNewTime
@@ -1923,6 +1991,7 @@ function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
     totalConnected: connected,
     htBookings,
     dcBookings,
+    dcCloses,
     followUps,
     confirmedBooks,
     confirmedNewTime,

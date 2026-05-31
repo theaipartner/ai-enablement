@@ -713,6 +713,7 @@ type RepSortKey =
   // setter-only
   | 'htBookings'
   | 'dcBookings'
+  | 'dcCloses'
   // closer-only
   | 'confirmedBooks'
   | 'confirmedNewTime'
@@ -722,10 +723,11 @@ type RepSortKey =
   | 'dqs'
   | 'missing'
 
-// Setter column order: Rep | Dials | Connected | HT Book | DC Book |
-// Setter pipeline | DQ | Missing. (Call Status options on the Setter
-// Triage Form; 2026-05-26 redesign — no more Reconfirm.)
-const SETTER_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.95fr 0.7fr 0.8fr'
+// Setter column order: Rep | Dials | Connected | HT Book | DC Book | DC Close |
+// Setter pipeline | DQ | Missing. (Call Status options on the Setter Triage
+// Form; 2026-05-26 redesign — no more Reconfirm. DC Close added 2026-05-31 —
+// the booking setter's credit for a DC close, from the close forms.)
+const SETTER_COLS = '1.5fr 0.7fr 0.85fr 0.7fr 0.7fr 0.7fr 0.95fr 0.7fr 0.8fr'
 
 // Closer column order: Rep | Dials | Connected | Confirmed | Confirmed
 // new time | Downsold | Setter pipeline | DQ | Missing. (Call Status
@@ -758,6 +760,7 @@ export function PerRepCallActivityTable({
         case 'connected': return r.totalConnected
         case 'htBookings': return r.htBookings
         case 'dcBookings': return r.dcBookings
+        case 'dcCloses': return r.dcCloses
         case 'followUps': return r.followUps
         case 'confirmedBooks': return r.confirmedBooks
         case 'confirmedNewTime': return r.confirmedNewTime
@@ -806,6 +809,7 @@ export function PerRepCallActivityTable({
             <>
               <SortableHeader label="HT Book" sortKey="htBookings" state={state} onToggle={onToggle} />
               <SortableHeader label="DC Book" sortKey="dcBookings" state={state} onToggle={onToggle} />
+              <SortableHeader label="DC Close" sortKey="dcCloses" state={state} onToggle={onToggle} />
               <SortableHeader label="Setter pipeline" sortKey="followUps" state={state} onToggle={onToggle} />
               <SortableHeader label="DQ" sortKey="dqs" state={state} onToggle={onToggle} />
             </>
@@ -832,6 +836,7 @@ export function PerRepCallActivityTable({
             <>
               <Num value={aggregate.htBookings.toString()} />
               <Num value={aggregate.dcBookings.toString()} />
+              <Num value={aggregate.dcCloses.toString()} />
               <Num value={aggregate.followUps.toString()} />
               <Num value={aggregate.dqs.toString()} />
             </>
@@ -892,6 +897,7 @@ export function PerRepCallActivityTable({
                         <>
                           <Num value={r.htBookings.toString()} />
                           <Num value={r.dcBookings.toString()} />
+                          <Num value={r.dcCloses.toString()} />
                           <Num value={r.followUps.toString()} />
                           <Num value={r.dqs.toString()} />
                         </>
