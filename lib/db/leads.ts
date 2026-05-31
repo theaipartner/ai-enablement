@@ -45,8 +45,12 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // Per-lead form signals (NOT per-call). The page gates these by bookingType
   // to build each funnel's stages.
   confirmed: boolean // confirmation form (Closer Triage Form) marked confirmed
-  showed: boolean    // any New closer form shows attendance
-  closed: boolean    // any New closer form is a full close (HT/DC)
+  showed: boolean    // any New closer form / DC sale form shows attendance
+  closed: boolean    // a full close — HT/DC closer form OR a DC sale (Closed?=Yes)
+  // Which offer the close was: 'ht' (high ticket) | 'dc' (Digital College) |
+  // null (not closed). HT wins if a lead somehow has both. Drives the Journey
+  // "Closed" stage label ("High Ticket" / "Digital College") + the funnel split.
+  closeType: 'ht' | 'dc' | null
   // Membership signals for the leads-page funnel stack (Drake 2026-05-31):
   //   - hasDirect: ever booked the direct strategy-call link → a "direct
   //     booking lead" (includes reactivations).
@@ -222,8 +226,17 @@ function outcomeShowed(callOutcome: string | null): boolean {
 
 // New-form Call Outcome → a full close (Deposit is NOT a close).
 function outcomeClosed(callOutcome: string | null): boolean {
+  return outcomeCloseType(callOutcome) !== null
+}
+
+// New-form Call Outcome → which offer closed, or null. Aman's downsell DC
+// closes ride the closer report as 'Digital College Closed'; Robby's DC closes
+// live on airtable_digital_college_sales (handled separately).
+function outcomeCloseType(callOutcome: string | null): 'ht' | 'dc' | null {
   const v = (callOutcome ?? '').trim().toLowerCase()
-  return v.includes('high ticket closed') || v.includes('digital college closed')
+  if (v.includes('high ticket closed')) return 'ht'
+  if (v.includes('digital college closed')) return 'dc'
+  return null
 }
 
 export async function getLeadsForRange(
@@ -382,6 +395,12 @@ export async function getLeadsForRange(
   // Close moment per lead = the EARLIEST closing (HT/DC) form's meeting time.
   // Used to cap raw dials at close (post-close fulfillment dials are excluded).
   const closeTime = new Map<string, string>()
+  // Which offer closed each lead — 'ht' beats 'dc' when a lead has both.
+  const closeTypeByLead = new Map<string, 'ht' | 'dc'>()
+  const setCloseType = (leadId: string, t: 'ht' | 'dc') => {
+    if (closeTypeByLead.get(leadId) === 'ht') return // ht wins, never downgrade
+    closeTypeByLead.set(leadId, t)
+  }
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
@@ -407,8 +426,56 @@ export async function getLeadsForRange(
         showedLeadIds.add(r.lead_id)
         if (postReact) reactShowedIds.add(r.lead_id)
       }
-      if (outcomeClosed(r.call_outcome)) {
+      const ct = outcomeCloseType(r.call_outcome)
+      if (ct) {
         closedLeadIds.add(r.lead_id)
+        setCloseType(r.lead_id, ct)
+        if (postReact) reactClosedIds.add(r.lead_id)
+        if (r.date_time_of_call) {
+          const prev = closeTime.get(r.lead_id)
+          if (!prev || r.date_time_of_call < prev) closeTime.set(r.lead_id, r.date_time_of_call)
+        }
+      }
+    }
+  }
+
+  // 5b. Digital College sales (Robby's dedicated low-ticket form). A filed
+  //     form = showed (no no-show field); Closed?=Yes = a DC close; Follow Up?
+  //     = No = DQ (the form's Follow Up field was mis-built — see
+  //     funnel-digital-college.ts). Monotonic: a DC show ⇒ booked+connected and
+  //     a DC close ⇒ showed+booked+connected, enforced downstream by
+  //     reachedStage's cumulative back-fill once showed/closed are set here.
+  for (let i = 0; i < leadIds.length; i += 100) {
+    const chunk = leadIds.slice(i, i + 100)
+    const { data, error } = await sb
+      .from('airtable_digital_college_sales' as never)
+      .select('lead_id, closed, follow_up, prospect_name, plans, date_time_of_call, airtable_created_at')
+      .is('excluded_at', null)
+      .in('lead_id', chunk)
+    if (error) throw new Error(`leads: digital college sales read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{
+      lead_id: string | null; closed: string | null; follow_up: string | null
+      prospect_name: string | null; plans: string[] | null
+      date_time_of_call: string | null; airtable_created_at: string | null
+    }>) {
+      if (!r.lead_id) continue
+      const stamp = r.date_time_of_call ?? r.airtable_created_at
+      // Reset on re-opt-in: a DC form from a prior journey doesn't count.
+      if (!afterOptIn(r.lead_id, stamp)) continue
+      // Drop blank Airtable rows (no outcome, no plan, no name).
+      const isBlank = !r.closed && !r.prospect_name && (r.plans ?? []).length === 0
+      if (isBlank) continue
+      const reactAt = leadReactivatedAt.get(r.lead_id) ?? null
+      const postReact = reactAt != null && stamp != null &&
+        new Date(stamp).getTime() >= new Date(reactAt).getTime()
+      // Follow Up? = No is a DQ (mis-built field).
+      if (norm(r.follow_up) === 'no') dqLeadIds.add(r.lead_id)
+      // A filed form = showed.
+      showedLeadIds.add(r.lead_id)
+      if (postReact) reactShowedIds.add(r.lead_id)
+      if (norm(r.closed) === 'yes') {
+        closedLeadIds.add(r.lead_id)
+        setCloseType(r.lead_id, 'dc')
         if (postReact) reactClosedIds.add(r.lead_id)
         if (r.date_time_of_call) {
           const prev = closeTime.get(r.lead_id)
@@ -501,15 +568,19 @@ export async function getLeadsForRange(
     // Reactive-phase connected — the same form-OR-call signal, but post-handover:
     // a ≥90s dial or a setter triage form filed after reactivated_at.
     const reactConnected = postReactConnectedIds.has(r.leadId) || postReactTriagedIds.has(r.leadId)
+    const closeType = closeTypeByLead.get(r.leadId) ?? null
+    // Once closed, the Journey "Closed" stage reads the offer ("High Ticket" /
+    // "Digital College") rather than a bare "Closed" (Drake 2026-05-31).
+    const closedWord = closeType === 'dc' ? 'Digital College' : closeType === 'ht' ? 'High Ticket' : 'Closed'
     let statusWord: string
     if (leadType === 'dq') statusWord = 'DQ'
-    else if (leadType === 'direct') statusWord = closed ? 'Closed' : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
+    else if (leadType === 'direct') statusWord = closed ? closedWord : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
     else if (leadType === 'reactivation')
       // Reactive phase only — furthest stage reached AFTER the handover. Floors
       // at "Eligible" (lost the spot, nothing since) rather than carrying over
       // the direct-phase "Connected".
       statusWord = reactClosed
-        ? 'Closed'
+        ? closedWord
         : reactShowed
           ? 'Showed'
           : reactBooked
@@ -517,7 +588,7 @@ export async function getLeadsForRange(
             : reactConnected
               ? 'Connected'
               : 'Eligible'
-    else statusWord = closed ? 'Closed' : showed ? 'Showed' : booked ? 'Booked' : connected ? 'Connected' : '—'
+    else statusWord = closed ? closedWord : showed ? 'Showed' : booked ? 'Booked' : connected ? 'Connected' : '—'
 
     return {
       ...r,
@@ -526,6 +597,7 @@ export async function getLeadsForRange(
       confirmed,
       showed,
       closed,
+      closeType,
       hasDirect,
       hasPartnership,
       reactivatedAt,
