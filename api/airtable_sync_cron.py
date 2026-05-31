@@ -128,6 +128,21 @@ def run_airtable_sync_cron() -> dict[str, Any]:
     since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     outcome = sync_all(client, db, since=since_iso)
 
+    # Maintain close_leads.reactivated_at from the forms just synced
+    # (set-once; tag_reactivated_leads() only ever tags newly-eligible
+    # leads — see migration 0064). Fail-soft: a tagging error must not
+    # halt the cron's read path or its audit write.
+    reactivation_tagged: int | None = None
+    try:
+        rpc_resp = db.rpc("tag_reactivated_leads").execute()
+        reactivation_tagged = (
+            rpc_resp.data if isinstance(rpc_resp.data, int) else None
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        logger.warning(
+            "airtable_sync_cron: reactivation tagging failed: %s", exc,
+        )
+
     # Webhook refresh — cheap insurance. Only fires if AIRTABLE_WEBHOOK_ID
     # is set (post-gate-d). Failure here is non-fatal; the read path
     # already ran.
@@ -157,6 +172,7 @@ def run_airtable_sync_cron() -> dict[str, Any]:
         "parse_failures": outcome.parse_failures,
         "full_closer_records_seen": outcome.full_closer_records_seen,
         "setter_name_fill_count": outcome.setter_name_fill_count,
+        "reactivation_tagged": reactivation_tagged,
         "webhook_refresh": refresh_result,
         "errors": outcome.errors[:10],
     }

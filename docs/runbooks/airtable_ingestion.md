@@ -16,6 +16,8 @@ Mirrors three Airtable sources into two Supabase mirror tables:
 
 All three converge on the same pipeline + parser per table (Full Closer parser threads `region` per source). Idempotent `ON CONFLICT (record_id) DO UPDATE`.
 
+After each sync the cron also calls `db.rpc("tag_reactivated_leads")` (migration `0064`) to maintain `close_leads.reactivated_at` from the forms just landed — a direct lead is tagged reactivated (set-once) the moment it loses its strategy-call spot: a confirmation form `Setter pipeline` handover, or a closer EOC form ghost/no-show/cancel (DQ + reschedule never trigger). Fail-soft — a tagging error is logged and never halts the sync. Backfilled once via `scripts/backfill_reactivated_at.py`. Drives the `/sales-dashboard/leads` reactivation funnel.
+
 ## The structural fact — webhook is load-bearing, not optional
 
 **Neither target table has a stored `lastModifiedTime` or `createdTime` field.** Incremental ingestion can only use Airtable's record-level `createdTime` metadata — which is created-only.
