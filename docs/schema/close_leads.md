@@ -48,6 +48,10 @@ Source data for the Gregory sales-side aggregation layer that produces the Engin
 ### Booking lifecycle
 `date_of_first_booked_call`, `latest_date_of_booked_call`, `date_first_connected` (`date`); `date_call_scheduled_for` (`timestamptz`); `direct_call_booked`, `confirmed_booking`, `call_connected`, `showed`, `triage_showed` (`text` — typically `'Yes'`/`'No'` or `'TRUE'`/`'FALSE'`).
 
+| Column | Type | Notes |
+|--------|------|-------|
+| `reactivated_at` | `timestamptz` | When a direct-booking lead (booked an Ai Partner Strategy Call) lost that spot and moved to the setter pipeline: confirmation form `call_status` = `Setter pipeline`/`DQ`, OR its first closer EOC form (the strategy meeting) = `DQ`/`Cancelled`/`Ghosted`/`Rescheduled` — AND it then had no active future strat booking for >3h (grace window that lets a drag-dropped reschedule keep its spot). Set once, permanent (never cleared). `null` = never reactivated. Added migration `0063`; populated by `scripts/backfill_reactivated_at.py` + maintained by the Airtable ingestion cron. Drives the `/sales-dashboard/leads` reactivation funnel + scopes that funnel's post-handover activity (dials/connected/books/shows/closes counted only after this timestamp). |
+
 ### Ownership
 | Column | Type | Notes |
 |--------|------|-------|
