@@ -302,10 +302,15 @@ export async function getLeadsForRange(
       const cs = norm(r.call_status)
       if (cs.includes('dq') && afterOptIn(r.lead_id, r.airtable_created_at)) dqLeadIds.add(r.lead_id)
       if (r.form_type === 'Closer Triage Form') {
+        // Closer Triage = confirmation: "Confirmed Booking" is the Confirmed
+        // stage (direct only), not a Booked signal.
         if (cs.startsWith('confirmed')) confirmedLeadIds.add(r.lead_id)
       } else {
+        // Setter triage: any booking status → Booked, including the old-sheet
+        // "Confirmed Booking" (a setter-side booking, not a Confirmed stage —
+        // there's one legacy row; the form no longer emits it).
         if (cs.includes('setter pipeline') || cs.includes('follow up')) setterConnectedIds.add(r.lead_id)
-        if (cs.includes('booking') && !cs.includes('confirmed')) setterBookedIds.add(r.lead_id)
+        if (cs.includes('booking')) setterBookedIds.add(r.lead_id)
       }
     }
   }
