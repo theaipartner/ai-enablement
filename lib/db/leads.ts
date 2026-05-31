@@ -299,8 +299,11 @@ export async function getLeadsForRange(
       lead_id: string | null; form_type: string | null; call_status: string | null; airtable_created_at: string | null
     }>) {
       if (!r.lead_id) continue
+      // Re-opting in resets a lead's stats (Drake 2026-05-31): a form from a
+      // prior journey (before the latest opt-in) doesn't count.
+      if (!afterOptIn(r.lead_id, r.airtable_created_at)) continue
       const cs = norm(r.call_status)
-      if (cs.includes('dq') && afterOptIn(r.lead_id, r.airtable_created_at)) dqLeadIds.add(r.lead_id)
+      if (cs.includes('dq')) dqLeadIds.add(r.lead_id)
       if (r.form_type === 'Closer Triage Form') {
         // Closer Triage = confirmation: "Confirmed Booking" is the Confirmed
         // stage (direct only), not a Booked signal.
@@ -336,7 +339,9 @@ export async function getLeadsForRange(
       lead_id: string | null; call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null
     }>) {
       if (!r.lead_id) continue
-      if (norm(r.call_outcome).includes('dq') && afterOptIn(r.lead_id, r.airtable_created_at)) dqLeadIds.add(r.lead_id)
+      // Reset on re-opt-in: skip closer forms from a prior journey.
+      if (!afterOptIn(r.lead_id, r.airtable_created_at)) continue
+      if (norm(r.call_outcome).includes('dq')) dqLeadIds.add(r.lead_id)
       if (outcomeShowed(r.call_outcome)) showedLeadIds.add(r.lead_id)
       if (outcomeClosed(r.call_outcome)) {
         closedLeadIds.add(r.lead_id)
@@ -354,7 +359,10 @@ export async function getLeadsForRange(
     const name = leadNames.get(r.leadId) ?? ''
     const qualified = leadQualified.get(r.leadId) ?? 'unknown'
     const hasDirect = bookedSince(directSig, r.leadId, emails, name, r.optInAt)
-    const hasPartnership = bookedEver(partnershipSig, r.leadId, emails, name)
+    // Both link tests are scoped to the latest opt-in — a booking from a prior
+    // journey doesn't count toward the current lifecycle (Drake 2026-05-31:
+    // re-opting in resets a lead's stats).
+    const hasPartnership = bookedSince(partnershipSig, r.leadId, emails, name, r.optInAt)
     const bookingType: BookingType =
       hasDirect && hasPartnership
         ? 'reactivation'

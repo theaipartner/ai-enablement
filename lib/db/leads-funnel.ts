@@ -61,12 +61,13 @@ type DialWindows = {
 
 // One outbound-call scan over the cohort → per-lead windowed dial counts.
 async function scanDialWindows(
-  leads: Array<{ leadId: string; reactivatedAt: string | null; closeTimeIso: string | null }>,
+  leads: Array<{ leadId: string; optInAt: string; reactivatedAt: string | null; closeTimeIso: string | null }>,
 ): Promise<Map<string, DialWindows>> {
   const out = new Map<string, DialWindows>()
   for (const l of leads) out.set(l.leadId, { dialsBeforeClose: 0, postReactDials: 0, postReactConnected: false })
   if (leads.length === 0) return out
 
+  const optInById = new Map(leads.map((l) => [l.leadId, l.optInAt]))
   const reactById = new Map(leads.map((l) => [l.leadId, l.reactivatedAt]))
   const closeById = new Map(leads.map((l) => [l.leadId, l.closeTimeIso]))
   const sb = createAdminClient()
@@ -89,6 +90,10 @@ async function scanDialWindows(
         if (!c.lead_id) continue
         const w = out.get(c.lead_id)
         if (!w) continue
+        // Reset on re-opt-in: only count dials at/after the lead's latest
+        // opt-in, so a prior journey's dials don't show on the current one.
+        const optInIso = optInById.get(c.lead_id) ?? null
+        if (optInIso && c.activity_at < optInIso) continue
         const closeIso = closeById.get(c.lead_id) ?? null
         // Cap at close: a dial after the lead's close is fulfillment, not sales.
         if (closeIso && c.activity_at > closeIso) continue
@@ -111,7 +116,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
   const isSetter = (r: LeadRow) => !isDirect(r)
 
   const win = await scanDialWindows(
-    rows.map((r) => ({ leadId: r.leadId, reactivatedAt: r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
+    rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
   )
   const dials = (r: LeadRow) => win.get(r.leadId)?.dialsBeforeClose ?? 0
   const postDials = (r: LeadRow) => win.get(r.leadId)?.postReactDials ?? 0

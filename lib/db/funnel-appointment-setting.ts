@@ -1320,7 +1320,14 @@ export async function getSpeedToLeadCohort(
         }>
         if (rows.length === 0) break
         for (const r of rows) {
-          if (!qualifyingMap.has(r.lead_id)) continue
+          const lead = qualifyingMap.get(r.lead_id)
+          if (!lead) continue
+          // Re-opting in resets a lead's stats (Drake 2026-05-31): only count
+          // calls at/after the lead's anchor opt-in. For new leads optInAt ≈
+          // creation (no-op); for re-opt-ins it drops the prior journey's
+          // dials/connects/first-call so intensity, connected, and speed all
+          // reflect the current journey only.
+          if (r.activity_at < lead.optInAt) continue
           if (r.user_id && r.raw_payload?.user_name && !nameByUser.has(r.user_id)) {
             nameByUser.set(r.user_id, r.raw_payload.user_name)
           }
