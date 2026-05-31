@@ -51,6 +51,84 @@ export type LeadsFunnel = {
   reactivation: PoolFunnelBox
 }
 
+// ── Funnel membership + stage predicates (the SINGLE source of truth) ──────────
+// The funnel boxes below AND the /leads roster filter both go through these, so
+// a funnel bar's count always equals the roster it filters to when clicked.
+
+// Lead-type filter values. 'direct' INCLUDES reactivation (reactivation ⊂
+// direct — a reactivated lead is still originally a direct booking), matching
+// the Direct funnel box. 'reactivation' is the post-handover subset; 'setter'
+// (a.k.a. opt-in) is everyone who never booked the strat link.
+export type LeadFilterType = 'direct' | 'setter' | 'reactivation'
+export type FunnelStage = 'connected' | 'booked' | 'confirmed' | 'showed' | 'closed'
+
+export const isDirect = (r: LeadRow): boolean => r.hasDirect || r.reactivatedAt !== null
+export const isReact = (r: LeadRow): boolean => r.reactivatedAt !== null
+export const isSetter = (r: LeadRow): boolean => !isDirect(r)
+
+// Does the lead belong to the given lead-type? (null = no type restriction = Total.)
+export function matchesType(r: LeadRow, type: LeadFilterType | null): boolean {
+  if (type === 'direct') return isDirect(r)
+  if (type === 'reactivation') return isReact(r)
+  if (type === 'setter') return isSetter(r)
+  return true
+}
+
+// Has the lead REACHED `stage` within funnel `type` (cumulative — a later stage
+// back-fills the earlier ones, so "showed" includes closes)? Mirrors the box
+// definitions exactly. `type` null = Total (all leads). Membership (matchesType)
+// is applied separately by the caller; this answers the stage question per type.
+export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: FunnelStage): boolean {
+  if (type === 'reactivation') {
+    switch (stage) {
+      case 'connected': return r.reactConnected || r.reactBooked || r.reactShowed || r.reactClosed
+      case 'booked': return r.reactBooked || r.reactShowed || r.reactClosed
+      case 'confirmed': return false // reactive funnel has no Confirmed stage
+      case 'showed': return r.reactShowed || r.reactClosed
+      case 'closed': return r.reactClosed
+    }
+  }
+  if (type === 'direct') {
+    switch (stage) {
+      case 'connected': return r.connected || r.confirmed || r.showed || r.closed
+      case 'booked': return true // every direct lead has booked, by definition
+      case 'confirmed': return r.confirmed || r.showed || r.closed
+      case 'showed': return r.showed || r.closed
+      case 'closed': return r.closed
+    }
+  }
+  if (type === 'setter') {
+    switch (stage) {
+      case 'connected': return r.connected || r.hasPartnership || r.showed || r.closed
+      case 'booked': return r.hasPartnership || r.showed || r.closed
+      case 'confirmed': return false // setter funnel has no Confirmed stage
+      case 'showed': return r.showed || r.closed
+      case 'closed': return r.closed
+    }
+  }
+  // Total (all leads).
+  const booked = r.hasDirect || r.hasPartnership
+  switch (stage) {
+    case 'connected': return r.connected || booked || r.showed || r.closed
+    case 'booked': return booked || r.showed || r.closed
+    case 'confirmed': return r.confirmed || r.showed || r.closed
+    case 'showed': return r.showed || r.closed
+    case 'closed': return r.closed
+  }
+}
+
+// Full /leads filter predicate: a lead matches when it's in the type AND has
+// reached the stage (either optional).
+export function matchesLeadFilter(
+  r: LeadRow,
+  type: LeadFilterType | null,
+  stage: FunnelStage | null,
+): boolean {
+  if (!matchesType(r, type)) return false
+  if (stage && !reachedStage(r, type, stage)) return false
+  return true
+}
+
 type DialWindows = {
   // Raw outbound dials with activity_at <= close (or all, if not closed).
   dialsBeforeClose: number
@@ -109,10 +187,6 @@ async function scanDialWindows(
 }
 
 export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise<LeadsFunnel> {
-  const isDirect = (r: LeadRow) => r.hasDirect || r.reactivatedAt !== null
-  const isReact = (r: LeadRow) => r.reactivatedAt !== null
-  const isSetter = (r: LeadRow) => !isDirect(r)
-
   const win = await scanDialWindows(
     rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
   )
@@ -132,18 +206,17 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     adspendUsd = null
   }
 
-  // Cumulative/monotonic across every box (matches the Direct ladder): a later
-  // stage back-fills the earlier ones. "Connected" is the form-OR-call signal
-  // (r.connected) — a self-booked direct lead with no ≥90s dial still counts as
-  // connected once booked, so books never exceed connected.
-  const booked = (r: LeadRow) => r.hasDirect || r.hasPartnership
+  // Every box's stage counts go through reachedStage (the shared predicate), so
+  // a bar's count equals exactly the roster it filters to when clicked. Stages
+  // are cumulative/monotonic: a later stage back-fills the earlier ones, and
+  // "connected" is form-OR-call, so books never exceed connected.
   const total: TotalBox = {
     optIns: rows.length,
     dials: sum(() => true, dials),
-    connected: count((r) => r.connected || booked(r) || r.showed || r.closed),
-    books: count((r) => booked(r) || r.showed || r.closed),
-    shows: count((r) => r.showed || r.closed),
-    closes: count((r) => r.closed),
+    connected: count((r) => reachedStage(r, null, 'connected')),
+    books: count((r) => reachedStage(r, null, 'booked')),
+    shows: count((r) => reachedStage(r, null, 'showed')),
+    closes: count((r) => reachedStage(r, null, 'closed')),
   }
 
   // Direct funnel — each stage counted ONCE per lead and CUMULATIVE: reaching a
@@ -164,11 +237,11 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
   const direct: DirectBox = {
     qualifiedOptIns: count((r) => r.qualified === 'qualified'),
     dials: sum(isDirect, dials),
-    books: count(isDirect),
-    connected: count((r) => isDirect(r) && (r.anyCallConnected || r.confirmed || r.showed || r.closed)),
-    confirms: count((r) => isDirect(r) && (r.confirmed || r.showed || r.closed)),
-    shows: count((r) => isDirect(r) && (r.showed || r.closed)),
-    closes: count((r) => isDirect(r) && r.closed),
+    books: count((r) => isDirect(r) && reachedStage(r, 'direct', 'booked')),
+    connected: count((r) => isDirect(r) && reachedStage(r, 'direct', 'connected')),
+    confirms: count((r) => isDirect(r) && reachedStage(r, 'direct', 'confirmed')),
+    shows: count((r) => isDirect(r) && reachedStage(r, 'direct', 'showed')),
+    closes: count((r) => isDirect(r) && reachedStage(r, 'direct', 'closed')),
   }
 
   const setter: PoolFunnelBox = {
@@ -176,10 +249,10 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     qualified: count((r) => isSetter(r) && r.qualified === 'qualified'),
     unqualified: count((r) => isSetter(r) && r.qualified === 'non-qualified'),
     dials: sum(isSetter, dials),
-    connected: count((r) => isSetter(r) && (r.connected || r.hasPartnership || r.showed || r.closed)),
-    books: count((r) => isSetter(r) && (r.hasPartnership || r.showed || r.closed)),
-    shows: count((r) => isSetter(r) && (r.showed || r.closed)),
-    closes: count((r) => isSetter(r) && r.closed),
+    connected: count((r) => isSetter(r) && reachedStage(r, 'setter', 'connected')),
+    books: count((r) => isSetter(r) && reachedStage(r, 'setter', 'booked')),
+    shows: count((r) => isSetter(r) && reachedStage(r, 'setter', 'showed')),
+    closes: count((r) => isSetter(r) && reachedStage(r, 'setter', 'closed')),
   }
 
   // Reactivation funnel — fully POST-handover: every stage counts only activity
@@ -196,10 +269,10 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     qualified: count((r) => isReact(r) && r.qualified === 'qualified'),
     unqualified: count((r) => isReact(r) && r.qualified === 'non-qualified'),
     dials: sum(isReact, postDials),
-    connected: count((r) => isReact(r) && (r.reactConnected || r.reactBooked || r.reactShowed || r.reactClosed)),
-    books: count((r) => isReact(r) && (r.reactBooked || r.reactShowed || r.reactClosed)),
-    shows: count((r) => isReact(r) && (r.reactShowed || r.reactClosed)),
-    closes: count((r) => isReact(r) && r.reactClosed),
+    connected: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'connected')),
+    books: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'booked')),
+    shows: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'showed')),
+    closes: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'closed')),
   }
 
   return { adspendUsd, total, direct, setter, reactivation }
