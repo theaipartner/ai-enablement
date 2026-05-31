@@ -1,5 +1,6 @@
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getCeoControlCenterData } from '@/lib/db/ceo-control-center'
+import { getMissingFormFlags, type MissingFormFlag } from '@/lib/db/ceo-missing-forms'
 
 // CEO Control Center — top-level admin metric tiles.
 // New Cash / Backend Cash are placeholder values for now; Total
@@ -18,8 +19,17 @@ const USD_FMT = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
+function formatEtTime(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(iso))
+}
+
 export default async function CeoControlCenterPage() {
-  const data = await getCeoControlCenterData()
+  const [data, missing] = await Promise.all([getCeoControlCenterData(), getMissingFormFlags()])
 
   return (
     <div style={{ padding: '32px 48px 64px', maxWidth: 1480, width: '100%' }}>
@@ -56,6 +66,58 @@ export default async function CeoControlCenterPage() {
           value={USD_FMT.format(data.ad_spend_mtd)}
         />
       </div>
+
+      <MissingFormsPanel setter={missing.setter} closer={missing.closer} />
+    </div>
+  )
+}
+
+// Today's overdue forms — connected setter calls with no triage form 15 min on,
+// and closer meetings with no EOC form 1.5 h after start. Clears itself once the
+// forms land. Hidden entirely when nothing is overdue.
+function MissingFormsPanel({ setter, closer }: { setter: MissingFormFlag[]; closer: MissingFormFlag[] }) {
+  const total = setter.length + closer.length
+  if (total === 0) return null
+  return (
+    <div
+      style={{
+        marginTop: 28,
+        padding: '20px 24px 22px',
+        background: 'color-mix(in srgb, var(--color-geg-warn) 7%, transparent)',
+        border: '1px solid var(--color-geg-warn-border)',
+        borderRadius: 10,
+      }}
+    >
+      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-warn)', marginBottom: 14 }}>
+        ⚠ Forms not filled · today · {total}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 24 }}>
+        <FlagColumn title="Setter · connected call, no triage form (15 min)" flags={setter} />
+        <FlagColumn title="Closer · meeting started, no EOC form (1.5 h)" flags={closer} />
+      </div>
+    </div>
+  )
+}
+
+function FlagColumn({ title, flags }: { title: string; flags: MissingFormFlag[] }) {
+  return (
+    <div>
+      <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 8 }}>
+        {title}
+      </div>
+      {flags.length === 0 ? (
+        <div className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>All filled ✓</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {flags.map((f, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
+              <span className="geg-serif" style={{ color: 'var(--color-geg-text)' }}>{f.leadName}</span>
+              <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-3)' }}>· {f.talentName}</span>
+              <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', marginLeft: 'auto' }}>{formatEtTime(f.atIso)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
