@@ -71,10 +71,14 @@ export type LeadRow = SpeedToLeadCohortRow & {
   reactBooked: boolean
   reactShowed: boolean
   reactClosed: boolean
-  // Funnel "connected" — a real conversation: ≥90s dial OR a setter triage form
-  // OR a confirmed confirmation (no-answer confirmations excluded). Once per
-  // lead. reactConnected is the same signal scoped post-handover.
+  // Raw connect evidence — ≥90s dial OR setter triage form OR a confirmation
+  // that reached them (any status except Unresponsive – Setter Handover).
   connected: boolean
+  // Effective "connected" — the general signal used by the Total funnel / speed
+  // box / roster / per-lead page: `connected` OR a setter/reactive booking
+  // (hasPartnership) OR showed/closed. A PURE DIRECT booking is NOT a connect.
+  connectedEffective: boolean
+  // Raw connect evidence scoped post-handover (reactive phase).
   reactConnected: boolean
   // Computed status for the roster Status column (Close's status_label is NOT
   // used — it's inaccurate). leadType drives the colour; statusWord is the
@@ -484,10 +488,16 @@ export async function getLeadsForRange(
           ? 'direct'
           : 'optin'
     const booked = hasPartnership || setterBookedIds.has(r.leadId)
-    // Connected (funnel/roster) = a real conversation: a ≥90s dial, a setter
-    // triage form, or a confirmed confirmation. (No-answer confirmations don't
-    // count.) Counted once per lead; the per-lead page still shows raw counts.
+    // Raw connect evidence: a ≥90s dial, a setter triage form, or a confirmation
+    // that reached the lead (any status except Unresponsive – Setter Handover).
     const connected = r.anyCallConnected || setterTriagedIds.has(r.leadId) || confirmReachedIds.has(r.leadId)
+    // Effective "connected" = the general "did we reach them", used by the Total
+    // funnel, the speed box, the roster column, and the per-lead page. A
+    // setter/reactive booking (hasPartnership) counts — booking it required a
+    // conversation — as does a show/close. A PURE DIRECT booking does NOT count:
+    // a self-booked strat call is not a connection. (So the Total funnel's Books
+    // can exceed its Connected — that's intended.)
+    const connectedEffective = connected || hasPartnership || showed || closed
     // Reactive-phase connected — the same form-OR-call signal, but post-handover:
     // a ≥90s dial or a setter triage form filed after reactivated_at.
     const reactConnected = postReactConnectedIds.has(r.leadId) || postReactTriagedIds.has(r.leadId)
@@ -521,6 +531,7 @@ export async function getLeadsForRange(
       reactivatedAt,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
       connected,
+      connectedEffective,
       reactConnected,
       reactBooked,
       reactShowed,

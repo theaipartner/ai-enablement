@@ -155,7 +155,9 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       color: 'var(--color-geg-pos)',
       stages: [
         { label: 'Booked', hit: true },
-        { label: 'Connected', hit: lead.connected },
+        // Connected surfaces in the LATEST lane — for a reactivated lead it shows
+        // in the Reactivation segment below, not here.
+        { label: 'Connected', hit: lead.connected && !lead.reactivatedAt },
         { label: 'Confirmed', hit: lead.confirmed },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
@@ -185,7 +187,10 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       since: lead.reactivatedAt,
       stages: [
         { label: 'Eligible', hit: true },
-        { label: 'Connected', hit: lead.reactConnected || lead.reactBooked || lead.reactShowed || lead.reactClosed },
+        // A reactivated lead is connected by definition of being reachable (and
+        // a DQ always implies a connect) — surface Connected here, the latest
+        // lane, whenever the lead connected at all.
+        { label: 'Connected', hit: lead.connected },
         { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
         { label: 'Closed', hit: lead.reactClosed },

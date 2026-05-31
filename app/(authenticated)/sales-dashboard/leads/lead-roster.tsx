@@ -135,10 +135,10 @@ function LeadRowView({ r, canDelete, backQuery }: { r: LeadRow; canDelete: boole
       <span
         className="geg-mono"
         style={{ fontSize: 11, letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        title="Yes when we reached the lead — a ≥90s call, a setter triage form, or a confirmation that reached them. Bracket = total ≥90s talk time (omitted when reached only via a form); ×N = how many calls connected."
+        title="Yes when we reached the lead — a ≥90s call, a setter triage form, a confirmation that reached them, a setter/reactive booking, or a show/close. A pure self-booked direct call does NOT count. Bracket = total ≥90s talk time (omitted when reached only via a form/booking); ×N = how many calls connected."
       >
-        <span style={{ color: r.connected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
-          {r.connected ? 'Yes' : r.firstCallAt ? 'No' : '—'}
+        <span style={{ color: r.connectedEffective ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
+          {r.connectedEffective ? 'Yes' : r.firstCallAt ? 'No' : '—'}
         </span>
         {r.totalConnectedDurationSec > 0 ? (
           <span style={{ color: 'var(--color-geg-text-faint)' }}>({formatDuration(r.totalConnectedDurationSec)})</span>

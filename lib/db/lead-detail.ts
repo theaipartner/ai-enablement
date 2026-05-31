@@ -458,9 +458,12 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     reactTriaged ||
     calls.some((c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt))
 
-  // Broad connected — a ≥90s call OR a setter triage form OR a confirmation that
-  // reached the lead. (connected[] above is the ≥90s-call list, for duration.)
-  const isConnected = connected.length > 0 || setterTriaged || confirmReached
+  // Effective connected — the general "did we reach them": a ≥90s call, a setter
+  // triage form, a confirmation that reached them, a setter/reactive booking, or
+  // a show/close. A pure direct (self-booked) booking does NOT count.
+  // (connected[] above is the ≥90s-call list, used only for talk-time.)
+  const isConnected =
+    connected.length > 0 || setterTriaged || confirmReached || hasPartnership || showed || closed
   const reactBooked = partnershipCreatedTimes.some((t) => afterReact(t))
 
   return {

@@ -99,7 +99,9 @@ export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: Fun
   }
   if (type === 'setter') {
     switch (stage) {
-      case 'connected': return r.connected || r.hasPartnership || r.showed || r.closed
+      // Setter connected = a setter booking (hasPartnership) counts, plus the
+      // raw connect / show / close. This is connectedEffective.
+      case 'connected': return r.connectedEffective
       case 'booked': return r.hasPartnership || r.showed || r.closed
       case 'confirmed': return false // setter funnel has no Confirmed stage
       case 'showed': return r.showed || r.closed
@@ -109,7 +111,10 @@ export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: Fun
   // Total (all leads).
   const booked = r.hasDirect || r.hasPartnership
   switch (stage) {
-    case 'connected': return r.connected || booked || r.showed || r.closed
+    // A PURE DIRECT booking is NOT a connection, so Connected uses
+    // connectedEffective (which excludes hasDirect) while Booked includes it —
+    // Books can therefore exceed Connected in Total, by design.
+    case 'connected': return r.connectedEffective
     case 'booked': return booked || r.showed || r.closed
     case 'confirmed': return r.confirmed || r.showed || r.closed
     case 'showed': return r.showed || r.closed
