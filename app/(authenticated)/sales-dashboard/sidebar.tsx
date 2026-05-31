@@ -29,8 +29,8 @@ const NAV: NavItem[] = [
   // Talent = per-rep views (Call Activity, per-closer scheduled, bookings, cash).
   // Route stays /people; only the display name is "Talent".
   { href: '/sales-dashboard/people', label: 'Talent' },
-  // Calls = setter/closer-setter call recordings (raw V1).
-  { href: '/sales-dashboard/calls', label: 'Calls' },
+  // The Calls list page is gone — per-call review pages are reached from the
+  // per-lead Lifecycle (each call links there, and returns "Back to lead").
 ]
 
 export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {

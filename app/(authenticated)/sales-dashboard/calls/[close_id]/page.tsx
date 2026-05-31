@@ -24,16 +24,24 @@ export const dynamic = 'force-dynamic'
 
 export default async function SetterCallDetailPage({
   params,
+  searchParams,
 }: {
   params: { close_id: string }
+  searchParams?: { lead?: string | string[] }
 }) {
   const id = decodeURIComponent(params.close_id)
   const detail = await getSetterCallById(id)
   if (!detail) notFound()
 
+  // Return to the lead this call was opened from (carried as ?lead=), falling
+  // back to the call's own lead, then the leads roster.
+  const fromLead = (Array.isArray(searchParams?.lead) ? searchParams?.lead[0] : searchParams?.lead) ?? null
+  const leadId = fromLead || detail.prospect_lead_id || null
+  const backHref = leadId ? `/sales-dashboard/leads/${encodeURIComponent(leadId)}` : '/sales-dashboard/leads'
+
   return (
     <div style={{ padding: '4px 8px 28px' }}>
-      <BackLink />
+      <BackLink href={backHref} hasLead={!!leadId} />
       <HeaderBlock detail={detail} />
 
       <div
@@ -62,10 +70,10 @@ export default async function SetterCallDetailPage({
 // Header — eyebrow + title + pill row
 // ----------------------------------------------------------------------
 
-function BackLink() {
+function BackLink({ href, hasLead }: { href: string; hasLead: boolean }) {
   return (
     <Link
-      href="/sales-dashboard/calls"
+      href={href}
       className="geg-mono"
       style={{
         display: 'inline-block',
@@ -77,7 +85,7 @@ function BackLink() {
         textDecoration: 'none',
       }}
     >
-      ← Back to calls
+      {hasLead ? '← Back to lead' : '← Back to leads'}
     </Link>
   )
 }

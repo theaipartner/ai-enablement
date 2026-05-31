@@ -70,7 +70,7 @@ export default async function LeadDetailPage({
       {lead.timeline.length === 0 && lead.calls.length === 0 ? (
         <Empty>No activity since the latest opt-in.</Empty>
       ) : (
-        <Lifecycle timeline={lead.timeline} calls={lead.calls} />
+        <Lifecycle timeline={lead.timeline} calls={lead.calls} leadId={lead.leadId} />
       )}
     </div>
   )
@@ -318,7 +318,7 @@ type DayGroup = {
   followUps: string[]
 }
 
-function Lifecycle({ timeline, calls }: { timeline: LeadTimelineEvent[]; calls: LeadCallEntry[] }) {
+function Lifecycle({ timeline, calls, leadId }: { timeline: LeadTimelineEvent[]; calls: LeadCallEntry[]; leadId: string }) {
   const byDay = new Map<string, DayGroup>()
   const get = (iso: string): DayGroup => {
     const key = etDayKey(iso)
@@ -346,13 +346,13 @@ function Lifecycle({ timeline, calls }: { timeline: LeadTimelineEvent[]; calls: 
   return (
     <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 14 }}>
       {days.map((d) => (
-        <DayBlock key={d.key} day={d} />
+        <DayBlock key={d.key} day={d} leadId={leadId} />
       ))}
     </div>
   )
 }
 
-function DayBlock({ day }: { day: DayGroup }) {
+function DayBlock({ day, leadId }: { day: DayGroup; leadId: string }) {
   return (
     <div style={{ border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
       <div
@@ -375,7 +375,7 @@ function DayBlock({ day }: { day: DayGroup }) {
           </Row>
         ) : null}
         {day.calls.map((c) => (
-          <CallRow key={c.closeCallId} c={c} />
+          <CallRow key={c.closeCallId} c={c} leadId={leadId} />
         ))}
         {day.forms.map((f, i) => (
           <FormRow key={`f${i}`} ev={f} />
@@ -401,13 +401,15 @@ function Row({ time, children }: { time: string; children: React.ReactNode }) {
   )
 }
 
-function CallRow({ c }: { c: LeadCallEntry }) {
+function CallRow({ c, leadId }: { c: LeadCallEntry; leadId: string }) {
   const color = c.connected ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'
+  // Carry the source lead so the per-call page's "Back to lead" returns here.
+  const callHref = `/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}?lead=${encodeURIComponent(leadId)}`
   return (
     <Row time={formatEtTime(c.activityAt)}>
       <Dot color={color} />
       <Link
-        href={`/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}`}
+        href={callHref}
         className="geg-serif"
         style={{ fontSize: 13, color: 'var(--color-geg-text)', textDecoration: 'none' }}
       >
@@ -417,7 +419,7 @@ function CallRow({ c }: { c: LeadCallEntry }) {
       <span className="geg-mono" style={{ fontSize: 11, color }}>{formatDuration(c.durationSec)}</span>
       {!c.connected ? <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>(not connected)</span> : null}
       <Link
-        href={`/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}`}
+        href={callHref}
         className="geg-mono"
         style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 6px', textDecoration: 'none', marginLeft: 'auto' }}
       >
