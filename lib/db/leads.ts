@@ -344,9 +344,10 @@ export async function getLeadsForRange(
         // Closer Triage = confirmation: "Confirmed Booking" is the Confirmed
         // stage (direct only), not a Booked signal.
         if (cs.startsWith('confirmed')) confirmedLeadIds.add(r.lead_id)
-        // Reached = a real conversation (confirmed / DQ'd / follow-up), as
-        // opposed to a bare no-answer "Setter pipeline" handoff.
-        if (cs.startsWith('confirmed') || cs.includes('dq') || cs.includes('follow')) confirmReachedIds.add(r.lead_id)
+        // Reached = every confirmation Call Status counts as a real conversation
+        // EXCEPT "Unresponsive – Setter Handover" (the only no-answer outcome).
+        // NB: "Setter pipeline / Follow up" DOES count — they answered.
+        if (cs && !cs.includes('unresponsive') && !cs.includes('handover')) confirmReachedIds.add(r.lead_id)
       } else {
         // Setter triage: a filed triage form = the setter triaged them
         // (connected). Any booking status → Booked, including the old-sheet

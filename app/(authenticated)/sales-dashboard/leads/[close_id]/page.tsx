@@ -107,11 +107,15 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
       <Fact
         label="Connected"
         value={
-          lead.connectedCount > 0
-            ? `${lead.connectedCount} · ${formatDuration(lead.totalConnectedDurationSec)}`
-            : '0'
+          // Broad connected (form-OR-call). Show the ≥90s call count + talk time
+          // when there is one; otherwise just "Yes" (reached via a form).
+          lead.connected
+            ? lead.connectedCount > 0
+              ? `${lead.connectedCount} · ${formatDuration(lead.totalConnectedDurationSec)}`
+              : 'Yes'
+            : 'No'
         }
-        valueColor={lead.connectedCount > 0 ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'}
+        valueColor={lead.connected ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'}
       />
       <Fact label="Reschedules" value={String(lead.rescheduleCount)} />
       <Fact label="Follow-ups" value={String(lead.followUpCount)} />
@@ -138,20 +142,20 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
   const bt = lead.bookingType
   const segments: JSegment[] = []
 
-  // Primary path. A direct or reactivation lead booked the strat link → Direct
-  // phase (Booked → Confirmed → Showed → Closed, cumulative). A setter-only
-  // lead → Setter-led (Booked → Showed → Closed, no Confirmed stage). A
+  // Primary path. A direct/reactivation lead → Direct phase (Booked → Connected
+  // → Confirmed → Showed → Closed, mirroring the Direct funnel ladder). A
+  // setter-only lead → Setter-led (Connected → Booked → Showed → Closed). A
   // reactivated lead is direct by definition, so it always gets the Direct phase
-  // even if the Calendly booking match didn't resolve here.
+  // even if the Calendly booking match didn't resolve here. "Connected" is the
+  // broad form-OR-call signal (so a confirmation-DQ lead like Presley reads as
+  // connected here); "Confirmed" stays literal (a DQ is not a confirm).
   if (bt === 'direct' || bt === 'reactivation' || lead.reactivatedAt) {
     segments.push({
       label: 'Direct',
       color: 'var(--color-geg-pos)',
       stages: [
         { label: 'Booked', hit: true },
-        // Literal — "Confirmed" means the confirmation call actually confirmed
-        // (a confirmation-form DQ is NOT a confirm), so it is NOT back-filled
-        // from showed/closed here on the factual per-lead view.
+        { label: 'Connected', hit: lead.connected },
         { label: 'Confirmed', hit: lead.confirmed },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
@@ -162,6 +166,7 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       label: 'Setter-led',
       color: 'var(--color-geg-warn)',
       stages: [
+        { label: 'Connected', hit: lead.connected },
         { label: 'Booked', hit: true },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
@@ -169,16 +174,17 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
     })
   }
 
-  // Reactive phase — only when the lead lost its spot. Floors at "Eligible"
-  // (lost the spot, available for reactivation) UNLESS the lead DQ'd — a DQ'd
-  // lead is not eligible, so the terminal DQ chip carries the state instead.
+  // Reactive phase — only when the lead lost its spot. Always floors at
+  // "Eligible" (lost the spot → eligible for reactivation), then the
+  // post-handover ladder. A DQ'd lead still shows Eligible + the terminal DQ
+  // chip (the connection/progress it reached up to the DQ is in the Direct phase).
   if (lead.reactivatedAt) {
     segments.push({
       label: 'Reactivation',
       color: REACT_BLUE,
       since: lead.reactivatedAt,
       stages: [
-        ...(lead.isDq ? [] : [{ label: 'Eligible', hit: true }]),
+        { label: 'Eligible', hit: true },
         { label: 'Connected', hit: lead.reactConnected || lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },

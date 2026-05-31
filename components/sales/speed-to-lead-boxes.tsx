@@ -16,11 +16,23 @@ export function SpeedToLeadBoxes({
   cohort,
   activeCaller,
   filter,
+  connectedLeads,
 }: {
   cohort: SpeedToLeadCohortResult
   activeCaller?: string | null
   filter?: React.ReactNode
+  // Broad form-OR-call connected count (matches the funnel's Connected). When
+  // provided it overrides the cohort's dial-only count so "connected" is one
+  // number everywhere; the rate becomes reached / cohort.
+  connectedLeads?: number
 }) {
+  const reached = connectedLeads ?? cohort.leadsConnected
+  const reachedRate =
+    connectedLeads !== undefined
+      ? cohort.cohortSize > 0
+        ? reached / cohort.cohortSize
+        : null
+      : cohort.connectedRate
   return (
     <div
       style={{
@@ -62,8 +74,12 @@ export function SpeedToLeadBoxes({
       />
       <StatCell
         label="Connected rate"
-        value={cohort.connectedRate !== null ? `${(cohort.connectedRate * 100).toFixed(0)}%` : '—'}
-        subtext={`${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`}
+        value={reachedRate !== null ? `${(reachedRate * 100).toFixed(0)}%` : '—'}
+        subtext={
+          connectedLeads !== undefined
+            ? `${reached} / ${cohort.cohortSize} leads reached (call or form)`
+            : `${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`
+        }
       />
       <StatCell
         label="Cohort size"

@@ -64,6 +64,10 @@ export type LeadDetail = {
   confirmed: boolean
   showed: boolean
   closed: boolean
+  // Connected — the same form-OR-call signal the roster/funnel use: a ≥90s dial,
+  // a setter triage form, or a confirmation that reached the lead (any Call
+  // Status except "Unresponsive – Setter Handover"). One definition everywhere.
+  connected: boolean
   // DQ — any form DQ'd this lead (lifecycle-scoped). Shown as the terminal
   // marker on the journey even though it doesn't reactivate.
   isDq: boolean
@@ -354,6 +358,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // A setter triage form filed after the handover = a post-handover connect
   // (the form-OR-call "connected" signal, reactive phase).
   let reactTriaged = false
+  // Form half of the broad "connected": a setter triage form, or a confirmation
+  // that reached the lead (any Call Status except Unresponsive – Setter Handover).
+  let setterTriaged = false
+  let confirmReached = false
   const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' }> = []
   {
     const { data, error } = await sb
@@ -367,8 +375,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       booked_at: string | null; submitted_at: string | null
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
-      if (isConfirmation && norm(r.call_status).startsWith('confirmed')) confirmed = true
-      if (norm(r.call_status).includes('dq')) isDq = true
+      const cs = norm(r.call_status)
+      if (isConfirmation && cs.startsWith('confirmed')) confirmed = true
+      if (cs.includes('dq')) isDq = true
+      if (isConfirmation) {
+        if (cs && !cs.includes('unresponsive') && !cs.includes('handover')) confirmReached = true
+      } else {
+        setterTriaged = true
+      }
       // Order by the meeting time itself, falling back through the form's other
       // timestamps. submitted_at is a bare date — anchor it at UTC midnight so
       // it sorts as an instant.
@@ -443,6 +457,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const reactConnected =
     reactTriaged ||
     calls.some((c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt))
+
+  // Broad connected — a ≥90s call OR a setter triage form OR a confirmation that
+  // reached the lead. (connected[] above is the ≥90s-call list, for duration.)
+  const isConnected = connected.length > 0 || setterTriaged || confirmReached
   const reactBooked = partnershipCreatedTimes.some((t) => afterReact(t))
 
   return {
@@ -458,6 +476,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     confirmed,
     showed,
     closed,
+    connected: isConnected,
     isDq,
     reactConnected,
     reactBooked,
