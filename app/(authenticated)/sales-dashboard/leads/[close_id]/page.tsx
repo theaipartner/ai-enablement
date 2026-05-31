@@ -214,6 +214,16 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
     })
   }
 
+  // Monotonic back-fill: a funnel ladder can't skip. Once the furthest stage in
+  // a lane is hit, every earlier stage lights — matching the funnel's cumulative
+  // reachedStage. Without this, a lead whose only signal is a late stage (e.g. a
+  // DC show with no confirmation form) renders a gap (Connected → ⬚ → Showed).
+  for (const seg of segments) {
+    let furthest = -1
+    seg.stages.forEach((s, i) => { if (s.hit) furthest = i })
+    for (let i = 0; i < furthest; i++) seg.stages[i].hit = true
+  }
+
   // Every lead now has at least one lane (direct or opt-in), so the journey is
   // always surfaced — no "not booked" empty state.
   return (
