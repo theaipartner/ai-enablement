@@ -439,7 +439,7 @@ function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
   // re-opt-in is light grey (was accent — Drake 2026-05-31); new keeps the
   // subtle outline.
   const reoptin = type === 'reoptin'
-  const color = reoptin ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-3)'
+  const color = reoptin ? 'var(--color-geg-text-dim)' : 'var(--color-geg-text-3)'
   return (
     <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>
       {reoptin ? 're-opt-in' : 'new'}
@@ -457,44 +457,21 @@ function QualifiedTag({ q }: { q: Qualification }) {
   )
 }
 
-// Status cell — the lead's funnel classification, four types matching the
-// stacked-funnel coats: Direct (green), Reactivated (pale blue), Opt-in
-// (yellow), DQ (red). Precedence DQ > Reactivated > Direct > Opt-in (DQ is the
-// current Close terminal state; reactivation a direct lead that lost its spot).
-//
-// Secondary line: for Opt-in / Reactivation leads who CONNECTED but stalled —
-// didn't book / show / close, and aren't DQ (i.e. follow-up / setter-pipeline)
-// — surface their funnel position as "Connected". Direct leads don't get this
-// (they confirm or get handed down). Otherwise show the Close status label.
+// Status cell — the lead's furthest funnel stage (statusWord), written in its
+// lead-type colour: Direct green, Opt-in yellow, Reactivation pale blue, DQ
+// red. Both computed in getLeadsForRange (lifecycle-scoped). The colour conveys
+// the type; the word conveys the stage.
+const STATUS_COLOR: Record<LeadRow['leadType'], string> = {
+  direct: 'var(--color-geg-pos)',
+  optin: 'var(--color-geg-warn)',
+  reactivation: '#7ea8dd',
+  dq: 'var(--color-geg-neg)',
+}
+
 function StatusCell({ r }: { r: LeadRow }) {
-  const isDq = (r.latestStatus ?? '').toLowerCase().includes('disqualif')
-  const kind = isDq ? 'dq' : r.reactivatedAt ? 'reactivation' : r.hasDirect ? 'direct' : 'optin'
-  const cfg = {
-    direct: { label: 'Direct', color: 'var(--color-geg-pos)' },
-    reactivation: { label: 'Reactivated', color: '#7ea8dd' },
-    optin: { label: 'Opt-in', color: 'var(--color-geg-warn)' },
-    dq: { label: 'DQ', color: 'var(--color-geg-neg)' },
-  }[kind]
-  const showConnected =
-    (kind === 'optin' || kind === 'reactivation') &&
-    r.anyCallConnected && !r.hasPartnership && !r.showed && !r.closed
   return (
-    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-      <span
-        className="geg-mono"
-        style={{ alignSelf: 'flex-start', fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: cfg.color, border: `1px solid ${cfg.color}`, borderRadius: 4, padding: '1px 5px' }}
-      >
-        {cfg.label}
-      </span>
-      {showConnected ? (
-        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-pos)', letterSpacing: '0.03em' }}>
-          Connected
-        </span>
-      ) : kind !== 'dq' && r.latestStatus ? (
-        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', letterSpacing: '0.03em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.latestStatus}>
-          {r.latestStatus}
-        </span>
-      ) : null}
+    <span className="geg-mono" style={{ fontSize: 12, letterSpacing: '0.04em', color: STATUS_COLOR[r.leadType] }} title={`${r.leadType} lead`}>
+      {r.statusWord}
     </span>
   )
 }
