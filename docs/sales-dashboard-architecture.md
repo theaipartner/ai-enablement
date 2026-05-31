@@ -25,7 +25,7 @@ Companion docs:
 > Reactivation). **(3)** A page RESTRUCTURE landed: the stacked funnel moved to
 > the **Funnel page** (renamed from Pulse), its stages link into a filtered Leads
 > roster (type/stage filter — see § 1 › Funnel → Leads filter), the sidebar
-> flattened to **Funnel/Leads/Talent/Calls** (no sub-bars; "Talent" is the People page renamed — route stays /people), and the
+> flattened to **Funnel/Leads/Talent** (no sub-bars; "Talent" is the People page renamed — route stays /people; the Calls list page was removed — per-call review pages are reached from the per-lead Lifecycle), and the
 > Appointment-Setting/Closing/Revenue routes were removed. Read **§ 1** for the
 > current routing/filter model and **§ REACTIVATION & LEAD FUNNEL** (bottom) for
 > the reactivation logic. The 05-30 section just below is now mostly historical
@@ -235,7 +235,7 @@ All under `app/(authenticated)/sales-dashboard/`. Server components by default;
 `usePathname()`) renders only under `/sales-dashboard/*`.
 
 **2026-05-31 restructure.** The sidebar is now four flat items, no sub-bars:
-**Funnel · Leads · Talent · Calls** ("Talent" = the People page, route still /people). The stacked Total/Direct/Setter/Reactivation
+**Funnel · Leads · Talent** ("Talent" = the People page, route still /people). The Calls list page is gone. The stacked Total/Direct/Setter/Reactivation
 funnel moved off `/leads` onto the **Funnel page** (`/sales-dashboard/funnel`);
 its stage nodes link into the Leads roster pre-filtered (see § Funnel → Leads
 filter below), the Total adspend node → the Ads page, and a header link → the
@@ -259,7 +259,7 @@ went away).
 | `/sales-dashboard/funnel/landing-pages` | Landing-page metrics (Clarity) — reached from the Funnel header link | not touched |
 | `/sales-dashboard/funnel/ads` | Ad metrics (Meta) — reached from the Funnel adspend node | **sparse — see §7** |
 | `/sales-dashboard/people` | Per-rep views (Call Activity, per-closer scheduled, bookings, cash) | **deep** |
-| `/sales-dashboard/calls` + `/calls/[close_id]` | Setter-call list + per-call transcript/review detail | medium |
+| `/sales-dashboard/calls/[close_id]` | Per-call transcript/review detail. Reached from the per-lead Lifecycle; back link = "← Back to lead" via `?lead=`. (The Calls LIST page was removed.) | medium |
 | `/sales-dashboard/states`, `/trajectory` | reference / trend surfaces (not in nav) | not touched |
 
 ### Funnel → Leads filter (2026-05-31)
@@ -537,8 +537,7 @@ The dashboard converged on this shape (shipped 2026-05-31):
    header link → Landing Pages.
 2. **Leads** — everything about the leads (the roster + filters + per-lead pages).
 3. **Talent** (route /people) — the same data from the **sales reps'** perspective (closers/setters).
-4. **Calls** — raw setter/closer call recordings (slated for removal once the
-   work to fold it elsewhere is done).
+4. ~~**Calls**~~ — the Calls list was removed; per-call review pages are now reached from the per-lead Lifecycle.
 
 **Ads + Landing Pages** live as detail pages reached *from* the Funnel page (no
 sidebar entry). **Revenue** is removed from Sales and slated for a future **CEO
@@ -1036,8 +1035,9 @@ side (NO matching — Drake: "just show both"):
 - Opt-in + follow-up markers fold into their day.
 - `lead-detail.ts` form events now carry a `by` field; `LeadTimelineEvent`'s
   `form` variant gained `by: string | null`.
-- The per-call links are the **eventual replacement for the Calls sidebar tab**
-  (NOT deleted yet — Drake verifies first).
+- The per-call links REPLACED the Calls sidebar tab (the list page + nav item
+  were removed). Each Lifecycle call link carries `?lead=<close_id>` so the
+  per-call page's "← Back to lead" returns to the source lead.
 
 ## G. FMR (first message response) — `lib/db/funnel-appointment-setting.ts`
 
@@ -1102,7 +1102,7 @@ For **today (ET)**:
 
 ## K. PAGE RESTRUCTURE + ROUTING (recap of the structural change)
 
-- Sidebar is FLAT, no sub-bars: **Funnel · Leads · Talent · Calls**. "Talent" is
+- Sidebar is FLAT, no sub-bars: **Funnel · Leads · Talent** (the Calls list page was removed; per-call review pages live under the per-lead Lifecycle). "Talent" is
   the **People page renamed** (route is still `/sales-dashboard/people` — display
   name only). The stacked funnel **moved off `/leads` onto the Funnel page**
   (`/sales-dashboard/funnel`, renamed from Pulse, was the activity-box page).
