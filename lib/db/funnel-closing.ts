@@ -842,6 +842,44 @@ export async function getClosingScheduledList(
     }
   }
 
+  // Email → lead fallback (Drake 2026-05-31). A booking whose utm_term tag
+  // doesn't resolve (ad-sourced bookings frequently don't) can still be
+  // identified by the invitee's email → the Close lead. ADDITIVE: only fills
+  // leadId where the utm resolver left it null. Once the booking knows its
+  // lead, the existing lead_id ↔ closer-form match fires (forms carry lead_id),
+  // and the booking groups under its real lead instead of an email key.
+  const needEmails = new Set<string>()
+  inviteeByEvent.forEach((inv) => {
+    if (!inv.leadId && inv.email) needEmails.add(inv.email.toLowerCase().trim())
+  })
+  if (needEmails.size > 0) {
+    const emailToLeadId = new Map<string, string>()
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb
+        .from('close_leads' as never)
+        .select('close_id, contacts')
+        .range(from, from + 999)
+      if (error) throw new Error(`close_leads email-resolve read failed: ${error.message}`)
+      const rows = (data ?? []) as unknown as Array<{ close_id: string; contacts: unknown }>
+      if (rows.length === 0) break
+      for (const r of rows) {
+        if (!Array.isArray(r.contacts)) continue
+        for (const c of r.contacts as Array<{ emails?: Array<{ email?: string }> }>) {
+          for (const e of c.emails ?? []) {
+            const em = (e?.email ?? '').toLowerCase().trim()
+            if (em && needEmails.has(em) && !emailToLeadId.has(em)) emailToLeadId.set(em, r.close_id)
+          }
+        }
+      }
+      if (rows.length < 1000) break
+    }
+    inviteeByEvent.forEach((inv, uri) => {
+      if (inv.leadId || !inv.email) return
+      const lid = emailToLeadId.get(inv.email.toLowerCase().trim())
+      if (lid) inviteeByEvent.set(uri, { ...inv, leadId: lid })
+    })
+  }
+
   // 2b. Booked-by resolver (setter attribution for the representative row).
   const bookedByResolver = await buildBookedByResolver(sb, range)
   // 2c. Setter id→name resolver — the new closer form carries Setter Name as
