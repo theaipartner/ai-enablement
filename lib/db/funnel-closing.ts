@@ -857,7 +857,7 @@ export async function getClosingScheduledList(
   const { data: formData, error: formErr } = await sb
     .from('airtable_full_closer_report' as never)
     .select(
-      'record_id, lead_id, prospect_name, date_time_of_call, showed, closed, ' +
+      'record_id, lead_id, prospect_name, prospect_email, date_time_of_call, showed, closed, ' +
       'amount_paid_today_currency, amount_paid_today_number, deposit_amount, ' +
       'payment_plan_type, closer_names, setter_names, setter_record_ids, ' +
       'form_type, call_outcome, airtable_created_at',
@@ -869,6 +869,7 @@ export async function getClosingScheduledList(
     record_id: string
     lead_id: string | null
     prospect_name: string | null
+    prospect_email: string | null
     date_time_of_call: string | null
     showed: string | null
     closed: string | null
@@ -886,11 +887,20 @@ export async function getClosingScheduledList(
 
   const formsByName = new Map<string, typeof forms>()
   const formsByLeadId = new Map<string, typeof forms>()
+  const formsByEmail = new Map<string, typeof forms>()
   for (const f of forms) {
     if (f.lead_id) {
       const arr = formsByLeadId.get(f.lead_id) ?? []
       arr.push(f)
       formsByLeadId.set(f.lead_id, arr)
+    }
+    if (f.prospect_email) {
+      const ek = f.prospect_email.toLowerCase().trim()
+      if (ek) {
+        const arr = formsByEmail.get(ek) ?? []
+        arr.push(f)
+        formsByEmail.set(ek, arr)
+      }
     }
     if (!f.prospect_name) continue
     const key = f.prospect_name.toLowerCase().trim()
@@ -925,12 +935,15 @@ export async function getClosingScheduledList(
     })
   }
 
-  // Match a Calendly event to its closer form. Lead_id (from the booking's
-  // utm_term token) is tried first; falls back to prospect-name. Both are
-  // scoped to the ±48h window; the winner is the newest form (see pickForm).
+  // Match a Calendly event to its closer form, in order: lead_id (from the
+  // booking's utm_term token) → invitee email → prospect-name. Email is the
+  // reliable key for ad-sourced bookings whose utm_term doesn't resolve and
+  // whose invitee name is first-name-only (Drake 2026-05-31 — restoring the
+  // email path). All scoped to the ±48h window; winner is the newest form.
   function matchForm(
     eventStartIso: string,
     leadId: string | null,
+    inviteeEmail: string | null,
     inviteeName: string | null,
   ): (typeof forms)[number] | null {
     const eventMs = new Date(eventStartIso).getTime()
@@ -938,6 +951,13 @@ export async function getClosingScheduledList(
       const byLead = formsByLeadId.get(leadId)
       if (byLead) {
         const hit = pickForm(byLead, eventMs)
+        if (hit) return hit
+      }
+    }
+    if (inviteeEmail) {
+      const byEmail = formsByEmail.get(inviteeEmail.toLowerCase().trim())
+      if (byEmail) {
+        const hit = pickForm(byEmail, eventMs)
         if (hit) return hit
       }
     }
@@ -963,7 +983,10 @@ export async function getClosingScheduledList(
       callType,
       invitee,
       inRange,
-      dead: e.status === 'canceled' || invitee.noShow,
+      // Dead = canceled in Calendly ONLY. A no-show is NOT a cancel (Drake
+      // 2026-05-31) — a no-showed lead keeps a live booking and surfaces with
+      // Showed=No from its closer form, rather than being counted cancelled.
+      dead: e.status === 'canceled',
     })
     eventsByLead.set(key, arr)
   }
@@ -990,7 +1013,7 @@ export async function getClosingScheduledList(
     if (inRangeEvs.length === 0) continue // lead has no booking in this view
 
     const bookingCount = evs.length                    // net valid bookings (since floor, both calendars)
-    const hasLive = evs.some((e) => !e.dead)           // any booking that isn't canceled/no-showed
+    const hasLive = evs.some((e) => !e.dead)           // any booking that isn't canceled
     const cancelled = !hasLive
 
     // Representative = the call shown for this lead in this range: prefer
@@ -1005,7 +1028,7 @@ export async function getClosingScheduledList(
     const invitee = rep.invitee
 
     // Outcomes only for live leads — a cancelled lead has no closer outcome.
-    const form = cancelled ? null : matchForm(rep.startTime, invitee.leadId, invitee.name)
+    const form = cancelled ? null : matchForm(rep.startTime, invitee.leadId, invitee.email, invitee.name)
 
     // New form (Form Type = New) → derive from Call Outcome; old form → the
     // legacy Showed?/Closed? fields. Call type (direct/setter), scheduled
