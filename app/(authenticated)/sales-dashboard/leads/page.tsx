@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
-import { matchesLeadFilter, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
+import { matchesLeadFilter, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
 import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
@@ -42,11 +42,14 @@ export default async function SalesDashboardLeadsPage({
   const q = (Array.isArray(searchParams?.q) ? searchParams?.q[0] : searchParams?.q) ?? ''
   if (q.trim().length >= 2) {
     const results = await searchLeads(q)
+    // Carry the window/filters (minus the search box) so a result → per-lead →
+    // "Back to leads" returns to the windowed roster, not the default window.
+    const backQuery = buildLeadsQuery(searchParams)
     return (
       <div>
         <HeaderBand eyebrow="SALES · LEADS" title="Leads." />
         <LeadSearch initial={q} />
-        <SearchResults results={results} query={q.trim()} />
+        <SearchResults results={results} query={q.trim()} backQuery={backQuery} />
       </div>
     )
   }
@@ -107,7 +110,7 @@ export default async function SalesDashboardLeadsPage({
 
       <div style={{ marginTop: 26 }}>
         <SectionLabel>Speed to lead · this window</SectionLabel>
-        <SpeedToLeadBoxes cohort={speedCohort} />
+        <SpeedToLeadBoxes cohort={speedCohort} connectedLeads={allRows.filter((r) => reachedStage(r, null, 'connected')).length} />
       </div>
 
       <div style={{ marginTop: 26 }}>
@@ -172,7 +175,7 @@ function buildLeadsQuery(sp?: { [key: string]: string | string[] | undefined }):
 
 // Global lead search results (any lead, not just the window's cohort). Each
 // links to the per-lead page.
-function SearchResults({ results, query }: { results: LeadSearchResult[]; query: string }) {
+function SearchResults({ results, query, backQuery }: { results: LeadSearchResult[]; query: string; backQuery: string }) {
   return (
     <div style={{ marginTop: 22 }}>
       <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 8 }}>
@@ -186,7 +189,7 @@ function SearchResults({ results, query }: { results: LeadSearchResult[]; query:
         results.map((r) => (
           <Link
             key={r.leadId}
-            href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`}
+            href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}${backQuery ? `?ret=${encodeURIComponent(backQuery)}` : ''}`}
             style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr', gap: 10, padding: '10px 8px', borderBottom: '1px dashed var(--color-geg-border)', textDecoration: 'none', color: 'inherit', alignItems: 'center' }}
           >
             <span className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text)' }}>
