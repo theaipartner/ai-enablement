@@ -1190,24 +1190,34 @@ export async function getSpeedToLeadCohort(
   if (newLeadRows.length > 0) {
     const scStart = range.startUtcIso
     const scEnd = new Date(new Date(range.endUtcIso).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
-    let scFrom = 0
-    for (;;) {
-      const { data: page, error } = await sb
-        .from('close_lead_status_changes' as never)
-        .select('lead_id, old_status_id, date_created')
-        .gte('date_created', scStart)
-        .lt('date_created', scEnd)
-        .order('date_created', { ascending: true })
-        .range(scFrom, scFrom + 999)
-      if (error) throw new Error(`status changes read failed: ${error.message}`)
-      const rows = (page ?? []) as unknown as Array<{ lead_id: string; old_status_id: string | null; date_created: string }>
-      if (rows.length === 0) break
-      for (const r of rows) {
-        if (!newLeadIdSet.has(r.lead_id)) continue
-        if (!earliestOld.has(r.lead_id)) earliestOld.set(r.lead_id, r.old_status_id)
+    // DB-side filter to the NEW-lead set (was: scan all status changes in the
+    // window+14d, discard non-cohort in JS). Chunked `.in(lead_id)` over the
+    // close_lead_status_changes(lead_id) index — same rows kept, just filtered
+    // before transfer. Provably identical: all of a lead's changes land in its
+    // chunk, ordered by date_created, so earliest-old per lead is unchanged.
+    const newIds = Array.from(newLeadIdSet)
+    for (let i = 0; i < newIds.length; i += 100) {
+      const idChunk = newIds.slice(i, i + 100)
+      let scFrom = 0
+      for (;;) {
+        const { data: page, error } = await sb
+          .from('close_lead_status_changes' as never)
+          .select('lead_id, old_status_id, date_created')
+          .in('lead_id', idChunk)
+          .gte('date_created', scStart)
+          .lt('date_created', scEnd)
+          .order('date_created', { ascending: true })
+          .range(scFrom, scFrom + 999)
+        if (error) throw new Error(`status changes read failed: ${error.message}`)
+        const rows = (page ?? []) as unknown as Array<{ lead_id: string; old_status_id: string | null; date_created: string }>
+        if (rows.length === 0) break
+        for (const r of rows) {
+          if (!newLeadIdSet.has(r.lead_id)) continue
+          if (!earliestOld.has(r.lead_id)) earliestOld.set(r.lead_id, r.old_status_id)
+        }
+        if (rows.length < 1000) break
+        scFrom += 1000
       }
-      if (rows.length < 1000) break
-      scFrom += 1000
     }
   }
   const cohortLeads: CohortLead[] = []
@@ -1280,43 +1290,55 @@ export async function getSpeedToLeadCohort(
   const dialCountByLead = new Map<string, number>()
   const nameByUser = new Map<string, string>()
   {
-    let from = 0
-    for (;;) {
-      const { data: page, error } = await sb
-        .from('close_calls' as never)
-        .select('lead_id, user_id, activity_at, duration, raw_payload')
-        .eq('direction', 'outbound')
-        .gte('activity_at', range.startUtcIso)
-        .order('activity_at', { ascending: true })
-        .range(from, from + 999)
-      if (error) throw new Error(`close_calls read failed: ${error.message}`)
-      const rows = (page ?? []) as unknown as Array<{
-        lead_id: string
-        user_id: string | null
-        activity_at: string
-        duration: number | null
-        raw_payload: { user_name?: string } | null
-      }>
-      if (rows.length === 0) break
-      for (const r of rows) {
-        if (!qualifyingMap.has(r.lead_id)) continue
-        if (r.user_id && r.raw_payload?.user_name && !nameByUser.has(r.user_id)) {
-          nameByUser.set(r.user_id, r.raw_payload.user_name)
+    // DB-side filter to the cohort lead set (was: scan ALL outbound calls since
+    // the window start, discard non-cohort in JS). Chunked `.in(lead_id)` over
+    // the close_calls(lead_id, date_created) index — same calls processed, just
+    // filtered before transfer. Provably identical: all of a lead's calls land
+    // in its chunk, ordered by activity_at, so first/second-call + per-lead
+    // aggregates are unchanged. nameByUser is per-user (rep names are stable),
+    // so chunk order doesn't affect it.
+    const cohortIds = Array.from(qualifyingMap.keys())
+    for (let i = 0; i < cohortIds.length; i += 100) {
+      const idChunk = cohortIds.slice(i, i + 100)
+      let from = 0
+      for (;;) {
+        const { data: page, error } = await sb
+          .from('close_calls' as never)
+          .select('lead_id, user_id, activity_at, duration, raw_payload')
+          .eq('direction', 'outbound')
+          .gte('activity_at', range.startUtcIso)
+          .in('lead_id', idChunk)
+          .order('activity_at', { ascending: true })
+          .range(from, from + 999)
+        if (error) throw new Error(`close_calls read failed: ${error.message}`)
+        const rows = (page ?? []) as unknown as Array<{
+          lead_id: string
+          user_id: string | null
+          activity_at: string
+          duration: number | null
+          raw_payload: { user_name?: string } | null
+        }>
+        if (rows.length === 0) break
+        for (const r of rows) {
+          if (!qualifyingMap.has(r.lead_id)) continue
+          if (r.user_id && r.raw_payload?.user_name && !nameByUser.has(r.user_id)) {
+            nameByUser.set(r.user_id, r.raw_payload.user_name)
+          }
+          if (!firstCallByLead.has(r.lead_id)) {
+            firstCallByLead.set(r.lead_id, { userId: r.user_id, activity_at: r.activity_at, duration: r.duration })
+          } else if (!secondCallByLead.has(r.lead_id)) {
+            secondCallByLead.set(r.lead_id, { duration: r.duration })
+          }
+          if ((r.duration ?? 0) >= 90) {
+            leadsWithAnyConnect.add(r.lead_id)
+            connectedDurationByLead.set(r.lead_id, (connectedDurationByLead.get(r.lead_id) ?? 0) + (r.duration ?? 0))
+            connectedCallCountByLead.set(r.lead_id, (connectedCallCountByLead.get(r.lead_id) ?? 0) + 1)
+          }
+          dialCountByLead.set(r.lead_id, (dialCountByLead.get(r.lead_id) ?? 0) + 1)
         }
-        if (!firstCallByLead.has(r.lead_id)) {
-          firstCallByLead.set(r.lead_id, { userId: r.user_id, activity_at: r.activity_at, duration: r.duration })
-        } else if (!secondCallByLead.has(r.lead_id)) {
-          secondCallByLead.set(r.lead_id, { duration: r.duration })
-        }
-        if ((r.duration ?? 0) >= 90) {
-          leadsWithAnyConnect.add(r.lead_id)
-          connectedDurationByLead.set(r.lead_id, (connectedDurationByLead.get(r.lead_id) ?? 0) + (r.duration ?? 0))
-          connectedCallCountByLead.set(r.lead_id, (connectedCallCountByLead.get(r.lead_id) ?? 0) + 1)
-        }
-        dialCountByLead.set(r.lead_id, (dialCountByLead.get(r.lead_id) ?? 0) + 1)
+        if (rows.length < 1000) break
+        from += 1000
       }
-      if (rows.length < 1000) break
-      from += 1000
     }
   }
 
