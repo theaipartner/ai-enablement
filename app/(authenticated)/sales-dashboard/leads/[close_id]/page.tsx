@@ -67,10 +67,10 @@ export default async function LeadDetailPage({
 
       <SectionHeading>Lifecycle</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
-        by day · newest first · since latest opt-in
+        by day · newest first · full history (opt-ins divide journeys)
       </div>
       {lead.timeline.length === 0 && lead.calls.length === 0 ? (
-        <Empty>No activity since the latest opt-in.</Empty>
+        <Empty>No activity yet.</Empty>
       ) : (
         <Lifecycle timeline={lead.timeline} calls={lead.calls} leadId={lead.leadId} />
       )}
@@ -369,7 +369,7 @@ type DayGroup = {
   at: string // representative instant for sorting/header
   forms: FormEvt[]
   calls: LeadCallEntry[]
-  optedIn: boolean
+  optIn: 'opted' | 'reopted' | null
   followUps: string[]
 }
 
@@ -379,7 +379,7 @@ function Lifecycle({ timeline, calls, leadId }: { timeline: LeadTimelineEvent[];
     const key = etDayKey(iso)
     let g = byDay.get(key)
     if (!g) {
-      g = { key, at: iso, forms: [], calls: [], optedIn: false, followUps: [] }
+      g = { key, at: iso, forms: [], calls: [], optIn: null, followUps: [] }
       byDay.set(key, g)
     }
     return g
@@ -387,7 +387,8 @@ function Lifecycle({ timeline, calls, leadId }: { timeline: LeadTimelineEvent[];
   for (const ev of timeline) {
     const g = get(ev.at)
     if (ev.kind === 'form') g.forms.push(ev)
-    else if (ev.kind === 'optin') g.optedIn = true
+    // A re-opt-in wins the day's marker (it's the journey divider).
+    else if (ev.kind === 'optin') g.optIn = ev.reopt ? 'reopted' : g.optIn ?? 'opted'
     else if (ev.kind === 'followup') g.followUps.push(ev.name)
   }
   for (const c of calls) get(c.activityAt).calls.push(c)
@@ -419,14 +420,19 @@ function DayBlock({ day, leadId }: { day: DayGroup; leadId: string }) {
           {day.calls.length ? `${day.calls.length} call${day.calls.length === 1 ? '' : 's'}` : ''}
           {day.calls.length && day.forms.length ? ' · ' : ''}
           {day.forms.length ? `${day.forms.length} form${day.forms.length === 1 ? '' : 's'}` : ''}
-          {day.optedIn ? ' · opted in' : ''}
+          {day.optIn === 'reopted' ? ' · re-opted in' : day.optIn === 'opted' ? ' · opted in' : ''}
         </span>
       </div>
       <div style={{ padding: '6px 12px 8px' }}>
-        {day.optedIn ? (
-          <Row time="" >
-            <Dot color="var(--color-geg-text-3)" />
-            <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)' }}>Opted in</span>
+        {day.optIn ? (
+          <Row time="">
+            <Dot color={day.optIn === 'reopted' ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)'} />
+            <span
+              className="geg-serif"
+              style={{ fontSize: 13, color: day.optIn === 'reopted' ? 'var(--color-geg-accent)' : 'var(--color-geg-text-2)', fontWeight: day.optIn === 'reopted' ? 600 : 400 }}
+            >
+              {day.optIn === 'reopted' ? 'Re-opted in — new journey' : 'Opted in'}
+            </span>
           </Row>
         ) : null}
         {day.calls.map((c) => (

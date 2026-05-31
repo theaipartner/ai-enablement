@@ -40,7 +40,7 @@ export type LeadCallEntry = {
 // reliable form↔call↔booking link on the current stack and interleaving calls
 // would be guesswork.
 export type LeadTimelineEvent =
-  | { kind: 'optin'; at: string }
+  | { kind: 'optin'; at: string; reopt: boolean }   // reopt = the latest re-opt-in divider
   | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; label: string; by: string | null }
   | { kind: 'followup'; at: string; name: string }
 
@@ -178,10 +178,24 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }
   }
   const leadNameLc = norm(lead.display_name)
-  // Lifecycle window: scope dials/connected to the latest opt-in onward.
+  // Current-journey boundary = the latest opt-in. The JOURNEY (stage chips +
+  // header stats) resets here — only activity at/after the latest opt-in
+  // counts, mirroring the roster in leads.ts so a prior journey's progress
+  // doesn't carry into a re-opt-in. The LIFECYCLE below, by contrast, shows the
+  // FULL history (old journey → re-opt-in → new journey).
   const sinceIso = lead.latest_opt_in_date ?? null
+  const optInMs = sinceIso ? new Date(sinceIso).getTime() : null
+  // In the current journey when at/after the latest opt-in (or no opt-in known).
+  const afterOptIn = (iso: string | null): boolean =>
+    optInMs == null || (iso != null && new Date(iso).getTime() >= optInMs)
+  // A form belongs to the current journey if its event OR its filed time is
+  // at/after the latest opt-in (same event-OR-filed leniency as the lifecycle).
+  const inCycle = (eventAt: string | null, filedAt: string | null): boolean =>
+    afterOptIn(eventAt) || afterOptIn(filedAt)
 
-  // 2. Full call history for this lead (both directions), newest first.
+  // 2. Full call history for this lead (both directions), newest first. We fetch
+  //    ALL calls (no opt-in window) for the lifecycle; the current-journey
+  //    subset for the header stats is filtered out below.
   type CallRaw = {
     close_id: string
     activity_at: string
@@ -193,12 +207,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const callRows: CallRaw[] = []
   let from = 0
   for (;;) {
-    let q = sb
+    const { data, error } = await sb
       .from('close_calls' as never)
       .select('close_id, activity_at, duration, direction, user_id, raw_payload')
       .eq('lead_id' as never, closeId)
-    if (sinceIso) q = q.gte('activity_at', sinceIso)
-    const { data, error } = await q
       .order('activity_at', { ascending: false })
       .range(from, from + 999)
     if (error) throw new Error(`lead-detail: close_calls read failed: ${error.message}`)
@@ -276,7 +288,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     review: reviewByCall.get(c.close_id) ?? null,
   }))
 
-  const connected = calls.filter((c) => c.connected)
+  // Current-journey calls drive the header stats + connected status (the
+  // journey reset); the lifecycle renders the full `calls` list.
+  const cycleCalls = calls.filter((c) => afterOptIn(c.activityAt))
+  const connected = cycleCalls.filter((c) => c.connected)
   const totalConnectedDurationSec = connected.reduce((sum, c) => sum + c.durationSec, 0)
 
   // 6. Calendly bookings — this lead's invitees (by email, then name),
@@ -344,12 +359,20 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null; event_created_at: string | null }>) {
       const nm = norm(e.name)
       let link: 'direct' | 'setter' | 'sync' | 'other' = 'other'
-      if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) { hasDirect = true; link = 'direct' }
-      else if (nm.startsWith('partnership call w/')) {
-        hasPartnership = true; link = 'setter'
-        if (e.event_created_at) partnershipCreatedTimes.push(e.event_created_at)
-      }
-      else if (nm.startsWith('ai partner sync')) { followUpCount++; link = 'sync' }
+      // Booking type resets on re-opt-in: only bookings created at/after the
+      // latest opt-in classify the current journey (mirrors leads.ts
+      // bookedSince(optInAt)). The `bookings` array stays full for the lifecycle.
+      const bookingInCycle = afterOptIn(e.event_created_at)
+      if (e.event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI) {
+        if (bookingInCycle) hasDirect = true
+        link = 'direct'
+      } else if (nm.startsWith('partnership call w/')) {
+        link = 'setter'
+        if (bookingInCycle) {
+          hasPartnership = true
+          if (e.event_created_at) partnershipCreatedTimes.push(e.event_created_at)
+        }
+      } else if (nm.startsWith('ai partner sync')) { followUpCount++; link = 'sync' }
       if (e.start_time) bookings.push({ at: e.start_time, link, name: e.name })
     }
   }
@@ -413,13 +436,6 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
       const cs = norm(r.call_status)
-      if (isConfirmation && cs.startsWith('confirmed')) confirmed = true
-      if (cs.includes('dq')) isDq = true
-      if (isConfirmation) {
-        if (cs && !cs.includes('unresponsive') && !cs.includes('handover')) confirmReached = true
-      } else {
-        setterTriaged = true
-      }
       // Order by the meeting time itself, falling back through the form's other
       // timestamps. submitted_at is a bare date — anchor it at UTC midnight so
       // it sorts as an instant.
@@ -428,7 +444,18 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
         r.confirmed_call_date_time ??
         r.booked_at ??
         (r.submitted_at ? `${r.submitted_at}T00:00:00Z` : null)
-      if (!isConfirmation && afterReact(at)) reactTriaged = true
+      // Status flags only count toward the CURRENT journey (reset on re-opt-in);
+      // the form still shows in the full lifecycle below regardless.
+      if (inCycle(at, r.airtable_created_at)) {
+        if (isConfirmation && cs.startsWith('confirmed')) confirmed = true
+        if (cs.includes('dq')) isDq = true
+        if (isConfirmation) {
+          if (cs && !cs.includes('unresponsive') && !cs.includes('handover')) confirmReached = true
+        } else {
+          setterTriaged = true
+        }
+        if (!isConfirmation && afterReact(at)) reactTriaged = true
+      }
       if (at && r.call_status) {
         // Filler: setter_names holds the form's author for both the setter
         // triage and the confirmation (the confirming closer, e.g. "Aman Ali").
@@ -447,6 +474,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
     for (const r of forms) {
+      // Reset on re-opt-in: a prior journey's closer form doesn't feed the
+      // current journey's status (it still appears in the lifecycle below).
+      if (!inCycle(r.date_time_of_call, r.airtable_created_at)) continue
       if (norm(r.call_outcome).includes('dq')) isDq = true
       // Post-handover if the meeting OR the filing is at/after reactivation —
       // the reactivation stamp is a coarse daily tag, so a meeting hours before
@@ -481,7 +511,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       const by = (latest.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
       formEvents.push({ at: latest.date_time_of_call, winAt: latest.airtable_created_at, label: latest.call_outcome as string, source: 'closer', by })
       const ct = outcomeCloseType(latest.call_outcome)
-      if (ct) considerClose(ct, { closer: by, plans: [], at: latest.date_time_of_call })
+      // Only the current journey's close drives closeType/closeDetail.
+      if (ct && inCycle(latest.date_time_of_call, latest.airtable_created_at)) {
+        considerClose(ct, { closer: by, plans: [], at: latest.date_time_of_call })
+      }
     }
   }
 
@@ -507,20 +540,24 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       const closer = (r.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
       const isClosed = norm(r.closed) === 'yes'
       const isDqForm = norm(r.follow_up) === 'no'
-      if (isDqForm) isDq = true
-      // Post-handover if the meeting OR the filing is at/after reactivation
-      // (same coarse-stamp reasoning as the closer report above) — Richard
-      // Harper: DC meeting 17:27, reactivated 19:00, filed next day → reactive.
-      const post = afterReact(r.date_time_of_call) || afterReact(r.airtable_created_at)
-      // A filed form = showed.
-      showed = true
-      if (post) reactShowed = true
-      else directShowed = true
-      if (isClosed) {
-        closed = true
-        if (post) reactClosed = true
-        else directClosed = true
-        considerClose('dc', { closer, plans: r.plans ?? [], at: r.date_time_of_call })
+      // Status flags only count toward the current journey (reset on re-opt-in);
+      // the form still shows in the full lifecycle below.
+      if (inCycle(r.date_time_of_call, r.airtable_created_at)) {
+        if (isDqForm) isDq = true
+        // Post-handover if the meeting OR the filing is at/after reactivation
+        // (same coarse-stamp reasoning as the closer report above) — Richard
+        // Harper: DC meeting 17:27, reactivated 19:00, filed next day → reactive.
+        const post = afterReact(r.date_time_of_call) || afterReact(r.airtable_created_at)
+        // A filed form = showed.
+        showed = true
+        if (post) reactShowed = true
+        else directShowed = true
+        if (isClosed) {
+          closed = true
+          if (post) reactClosed = true
+          else directClosed = true
+          considerClose('dc', { closer, plans: r.plans ?? [], at: r.date_time_of_call })
+        }
       }
       // Timeline label: the DC disposition.
       const label = isClosed ? 'Digital College closed' : isDqForm ? 'Digital College DQ' : 'Digital College follow-up'
@@ -528,29 +565,35 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }
   }
 
-  // 8. Lifecycle timeline — opt-in anchor + every form outcome + the trailing
-  //    follow-up (AI Partner Sync) booking, scoped to the latest opt-in and
-  //    sorted oldest-first (reads as the lead's journey top-to-bottom). No
-  //    close_calls — see the LeadTimelineEvent note.
-  const inWindow = (at: string) => !sinceIso || at >= sinceIso
+  // 8. Lifecycle timeline — the FULL history (every form outcome + follow-up
+  //    booking, no opt-in window), with an opt-in marker for the original opt-in
+  //    and the latest re-opt-in so a re-opt-in lead reads old journey → re-opt-in
+  //    → new journey top-to-bottom. The calls (also full history) are merged in
+  //    by the page. Sorted oldest-first.
+  const reopted = (lead.number_of_opt_ins ?? 1) > 1
   const timeline: LeadTimelineEvent[] = []
-  if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso })
+  // Original opt-in marker (only when there's been a re-opt-in — otherwise the
+  // single opt-in below covers it). date_first_opted_in is a bare date; anchor
+  // at noon UTC so it renders on its own ET day (ADR 0003).
+  if (reopted && lead.date_first_opted_in) {
+    const firstIso = lead.date_first_opted_in.length <= 10
+      ? `${lead.date_first_opted_in}T12:00:00Z`
+      : lead.date_first_opted_in
+    timeline.push({ kind: 'optin', at: firstIso, reopt: false })
+  }
+  // Latest opt-in marker — flagged as the re-opt-in when the lead opted in >1×.
+  if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso, reopt: reopted })
   for (const f of formEvents) {
-    // Show a form when its event time OR its filed time falls in the current
-    // journey — a form filed after the latest opt-in belongs to this journey
-    // even if its meeting time slightly predates the opt-in instant.
-    if (inWindow(f.at) || (f.winAt != null && inWindow(f.winAt))) {
-      timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
-    }
+    timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
   }
   for (const b of bookings) {
-    if (b.link === 'sync' && inWindow(b.at)) timeline.push({ kind: 'followup', at: b.at, name: b.name })
+    if (b.link === 'sync') timeline.push({ kind: 'followup', at: b.at, name: b.name })
   }
   timeline.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
 
   // Reactive-phase connected/booked — a ≥90s outbound dial / partnership
-  // booking after the handover. (Calls are already loaded since latest opt-in,
-  // which precedes reactivation, so post-handover calls are present.)
+  // booking after the handover. Calls are the full history; afterReact scopes
+  // to post-handover.
   const reactConnected =
     reactTriaged ||
     calls.some((c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt))
@@ -586,7 +629,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     reactClosed,
     directShowed,
     directClosed,
-    totalCalls: calls.length,
+    // Header stats reflect the CURRENT journey (since the latest opt-in); the
+    // lifecycle (`calls`) shows the full history.
+    totalCalls: cycleCalls.length,
     connectedCount: connected.length,
     totalConnectedDurationSec,
     rescheduleCount,
