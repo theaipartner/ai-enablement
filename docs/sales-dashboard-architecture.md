@@ -273,6 +273,16 @@ the filter bar (`leads-filter-bar.tsx`) also sets them manually. Contract:
 - **Single source of truth:** `reachedStage(row, type, stage)` + `matchesType` +
   `matchesLeadFilter` in `lib/db/leads-funnel.ts`. The funnel box COUNTS and the
   roster FILTER both go through it, so a bar's number equals the roster it opens.
+- **"Connected" = one definition everywhere (`row.connected`, set in `leads.ts`):**
+  a ≥90s outbound dial OR a setter triage form OR a confirmation (Closer Triage
+  Form) that reached the lead — *every* Call Status EXCEPT `Unresponsive – Setter
+  Handover` (the only no-answer outcome; `Setter pipeline / Follow up` counts —
+  they answered). Aggregate surfaces (funnel boxes, the speed-to-lead "Connected
+  rate") count it *cumulatively* (booked/showed/closed back-fill it, so the
+  stacked funnel can't invert and the speed box matches the funnel). Per-lead
+  surfaces (roster Connected column, per-lead header + Journey) show the raw
+  signal — "did we actually reach them" — so a self-booked-but-unreached lead
+  reads Booked-without-Connected, which is factually correct.
 - The per-lead **Back to leads** button preserves the full window+filter via a
   `ret` querystring carried on each row link.
 
