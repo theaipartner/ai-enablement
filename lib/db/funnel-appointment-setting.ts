@@ -1143,6 +1143,57 @@ export type SpeedToLeadCohortResult = {
   rows: SpeedToLeadCohortRow[]
 }
 
+// Scalar stats of a set of cohort rows. Pure over the row fields, so it can be
+// re-run over a FILTERED subset (the /leads type/stage filter) to keep the
+// speed-to-lead boxes in sync with the roster.
+export type CohortStats = Pick<
+  SpeedToLeadCohortResult,
+  | 'cohortSize'
+  | 'leadsCalled'
+  | 'leadsConnected'
+  | 'avgSpeedToLeadSec'
+  | 'avgSpeedToLeadSecUnder3h'
+  | 'leadsUnder3h'
+  | 'connectedRate'
+  | 'avgIntensity'
+>
+
+export function summarizeCohortRows(rows: SpeedToLeadCohortRow[]): CohortStats {
+  const UNDER_3H_THRESHOLD_SEC = 3 * 60 * 60
+  let cappedSum = 0
+  let speedN = 0
+  let under3hSum = 0
+  let under3hN = 0
+  let connectedCount = 0
+  let calledCount = 0
+  let intensitySum = 0
+  for (const r of rows) {
+    if (r.speedSec !== null) {
+      cappedSum += Math.min(r.speedSec, SPEED_CAP_SEC)
+      speedN++
+      if (r.speedSec < UNDER_3H_THRESHOLD_SEC) {
+        under3hSum += r.speedSec
+        under3hN++
+      }
+    }
+    if (r.firstCallAt) {
+      calledCount++
+      intensitySum += r.intensity // CALLED leads only (uncalled = 0, would drag the mean)
+    }
+    if (r.anyCallConnected) connectedCount++
+  }
+  return {
+    cohortSize: rows.length,
+    leadsCalled: calledCount,
+    leadsConnected: connectedCount,
+    avgSpeedToLeadSec: speedN > 0 ? cappedSum / speedN : null,
+    avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
+    leadsUnder3h: under3hN,
+    connectedRate: calledCount > 0 ? connectedCount / calledCount : null,
+    avgIntensity: calledCount > 0 ? intensitySum / calledCount : null,
+  }
+}
+
 export async function getSpeedToLeadCohort(
   arg: Window | DateRange,
   callerFilter?: string | null,
@@ -1425,32 +1476,7 @@ export async function getSpeedToLeadCohort(
   // avg into a "responsiveness" number that doesn't reflect how fast
   // the team is dialing while actively working — this restricts the
   // secondary average to in-the-moment activity.
-  const UNDER_3H_THRESHOLD_SEC = 3 * 60 * 60
-
-  let cappedSum = 0
-  let speedN = 0
-  let under3hSum = 0
-  let under3hN = 0
-  let connectedCount = 0
-  let calledCount = 0
-  let intensitySum = 0
-  for (const r of filteredRows) {
-    if (r.speedSec !== null) {
-      cappedSum += Math.min(r.speedSec, SPEED_CAP_SEC)
-      speedN++
-      if (r.speedSec < UNDER_3H_THRESHOLD_SEC) {
-        under3hSum += r.speedSec
-        under3hN++
-      }
-    }
-    if (r.firstCallAt) calledCount++
-    // Global "connected" — any outbound call to this lead has ever
-    // had duration >= 90s. Mirrors the new Connected column.
-    if (r.anyCallConnected) connectedCount++
-    // Intensity contribution — sum across CALLED leads only (uncalled
-    // leads have intensity 0 which would suppress the average).
-    if (r.firstCallAt) intensitySum += r.intensity
-  }
+  const stats = summarizeCohortRows(filteredRows)
 
   // Sort rows: most recent first call first; leads without calls go
   // to the bottom.
@@ -1461,18 +1487,7 @@ export async function getSpeedToLeadCohort(
     return 0
   })
 
-  return {
-    cohortSize: filteredRows.length,
-    leadsCalled: calledCount,
-    leadsConnected: connectedCount,
-    avgSpeedToLeadSec: speedN > 0 ? cappedSum / speedN : null,
-    avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
-    leadsUnder3h: under3hN,
-    connectedRate: calledCount > 0 ? connectedCount / calledCount : null,
-    avgIntensity: calledCount > 0 ? intensitySum / calledCount : null,
-    callers,
-    rows: filteredRows,
-  }
+  return { ...stats, callers, rows: filteredRows }
 }
 
 // ---------------------------------------------------------------------------

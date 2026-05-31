@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
 import { matchesLeadFilter, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
-import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
+import { getFmrTimeBlocks, getSpeedToLeadCohort, summarizeCohortRows } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
@@ -80,9 +80,11 @@ export default async function SalesDashboardLeadsPage({
 
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
   const viewRows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
-  // Roster also honors the type/stage filter. Speed-to-lead + FMR stay over the
-  // full (unfiltered) cohort — they're window health, not the filtered list.
+  // Roster honors the type/stage filter. The speed-to-lead boxes recompute over
+  // the SAME filtered rows so they track the filter (FMR stays a fixed
+  // since-May-24 reference, intentionally not range/filter-scoped).
   const rows = viewRows.filter((r) => matchesLeadFilter(r, types, stage))
+  const filteredCohort = { ...speedCohort, ...summarizeCohortRows(rows), rows }
 
   // Serialize the current leads-page state (date window, view, filters) so a row
   // click carries it as `ret`, letting the per-lead "Back to leads" return to
@@ -110,7 +112,7 @@ export default async function SalesDashboardLeadsPage({
 
       <div style={{ marginTop: 26 }}>
         <SectionLabel>Speed to lead · this window</SectionLabel>
-        <SpeedToLeadBoxes cohort={speedCohort} connectedLeads={allRows.filter((r) => reachedStage(r, null, 'connected')).length} />
+        <SpeedToLeadBoxes cohort={filteredCohort} connectedLeads={rows.filter((r) => reachedStage(r, null, 'connected')).length} />
       </div>
 
       <div style={{ marginTop: 26 }}>
