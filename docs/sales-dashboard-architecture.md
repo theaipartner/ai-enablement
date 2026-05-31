@@ -18,14 +18,18 @@ Companion docs:
 
 ## ⚡ CONTINUATION — START HERE (handoff 2026-05-30, sales-dashboard sprint)
 
-> **2026-05-31 UPDATE:** A large amount has shipped since this 05-30 handoff
-> (reactivation tagging, the stacked lead funnel, the Status column, perf fixes,
-> People-page fixes, sortable roster). **The reactivation funnel/status plan
-> (§ 5) is now fully BUILT — all 5 steps shipped 2026-05-31.** Before doing
-> anything, read **§ REACTIVATION & LEAD FUNNEL — FULL STATE + PLAN (2026-05-31)**
-> at the BOTTOM of this doc — it remains the authoritative current state; § 5
-> records what each step shipped. This 05-30 section below is now partly
-> historical.
+> **2026-05-31 UPDATE:** A large amount has shipped since this 05-30 handoff.
+> **(1)** The reactivation funnel/status plan (§ 5) is fully BUILT — all 5 steps
+> shipped. **(2)** Connected is now a form-OR-call signal and every funnel box is
+> cumulative/monotonic; the per-lead page gained a two-phase Journey (Direct →
+> Reactivation). **(3)** A page RESTRUCTURE landed: the stacked funnel moved to
+> the **Funnel page** (renamed from Pulse), its stages link into a filtered Leads
+> roster (type/stage filter — see § 1 › Funnel → Leads filter), the sidebar
+> flattened to **Funnel/Leads/People/Calls** (no sub-bars), and the
+> Appointment-Setting/Closing/Revenue routes were removed. Read **§ 1** for the
+> current routing/filter model and **§ REACTIVATION & LEAD FUNNEL** (bottom) for
+> the reactivation logic. The 05-30 section just below is now mostly historical
+> (it still describes the funnel as living on /leads — it no longer does).
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -224,19 +228,53 @@ All under `app/(authenticated)/sales-dashboard/`. Server components by default;
 `force-dynamic`. The left sidebar (`sidebar.tsx`, a client component for
 `usePathname()`) renders only under `/sales-dashboard/*`.
 
+**2026-05-31 restructure.** The sidebar is now four flat items, no sub-bars:
+**Funnel · Leads · People · Calls**. The stacked Total/Direct/Setter/Reactivation
+funnel moved off `/leads` onto the **Funnel page** (`/sales-dashboard/funnel`);
+its stage nodes link into the Leads roster pre-filtered (see § Funnel → Leads
+filter below), the Total adspend node → the Ads page, and a header link → the
+Landing Pages page (those two links are why Ads/LP left the sidebar). The
+Appointment-Setting, Closing, and Revenue **routes were removed** (appt/closing
+are covered by People + the funnel→leads drill; Revenue is slated for a future
+CEO tab). The `_components/` (PerRepCallActivityTable, CloserScheduledTables) +
+`actions.ts` + `rep-link.tsx` under the deleted appt-setting/closed folders stay
+colocated — People still imports them. `lib/db/funnel-stages.ts` `getFunnelActivity`
+is now **orphaned** (the old activity-box Funnel page is gone); its sibling
+exports (`resolveFunnelRange`, etc.) are still widely used.
+
 | Route | What it is | Depth today |
 |---|---|---|
-| `/sales-dashboard` | Overview / hero ("Pulse" in the future vision) — v2 hero cards over a metric catalog | touched lightly |
-| `/sales-dashboard/[section]` | Dynamic section router → `SectionId` or 404 | not touched |
-| `/sales-dashboard/leads` | **Leads roster** + funnel header + the Direct/Setter booking funnels | **deep** |
-| `/sales-dashboard/leads/[close_id]` | **Per-lead detail** — opt-in facts + full call history w/ reviews (built today) | **deep** |
-| `/sales-dashboard/funnel/appointment-setting` | Speed-to-Lead lead list + per-rep call-activity drill | **deep** |
-| `/sales-dashboard/funnel/closed` | **Closer drill** — per-closer scheduled calls + outcomes | **deep** |
-| `/sales-dashboard/funnel/landing-pages` | Landing-page metrics (Clarity) | not touched |
-| `/sales-dashboard/funnel/ads` | Ad metrics (Meta) | **sparse — see §7** |
+| `/sales-dashboard` | Redirects → `/sales-dashboard/funnel` | n/a |
+| `/sales-dashboard/funnel` | **Funnel** — the stacked Total/Direct/Setter/Reactivation funnel; stages link to filtered Leads | **deep** |
+| `/sales-dashboard/[section]` | Dynamic section router → `SectionId` or 404 (not in nav) | not touched |
+| `/sales-dashboard/leads` | **Leads roster** + filter bar (type/stage) + speed-to-lead + FMR | **deep** |
+| `/sales-dashboard/leads/[close_id]` | **Per-lead detail** — facts + two-phase Journey + form-driven lifecycle | **deep** |
+| `/sales-dashboard/funnel/landing-pages` | Landing-page metrics (Clarity) — reached from the Funnel header link | not touched |
+| `/sales-dashboard/funnel/ads` | Ad metrics (Meta) — reached from the Funnel adspend node | **sparse — see §7** |
+| `/sales-dashboard/people` | Per-rep views (Call Activity, per-closer scheduled, bookings, cash) | **deep** |
 | `/sales-dashboard/calls` + `/calls/[close_id]` | Setter-call list + per-call transcript/review detail | medium |
-| `/sales-dashboard/revenue/*` | profit / future / new-cash / expenses / refunds | not touched |
-| `/sales-dashboard/states`, `/trajectory` | reference / trend surfaces | not touched |
+| `/sales-dashboard/states`, `/trajectory` | reference / trend surfaces (not in nav) | not touched |
+
+### Funnel → Leads filter (2026-05-31)
+
+The Funnel page's stage nodes are links to `/sales-dashboard/leads?type=<t>&stage=<s>`
+(+ the window's `start`/`end`). The Leads page reads them and filters the roster;
+the filter bar (`leads-filter-bar.tsx`) also sets them manually. Contract:
+
+- **`type`** (multi, comma-sep): `direct` | `setter` (a.k.a. opt-in) | `reactivation`.
+  **`direct` INCLUDES reactivation** — a reactivated lead is still originally a
+  direct booking (reactivation ⊂ direct), so clicking *Direct · Showed* surfaces
+  reactivated-showed leads too. `reactivation` is the post-handover subset;
+  `setter` is everyone who never booked the strat link. Empty = all (Total).
+- **`stage`** (single): `connected` | `booked` | `confirmed` | `showed` | `closed`.
+  **Cumulative — "latest stage reached", not current stage.** Selecting `showed`
+  includes closes (they reached it). Because it's cumulative, multi-select makes
+  no sense — you pick the lowest stage you care about. `confirmed` is direct-only.
+- **Single source of truth:** `reachedStage(row, type, stage)` + `matchesType` +
+  `matchesLeadFilter` in `lib/db/leads-funnel.ts`. The funnel box COUNTS and the
+  roster FILTER both go through it, so a bar's number equals the roster it opens.
+- The per-lead **Back to leads** button preserves the full window+filter via a
+  `ret` querystring carried on each row link.
 
 ---
 
@@ -467,15 +505,18 @@ these with the same depth as §1–§6.
 
 ## 8. Future vision (Drake, 2026-05-30)
 
-The dashboard is converging on **three main pages**:
-1. **Pulse** — the at-a-glance health/overview surface (today's `/sales-dashboard`).
-2. **Leads** — everything about the leads (today's `/leads` + per-lead pages,
-   absorbing the funnel detail).
-3. **People** — the same underlying data viewed from the **sales reps'**
-   perspective (closers/setters).
+The dashboard converged on this shape (shipped 2026-05-31):
+1. **Funnel** (`/sales-dashboard/funnel`, renamed from Pulse) — the at-a-glance
+   stacked-funnel overview; stages drill into filtered Leads, adspend → Ads, a
+   header link → Landing Pages.
+2. **Leads** — everything about the leads (the roster + filters + per-lead pages).
+3. **People** — the same data from the **sales reps'** perspective (closers/setters).
+4. **Calls** — raw setter/closer call recordings (slated for removal once the
+   work to fold it elsewhere is done).
 
-Where the **ads** and **funnel** pages live in this layout is still undecided.
-Treat this section as direction, not commitment.
+**Ads + Landing Pages** live as detail pages reached *from* the Funnel page (no
+sidebar entry). **Revenue** is removed from Sales and slated for a future **CEO
+tab**. See § 1 for the realized routing.
 
 ---
 
