@@ -351,6 +351,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   let isDq = false
   let reactShowed = false
   let reactClosed = false
+  // A setter triage form filed after the handover = a post-handover connect
+  // (the form-OR-call "connected" signal, reactive phase).
+  let reactTriaged = false
   const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' }> = []
   {
     const { data, error } = await sb
@@ -374,6 +377,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
         r.confirmed_call_date_time ??
         r.booked_at ??
         (r.submitted_at ? `${r.submitted_at}T00:00:00Z` : null)
+      if (!isConfirmation && afterReact(at)) reactTriaged = true
       if (at && r.call_status) {
         formEvents.push({ at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage' })
       }
@@ -436,9 +440,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // Reactive-phase connected/booked — a ≥90s outbound dial / partnership
   // booking after the handover. (Calls are already loaded since latest opt-in,
   // which precedes reactivation, so post-handover calls are present.)
-  const reactConnected = calls.some(
-    (c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt),
-  )
+  const reactConnected =
+    reactTriaged ||
+    calls.some((c) => c.connected && c.direction === 'outbound' && afterReact(c.activityAt))
   const reactBooked = partnershipCreatedTimes.some((t) => afterReact(t))
 
   return {

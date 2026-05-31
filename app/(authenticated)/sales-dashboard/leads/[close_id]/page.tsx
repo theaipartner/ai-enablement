@@ -142,7 +142,10 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       color: 'var(--color-geg-pos)',
       stages: [
         { label: 'Booked', hit: true },
-        { label: 'Confirmed', hit: lead.confirmed || lead.showed || lead.closed },
+        // Literal — "Confirmed" means the confirmation call actually confirmed
+        // (a confirmation-form DQ is NOT a confirm), so it is NOT back-filled
+        // from showed/closed here on the factual per-lead view.
+        { label: 'Confirmed', hit: lead.confirmed },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
       ],
@@ -160,14 +163,15 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
   }
 
   // Reactive phase — only when the lead lost its spot. Floors at "Eligible"
-  // (always hit: being reactivated = eligible), then the post-handover ladder.
+  // (lost the spot, available for reactivation) UNLESS the lead DQ'd — a DQ'd
+  // lead is not eligible, so the terminal DQ chip carries the state instead.
   if (lead.reactivatedAt) {
     segments.push({
       label: 'Reactivation',
       color: REACT_BLUE,
       since: lead.reactivatedAt,
       stages: [
-        { label: 'Eligible', hit: true },
+        ...(lead.isDq ? [] : [{ label: 'Eligible', hit: true }]),
         { label: 'Connected', hit: lead.reactConnected || lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
