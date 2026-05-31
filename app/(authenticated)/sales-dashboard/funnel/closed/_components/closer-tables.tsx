@@ -335,8 +335,8 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
                 <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
                 <Cell text={callTypeLabel(c.callType)} mono />
                 <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
-                <YesNoCell value={c.showed} />
-                <ClosedTypeCell closed={c.closed} closeType={c.closeType} />
+                <YesNoCell value={c.showed} cancelled={c.cancelled} />
+                <ClosedTypeCell closed={c.closed} closeType={c.closeType} cancelled={c.cancelled} />
                 <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
               </div>
             )
@@ -529,7 +529,8 @@ function BookedByCell({
   )
 }
 
-function YesNoCell({ value }: { value: CloserScheduledDrillRow['showed'] }) {
+function YesNoCell({ value, cancelled }: { value: CloserScheduledDrillRow['showed']; cancelled?: boolean }) {
+  if (cancelled) return <DashCell />
   if (value === null) return <MissingTag />
   const map: Record<NonNullable<CloserScheduledDrillRow['showed']>, { text: string; color: string }> = {
     yes: { text: 'Yes', color: 'var(--color-geg-pos)' },
@@ -550,10 +551,13 @@ function YesNoCell({ value }: { value: CloserScheduledDrillRow['showed'] }) {
 function ClosedTypeCell({
   closed,
   closeType,
+  cancelled,
 }: {
   closed: CloserScheduledDrillRow['closed']
   closeType: 'ht' | 'dc' | null
+  cancelled?: boolean
 }) {
+  if (cancelled) return <DashCell />
   if (closed === null) return <MissingTag />
   if (closed === 'no') {
     return (
@@ -581,6 +585,16 @@ function ClosedTypeCell({
       title={closeType ? `Closed · ${label}` : 'Closed (payment_plan_type unknown)'}
     >
       {label}
+    </span>
+  )
+}
+
+// Canceled meeting → showed/closed are not applicable (no EOC will be filed),
+// so render an em-dash rather than the "missing" tag.
+function DashCell() {
+  return (
+    <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}>
+      —
     </span>
   )
 }
