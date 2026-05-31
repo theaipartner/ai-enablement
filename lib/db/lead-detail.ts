@@ -41,8 +41,16 @@ export type LeadCallEntry = {
 // would be guesswork.
 export type LeadTimelineEvent =
   | { kind: 'optin'; at: string }
-  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer'; label: string; by: string | null }
+  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; label: string; by: string | null }
   | { kind: 'followup'; at: string; name: string }
+
+// Close details surfaced on the per-lead page when the lead has closed.
+export type LeadCloseDetail = {
+  offer: 'ht' | 'dc'
+  closer: string | null
+  plans: string[]          // DC plan multi-select (Base44 / Wix × Mo/Yr); [] for HT
+  at: string | null        // meeting time of the close
+}
 
 export type LeadDetail = {
   leadId: string
@@ -64,6 +72,10 @@ export type LeadDetail = {
   confirmed: boolean
   showed: boolean
   closed: boolean
+  // Which offer closed ('ht' | 'dc' | null). HT wins if both. Drives the
+  // Journey "Closed" label + the Close-details section.
+  closeType: 'ht' | 'dc' | null
+  closeDetail: LeadCloseDetail | null
   // Connected — the same form-OR-call signal the roster/funnel use: a ≥90s dial,
   // a setter triage form, or a confirmation that reached the lead (any Call
   // Status except "Unresponsive – Setter Handover"). One definition everywhere.
@@ -111,8 +123,13 @@ function outcomeShowed(co: string | null): boolean {
   return !(v.includes('ghost') || v.includes('no show') || v.includes('reschedul') || v.includes('cancel'))
 }
 function outcomeClosed(co: string | null): boolean {
+  return outcomeCloseType(co) !== null
+}
+function outcomeCloseType(co: string | null): 'ht' | 'dc' | null {
   const v = norm(co)
-  return v.includes('high ticket closed') || v.includes('digital college closed')
+  if (v.includes('high ticket closed')) return 'ht'
+  if (v.includes('digital college closed')) return 'dc'
+  return null
 }
 
 const CONNECTED_SEC = 90
@@ -355,6 +372,18 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   let isDq = false
   let reactShowed = false
   let reactClosed = false
+  // Which offer closed + its details. 'ht' wins over 'dc' if a lead has both.
+  let closeType: 'ht' | 'dc' | null = null
+  let closeDetail: LeadCloseDetail | null = null
+  const considerClose = (
+    offer: 'ht' | 'dc',
+    detail: { closer: string | null; plans: string[]; at: string | null },
+  ) => {
+    if (closeType === 'ht') return // ht wins, never downgrade
+    if (closeType === 'dc' && offer === 'dc') return // keep first dc
+    closeType = offer
+    closeDetail = { offer, ...detail }
+  }
   // A setter triage form filed after the handover = a post-handover connect
   // (the form-OR-call "connected" signal, reactive phase).
   let reactTriaged = false
@@ -362,7 +391,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // that reached the lead (any Call Status except Unresponsive – Setter Handover).
   let setterTriaged = false
   let confirmReached = false
-  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer'; by: string | null }> = []
+  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null }> = []
   {
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
@@ -438,6 +467,45 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
       const by = (latest.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
       formEvents.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer', by })
+      const ct = outcomeCloseType(latest.call_outcome)
+      if (ct) considerClose(ct, { closer: by, plans: [], at: latest.date_time_of_call })
+    }
+  }
+
+  // 7b. Digital College sales (Robby's dedicated low-ticket form). A filed form
+  //     = showed (no no-show field); Closed?=Yes = a DC close; Follow Up? = No =
+  //     DQ (mis-built field — see funnel-digital-college.ts). Each form is a
+  //     timeline row (source 'dc'); showed/closed feed the journey monotonically.
+  {
+    type DcForm = {
+      closed: string | null; follow_up: string | null; plans: string[] | null
+      closer_names: string[] | null; date_time_of_call: string | null; airtable_created_at: string | null
+    }
+    const { data, error } = await sb
+      .from('airtable_digital_college_sales' as never)
+      .select('closed, follow_up, plans, closer_names, date_time_of_call, airtable_created_at')
+      .is('excluded_at', null)
+      .eq('lead_id', closeId)
+    if (error) throw new Error(`lead-detail: digital college sales read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as DcForm[]) {
+      const isBlank = !r.closed && (r.plans ?? []).length === 0
+      if (isBlank) continue
+      const at = r.date_time_of_call ?? r.airtable_created_at
+      const closer = (r.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
+      const isClosed = norm(r.closed) === 'yes'
+      const isDqForm = norm(r.follow_up) === 'no'
+      if (isDqForm) isDq = true
+      // A filed form = showed.
+      showed = true
+      if (afterReact(at)) reactShowed = true
+      if (isClosed) {
+        closed = true
+        if (afterReact(at)) reactClosed = true
+        considerClose('dc', { closer, plans: r.plans ?? [], at: r.date_time_of_call })
+      }
+      // Timeline label: the DC disposition.
+      const label = isClosed ? 'Digital College closed' : isDqForm ? 'Digital College DQ' : 'Digital College follow-up'
+      if (at) formEvents.push({ at, label, source: 'dc', by: closer })
     }
   }
 
@@ -484,6 +552,8 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     confirmed,
     showed,
     closed,
+    closeType,
+    closeDetail,
     connected: isConnected,
     isDq,
     reactConnected,

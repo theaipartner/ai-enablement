@@ -63,6 +63,8 @@ export default async function LeadDetailPage({
       </div>
       <JourneyProgress lead={lead} />
 
+      {lead.closeDetail ? <CloseDetails detail={lead.closeDetail} /> : null}
+
       <SectionHeading>Lifecycle</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
         by day · newest first · since latest opt-in
@@ -141,6 +143,8 @@ type JSegment = { label: string; color: string; stages: JStage[]; since?: string
 function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
   const bt = lead.bookingType
   const segments: JSegment[] = []
+  // Once closed, the terminal stage reads the offer instead of a bare "Closed".
+  const closedLabel = lead.closeType === 'dc' ? 'Digital College' : lead.closeType === 'ht' ? 'High Ticket' : 'Closed'
 
   // Primary path. A direct/reactivation lead → Direct phase (Booked → Connected
   // → Confirmed → Showed → Closed, mirroring the Direct funnel ladder). A
@@ -162,7 +166,7 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
         { label: 'Connected', hit: lead.confirmed || (lead.connected && !lead.reactConnected) },
         { label: 'Confirmed', hit: lead.confirmed },
         { label: 'Showed', hit: lead.showed || lead.closed },
-        { label: 'Closed', hit: lead.closed },
+        { label: closedLabel, hit: lead.closed },
       ],
     })
   } else {
@@ -175,9 +179,11 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       color: 'var(--color-geg-warn)',
       stages: [
         { label: 'Connected', hit: lead.connected },
-        { label: 'Booked', hit: lead.bookingType === 'setter' },
+        // Monotonic: a show/close implies a booking even when no Calendly
+        // partnership link resolved (a self-set DC meeting, say).
+        { label: 'Booked', hit: lead.bookingType === 'setter' || lead.showed || lead.closed },
         { label: 'Showed', hit: lead.showed || lead.closed },
-        { label: 'Closed', hit: lead.closed },
+        { label: closedLabel, hit: lead.closed },
       ],
     })
   }
@@ -200,7 +206,7 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
         { label: 'Connected', hit: lead.reactConnected },
         { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
-        { label: 'Closed', hit: lead.reactClosed },
+        { label: closedLabel, hit: lead.reactClosed },
       ],
     })
   }
@@ -279,6 +285,43 @@ function DqChip() {
       DQ
     </span>
   )
+}
+
+// Close details — the offer closed (High Ticket / Digital College), the closer,
+// the DC plan breakdown (Base44 / Wix × Mo/Yr), and the meeting time.
+function CloseDetails({ detail }: { detail: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>>['closeDetail'] }) {
+  if (!detail) return null
+  const offerLabel = detail.offer === 'dc' ? 'Digital College' : 'High Ticket'
+  const planText = detail.plans.length ? formatDcPlans(detail.plans) : null
+  return (
+    <>
+      <SectionHeading>Close details</SectionHeading>
+      <div
+        style={{
+          display: 'flex', flexWrap: 'wrap', gap: 28, marginTop: 10,
+          padding: '16px 18px', background: 'var(--color-geg-pos-fill)',
+          border: '1px solid var(--color-geg-pos-border)', borderRadius: 8,
+        }}
+      >
+        <Fact label="Offer" value={offerLabel} valueColor="var(--color-geg-pos)" />
+        <Fact label="Closer" value={detail.closer ?? '—'} />
+        {planText ? <Fact label="Plan" value={planText} /> : null}
+        <Fact label="Closed on" value={detail.at ? formatEtTimestamp(detail.at) : '—'} />
+      </div>
+    </>
+  )
+}
+
+// Render the DC plan multi-select with the Base44 display label.
+function formatDcPlans(plans: string[]): string {
+  return plans
+    .map((p) => {
+      const v = p.toLowerCase()
+      const product = v.includes('wix') ? 'Wix' : v.includes('base') ? 'Base44' : p
+      const cadence = v.includes('year') || v.includes('annual') ? 'Yearly' : v.includes('month') ? 'Monthly' : ''
+      return cadence ? `${product} ${cadence}` : product
+    })
+    .join(' · ')
 }
 
 function Fact({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
@@ -445,8 +488,14 @@ function Dot({ color }: { color: string }) {
   return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
 }
 
-function sourceLabel(s: 'triage' | 'confirmation' | 'closer'): string {
-  return s === 'triage' ? 'Setter triage' : s === 'confirmation' ? 'Confirmation' : 'Closer'
+function sourceLabel(s: 'triage' | 'confirmation' | 'closer' | 'dc'): string {
+  return s === 'triage'
+    ? 'Setter triage'
+    : s === 'confirmation'
+      ? 'Confirmation'
+      : s === 'dc'
+        ? 'Digital College'
+        : 'Closer'
 }
 
 function dispositionColor(label: string): string {
