@@ -49,6 +49,55 @@ export type LeadsFunnel = {
   direct: DirectBox
   setter: PoolFunnelBox
   reactivation: PoolFunnelBox
+  // Integrity warnings (empty = clean). Surfaced as a banner on the Funnel page
+  // so a silent miscount / cross-contamination can't hide as volume grows.
+  warnings: string[]
+}
+
+// Funnel-integrity guard. Returns human-readable violations of invariants that
+// MUST hold if the funnel is counting each lead once and bucketing cleanly.
+// Empty = clean. A violation means a bug (double-count, mis-bucket, or a stage
+// predicate that lets a later stage exceed an earlier one).
+export function validateFunnel(f: LeadsFunnel, rows: LeadRow[]): string[] {
+  const w: string[] = []
+
+  // (1) Per-lead-once: the cohort must have no duplicate lead rows (every box
+  //     counts per row, so a dup row would double-count that lead everywhere).
+  const seen = new Set<string>()
+  let dups = 0
+  for (const r of rows) {
+    if (seen.has(r.leadId)) dups++
+    else seen.add(r.leadId)
+  }
+  if (dups > 0) w.push(`${dups} duplicate lead row(s) in the cohort — leads would double-count.`)
+
+  // (2) Monotonicity: within each box a later stage can't exceed an earlier one.
+  //     (Total is the exception — Books MAY exceed Connected by design, since a
+  //     self-booked direct lead is booked but not connected — so Total checks
+  //     the two chains that DO hold rather than one straight ladder.)
+  const chain = (label: string, ...seq: [string, number][]) => {
+    for (let i = 1; i < seq.length; i++) {
+      if (seq[i][1] > seq[i - 1][1]) {
+        w.push(`${label}: ${seq[i][0]} (${seq[i][1]}) > ${seq[i - 1][0]} (${seq[i - 1][1]}).`)
+      }
+    }
+  }
+  chain('Total', ['opt-ins', f.total.optIns], ['connected', f.total.connected], ['shows', f.total.shows], ['closes', f.total.closes])
+  chain('Total', ['opt-ins', f.total.optIns], ['books', f.total.books], ['shows', f.total.shows])
+  chain('Direct', ['books', f.direct.books], ['connected', f.direct.connected], ['confirms', f.direct.confirms], ['shows', f.direct.shows], ['closes', f.direct.closes])
+  chain('Setter', ['pool', f.setter.pool], ['connected', f.setter.connected], ['books', f.setter.books], ['shows', f.setter.shows], ['closes', f.setter.closes])
+  chain('Reactivation', ['pool', f.reactivation.pool], ['connected', f.reactivation.connected], ['books', f.reactivation.books], ['shows', f.reactivation.shows], ['closes', f.reactivation.closes])
+
+  // (3) Partition: every lead is exactly one of Direct or Setter, so the two
+  //     pools must sum to the whole cohort.
+  if (f.direct.books + f.setter.pool !== f.total.optIns) {
+    w.push(`Partition: Direct (${f.direct.books}) + Setter (${f.setter.pool}) ≠ opt-ins (${f.total.optIns}) — a lead is mis-bucketed or counted in both.`)
+  }
+  // (4) Reactivation ⊂ Direct — the reactive pool can't exceed direct bookings.
+  if (f.reactivation.pool > f.direct.books) {
+    w.push(`Reactivation pool (${f.reactivation.pool}) > Direct books (${f.direct.books}) — reactivation should be a subset of direct.`)
+  }
+  return w
 }
 
 // ── Funnel membership + stage predicates (the SINGLE source of truth) ──────────
@@ -282,5 +331,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     closes: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'closed')),
   }
 
-  return { adspendUsd, total, direct, setter, reactivation }
+  const funnel: LeadsFunnel = { adspendUsd, total, direct, setter, reactivation, warnings: [] }
+  funnel.warnings = validateFunnel(funnel, rows)
+  return funnel
 }
