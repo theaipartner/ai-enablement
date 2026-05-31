@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { unstable_cache } from 'next/cache'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
@@ -167,7 +168,7 @@ function etHourOfDay(iso: string): number {
   return parseInt(fmt.format(new Date(iso)), 10) % 24
 }
 
-export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
+async function getFmrTimeBlocksUncached(): Promise<FmrTimeBlocksResult> {
   const sb = createAdminClient()
 
   // Cohort: leads created since May 24, 2026 00:00 ET (see
@@ -324,6 +325,17 @@ export async function getFmrTimeBlocks(): Promise<FmrTimeBlocksResult> {
     blocks,
   }
 }
+
+// FMR is cohort-wide (since May 24) and identical on every request, but its
+// uncached body scans ~48k close_sms + ~16k close_calls rows — so it was
+// re-running that scan on every leads / appointment-setting page load. Cache
+// it; the time-of-day chart tolerates coarse staleness. 10-min revalidate.
+// (Perf option A — no logic change.)
+export const getFmrTimeBlocks = unstable_cache(
+  getFmrTimeBlocksUncached,
+  ['fmr-time-blocks-v1'],
+  { revalidate: 600 },
+)
 
 // ---------------------------------------------------------------------------
 // Speed to Lead (per-rep, separately for setters + closers)

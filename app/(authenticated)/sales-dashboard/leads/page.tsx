@@ -58,15 +58,17 @@ export default async function SalesDashboardLeadsPage({
   const todayEt = todayEtDate()
   const view: View = pickView(searchParams?.view)
 
-  const [allRows, access, fmr, speedCohort] = await Promise.all([
-    getLeadsForRange(range),
-    getCurrentUserAccessTier(),
-    // FMR is cohort-wide (since May 24, NOT range-scoped). The speed-to-lead
-    // boxes ARE scoped to this page's date range — same cohort getLeadsForRange
-    // builds, so the boxes and roster can't drift.
-    getFmrTimeBlocks(),
+  // Fetch the cohort ONCE (it's the heavy scan) + access + the cached FMR in
+  // parallel, then reuse the cohort for both the roster (getLeadsForRange) and
+  // the speed-to-lead boxes — no duplicate cohort scan. (Perf option A.)
+  // FMR is cohort-wide (since May 24, NOT range-scoped); the speed boxes ARE
+  // range-scoped to the same cohort getLeadsForRange uses, so they can't drift.
+  const [speedCohort, access, fmr] = await Promise.all([
     getSpeedToLeadCohort(range),
+    getCurrentUserAccessTier(),
+    getFmrTimeBlocks(),
   ])
+  const allRows = await getLeadsForRange(range, speedCohort)
   const canDelete = access?.tier === 'creator'
 
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.

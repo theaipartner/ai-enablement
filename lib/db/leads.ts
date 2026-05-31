@@ -5,6 +5,7 @@ import type { DateRange } from './funnel-window'
 import {
   getSpeedToLeadCohort,
   type SpeedToLeadCohortRow,
+  type SpeedToLeadCohortResult,
 } from './funnel-appointment-setting'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm, type CalendlyLeadResolver } from './calendly-lead-match'
@@ -148,10 +149,17 @@ function outcomeClosed(callOutcome: string | null): boolean {
   return v.includes('high ticket closed') || v.includes('digital college closed')
 }
 
-export async function getLeadsForRange(range: DateRange): Promise<LeadRow[]> {
+export async function getLeadsForRange(
+  range: DateRange,
+  // Optional pre-fetched cohort — the leads page already fetches it for the
+  // speed-to-lead boxes, so passing it in avoids a duplicate full cohort scan
+  // (~48k close_sms + ~16k close_calls). Falls back to fetching when omitted.
+  // (Perf option A — no logic change.)
+  cohort?: SpeedToLeadCohortResult,
+): Promise<LeadRow[]> {
   // 1. Cohort (new + re-opt-in; soft-hidden leads already filtered out).
-  const cohort = await getSpeedToLeadCohort(range)
-  const rows = cohort.rows
+  const c = cohort ?? (await getSpeedToLeadCohort(range))
+  const rows = c.rows
   if (rows.length === 0) return []
 
   const sb = createAdminClient()
