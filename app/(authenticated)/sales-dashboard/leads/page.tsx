@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
 import { matchesLeadFilter, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
-import { getFmrTimeBlocks, getSpeedToLeadCohort, summarizeCohortRows } from '@/lib/db/funnel-appointment-setting'
+import { getFmrSignals, buildFmrBlocks, getSpeedToLeadCohort, summarizeCohortRows } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
@@ -65,15 +65,14 @@ export default async function SalesDashboardLeadsPage({
   const types = parseTypes(searchParams?.type)
   const stage = parseStage(searchParams?.stage)
 
-  // Fetch the cohort ONCE (it's the heavy scan) + access + the cached FMR in
-  // parallel, then reuse the cohort for both the roster (getLeadsForRange) and
-  // the speed-to-lead boxes — no duplicate cohort scan. (Perf option A.)
-  // FMR is cohort-wide (since May 24, NOT range-scoped); the speed boxes ARE
-  // range-scoped to the same cohort getLeadsForRange uses, so they can't drift.
-  const [speedCohort, access, fmr] = await Promise.all([
+  // Fetch the cohort ONCE (the heavy scan) + access + the cached FMR signals in
+  // parallel, then reuse the cohort for the roster (getLeadsForRange), the speed
+  // boxes, and FMR — no duplicate cohort scan. FMR signals (the SMS/connect
+  // scans) are cached per range; the cohort bucketing is applied cheaply below.
+  const [speedCohort, access, fmrSignals] = await Promise.all([
     getSpeedToLeadCohort(range),
     getCurrentUserAccessTier(),
-    getFmrTimeBlocks(),
+    getFmrSignals(range),
   ])
   const allRows = await getLeadsForRange(range, speedCohort)
   const canDelete = access?.tier === 'creator'
@@ -81,10 +80,16 @@ export default async function SalesDashboardLeadsPage({
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
   const viewRows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
   // Roster honors the type/stage filter. The speed-to-lead boxes recompute over
-  // the SAME filtered rows so they track the filter (FMR stays a fixed
-  // since-May-24 reference, intentionally not range/filter-scoped).
+  // the SAME filtered rows so they track the filter.
   const rows = viewRows.filter((r) => matchesLeadFilter(r, types, stage))
   const filteredCohort = { ...speedCohort, ...summarizeCohortRows(rows), rows }
+  // FMR now follows the WINDOW (not the type/stage filter): bucket the full
+  // window cohort by opt-in hour, so cohortSize matches the Total funnel.
+  const fmr = buildFmrBlocks(
+    allRows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt })),
+    fmrSignals,
+    `${range.startEtDate} → ${range.endEtDate} ET`,
+  )
 
   // Serialize the current leads-page state (date window, view, filters) so a row
   // click carries it as `ret`, letting the per-lead "Back to leads" return to
@@ -116,7 +121,7 @@ export default async function SalesDashboardLeadsPage({
       </div>
 
       <div style={{ marginTop: 26 }}>
-        <SectionLabel>First message response · by hour of creation · since May 24 ET</SectionLabel>
+        <SectionLabel>First message response · by hour of opt-in · this window</SectionLabel>
         <FmrTimeBlockChart fmr={fmr} />
       </div>
 

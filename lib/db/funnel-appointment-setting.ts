@@ -127,9 +127,6 @@ const STATUS_LOOKBACK_MS = STATUS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
 // whether or not we ever texted them. Matches the Close-UI calc:
 // "leads where SMS received > 0 / total new leads."
 
-// FMR cohort starts at May 24, 2026 00:00 ET (= 04:00 UTC during EDT).
-// Aligned with APPT_SETTING_MIN_ET_DATE — same floor across the page.
-const FMR_COHORT_START_UTC_ISO = '2026-05-24T04:00:00Z'
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
 // "Connected" threshold for treating a first dial as a response. Same
@@ -168,141 +165,95 @@ function etHourOfDay(iso: string): number {
   return parseInt(fmt.format(new Date(iso)), 10) % 24
 }
 
-async function getFmrTimeBlocksUncached(): Promise<FmrTimeBlocksResult> {
+// FMR signals — earliest inbound SMS + earliest >=90s outbound connect per lead,
+// scanned from the window start onward (a response to a window lead lands at or
+// after its opt-in, which is >= window start). Returned as plain arrays so the
+// result is JSON-cacheable; buildFmrBlocks rebuilds the maps. Cached per range.
+export type FmrSignals = {
+  inbound: Array<[string, string]> // [leadId, earliest inbound activity_at]
+  connect: Array<[string, string]> // [leadId, earliest >=90s outbound activity_at]
+}
+
+async function getFmrSignalsUncached(range: DateRange): Promise<FmrSignals> {
   const sb = createAdminClient()
 
-  // Cohort: leads created since May 24, 2026 00:00 ET (see
-  // FMR_COHORT_START_UTC_ISO). Paginate to avoid PostgREST's default
-  // page limit.
-  const leads: Array<{ close_id: string; date_created: string }> = []
-  {
-    let from = 0
-    const PAGE = 1000
-    for (;;) {
-      const { data, error } = await sb
-        .from('close_leads' as never)
-        .select('close_id, date_created')
-        .gte('date_created', FMR_COHORT_START_UTC_ISO)
-        .order('date_created', { ascending: true })
-        .range(from, from + PAGE - 1)
-      if (error) throw new Error(`close_leads cohort read failed: ${error.message}`)
-      const rows = (data ?? []) as unknown as Array<{ close_id: string; date_created: string }>
-      if (rows.length === 0) break
-      leads.push(...rows)
-      if (rows.length < PAGE) break
-      from += PAGE
-    }
+  // Earliest inbound SMS per lead (>= window start).
+  const inbound = new Map<string, string>()
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb
+      .from('close_sms' as never)
+      .select('lead_id, activity_at')
+      .eq('direction', 'inbound')
+      .gte('activity_at', range.startUtcIso)
+      .order('activity_at', { ascending: true })
+      .range(from, from + 999)
+    if (error) throw new Error(`close_sms inbound read failed: ${error.message}`)
+    const rows = (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string }>
+    if (rows.length === 0) break
+    for (const r of rows) if (r.lead_id && !inbound.has(r.lead_id)) inbound.set(r.lead_id, r.activity_at)
+    if (rows.length < 1000) break
   }
 
-  // Inbound SMS scan — keyed only by date so we get every inbound
-  // since cohort start. Faster than a per-lead `.in()` filter.
-  const earliestInboundByLead = new Map<string, string>()
-  {
-    let from = 0
-    const PAGE = 1000
-    for (;;) {
-      const { data, error } = await sb
-        .from('close_sms' as never)
-        .select('lead_id, activity_at')
-        .eq('direction', 'inbound')
-        .gte('activity_at', FMR_COHORT_START_UTC_ISO)
-        .order('activity_at', { ascending: true })
-        .range(from, from + PAGE - 1)
-      if (error) throw new Error(`close_sms inbound read failed: ${error.message}`)
-      const rows = (data ?? []) as unknown as Array<{ lead_id: string; activity_at: string }>
-      if (rows.length === 0) break
-      for (const r of rows) {
-        if (!r.lead_id) continue
-        if (!earliestInboundByLead.has(r.lead_id)) {
-          earliestInboundByLead.set(r.lead_id, r.activity_at)
-        }
-      }
-      if (rows.length < PAGE) break
-      from += PAGE
-    }
+  // Earliest >=90s outbound connect per lead (>= window start).
+  const connect = new Map<string, string>()
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb
+      .from('close_calls' as never)
+      .select('lead_id, activity_at')
+      .eq('direction', 'outbound')
+      .gte('duration', FMR_DIAL_CONNECTED_SEC)
+      .gte('activity_at', range.startUtcIso)
+      .order('activity_at', { ascending: true })
+      .range(from, from + 999)
+    if (error) throw new Error(`close_calls connected-outbound read failed: ${error.message}`)
+    const rows = (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string }>
+    if (rows.length === 0) break
+    for (const r of rows) if (r.lead_id && !connect.has(r.lead_id)) connect.set(r.lead_id, r.activity_at)
+    if (rows.length < 1000) break
   }
 
-  // Earliest-CONNECTED-outbound-dial scan — track the FIRST outbound
-  // call per lead WHERE duration >= 90s (i.e. an actual conversation,
-  // not a ring-out). The 90s filter happens DB-side so we only
-  // materialize connects. Sorting by ascending activity_at + only
-  // keeping the first per lead gives us the earliest connect.
-  //
-  // "Any connect ever" → presence in this map.
-  // "Connect within 24h"  → check the stored activity_at against the
-  //                         lead's date_created.
-  const earliestConnectedDialByLead = new Map<string, string>()
-  {
-    let from = 0
-    const PAGE = 1000
-    for (;;) {
-      const { data, error } = await sb
-        .from('close_calls' as never)
-        .select('lead_id, activity_at, duration')
-        .eq('direction', 'outbound')
-        .gte('duration', FMR_DIAL_CONNECTED_SEC)
-        .gte('activity_at', FMR_COHORT_START_UTC_ISO)
-        .order('activity_at', { ascending: true })
-        .range(from, from + PAGE - 1)
-      if (error) throw new Error(`close_calls connected-outbound read failed: ${error.message}`)
-      const rows = (data ?? []) as unknown as Array<{
-        lead_id: string | null
-        activity_at: string
-        duration: number | null
-      }>
-      if (rows.length === 0) break
-      for (const r of rows) {
-        if (!r.lead_id) continue
-        if (!earliestConnectedDialByLead.has(r.lead_id)) {
-          earliestConnectedDialByLead.set(r.lead_id, r.activity_at)
-        }
-      }
-      if (rows.length < PAGE) break
-      from += PAGE
-    }
-  }
+  return { inbound: Array.from(inbound), connect: Array.from(connect) }
+}
 
-  // Bucket each lead. everReplied / within24h now use the UNIFIED
-  // response definition: SMS reply OR first-dial-answered (>=90s).
-  // Per-channel within-24h check — a slow dial that eventually got
-  // picked up still counts as everReplied but NOT within24h.
+// Cached per window. The scans are keyed only by the range (date-bounded, not
+// lead-bounded), so the cohort can be applied cheaply on top in buildFmrBlocks.
+export function getFmrSignals(range: DateRange): Promise<FmrSignals> {
+  return unstable_cache(
+    () => getFmrSignalsUncached(range),
+    ['fmr-signals-v1', range.startEtDate, range.endEtDate],
+    { revalidate: 600 },
+  )()
+}
+
+// Build the FMR time-of-day blocks over a cohort — the SAME window cohort as the
+// roster/funnel, so cohortSize equals the Total funnel's opt-ins. Buckets each
+// lead by the ET hour of its OPT-IN (a re-opt-in by its re-opt-in moment, not
+// the original signup), and credits a response only at/after that opt-in.
+export function buildFmrBlocks(
+  cohort: Array<{ leadId: string; optInAt: string }>,
+  signals: FmrSignals,
+  windowLabel: string,
+): FmrTimeBlocksResult {
+  const inbound = new Map(signals.inbound)
+  const connect = new Map(signals.connect)
   const totals = [0, 0, 0, 0, 0, 0]
   const everCounts = [0, 0, 0, 0, 0, 0]
   const within24Counts = [0, 0, 0, 0, 0, 0]
-  for (const lead of leads) {
-    const hour = etHourOfDay(lead.date_created)
-    const block = Math.floor(hour / 4) as 0 | 1 | 2 | 3 | 4 | 5
+  for (const lead of cohort) {
+    const optInMs = new Date(lead.optInAt).getTime()
+    const block = Math.floor(etHourOfDay(lead.optInAt) / 4) as 0 | 1 | 2 | 3 | 4 | 5
     totals[block]++
-
-    const leadCreatedMs = new Date(lead.date_created).getTime()
-    const inboundAt = earliestInboundByLead.get(lead.close_id)
-    const earliestConnectAt = earliestConnectedDialByLead.get(lead.close_id)
-
-    // Ever responded: either signal at any time.
-    if (inboundAt || earliestConnectAt) {
-      everCounts[block]++
-    }
-
-    // Within 24h: either signal landed within 24h of lead creation.
-    const smsWithin24h = !!(
-      inboundAt &&
-      (() => {
-        const delta = new Date(inboundAt).getTime() - leadCreatedMs
-        return delta >= 0 && delta <= ONE_DAY_MS
-      })()
-    )
-    const connectWithin24h = !!(
-      earliestConnectAt &&
-      (() => {
-        const delta = new Date(earliestConnectAt).getTime() - leadCreatedMs
-        return delta >= 0 && delta <= ONE_DAY_MS
-      })()
-    )
-    if (smsWithin24h || connectWithin24h) {
-      within24Counts[block]++
-    }
+    const inAt = inbound.get(lead.leadId)
+    const coAt = connect.get(lead.leadId)
+    // A response counts only at/after this opt-in (don't credit a re-opt-in with
+    // a reply to a prior journey).
+    const inOk = !!inAt && new Date(inAt).getTime() >= optInMs
+    const coOk = !!coAt && new Date(coAt).getTime() >= optInMs
+    if (inOk || coOk) everCounts[block]++
+    const within = (at: string | undefined, ok: boolean) =>
+      ok && !!at && new Date(at).getTime() - optInMs <= ONE_DAY_MS
+    if (within(inAt, inOk) || within(coAt, coOk)) within24Counts[block]++
   }
-
   const blocks: FmrTimeBlock[] = []
   for (let i = 0; i < 6; i++) {
     const total = totals[i]
@@ -316,26 +267,14 @@ async function getFmrTimeBlocksUncached(): Promise<FmrTimeBlocksResult> {
       within24hRate: total > 0 ? within24Counts[i] / total : null,
     })
   }
-
   return {
-    cohortStart: 'May 24, 2026 · 12:00am ET',
-    cohortSize: leads.length,
+    cohortStart: windowLabel,
+    cohortSize: cohort.length,
     cohortEverReplied: everCounts.reduce((a, b) => a + b, 0),
     cohortWithin24h: within24Counts.reduce((a, b) => a + b, 0),
     blocks,
   }
 }
-
-// FMR is cohort-wide (since May 24) and identical on every request, but its
-// uncached body scans ~48k close_sms + ~16k close_calls rows — so it was
-// re-running that scan on every leads / appointment-setting page load. Cache
-// it; the time-of-day chart tolerates coarse staleness. 10-min revalidate.
-// (Perf option A — no logic change.)
-export const getFmrTimeBlocks = unstable_cache(
-  getFmrTimeBlocksUncached,
-  ['fmr-time-blocks-v1'],
-  { revalidate: 600 },
-)
 
 // ---------------------------------------------------------------------------
 // Speed to Lead (per-rep, separately for setters + closers)

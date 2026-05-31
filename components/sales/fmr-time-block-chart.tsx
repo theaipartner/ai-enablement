@@ -3,14 +3,9 @@ import type { FmrTimeBlocksResult } from '@/lib/db/funnel-appointment-setting'
 // First Message Response — time-block bar chart with cohort avg.
 //
 // 6 time-of-day blocks × 2 bars each (ever-replied + within-24h). Pure
-// SVG so it renders server-side without a chart-lib dependency. Cohort is
-// fixed since May 24 ET (NOT range-scoped) — the chart is about
-// time-of-day response patterns across the whole cohort, so it carries its
-// own "since May 24" footer regardless of any page date filter.
-//
-// Ported verbatim from the appointment-setting page so the leads page can
-// show the same chart. The appointment-setting page keeps its own inline
-// copy until it's retired.
+// SVG so it renders server-side without a chart-lib dependency. The cohort is
+// the page's window cohort (range-scoped, bucketed by ET opt-in hour); the
+// footer shows the window label (fmr.cohortStart).
 
 export function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
   // Bar geometry — fits comfortably in the page's content column.
@@ -181,7 +176,7 @@ export function FmrTimeBlockChart({ fmr }: { fmr: FmrTimeBlocksResult }) {
           }}
           title="A response is an inbound SMS OR the first outbound dial answered (>= 90s) — either channel counts."
         >
-          {fmr.cohortSize} leads · {fmr.cohortEverReplied} responded · {fmr.cohortWithin24h} within 24h · since May 24 ET
+          {fmr.cohortSize} leads · {fmr.cohortEverReplied} responded · {fmr.cohortWithin24h} within 24h · {fmr.cohortStart}
         </div>
       </div>
     </div>
