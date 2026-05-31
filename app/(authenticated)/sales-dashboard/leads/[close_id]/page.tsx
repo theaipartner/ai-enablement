@@ -3,10 +3,11 @@ import { notFound } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadDetail, type LeadTimelineEvent } from '@/lib/db/lead-detail'
 
-// Per-lead detail page. One Close lead's opt-in facts + full call history,
-// each call collapsed by default and expanding to its setter-call review.
-// Reached from the appointment-setting lead list, the per-rep drill, and
-// the /leads roster. Closing-call detail is stubbed for now (built later).
+// Per-lead detail page. One Close lead's opt-in facts + header (qualification,
+// dials/connected counts, booking stage) + a form-driven lifecycle timeline:
+// the opt-in anchor, every Airtable form outcome in chronological order, and
+// the trailing follow-up booking. Reached from the appointment-setting lead
+// list, the per-rep drill, and the /leads roster.
 
 export const dynamic = 'force-dynamic'
 
@@ -51,7 +52,7 @@ export default async function LeadDetailPage({
 
       <SectionHeading>Lifecycle</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 8, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
-        newest first · since latest opt-in
+        in order · since latest opt-in
       </div>
       {lead.timeline.length === 0 ? (
         <Empty>No activity since the latest opt-in.</Empty>
@@ -169,8 +170,10 @@ function Fact({ label, value, valueColor }: { label: string; value: string; valu
 // ----------------------------------------------------------------------
 
 // ----------------------------------------------------------------------
-// Lifecycle timeline — newest first; dial-runs, connected calls (link to the
-// review), bookings, and form dispositions as rows.
+// Lifecycle timeline — form-driven, oldest first: the opt-in anchor, every
+// Airtable form outcome (setter triage / confirmation / closer EOC) in order,
+// and the trailing follow-up booking. No close_calls (no reliable form↔call
+// link) — see lib/db/lead-detail.ts.
 // ----------------------------------------------------------------------
 
 function Lifecycle({ events }: { events: LeadTimelineEvent[] }) {
@@ -209,54 +212,28 @@ function EventBody({ ev }: { ev: LeadTimelineEvent }) {
       </span>
     )
   }
-  if (ev.kind === 'dials') {
-    return (
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)', letterSpacing: '0.04em' }}>
-        {ev.count} dial{ev.count === 1 ? '' : 's'}
-      </span>
-    )
-  }
-  if (ev.kind === 'connected') {
+  if (ev.kind === 'followup') {
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <Dot color="var(--color-geg-pos)" />
-        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Connected call</span>
-        <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>
-          {ev.caller ?? '—'} · {formatDuration(ev.durationSec)}
-        </span>
-        <Link
-          href={`/sales-dashboard/calls/${encodeURIComponent(ev.closeCallId)}`}
-          className="geg-mono"
-          style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--color-geg-accent)', textDecoration: 'none' }}
-        >
-          {ev.hasReview ? 'review →' : 'open →'}
-        </Link>
+        <Dot color="var(--color-geg-warn)" />
+        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Follow-up booked</span>
+        <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>{ev.name}</span>
       </span>
     )
   }
-  if (ev.kind === 'booking') {
-    const label = ev.link === 'direct' ? 'Direct' : ev.link === 'setter' ? 'Setter-led' : ev.link === 'sync' ? 'Sync follow-up' : 'Call'
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-        <Dot color="var(--color-geg-accent)" />
-        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)' }}>Booked</span>
-        <span className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-accent)', borderRadius: 4, padding: '1px 5px' }}>
-          {label}
-        </span>
-        {ev.bookedBy ? (
-          <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-3)' }}>by {ev.bookedBy}</span>
-        ) : null}
-      </span>
-    )
-  }
+  // form outcome (setter triage / confirmation / closer EOC)
   const color = dispositionColor(ev.label)
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Dot color={color} />
       <span className="geg-serif" style={{ fontSize: 13, color }}>{ev.label}</span>
-      <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{ev.source}</span>
+      <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>{sourceLabel(ev.source)}</span>
     </span>
   )
+}
+
+function sourceLabel(s: 'triage' | 'confirmation' | 'closer'): string {
+  return s === 'triage' ? 'Setter triage' : s === 'confirmation' ? 'Confirmation' : 'Closer'
 }
 
 function dispositionColor(label: string): string {

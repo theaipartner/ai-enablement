@@ -32,15 +32,17 @@ export type LeadCallEntry = {
   review: SetterCallReviewFull | null
 }
 
-// One row in the lifecycle timeline (newest first). Dials are collapsed into
-// runs; connected calls link to their review; bookings + form dispositions are
-// their own rows.
+// One row in the lifecycle timeline (chronological, oldest first). The
+// lifecycle is form-driven: the opt-in anchor, every Airtable form outcome
+// (setter triage / confirmation / closer EOC) in order, and the trailing
+// follow-up booking. Close dials/connected calls are intentionally excluded —
+// the forms carry only `lead_id` (no call id / Calendly URI), so there's no
+// reliable form↔call↔booking link on the current stack and interleaving calls
+// would be guesswork.
 export type LeadTimelineEvent =
   | { kind: 'optin'; at: string }
-  | { kind: 'dials'; at: string; count: number }
-  | { kind: 'connected'; at: string; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
-  | { kind: 'booking'; at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string; bookedBy: string | null }
-  | { kind: 'disposition'; at: string; label: string; source: 'closer' | 'triage' }
+  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer'; label: string }
+  | { kind: 'followup'; at: string; name: string }
 
 export type LeadDetail = {
   leadId: string
@@ -308,24 +310,39 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const bookingType: BookingType =
     hasDirect && hasPartnership ? 'reactivation' : hasDirect ? 'direct' : hasPartnership ? 'setter' : null
 
-  // 7. Funnel stages + disposition rows from the lead's forms (by lead_id).
+  // 7. Funnel stages + form rows from the lead's forms (by lead_id). The
+  //    lifecycle is form-driven, so each form becomes a timeline row: setter
+  //    triage / confirmation (airtable_setter_triage_calls) + closer EOC
+  //    (airtable_full_closer_report, form_type=New). confirmed/showed/closed
+  //    still feed the header stage chip.
   let confirmed = false
   let showed = false
   let closed = false
-  const dispositions: Array<{ at: string; label: string; source: 'closer' | 'triage' }> = []
+  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' }> = []
   {
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('call_status, form_type, event_date_time, confirmed_call_date_time, submitted_at')
+      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: triage forms read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       call_status: string | null; form_type: string | null
-      event_date_time: string | null; confirmed_call_date_time: string | null; submitted_at: string | null
+      event_date_time: string | null; confirmed_call_date_time: string | null
+      booked_at: string | null; submitted_at: string | null
     }>) {
-      if (r.form_type === 'Closer Triage Form' && norm(r.call_status).startsWith('confirmed')) confirmed = true
-      const at = r.event_date_time ?? r.confirmed_call_date_time ?? r.submitted_at
-      if (at && r.call_status) dispositions.push({ at, label: r.call_status, source: 'triage' })
+      const isConfirmation = r.form_type === 'Closer Triage Form'
+      if (isConfirmation && norm(r.call_status).startsWith('confirmed')) confirmed = true
+      // Order by the meeting time itself, falling back through the form's other
+      // timestamps. submitted_at is a bare date — anchor it at UTC midnight so
+      // it sorts as an instant.
+      const at =
+        r.event_date_time ??
+        r.confirmed_call_date_time ??
+        r.booked_at ??
+        (r.submitted_at ? `${r.submitted_at}T00:00:00Z` : null)
+      if (at && r.call_status) {
+        formEvents.push({ at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage' })
+      }
     }
   }
   {
@@ -341,8 +358,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       if (outcomeShowed(r.call_outcome)) showed = true
       if (outcomeClosed(r.call_outcome)) closed = true
     }
-    // Dedup duplicate forms for the SAME call (within 90 min) — keep the
-    // latest-submitted, so a re-filed / double-filed closer form shows once.
+    // Dedup duplicate forms for the SAME meeting (within 90 min) — keep the
+    // latest-submitted. Distinct reschedule forms (different meeting times) stay
+    // as separate rows, so a "rescheduled → rescheduled → closed" sequence shows
+    // all three.
     const withTime = forms.filter((r): r is CForm & { date_time_of_call: string } => !!r.date_time_of_call)
     withTime.sort((a, b) => (a.date_time_of_call < b.date_time_of_call ? -1 : 1))
     const CLUSTER_MS = 90 * 60 * 1000
@@ -354,64 +373,24 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     }
     for (const group of clusters) {
       const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
-      dispositions.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer' })
+      formEvents.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer' })
     }
   }
 
-  // 8. Lifecycle timeline — merge dials / connected calls / bookings /
-  //    dispositions, scope to the latest opt-in, sort newest-first, and
-  //    collapse consecutive (non-connected) dials into runs.
+  // 8. Lifecycle timeline — opt-in anchor + every form outcome + the trailing
+  //    follow-up (AI Partner Sync) booking, scoped to the latest opt-in and
+  //    sorted oldest-first (reads as the lead's journey top-to-bottom). No
+  //    close_calls — see the LeadTimelineEvent note.
   const inWindow = (at: string) => !sinceIso || at >= sinceIso
-  type RawEv =
-    | { at: string; t: 'optin' }
-    | { at: string; t: 'dial' }
-    | { at: string; t: 'connected'; closeCallId: string; caller: string | null; durationSec: number; hasReview: boolean }
-    | { at: string; t: 'booking'; link: 'direct' | 'setter' | 'sync' | 'other'; name: string; bookedBy: string | null }
-    | { at: string; t: 'disposition'; label: string; source: 'closer' | 'triage' }
-  // "Booked by" = the setter on the most recent connected call before the
-  // booking (the person who talked to them and set it up).
-  const connectedSetters = calls.filter((c) => c.connected).map((c) => ({ at: c.activityAt, caller: c.setterName }))
-  const bookedByFor = (bAt: string): string | null => {
-    let best: { at: string; caller: string | null } | null = null
-    for (const cc of connectedSetters) if (cc.at <= bAt && (!best || cc.at > best.at)) best = cc
-    return best?.caller ?? primaryCallerName
-  }
-  const raw: RawEv[] = []
-  if (sinceIso) raw.push({ at: sinceIso, t: 'optin' })
-  for (const c of calls) {
-    if (c.connected) {
-      raw.push({ at: c.activityAt, t: 'connected', closeCallId: c.closeCallId, caller: c.setterName, durationSec: c.durationSec, hasReview: c.hasTranscript || c.review !== null })
-    } else {
-      raw.push({ at: c.activityAt, t: 'dial' })
-    }
-  }
-  for (const b of bookings) if (inWindow(b.at)) raw.push({ at: b.at, t: 'booking', link: b.link, name: b.name, bookedBy: bookedByFor(b.at) })
-  for (const d of dispositions) if (inWindow(d.at)) raw.push({ at: d.at, t: 'disposition', label: d.label, source: d.source })
-  raw.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
-
   const timeline: LeadTimelineEvent[] = []
-  for (let i = 0; i < raw.length; ) {
-    const e = raw[i]
-    if (e.t === 'dial') {
-      let j = i
-      let count = 0
-      while (j < raw.length && raw[j].t === 'dial') { count++; j++ }
-      timeline.push({ kind: 'dials', at: e.at, count })
-      i = j
-    } else if (e.t === 'optin') {
-      timeline.push({ kind: 'optin', at: e.at })
-      i++
-    } else if (e.t === 'connected') {
-      timeline.push({ kind: 'connected', at: e.at, closeCallId: e.closeCallId, caller: e.caller, durationSec: e.durationSec, hasReview: e.hasReview })
-      i++
-    } else if (e.t === 'booking') {
-      timeline.push({ kind: 'booking', at: e.at, link: e.link, name: e.name, bookedBy: e.bookedBy })
-      i++
-    } else {
-      timeline.push({ kind: 'disposition', at: e.at, label: e.label, source: e.source })
-      i++
-    }
+  if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso })
+  for (const f of formEvents) {
+    if (inWindow(f.at)) timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label })
   }
+  for (const b of bookings) {
+    if (b.link === 'sync' && inWindow(b.at)) timeline.push({ kind: 'followup', at: b.at, name: b.name })
+  }
+  timeline.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
 
   return {
     leadId: lead.close_id,
