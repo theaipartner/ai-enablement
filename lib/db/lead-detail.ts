@@ -401,18 +401,22 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // that reached the lead (any Call Status except Unresponsive – Setter Handover).
   let setterTriaged = false
   let confirmReached = false
-  const formEvents: Array<{ at: string; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null }> = []
+  // `at` = the event/meeting time (display + sort). `winAt` = when the form was
+  // FILED (airtable_created_at) — used for the lifecycle window so a form filed
+  // in the current journey shows even if its event time slightly predates the
+  // latest opt-in (Israel Lopez: DQ filed 19:13, event 18:12, opt-in 19:00).
+  const formEvents: Array<{ at: string; winAt: string | null; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null }> = []
   {
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names')
+      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names, airtable_created_at')
       .eq('lead_id', closeId)
     if (error) throw new Error(`lead-detail: triage forms read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       call_status: string | null; form_type: string | null
       event_date_time: string | null; confirmed_call_date_time: string | null
       booked_at: string | null; submitted_at: string | null
-      setter_names: string[] | null
+      setter_names: string[] | null; airtable_created_at: string | null
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
       const cs = norm(r.call_status)
@@ -436,7 +440,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
         // Filler: setter_names holds the form's author for both the setter
         // triage and the confirmation (the confirming closer, e.g. "Aman Ali").
         const by = (r.setter_names ?? []).find((n) => typeof n === 'string' && n.trim() && n.trim().toLowerCase() !== 'no setter') ?? null
-        formEvents.push({ at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage', by })
+        formEvents.push({ at, winAt: r.airtable_created_at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage', by })
       }
     }
   }
@@ -479,7 +483,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     for (const group of clusters) {
       const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
       const by = (latest.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
-      formEvents.push({ at: latest.date_time_of_call, label: latest.call_outcome as string, source: 'closer', by })
+      formEvents.push({ at: latest.date_time_of_call, winAt: latest.airtable_created_at, label: latest.call_outcome as string, source: 'closer', by })
       const ct = outcomeCloseType(latest.call_outcome)
       if (ct) considerClose(ct, { closer: by, plans: [], at: latest.date_time_of_call })
     }
@@ -521,7 +525,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       }
       // Timeline label: the DC disposition.
       const label = isClosed ? 'Digital College closed' : isDqForm ? 'Digital College DQ' : 'Digital College follow-up'
-      if (at) formEvents.push({ at, label, source: 'dc', by: closer })
+      if (at) formEvents.push({ at, winAt: r.airtable_created_at, label, source: 'dc', by: closer })
     }
   }
 
@@ -533,7 +537,12 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const timeline: LeadTimelineEvent[] = []
   if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso })
   for (const f of formEvents) {
-    if (inWindow(f.at)) timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
+    // Show a form when its event time OR its filed time falls in the current
+    // journey — a form filed after the latest opt-in belongs to this journey
+    // even if its meeting time slightly predates the opt-in instant.
+    if (inWindow(f.at) || (f.winAt != null && inWindow(f.winAt))) {
+      timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
+    }
   }
   for (const b of bookings) {
     if (b.link === 'sync' && inWindow(b.at)) timeline.push({ kind: 'followup', at: b.at, name: b.name })
