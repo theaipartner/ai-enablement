@@ -38,7 +38,7 @@ type View = 'all' | 'unique'
 export default async function SalesDashboardLeadsPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[]; view?: string | string[]; q?: string | string[] }
+  searchParams?: { [key: string]: string | string[] | undefined }
 }) {
   const q = (Array.isArray(searchParams?.q) ? searchParams?.q[0] : searchParams?.q) ?? ''
   if (q.trim().length >= 2) {
@@ -73,6 +73,12 @@ export default async function SalesDashboardLeadsPage({
 
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
   const rows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
+
+  // Serialize the current leads-page state (date window, view, and — later —
+  // filters) so a row click carries it as `ret`, letting the per-lead "Back to
+  // leads" return to the exact same view. Generic over every param except the
+  // search box (`q`) and `ret` itself, so future filters are preserved for free.
+  const backQuery = buildLeadsQuery(searchParams)
 
   // Funnel stack (Total / Direct / Setter / Reactivation) over the same,
   // view-filtered rows — boxes + roster can't drift.
@@ -109,7 +115,7 @@ export default async function SalesDashboardLeadsPage({
         <FmrTimeBlockChart fmr={fmr} />
       </div>
 
-      <LeadRoster rows={rows} canDelete={canDelete} />
+      <LeadRoster rows={rows} canDelete={canDelete} backQuery={backQuery} />
     </div>
   )
 }
@@ -130,6 +136,18 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function pickView(raw: string | string[] | undefined): View {
   const v = Array.isArray(raw) ? raw[0] : raw
   return v === 'unique' ? 'unique' : 'all'
+}
+
+// Serialize the leads-page state to a querystring for the per-lead "Back to
+// leads" return link. Carries every param (incl. future filters) except the
+// search box `q` and `ret` itself.
+function buildLeadsQuery(sp?: { [key: string]: string | string[] | undefined }): string {
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(sp ?? {})) {
+    if (k === 'q' || k === 'ret' || v == null) continue
+    for (const val of Array.isArray(v) ? v : [v]) params.append(k, val)
+  }
+  return params.toString()
 }
 
 // Global lead search results (any lead, not just the window's cohort). Each

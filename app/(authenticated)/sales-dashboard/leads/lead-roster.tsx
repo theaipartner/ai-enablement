@@ -44,7 +44,7 @@ function sortValue(r: LeadRow, key: SortKey): number | string | null {
   }
 }
 
-export function LeadRoster({ rows, canDelete }: { rows: LeadRow[]; canDelete: boolean }) {
+export function LeadRoster({ rows, canDelete, backQuery }: { rows: LeadRow[]; canDelete: boolean; backQuery: string }) {
   const [key, setKey] = useState<SortKey>('')
   const [dir, setDir] = useState<SortDir>(null)
 
@@ -104,16 +104,17 @@ export function LeadRoster({ rows, canDelete }: { rows: LeadRow[]; canDelete: bo
         {sorted.length === 0 ? (
           <EmptyState />
         ) : (
-          sorted.map((r) => <LeadRowView key={r.leadId} r={r} canDelete={canDelete} />)
+          sorted.map((r) => <LeadRowView key={r.leadId} r={r} canDelete={canDelete} backQuery={backQuery} />)
         )}
       </div>
     </div>
   )
 }
 
-function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
+function LeadRowView({ r, canDelete, backQuery }: { r: LeadRow; canDelete: boolean; backQuery: string }) {
+  const href = `/sales-dashboard/leads/${encodeURIComponent(r.leadId)}${backQuery ? `?ret=${encodeURIComponent(backQuery)}` : ''}`
   return (
-    <Link href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
+    <Link href={href} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
       <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.leadId}>
         {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
       </span>

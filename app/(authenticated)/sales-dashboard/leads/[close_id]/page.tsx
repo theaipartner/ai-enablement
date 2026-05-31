@@ -13,12 +13,19 @@ export const dynamic = 'force-dynamic'
 
 export default async function LeadDetailPage({
   params,
+  searchParams,
 }: {
   params: { close_id: string }
+  searchParams?: { ret?: string | string[] }
 }) {
   const closeId = decodeURIComponent(params.close_id)
   const lead = await getLeadDetail(closeId)
   if (!lead) notFound()
+
+  // Return to the leads page preserving the window/filters it was left in
+  // (carried as `ret`). Falls back to the bare leads page when arrived directly.
+  const ret = (Array.isArray(searchParams?.ret) ? searchParams?.ret[0] : searchParams?.ret) ?? ''
+  const backHref = ret ? `/sales-dashboard/leads?${ret}` : '/sales-dashboard/leads'
 
   return (
     <div>
@@ -27,7 +34,7 @@ export default async function LeadDetailPage({
         title={`${lead.prospectName ?? 'Unknown lead'}.`}
         actions={
           <Link
-            href="/sales-dashboard/leads"
+            href={backHref}
             className="geg-mono"
             style={{
               fontSize: 11,
