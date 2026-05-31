@@ -165,8 +165,11 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
         // not timing-based). Post-handover connects move to the Reactivation lane.
         { label: 'Connected', hit: lead.confirmed || (lead.connected && !lead.reactConnected) },
         { label: 'Confirmed', hit: lead.confirmed },
-        { label: 'Showed', hit: lead.showed || lead.closed },
-        { label: closedLabel, hit: lead.closed },
+        // Direct-PHASE only: a post-handover show/close lights the Reactivation
+        // lane below, not this (frozen) Direct lane. A reactivated lead can't
+        // retroactively light the direct path it already left.
+        { label: 'Showed', hit: lead.directShowed || lead.directClosed },
+        { label: closedLabel, hit: lead.directClosed },
       ],
     })
   } else {

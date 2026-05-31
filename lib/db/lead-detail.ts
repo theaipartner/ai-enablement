@@ -91,6 +91,13 @@ export type LeadDetail = {
   reactBooked: boolean
   reactShowed: boolean
   reactClosed: boolean
+  // Direct-PHASE show/close — a show/close that happened BEFORE the lead lost
+  // its strat spot (or any show/close when never reactivated). The per-lead
+  // Journey's Direct lane uses these so a post-handover close lights only the
+  // Reactivation lane, not the (frozen) Direct lane. Once a lead is on the
+  // reactive path it can't retroactively light the direct path (Drake 2026-05-31).
+  directShowed: boolean
+  directClosed: boolean
   // Journey metrics. Dials + connected are scoped from the latest opt-in (the
   // lifecycle window). Reschedules + follow-ups are over the lead's bookings.
   totalCalls: number          // dials incl. inbound, since latest opt-in
@@ -372,6 +379,9 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   let isDq = false
   let reactShowed = false
   let reactClosed = false
+  // Direct-phase (pre-handover) show/close — see LeadDetail.directShowed.
+  let directShowed = false
+  let directClosed = false
   // Which offer closed + its details. 'ht' wins over 'dc' if a lead has both.
   let closeType: 'ht' | 'dc' | null = null
   let closeDetail: LeadCloseDetail | null = null
@@ -441,13 +451,16 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
     for (const r of forms) {
       if (norm(r.call_outcome).includes('dq')) isDq = true
+      const post = afterReact(r.airtable_created_at)
       if (outcomeShowed(r.call_outcome)) {
         showed = true
-        if (afterReact(r.airtable_created_at)) reactShowed = true
+        if (post) reactShowed = true
+        else directShowed = true
       }
       if (outcomeClosed(r.call_outcome)) {
         closed = true
-        if (afterReact(r.airtable_created_at)) reactClosed = true
+        if (post) reactClosed = true
+        else directClosed = true
       }
     }
     // Dedup duplicate forms for the SAME meeting (within 90 min) — keep the
@@ -495,12 +508,15 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       const isClosed = norm(r.closed) === 'yes'
       const isDqForm = norm(r.follow_up) === 'no'
       if (isDqForm) isDq = true
+      const post = afterReact(at)
       // A filed form = showed.
       showed = true
-      if (afterReact(at)) reactShowed = true
+      if (post) reactShowed = true
+      else directShowed = true
       if (isClosed) {
         closed = true
-        if (afterReact(at)) reactClosed = true
+        if (post) reactClosed = true
+        else directClosed = true
         considerClose('dc', { closer, plans: r.plans ?? [], at: r.date_time_of_call })
       }
       // Timeline label: the DC disposition.
@@ -560,6 +576,8 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     reactBooked,
     reactShowed,
     reactClosed,
+    directShowed,
+    directClosed,
     totalCalls: calls.length,
     connectedCount: connected.length,
     totalConnectedDurationSec,
