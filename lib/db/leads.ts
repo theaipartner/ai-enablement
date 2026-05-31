@@ -59,9 +59,16 @@ export type LeadRow = SpeedToLeadCohortRow & {
   hasPartnership: boolean
   reactivatedAt: string | null
   closeTimeIso: string | null
-  // Current Close lead status label (e.g. "New Opt-in", "Confirmed Booking",
-  // "Client"). Surfaced in the roster's Status column.
-  latestStatus: string | null
+  // Computed status for the roster Status column (Close's status_label is NOT
+  // used — it's inaccurate). leadType drives the colour; statusWord is the
+  // lead's furthest-reached funnel stage. Type precedence dq > reactivation >
+  // direct > opt-in. Word ladders: direct = Booked/Confirmed/Showed/Closed;
+  // opt-in & reactivation = Connected/Booked/Showed/Closed; dq = "DQ". DQ is
+  // lifecycle-scoped (a DQ before the latest opt-in doesn't count) so it resets
+  // on re-opt-in. Computed each load — cheap over the cohort's already-loaded
+  // forms; no stored state to drift.
+  leadType: 'direct' | 'optin' | 'reactivation' | 'dq'
+  statusWord: string
 }
 
 function norm(s: string | null | undefined): string {
@@ -212,12 +219,11 @@ export async function getLeadsForRange(
   const leadNames = new Map<string, string>()
   const leadQualified = new Map<string, Qualification>()
   const leadReactivatedAt = new Map<string, string>()
-  const leadStatus = new Map<string, string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, status_label')
+      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at')
       .in('close_id', chunk)
     if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
@@ -226,7 +232,6 @@ export async function getLeadsForRange(
       contacts: unknown
       marketing_qualified: string | null
       reactivated_at: string | null
-      status_label: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -241,8 +246,16 @@ export async function getLeadsForRange(
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
       leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
       if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
-      if (r.status_label) leadStatus.set(r.close_id, r.status_label)
     }
+  }
+
+  // optInAt per lead — anchors the lifecycle window for DQ scoping (a DQ before
+  // the latest opt-in belongs to a prior journey and shouldn't count).
+  const optInAtByLead = new Map(rows.map((r) => [r.leadId, r.optInAt]))
+  const afterOptIn = (leadId: string, at: string | null): boolean => {
+    const optIn = optInAtByLead.get(leadId)
+    if (!optIn || !at) return true
+    return new Date(at).getTime() >= new Date(optIn).getTime()
   }
 
   // 3. Booking signals — the DIRECT link ("Ai Partner Strategy Call") and the
@@ -266,18 +279,33 @@ export async function getLeadsForRange(
   //    stray "High Ticket booking" left over from a form_type backfill) do
   //    NOT count. The form is the sole decider — no call-duration gate, since
   //    a sub-90s confirmation call still warrants a filed form.
+  //    Read BOTH form families: the confirmation (Closer Triage Form) drives
+  //    the direct Confirmed stage; the setter triage drives opt-in/reactivation
+  //    Connected ("Setter pipeline / Follow up") and Booked (HT/DC booking —
+  //    NOT "Confirmed Booking", which is the Confirmed stage, direct only). Any
+  //    "DQ" status on either, after the lead's opt-in, flags DQ.
   const confirmedLeadIds = new Set<string>()
+  const setterConnectedIds = new Set<string>()
+  const setterBookedIds = new Set<string>()
+  const dqLeadIds = new Set<string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('airtable_setter_triage_calls' as never)
-      .select('lead_id, call_status')
-      .eq('form_type', 'Closer Triage Form')
+      .select('lead_id, form_type, call_status, airtable_created_at')
       .in('lead_id', chunk)
-    if (error) throw new Error(`leads: confirmation form read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null }>) {
-      if (r.lead_id && (r.call_status ?? '').trim().toLowerCase().startsWith('confirmed')) {
-        confirmedLeadIds.add(r.lead_id)
+    if (error) throw new Error(`leads: triage forms read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{
+      lead_id: string | null; form_type: string | null; call_status: string | null; airtable_created_at: string | null
+    }>) {
+      if (!r.lead_id) continue
+      const cs = norm(r.call_status)
+      if (cs.includes('dq') && afterOptIn(r.lead_id, r.airtable_created_at)) dqLeadIds.add(r.lead_id)
+      if (r.form_type === 'Closer Triage Form') {
+        if (cs.startsWith('confirmed')) confirmedLeadIds.add(r.lead_id)
+      } else {
+        if (cs.includes('setter pipeline') || cs.includes('follow up')) setterConnectedIds.add(r.lead_id)
+        if (cs.includes('booking') && !cs.includes('confirmed')) setterBookedIds.add(r.lead_id)
       }
     }
   }
@@ -295,14 +323,15 @@ export async function getLeadsForRange(
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
-      .select('lead_id, call_outcome, date_time_of_call')
+      .select('lead_id, call_outcome, date_time_of_call, airtable_created_at')
       .eq('form_type', 'New')
       .in('lead_id', chunk)
     if (error) throw new Error(`leads: closer form read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
-      lead_id: string | null; call_outcome: string | null; date_time_of_call: string | null
+      lead_id: string | null; call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null
     }>) {
       if (!r.lead_id) continue
+      if (norm(r.call_outcome).includes('dq') && afterOptIn(r.lead_id, r.airtable_created_at)) dqLeadIds.add(r.lead_id)
       if (outcomeShowed(r.call_outcome)) showedLeadIds.add(r.lead_id)
       if (outcomeClosed(r.call_outcome)) {
         closedLeadIds.add(r.lead_id)
@@ -329,18 +358,40 @@ export async function getLeadsForRange(
           : hasPartnership
             ? 'setter'
             : null
+
+    // Computed status — type (colour) + furthest-stage word.
+    const confirmed = confirmedLeadIds.has(r.leadId)
+    const showed = showedLeadIds.has(r.leadId)
+    const closed = closedLeadIds.has(r.leadId)
+    const reactivatedAt = leadReactivatedAt.get(r.leadId) ?? null
+    const isDq = dqLeadIds.has(r.leadId)
+    const leadType: LeadRow['leadType'] = isDq
+      ? 'dq'
+      : reactivatedAt
+        ? 'reactivation'
+        : hasDirect
+          ? 'direct'
+          : 'optin'
+    const booked = hasPartnership || setterBookedIds.has(r.leadId)
+    const connected = r.anyCallConnected || setterConnectedIds.has(r.leadId)
+    let statusWord: string
+    if (leadType === 'dq') statusWord = 'DQ'
+    else if (leadType === 'direct') statusWord = closed ? 'Closed' : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
+    else statusWord = closed ? 'Closed' : showed ? 'Showed' : booked ? 'Booked' : connected || leadType === 'reactivation' ? 'Connected' : '—'
+
     return {
       ...r,
       qualified,
       bookingType,
-      confirmed: confirmedLeadIds.has(r.leadId),
-      showed: showedLeadIds.has(r.leadId),
-      closed: closedLeadIds.has(r.leadId),
+      confirmed,
+      showed,
+      closed,
       hasDirect,
       hasPartnership,
-      reactivatedAt: leadReactivatedAt.get(r.leadId) ?? null,
+      reactivatedAt,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
-      latestStatus: leadStatus.get(r.leadId) ?? null,
+      leadType,
+      statusWord,
     }
   })
 }
