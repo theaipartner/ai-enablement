@@ -71,6 +71,11 @@ export type LeadRow = SpeedToLeadCohortRow & {
   reactBooked: boolean
   reactShowed: boolean
   reactClosed: boolean
+  // Funnel "connected" — a real conversation: ≥90s dial OR a setter triage form
+  // OR a confirmed confirmation (no-answer confirmations excluded). Once per
+  // lead. reactConnected is the same signal scoped post-handover.
+  connected: boolean
+  reactConnected: boolean
   // Computed status for the roster Status column (Close's status_label is NOT
   // used — it's inaccurate). leadType drives the colour; statusWord is the
   // lead's furthest-reached funnel stage. Type precedence dq > reactivation >
@@ -304,9 +309,21 @@ export async function getLeadsForRange(
   //    NOT "Confirmed Booking", which is the Confirmed stage, direct only). Any
   //    "DQ" status on either, after the lead's opt-in, flags DQ.
   const confirmedLeadIds = new Set<string>()
+  // Confirmation forms where the closer actually REACHED the lead (confirmed,
+  // DQ, or follow-up) — a real conversation = connected. The bare no-answer
+  // "Setter pipeline" handoff is excluded (they weren't reached).
+  const confirmReachedIds = new Set<string>()
   const setterConnectedIds = new Set<string>()
   const setterBookedIds = new Set<string>()
   const dqLeadIds = new Set<string>()
+  // Triage-form "connected" evidence: a setter actually filed a triage form
+  // (= a real conversation), even when close_calls logged no ≥90s dial (a call
+  // on another system / sub-90s-logged). The funnel "connected" stage is a
+  // ≥90s dial OR this. No-answer CONFIRMATION forms don't count here — only the
+  // confirmed-confirmation does (via confirmedLeadIds). postReactTriagedIds is
+  // the post-handover subset, for the reactive-phase connect signal.
+  const setterTriagedIds = new Set<string>()
+  const postReactTriagedIds = new Set<string>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
@@ -327,10 +344,20 @@ export async function getLeadsForRange(
         // Closer Triage = confirmation: "Confirmed Booking" is the Confirmed
         // stage (direct only), not a Booked signal.
         if (cs.startsWith('confirmed')) confirmedLeadIds.add(r.lead_id)
+        // Reached = a real conversation (confirmed / DQ'd / follow-up), as
+        // opposed to a bare no-answer "Setter pipeline" handoff.
+        if (cs.startsWith('confirmed') || cs.includes('dq') || cs.includes('follow')) confirmReachedIds.add(r.lead_id)
       } else {
-        // Setter triage: any booking status → Booked, including the old-sheet
+        // Setter triage: a filed triage form = the setter triaged them
+        // (connected). Any booking status → Booked, including the old-sheet
         // "Confirmed Booking" (a setter-side booking, not a Confirmed stage —
         // there's one legacy row; the form no longer emits it).
+        setterTriagedIds.add(r.lead_id)
+        const reactAt = leadReactivatedAt.get(r.lead_id) ?? null
+        if (reactAt && r.airtable_created_at != null &&
+            new Date(r.airtable_created_at).getTime() >= new Date(reactAt).getTime()) {
+          postReactTriagedIds.add(r.lead_id)
+        }
         if (cs.includes('setter pipeline') || cs.includes('follow up')) setterConnectedIds.add(r.lead_id)
         if (cs.includes('booking')) setterBookedIds.add(r.lead_id)
       }
@@ -456,8 +483,13 @@ export async function getLeadsForRange(
           ? 'direct'
           : 'optin'
     const booked = hasPartnership || setterBookedIds.has(r.leadId)
-    const connected = r.anyCallConnected || setterConnectedIds.has(r.leadId)
-    const postReactConnected = postReactConnectedIds.has(r.leadId)
+    // Connected (funnel/roster) = a real conversation: a ≥90s dial, a setter
+    // triage form, or a confirmed confirmation. (No-answer confirmations don't
+    // count.) Counted once per lead; the per-lead page still shows raw counts.
+    const connected = r.anyCallConnected || setterTriagedIds.has(r.leadId) || confirmReachedIds.has(r.leadId)
+    // Reactive-phase connected — the same form-OR-call signal, but post-handover:
+    // a ≥90s dial or a setter triage form filed after reactivated_at.
+    const reactConnected = postReactConnectedIds.has(r.leadId) || postReactTriagedIds.has(r.leadId)
     let statusWord: string
     if (leadType === 'dq') statusWord = 'DQ'
     else if (leadType === 'direct') statusWord = closed ? 'Closed' : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
@@ -471,7 +503,7 @@ export async function getLeadsForRange(
           ? 'Showed'
           : reactBooked
             ? 'Booked'
-            : postReactConnected
+            : reactConnected
               ? 'Connected'
               : 'Eligible'
     else statusWord = closed ? 'Closed' : showed ? 'Showed' : booked ? 'Booked' : connected ? 'Connected' : '—'
@@ -487,6 +519,8 @@ export async function getLeadsForRange(
       hasPartnership,
       reactivatedAt,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
+      connected,
+      reactConnected,
       reactBooked,
       reactShowed,
       reactClosed,

@@ -20,16 +20,17 @@ import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 //                     reactivated (reactivation ⊂ direct).
 //   - setter lead   = everyone else.
 //   - reactivation  = reactivatedAt set.
-//   - connected     = 1 per lead (anyCallConnected); for Reactivation it's a
-//                     connected call AFTER reactivatedAt.
+//   - connected     = 1 per lead, form-OR-call (a ≥90s dial, a setter triage
+//                     form, or a confirmed confirmation — r.connected); for
+//                     Reactivation it's that signal scoped post-handover
+//                     (r.reactConnected). Cumulative: a later stage back-fills
+//                     it, so books never exceed connected.
 //   - dials         = RAW outbound dials, capped at the lead's close (post-close
 //                     fulfillment dials excluded); for Reactivation, only dials
 //                     AFTER reactivatedAt (still capped at close).
 //   - books/shows/closes for Reactivation use the plain flags: a reactivated lead
 //     lost its strat spot, so any later partnership book / show / close is
 //     inherently post-handover — no extra time-scoping needed.
-
-const CONNECTED_SEC = 90
 
 export type TotalBox = {
   optIns: number; dials: number; connected: number; books: number; shows: number; closes: number
@@ -55,8 +56,6 @@ type DialWindows = {
   dialsBeforeClose: number
   // Outbound dials strictly after reactivatedAt, still capped at close.
   postReactDials: number
-  // Any outbound connected (>=90s) dial after reactivatedAt.
-  postReactConnected: boolean
 }
 
 // One outbound-call scan over the cohort → per-lead windowed dial counts.
@@ -64,7 +63,7 @@ async function scanDialWindows(
   leads: Array<{ leadId: string; optInAt: string; reactivatedAt: string | null; closeTimeIso: string | null }>,
 ): Promise<Map<string, DialWindows>> {
   const out = new Map<string, DialWindows>()
-  for (const l of leads) out.set(l.leadId, { dialsBeforeClose: 0, postReactDials: 0, postReactConnected: false })
+  for (const l of leads) out.set(l.leadId, { dialsBeforeClose: 0, postReactDials: 0 })
   if (leads.length === 0) return out
 
   const optInById = new Map(leads.map((l) => [l.leadId, l.optInAt]))
@@ -101,7 +100,6 @@ async function scanDialWindows(
         const reactIso = reactById.get(c.lead_id) ?? null
         if (reactIso && c.activity_at > reactIso) {
           w.postReactDials += 1
-          if ((c.duration ?? 0) >= CONNECTED_SEC) w.postReactConnected = true
         }
       }
       if (calls.length < 1000) break
@@ -120,7 +118,6 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
   )
   const dials = (r: LeadRow) => win.get(r.leadId)?.dialsBeforeClose ?? 0
   const postDials = (r: LeadRow) => win.get(r.leadId)?.postReactDials ?? 0
-  const postConnected = (r: LeadRow) => win.get(r.leadId)?.postReactConnected ?? false
 
   const sum = (pred: (r: LeadRow) => boolean, val: (r: LeadRow) => number) =>
     rows.reduce((acc, r) => (pred(r) ? acc + val(r) : acc), 0)
@@ -135,12 +132,17 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     adspendUsd = null
   }
 
+  // Cumulative/monotonic across every box (matches the Direct ladder): a later
+  // stage back-fills the earlier ones. "Connected" is the form-OR-call signal
+  // (r.connected) — a self-booked direct lead with no ≥90s dial still counts as
+  // connected once booked, so books never exceed connected.
+  const booked = (r: LeadRow) => r.hasDirect || r.hasPartnership
   const total: TotalBox = {
     optIns: rows.length,
     dials: sum(() => true, dials),
-    connected: count((r) => r.anyCallConnected),
-    books: count((r) => r.hasDirect || r.hasPartnership),
-    shows: count((r) => r.showed),
+    connected: count((r) => r.connected || booked(r) || r.showed || r.closed),
+    books: count((r) => booked(r) || r.showed || r.closed),
+    shows: count((r) => r.showed || r.closed),
     closes: count((r) => r.closed),
   }
 
@@ -174,9 +176,9 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     qualified: count((r) => isSetter(r) && r.qualified === 'qualified'),
     unqualified: count((r) => isSetter(r) && r.qualified === 'non-qualified'),
     dials: sum(isSetter, dials),
-    connected: count((r) => isSetter(r) && r.anyCallConnected),
-    books: count((r) => isSetter(r) && r.hasPartnership),
-    shows: count((r) => isSetter(r) && r.showed),
+    connected: count((r) => isSetter(r) && (r.connected || r.hasPartnership || r.showed || r.closed)),
+    books: count((r) => isSetter(r) && (r.hasPartnership || r.showed || r.closed)),
+    shows: count((r) => isSetter(r) && (r.showed || r.closed)),
     closes: count((r) => isSetter(r) && r.closed),
   }
 
@@ -194,7 +196,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     qualified: count((r) => isReact(r) && r.qualified === 'qualified'),
     unqualified: count((r) => isReact(r) && r.qualified === 'non-qualified'),
     dials: sum(isReact, postDials),
-    connected: count((r) => isReact(r) && (postConnected(r) || r.reactBooked || r.reactShowed || r.reactClosed)),
+    connected: count((r) => isReact(r) && (r.reactConnected || r.reactBooked || r.reactShowed || r.reactClosed)),
     books: count((r) => isReact(r) && (r.reactBooked || r.reactShowed || r.reactClosed)),
     shows: count((r) => isReact(r) && (r.reactShowed || r.reactClosed)),
     closes: count((r) => isReact(r) && r.reactClosed),
