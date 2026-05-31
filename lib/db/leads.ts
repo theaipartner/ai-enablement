@@ -75,13 +75,20 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // used — it's inaccurate). leadType drives the colour; statusWord is the
   // lead's furthest-reached funnel stage. Type precedence dq > reactivation >
   // direct > opt-in. Word ladders: direct = Booked/Confirmed/Showed/Closed;
-  // opt-in & reactivation = Connected/Booked/Showed/Closed; dq = "DQ". DQ is
+  // opt-in = Connected/Booked/Showed/Closed; reactivation = the reactive-phase
+  // ladder Eligible/Connected/Booked/Showed/Closed, computed from POST-handover
+  // signals only (floors at "Eligible" — lost the spot, nothing since — rather
+  // than carrying over the direct-phase progress); dq = "DQ". DQ is
   // lifecycle-scoped (a DQ before the latest opt-in doesn't count) so it resets
   // on re-opt-in. Computed each load — cheap over the cohort's already-loaded
   // forms; no stored state to drift.
   leadType: 'direct' | 'optin' | 'reactivation' | 'dq'
   statusWord: string
 }
+
+// A ≥90s outbound dial is a "connected" call (the FMR_DIAL_CONNECTED_SEC
+// convention, shared with leads-funnel.ts).
+const CONNECTED_SEC = 90
 
 function norm(s: string | null | undefined): string {
   return (s ?? '').trim().toLowerCase()
@@ -379,6 +386,35 @@ export async function getLeadsForRange(
     }
   }
 
+  // 6. Post-reactivation connected — for the roster Status of reactivated leads
+  //    (their Status reflects the reactive phase, not carried-over direct
+  //    progress). A ≥90s outbound dial at/after reactivated_at. Scoped to the
+  //    reactivated cohort leads only (few), so it's a cheap targeted scan.
+  const postReactConnectedIds = new Set<string>()
+  const reactIds = Array.from(leadReactivatedAt.keys())
+  for (let i = 0; i < reactIds.length; i += 100) {
+    const chunk = reactIds.slice(i, i + 100)
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb
+        .from('close_calls' as never)
+        .select('lead_id, activity_at, duration')
+        .in('lead_id', chunk)
+        .eq('direction', 'outbound')
+        .gte('duration', CONNECTED_SEC)
+        .range(from, from + 999)
+      if (error) throw new Error(`leads: post-react calls read failed: ${error.message}`)
+      const calls = (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null }>
+      for (const c of calls) {
+        if (!c.lead_id || !c.activity_at) continue
+        const reactAt = leadReactivatedAt.get(c.lead_id)
+        if (reactAt && new Date(c.activity_at).getTime() >= new Date(reactAt).getTime()) {
+          postReactConnectedIds.add(c.lead_id)
+        }
+      }
+      if (calls.length < 1000) break
+    }
+  }
+
   // 7. Assemble — classify each lead by which booking links it has ever had.
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
@@ -421,10 +457,24 @@ export async function getLeadsForRange(
           : 'optin'
     const booked = hasPartnership || setterBookedIds.has(r.leadId)
     const connected = r.anyCallConnected || setterConnectedIds.has(r.leadId)
+    const postReactConnected = postReactConnectedIds.has(r.leadId)
     let statusWord: string
     if (leadType === 'dq') statusWord = 'DQ'
     else if (leadType === 'direct') statusWord = closed ? 'Closed' : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
-    else statusWord = closed ? 'Closed' : showed ? 'Showed' : booked ? 'Booked' : connected || leadType === 'reactivation' ? 'Connected' : '—'
+    else if (leadType === 'reactivation')
+      // Reactive phase only — furthest stage reached AFTER the handover. Floors
+      // at "Eligible" (lost the spot, nothing since) rather than carrying over
+      // the direct-phase "Connected".
+      statusWord = reactClosed
+        ? 'Closed'
+        : reactShowed
+          ? 'Showed'
+          : reactBooked
+            ? 'Booked'
+            : postReactConnected
+              ? 'Connected'
+              : 'Eligible'
+    else statusWord = closed ? 'Closed' : showed ? 'Showed' : booked ? 'Booked' : connected ? 'Connected' : '—'
 
     return {
       ...r,
