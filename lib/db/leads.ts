@@ -59,6 +59,18 @@ export type LeadRow = SpeedToLeadCohortRow & {
   hasPartnership: boolean
   reactivatedAt: string | null
   closeTimeIso: string | null
+  // Post-reactivation signals — the reactivation funnel counts only what
+  // happened AFTER the lead lost its strat spot (reactivatedAt); pre-handover
+  // activity belongs to Direct. Each is false when reactivatedAt is null.
+  //   - reactBooked: booked a setter/partnership link at/after reactivatedAt
+  //     (a pre-handover partnership booking — there are real cases — does NOT
+  //     count as a reactive-phase book).
+  //   - reactShowed / reactClosed: a New closer form showed / closed, filed
+  //     at/after reactivatedAt. (Inherently post-handover in today's data, but
+  //     scoped here so the reactive funnel stays correct as data grows.)
+  reactBooked: boolean
+  reactShowed: boolean
+  reactClosed: boolean
   // Computed status for the roster Status column (Close's status_label is NOT
   // used — it's inaccurate). leadType drives the colour; statusWord is the
   // lead's furthest-reached funnel stage. Type precedence dq > reactivation >
@@ -324,6 +336,10 @@ export async function getLeadsForRange(
   //    A lead with ANY New closer form whose outcome shows/closes counts.
   const showedLeadIds = new Set<string>()
   const closedLeadIds = new Set<string>()
+  // Post-reactivation subsets: a showed/closed form filed at/after the lead's
+  // reactivated_at. Feeds the reactivation funnel's post-handover scoping.
+  const reactShowedIds = new Set<string>()
+  const reactClosedIds = new Set<string>()
   // Close moment per lead = the EARLIEST closing (HT/DC) form's meeting time.
   // Used to cap raw dials at close (post-close fulfillment dials are excluded).
   const closeTime = new Map<string, string>()
@@ -342,9 +358,19 @@ export async function getLeadsForRange(
       // Reset on re-opt-in: skip closer forms from a prior journey.
       if (!afterOptIn(r.lead_id, r.airtable_created_at)) continue
       if (norm(r.call_outcome).includes('dq')) dqLeadIds.add(r.lead_id)
-      if (outcomeShowed(r.call_outcome)) showedLeadIds.add(r.lead_id)
+      // Is this form at/after the lead's reactivation? (false when not reactivated)
+      const reactAt = leadReactivatedAt.get(r.lead_id) ?? null
+      const postReact =
+        reactAt != null &&
+        r.airtable_created_at != null &&
+        new Date(r.airtable_created_at).getTime() >= new Date(reactAt).getTime()
+      if (outcomeShowed(r.call_outcome)) {
+        showedLeadIds.add(r.lead_id)
+        if (postReact) reactShowedIds.add(r.lead_id)
+      }
       if (outcomeClosed(r.call_outcome)) {
         closedLeadIds.add(r.lead_id)
+        if (postReact) reactClosedIds.add(r.lead_id)
         if (r.date_time_of_call) {
           const prev = closeTime.get(r.lead_id)
           if (!prev || r.date_time_of_call < prev) closeTime.set(r.lead_id, r.date_time_of_call)
@@ -377,6 +403,14 @@ export async function getLeadsForRange(
     const showed = showedLeadIds.has(r.leadId)
     const closed = closedLeadIds.has(r.leadId)
     const reactivatedAt = leadReactivatedAt.get(r.leadId) ?? null
+    // Post-reactivation signals (false when never reactivated). Booked uses the
+    // partnership booking times scoped to reactivatedAt; showed/closed use the
+    // post-react form subsets gathered above.
+    const reactBooked = reactivatedAt
+      ? bookedSince(partnershipSig, r.leadId, emails, name, reactivatedAt)
+      : false
+    const reactShowed = reactShowedIds.has(r.leadId)
+    const reactClosed = reactClosedIds.has(r.leadId)
     const isDq = dqLeadIds.has(r.leadId)
     const leadType: LeadRow['leadType'] = isDq
       ? 'dq'
@@ -403,6 +437,9 @@ export async function getLeadsForRange(
       hasPartnership,
       reactivatedAt,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
+      reactBooked,
+      reactShowed,
+      reactClosed,
       leadType,
       statusWord,
     }

@@ -180,15 +180,24 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     closes: count((r) => isSetter(r) && r.closed),
   }
 
+  // Reactivation funnel — fully POST-handover: every stage counts only activity
+  // after the lead lost its strat spot (reactivatedAt). dials/connected are
+  // already post-react via scanDialWindows; books/shows/closes use the
+  // post-react signals from leads.ts (a pre-handover partnership booking or
+  // show/close belongs to Direct, not here). Cumulative + monotonic like the
+  // Direct box: reaching a later stage back-fills the earlier ones
+  // (books ≥ connected ≥ shows ≥ closes), so a post-react show/close that isn't
+  // mirrored by a ≥90s dial or a captured partnership booking still reads
+  // correctly rather than inverting the ladder.
   const reactivation: PoolFunnelBox = {
     pool: count(isReact),
     qualified: count((r) => isReact(r) && r.qualified === 'qualified'),
     unqualified: count((r) => isReact(r) && r.qualified === 'non-qualified'),
     dials: sum(isReact, postDials),
-    connected: count((r) => isReact(r) && postConnected(r)),
-    books: count((r) => isReact(r) && r.hasPartnership),
-    shows: count((r) => isReact(r) && r.showed),
-    closes: count((r) => isReact(r) && r.closed),
+    connected: count((r) => isReact(r) && (postConnected(r) || r.reactBooked || r.reactShowed || r.reactClosed)),
+    books: count((r) => isReact(r) && (r.reactBooked || r.reactShowed || r.reactClosed)),
+    shows: count((r) => isReact(r) && (r.reactShowed || r.reactClosed)),
+    closes: count((r) => isReact(r) && r.reactClosed),
   }
 
   return { adspendUsd, total, direct, setter, reactivation }
