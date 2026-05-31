@@ -457,10 +457,10 @@ function QualifiedTag({ q }: { q: Qualification }) {
   )
 }
 
-// Status cell — the lead's furthest funnel stage (statusWord), written in its
-// lead-type colour: Direct green, Opt-in yellow, Reactivation pale blue, DQ
-// red. Both computed in getLeadsForRange (lifecycle-scoped). The colour conveys
-// the type; the word conveys the stage.
+// Status cell — the lead's furthest funnel stage (statusWord) in a boxed tag,
+// coloured by lead type: Direct green, Opt-in yellow, Reactivation pale blue,
+// DQ red. Both computed in getLeadsForRange (lifecycle-scoped). A lead with no
+// stage reached yet ("—") shows a plain dash, no box.
 const STATUS_COLOR: Record<LeadRow['leadType'], string> = {
   direct: 'var(--color-geg-pos)',
   optin: 'var(--color-geg-warn)',
@@ -469,8 +469,16 @@ const STATUS_COLOR: Record<LeadRow['leadType'], string> = {
 }
 
 function StatusCell({ r }: { r: LeadRow }) {
+  const color = STATUS_COLOR[r.leadType]
+  if (r.statusWord === '—') {
+    return <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
+  }
   return (
-    <span className="geg-mono" style={{ fontSize: 12, letterSpacing: '0.04em', color: STATUS_COLOR[r.leadType] }} title={`${r.leadType} lead`}>
+    <span
+      className="geg-mono"
+      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
+      title={`${r.leadType} lead`}
+    >
       {r.statusWord}
     </span>
   )
