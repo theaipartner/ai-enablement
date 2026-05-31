@@ -25,7 +25,7 @@ Companion docs:
 > Reactivation). **(3)** A page RESTRUCTURE landed: the stacked funnel moved to
 > the **Funnel page** (renamed from Pulse), its stages link into a filtered Leads
 > roster (type/stage filter — see § 1 › Funnel → Leads filter), the sidebar
-> flattened to **Funnel/Leads/People/Calls** (no sub-bars), and the
+> flattened to **Funnel/Leads/Talent/Calls** (no sub-bars; "Talent" is the People page renamed — route stays /people), and the
 > Appointment-Setting/Closing/Revenue routes were removed. Read **§ 1** for the
 > current routing/filter model and **§ REACTIVATION & LEAD FUNNEL** (bottom) for
 > the reactivation logic. The 05-30 section just below is now mostly historical
@@ -229,7 +229,7 @@ All under `app/(authenticated)/sales-dashboard/`. Server components by default;
 `usePathname()`) renders only under `/sales-dashboard/*`.
 
 **2026-05-31 restructure.** The sidebar is now four flat items, no sub-bars:
-**Funnel · Leads · People · Calls**. The stacked Total/Direct/Setter/Reactivation
+**Funnel · Leads · Talent · Calls** ("Talent" = the People page, route still /people). The stacked Total/Direct/Setter/Reactivation
 funnel moved off `/leads` onto the **Funnel page** (`/sales-dashboard/funnel`);
 its stage nodes link into the Leads roster pre-filtered (see § Funnel → Leads
 filter below), the Total adspend node → the Ads page, and a header link → the
@@ -238,16 +238,17 @@ Appointment-Setting, Closing, and Revenue **routes were removed** (appt/closing
 are covered by People + the funnel→leads drill; Revenue is slated for a future
 CEO tab). The `_components/` (PerRepCallActivityTable, CloserScheduledTables) +
 `actions.ts` + `rep-link.tsx` under the deleted appt-setting/closed folders stay
-colocated — People still imports them. `lib/db/funnel-stages.ts` `getFunnelActivity`
-is now **orphaned** (the old activity-box Funnel page is gone); its sibling
-exports (`resolveFunnelRange`, etc.) are still widely used.
+colocated — the Talent (People) page still imports them. `lib/db/funnel-stages.ts`
+was trimmed to just `resolveFunnelRange` (the dead `getFunnelActivity` + its
+FunnelBox/PulseTile types/helpers were removed when the activity-box Funnel page
+went away).
 
 | Route | What it is | Depth today |
 |---|---|---|
 | `/sales-dashboard` | Redirects → `/sales-dashboard/funnel` | n/a |
 | `/sales-dashboard/funnel` | **Funnel** — the stacked Total/Direct/Setter/Reactivation funnel; stages link to filtered Leads | **deep** |
 | `/sales-dashboard/[section]` | Dynamic section router → `SectionId` or 404 (not in nav) | not touched |
-| `/sales-dashboard/leads` | **Leads roster** + filter bar (type/stage) + speed-to-lead + FMR | **deep** |
+| `/sales-dashboard/leads` | **Leads roster** + filter bar (type/stage) + speed-to-lead + FMR (both now window/filter-scoped to the same cohort) | **deep** |
 | `/sales-dashboard/leads/[close_id]` | **Per-lead detail** — facts + two-phase Journey + form-driven lifecycle | **deep** |
 | `/sales-dashboard/funnel/landing-pages` | Landing-page metrics (Clarity) — reached from the Funnel header link | not touched |
 | `/sales-dashboard/funnel/ads` | Ad metrics (Meta) — reached from the Funnel adspend node | **sparse — see §7** |
@@ -529,7 +530,7 @@ The dashboard converged on this shape (shipped 2026-05-31):
    stacked-funnel overview; stages drill into filtered Leads, adspend → Ads, a
    header link → Landing Pages.
 2. **Leads** — everything about the leads (the roster + filters + per-lead pages).
-3. **People** — the same data from the **sales reps'** perspective (closers/setters).
+3. **Talent** (route /people) — the same data from the **sales reps'** perspective (closers/setters).
 4. **Calls** — raw setter/closer call recordings (slated for removal once the
    work to fold it elsewhere is done).
 
