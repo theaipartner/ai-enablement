@@ -165,13 +165,17 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
         { label: 'Closed', hit: lead.closed },
       ],
     })
-  } else if (bt === 'setter') {
+  } else {
+    // Opt-in lane — surfaced for EVERY non-direct, non-reactivated lead, even
+    // one we haven't connected with yet (no booking, no calls): the journey
+    // starts at Connected and shows the full ladder unlit so you can see where
+    // they are. Booked lights only once they've actually booked a partnership.
     segments.push({
-      label: 'Setter-led',
+      label: 'Opt-in',
       color: 'var(--color-geg-warn)',
       stages: [
         { label: 'Connected', hit: lead.connected },
-        { label: 'Booked', hit: true },
+        { label: 'Booked', hit: lead.bookingType === 'setter' },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
       ],
@@ -201,15 +205,8 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
     })
   }
 
-  if (segments.length === 0) {
-    return (
-      <div className="geg-serif" style={{ fontSize: 14, color: 'var(--color-geg-text-faint)', padding: '4px 0' }}>
-        Not booked{lead.isDq ? ' · ' : ''}
-        {lead.isDq ? <DqChip /> : null}
-      </div>
-    )
-  }
-
+  // Every lead now has at least one lane (direct or opt-in), so the journey is
+  // always surfaced — no "not booked" empty state.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {segments.map((seg, si) => (
