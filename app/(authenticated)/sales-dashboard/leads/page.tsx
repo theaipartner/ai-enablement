@@ -1,17 +1,16 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
-import { getLeadsFunnel } from '@/lib/db/leads-funnel'
+import { matchesLeadFilter, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
 import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { searchLeads, type LeadSearchResult } from '@/lib/db/lead-search'
 import { FmrTimeBlockChart } from '@/components/sales/fmr-time-block-chart'
-import { FunnelStack } from '@/components/sales/funnel-stack'
 import { SpeedToLeadBoxes } from '@/components/sales/speed-to-lead-boxes'
 import { LeadSearch } from './lead-search'
-import { ViewToggle } from './view-toggle'
+import { LeadsFilterBar } from './leads-filter-bar'
 import { LeadRoster } from './lead-roster'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
@@ -57,6 +56,11 @@ export default async function SalesDashboardLeadsPage({
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
   const view: View = pickView(searchParams?.view)
+  // Lead-type (multi) + stage (single, cumulative) filters — set by the Funnel
+  // page's stage links and the filter bar. The funnel and roster share the
+  // reachedStage predicate, so a clicked bar opens exactly its leads.
+  const types = parseTypes(searchParams?.type)
+  const stage = parseStage(searchParams?.stage)
 
   // Fetch the cohort ONCE (it's the heavy scan) + access + the cached FMR in
   // parallel, then reuse the cohort for both the roster (getLeadsForRange) and
@@ -72,17 +76,15 @@ export default async function SalesDashboardLeadsPage({
   const canDelete = access?.tier === 'creator'
 
   // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
-  const rows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
+  const viewRows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
+  // Roster also honors the type/stage filter. Speed-to-lead + FMR stay over the
+  // full (unfiltered) cohort — they're window health, not the filtered list.
+  const rows = viewRows.filter((r) => matchesLeadFilter(r, types, stage))
 
-  // Serialize the current leads-page state (date window, view, and — later —
-  // filters) so a row click carries it as `ret`, letting the per-lead "Back to
-  // leads" return to the exact same view. Generic over every param except the
-  // search box (`q`) and `ret` itself, so future filters are preserved for free.
+  // Serialize the current leads-page state (date window, view, filters) so a row
+  // click carries it as `ret`, letting the per-lead "Back to leads" return to
+  // the exact same view. Generic over every param except `q` and `ret`.
   const backQuery = buildLeadsQuery(searchParams)
-
-  // Funnel stack (Total / Direct / Setter / Reactivation) over the same,
-  // view-filtered rows — boxes + roster can't drift.
-  const funnel = await getLeadsFunnel(rows, range)
 
   return (
     <div>
@@ -99,11 +101,9 @@ export default async function SalesDashboardLeadsPage({
 
       <LeadSearch initial="" />
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
-        <ViewToggle current={view} />
+      <div style={{ marginTop: 20 }}>
+        <LeadsFilterBar view={view} types={types} stage={stage} />
       </div>
-
-      <FunnelStack funnel={funnel} range={range} />
 
       <div style={{ marginTop: 26 }}>
         <SectionLabel>Speed to lead · this window</SectionLabel>
@@ -115,7 +115,9 @@ export default async function SalesDashboardLeadsPage({
         <FmrTimeBlockChart fmr={fmr} />
       </div>
 
-      <LeadRoster rows={rows} canDelete={canDelete} backQuery={backQuery} />
+      <div style={{ marginTop: 26 }}>
+        <LeadRoster rows={rows} canDelete={canDelete} backQuery={backQuery} />
+      </div>
     </div>
   )
 }
@@ -136,6 +138,24 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function pickView(raw: string | string[] | undefined): View {
   const v = Array.isArray(raw) ? raw[0] : raw
   return v === 'unique' ? 'unique' : 'all'
+}
+
+const VALID_TYPES: LeadFilterType[] = ['direct', 'setter', 'reactivation']
+const VALID_STAGES: FunnelStage[] = ['connected', 'booked', 'confirmed', 'showed', 'closed']
+
+// `?type=direct,reactivation` → the validated multi-select lead-type filter.
+function parseTypes(raw: string | string[] | undefined): LeadFilterType[] {
+  const s = (Array.isArray(raw) ? raw[0] : raw) ?? ''
+  return s
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t): t is LeadFilterType => (VALID_TYPES as string[]).includes(t))
+}
+
+// `?stage=showed` → the single cumulative stage threshold (null when unset/invalid).
+function parseStage(raw: string | string[] | undefined): FunnelStage | null {
+  const s = (Array.isArray(raw) ? raw[0] : raw) ?? ''
+  return (VALID_STAGES as string[]).includes(s) ? (s as FunnelStage) : null
 }
 
 // Serialize the leads-page state to a querystring for the per-lead "Back to

@@ -117,16 +117,18 @@ export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: Fun
   }
 }
 
-// Full /leads filter predicate: a lead matches when it's in the type AND has
-// reached the stage (either optional).
+// Full /leads filter predicate. `types` is the multi-select lead-type filter
+// (empty = no type restriction = Total). `stage` is the single cumulative
+// threshold. A lead matches when it's in ANY selected type AND has reached the
+// stage within that type's funnel (so "Direct · Showed" reads the stage with
+// the Direct definition, "Reactivation · Showed" with the reactive one).
 export function matchesLeadFilter(
   r: LeadRow,
-  type: LeadFilterType | null,
+  types: LeadFilterType[],
   stage: FunnelStage | null,
 ): boolean {
-  if (!matchesType(r, type)) return false
-  if (stage && !reachedStage(r, type, stage)) return false
-  return true
+  if (types.length === 0) return !stage || reachedStage(r, null, stage)
+  return types.some((t) => matchesType(r, t) && (!stage || reachedStage(r, t, stage)))
 }
 
 type DialWindows = {
