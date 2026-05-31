@@ -155,9 +155,11 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       color: 'var(--color-geg-pos)',
       stages: [
         { label: 'Booked', hit: true },
-        // Connected surfaces in the LATEST lane — for a reactivated lead it shows
-        // in the Reactivation segment below, not here.
-        { label: 'Connected', hit: lead.connected && !lead.reactivatedAt },
+        // Direct-lane Connected = a direct-phase touch: a confirmed booking
+        // (Confirmed Booking / – New Time) always lights it here, OR any connect
+        // that wasn't a post-handover one. Form fill-order can't break this (it's
+        // not timing-based). Post-handover connects move to the Reactivation lane.
+        { label: 'Connected', hit: lead.confirmed || (lead.connected && !lead.reactConnected) },
         { label: 'Confirmed', hit: lead.confirmed },
         { label: 'Showed', hit: lead.showed || lead.closed },
         { label: 'Closed', hit: lead.closed },
@@ -187,10 +189,11 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
       since: lead.reactivatedAt,
       stages: [
         { label: 'Eligible', hit: true },
-        // A reactivated lead is connected by definition of being reachable (and
-        // a DQ always implies a connect) — surface Connected here, the latest
-        // lane, whenever the lead connected at all.
-        { label: 'Connected', hit: lead.connected },
+        // Reactive-lane Connected = a POST-handover touch only (a ≥90s dial or
+        // setter triage after reactivatedAt). A confirmed booking is NOT a
+        // reactive connect (it's a direct-phase event, shown in the Direct lane)
+        // — it stays a global connect but doesn't light this stage.
+        { label: 'Connected', hit: lead.reactConnected },
         { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
         { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
         { label: 'Closed', hit: lead.reactClosed },
