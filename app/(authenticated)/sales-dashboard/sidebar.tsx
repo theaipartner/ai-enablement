@@ -2,44 +2,33 @@
 
 // Sales Dashboard — sales-only left sidebar.
 //
-// Three primary views post-2026-05-27: Pulse (the activity view —
-// renamed from Funnel — with an inline sub-list of the four funnel
-// stages for fast access), Revenue, and Calls.
+// Four flat views (no sub-bars): Funnel (the stacked top-of-funnel overview;
+// its stage nodes link to pre-filtered Leads, adspend → Ads, and a header link
+// → Landing Pages, so Ads/LP no longer need sidebar entries), Leads, People,
+// Calls. Revenue moved to the CEO tab; Appointment Setting + Closing are folded
+// into People + the Funnel→Leads drill.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useState } from 'react'
 
 const TOPNAV_HEIGHT = 64
 
 type NavItem = {
   href: string
   label: string
-  children?: NavItem[]
 }
 
 const NAV: NavItem[] = [
-  {
-    href: '/sales-dashboard/funnel',
-    label: 'Pulse',
-    children: [
-      { href: '/sales-dashboard/funnel/ads', label: 'Ads' },
-      { href: '/sales-dashboard/funnel/landing-pages', label: 'Landing page' },
-      { href: '/sales-dashboard/funnel/appointment-setting', label: 'Appointment setting' },
-      { href: '/sales-dashboard/funnel/closed', label: 'Closing' },
-    ],
-  },
-  // Leads = view-only roster of every lead opted-in in the timeframe
-  // (new + re-opt-in), with qualified + booked tags. Mirror of the
-  // appointment-setting dial list, read-only.
+  // Funnel = the stacked Total/Direct/Setter/Reactivation overview. Stage nodes
+  // drill into the pre-filtered Leads roster; Ads + Landing Pages are reached
+  // from within the page, not the sidebar.
+  { href: '/sales-dashboard/funnel', label: 'Funnel' },
+  // Leads = the roster of every lead opted-in in the window (new + re-opt-in),
+  // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },
-  // People = per-rep views (Call Activity, per-closer scheduled, bookings,
-  // cash) consolidated from the Appointment Setting + Closing pages, under
-  // one date picker.
+  // People = per-rep views (Call Activity, per-closer scheduled, bookings, cash).
   { href: '/sales-dashboard/people', label: 'People' },
-  { href: '/sales-dashboard/revenue', label: 'Revenue' },
-  // Calls = setter/closer-setter call recordings transcribed via Deepgram,
-  // rendered raw for V1 (AI review layer comes after golden-set selection).
+  // Calls = setter/closer-setter call recordings (raw V1).
   { href: '/sales-dashboard/calls', label: 'Calls' },
 ]
 
@@ -92,92 +81,16 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
         </div>
       </div>
 
-      {NAV.map((item) =>
-        item.children && item.children.length > 0 ? (
-          <SidebarGroup
-            key={item.href}
-            item={item}
-            isActive={isActive}
-            anyChildActive={item.children.some((c) => isActive(c.href))}
-          />
-        ) : (
-          <SidebarLink
-            key={item.href}
-            href={item.href}
-            label={item.label}
-            active={isActive(item.href)}
-            variant="overview"
-          />
-        ),
-      )}
+      {NAV.map((item) => (
+        <SidebarLink
+          key={item.href}
+          href={item.href}
+          label={item.label}
+          active={isActive(item.href)}
+          variant="overview"
+        />
+      ))}
     </aside>
-  )
-}
-
-// Parent row with chevron toggle + a collapsible list of children.
-// Auto-expanded when the user is already on the parent or any child
-// route; otherwise collapsed by default, toggled by clicking the
-// chevron. The label itself stays a Link to the parent route.
-function SidebarGroup({
-  item,
-  isActive,
-  anyChildActive,
-}: {
-  item: NavItem
-  isActive: (href: string) => boolean
-  anyChildActive: boolean
-}) {
-  const parentActive = isActive(item.href)
-  const autoOpen = parentActive || anyChildActive
-  const [manuallyOpen, setManuallyOpen] = useState<boolean | null>(null)
-  const open = manuallyOpen ?? autoOpen
-
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'stretch' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <SidebarLink
-            href={item.href}
-            label={item.label}
-            active={parentActive}
-            variant="overview"
-          />
-        </div>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={`${open ? 'Collapse' : 'Expand'} ${item.label} sub-pages`}
-          onClick={() => setManuallyOpen(!open)}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '0 22px 0 8px',
-            cursor: 'pointer',
-            color: 'var(--color-geg-text-faint)',
-            fontSize: 10,
-            display: 'flex',
-            alignItems: 'center',
-            transition: 'transform 120ms ease, color 100ms ease',
-            transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
-          }}
-        >
-          ▾
-        </button>
-      </div>
-      {open ? (
-        <div style={{ paddingBottom: 4 }}>
-          {item.children!.map((c) => (
-            <SidebarLink
-              key={c.href}
-              href={c.href}
-              label={c.label}
-              active={isActive(c.href)}
-              variant="child"
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
   )
 }
 

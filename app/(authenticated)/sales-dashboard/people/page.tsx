@@ -252,21 +252,6 @@ function CashSection({ money }: { money: ClosingMoney }) {
     <SectionBox
       eyebrow="CASH"
       title="Upfront, contract value, AOV — from the closer form."
-      action={
-        <Link
-          href="/sales-dashboard/revenue"
-          className="geg-mono"
-          style={{
-            fontSize: 10,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: 'var(--color-geg-text-faint)',
-            textDecoration: 'none',
-          }}
-        >
-          full revenue view →
-        </Link>
-      }
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         <MoneyTile label="Total upfront collected" value={money.upfrontCollected} provisional={money.provisional} />
