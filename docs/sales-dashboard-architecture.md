@@ -30,6 +30,12 @@ Companion docs:
 > current routing/filter model and **§ REACTIVATION & LEAD FUNNEL** (bottom) for
 > the reactivation logic. The 05-30 section just below is now mostly historical
 > (it still describes the funnel as living on /leads — it no longer does).
+>
+> **For the full late-session detail (the "connected" model, the form Call-Status
+> values, the shared funnel predicate, the per-lead Journey + day-grouped
+> Lifecycle, the FMR rewrite, the funnel integrity guard, and the CEO missing-form
+> flags) read the LAST section: § DEEP REFERENCE (2026-05-31, late session) at the
+> very bottom of this doc.** It is the most current and most detailed.
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -886,3 +892,270 @@ See `PERFORMANCE-SCALING-DEBT.md` (repo root). Option A + B-step-1 shipped; the
 DB-side SQL-aggregation layer (the build-alongside-and-diff items) is deferred.
 The new 3h-lapse RPC + the cohort scans are fine at current scale (5.4k leads,
 16k calls, 158 calendly) but are on that doc's radar.
+
+---
+
+# ⚡⚡⚡ DEEP REFERENCE — CONNECTED MODEL · FILTERS · FMR · JOURNEY · INTEGRITY · CEO FLAGS (2026-05-31, late session) ⚡⚡⚡
+
+This is the authoritative, detailed record of the late-2026-05-31 session. It is
+intentionally exhaustive — a future instance should be able to reconstruct the
+reasoning, not just the mechanics. Everything below is live on `main`.
+
+## A. THE "CONNECTED" MODEL — the load-bearing concept (read first)
+
+There are **two connected signals**, both per-lead, both set in `lib/db/leads.ts`
+`getLeadsForRange`:
+
+- **`connected`** (raw connect evidence) = a ≥90s outbound dial (`anyCallConnected`)
+  **OR** a setter triage form (`setterTriagedIds` — any `airtable_setter_triage_calls`
+  row with `form_type != 'Closer Triage Form'`) **OR** a confirmation that *reached*
+  the lead (`confirmReachedIds`).
+- **`connectedEffective`** (the GENERAL "did we reach them") =
+  `connected || hasPartnership || showed || closed`. This is what the **Total
+  funnel**, the **speed-to-lead box**, the **roster Connected column**, and the
+  **per-lead header** all read.
+
+**`confirmReached` rule (memorize this):** a Closer Triage Form (= the
+**confirmation** form) counts as a connect for **every** `call_status` EXCEPT
+`Unresponsive – Setter Handover` — the *only* no-answer outcome. Match by:
+`cs && !cs.includes('unresponsive') && !cs.includes('handover')`. So
+`Confirmed Booking`, `Confirmed Booking – New Time`, `DQ / Un-interested`,
+`Setter pipeline / Follow up`, `High Ticket booking`, `Digital College booking`,
+`Downsold` ALL count as connected. (Earlier versions wrongly hinged on
+confirmed/DQ/follow only — fixed.)
+
+**A pure direct booking is NEVER a connection.** A self-booked "Ai Partner
+Strategy Call" (`hasDirect`, no call/form/partnership) is **Booked but not
+Connected** everywhere — including the Total funnel. Consequence: in the **Total
+funnel, Books can exceed Connected** (intended, Drake-confirmed). A
+**setter/reactive booking (`hasPartnership`) DOES count** as connected (booking
+it took a conversation), as do showed/closed.
+
+**A DQ always implies connected** — every DQ comes from a form output that counts
+(a closer-EOC `DQ / Bad Fit` is `showed`; a confirmation `DQ / Un-interested` is
+`confirmReached`; a setter-triage DQ is a triage form). No special-casing needed.
+
+**Per-type connected** (the `reachedStage` predicate, below):
+- Total: `connectedEffective` (excludes pure-direct booking).
+- Direct: `connected || confirmed || showed || closed` (NO partnership/booking
+  back-fill — a direct booking isn't a connect; but confirm/show/close are).
+- Setter: `connectedEffective` (a setter booking counts).
+- Reactivation: `reactConnected` only — a **≥90s dial OR setter triage form filed
+  AFTER `reactivated_at`** (`postReactConnectedIds || postReactTriagedIds`). A
+  **confirmation does NOT count as a reactive connect** (it's a direct-phase event).
+
+## B. AUTHORITATIVE FORM VALUES + NAMING (pulled live from Airtable schema)
+
+**Naming (confusing — internalize it):** `airtable_setter_triage_calls` is ONE
+table holding TWO forms via `form_type`:
+- `'Closer Triage Form'` = **the CONFIRMATION form** (the closer/Aman confirms a
+  direct booking). Drake calls this "the confirmation form."
+- `'Setter Triage Form'` = **the TRIAGE form** (the setter's triage call). Drake
+  calls this "the triage form."
+
+**`Call Status` singleSelect options** (shared field, both forms), pulled via the
+Airtable Metadata API: `High Ticket booking`, `Digital College booking`,
+`Setter pipeline / Follow up`, `Confirmed Booking`, `Confirmed Booking – New Time`,
+`Downsold`, `Unresponsive – Setter Handover`, `DQ / Un-interested`. **The only
+no-answer (lead didn't pick up) outcome is `Unresponsive – Setter Handover`.** Do
+NOT confuse it with `Setter pipeline / Follow up` (a real, answered disposition).
+
+**Form filler names** (for "who sent the form" on the per-lead Lifecycle):
+- `airtable_setter_triage_calls.setter_names[0]` — the filler for BOTH triage
+  (the setter) and confirmation (the confirming closer, e.g. `"Aman Ali"`;
+  sometimes `"No Setter"` → treat as null).
+- `airtable_full_closer_report.closer_names[0]` — the closer who filled the EOC.
+- Both are populated `text[]` here, so NO record-id→name resolution is needed on
+  the per-lead page (unlike the closer drill, which still needs it).
+
+**Pulling live form options:** `AirtableClient.from_env().get_base_schema()` —
+but `.env.local` is NOT auto-loaded into the python shell, so first
+`os.environ.setdefault(...)` from `.env.local`. Confirmation/triage table id =
+`tblaoMsiE3FSkHjQt` ("Triage Calls EOC Form").
+
+## C. SHARED FUNNEL PREDICATE (single source of truth) — `lib/db/leads-funnel.ts`
+
+Every funnel box count AND the /leads roster filter go through these, so **a
+funnel bar's number always equals the roster it opens when clicked**:
+- `isDirect(r)` = `hasDirect || reactivatedAt != null` (**reactivation ⊂ direct**).
+  `isReact` = `reactivatedAt != null`. `isSetter` = `!isDirect`.
+- `matchesType(r, type | null)` — `direct` / `reactivation` / `setter` / `null`(all).
+- `reachedStage(r, type | null, stage)` — **cumulative** "reached at least this
+  stage", with the per-type connected defs from § A. `confirmed` is direct/total
+  only (setter + reactivation return false for it).
+- `matchesLeadFilter(r, types[], stage)` — the roster filter: a lead matches if
+  it's in ANY selected type AND (no stage OR reached it within that type).
+
+## D. FUNNEL → LEADS FILTER (URL contract)
+
+- `?type=` comma-multi (`direct` / `setter` (a.k.a. opt-in) / `reactivation`);
+  `?stage=` single (`connected`/`booked`/`confirmed`/`showed`/`closed`).
+- `direct` INCLUDES reactivation. `stage` is cumulative ("latest stage reached" —
+  picking `showed` includes closes). `confirmed` only shows in the bar when Direct
+  is selected. Multi-stage makes no sense (cumulative), so it's single-select.
+- Funnel-page stage nodes are `<Link>`s to `/leads?type=&stage=&start=&end=`; the
+  Total adspend node → the Ads page; a header link → the Landing Pages page.
+- Filter bar = `leads/leads-filter-bar.tsx` (client): View (all/unique — the old
+  toggle, repurposed) · Type chips · Reached chips.
+
+## E. PER-LEAD JOURNEY (two-phase) — `leads/[close_id]/page.tsx` `JourneyProgress`
+
+Lanes (each stage is a chip, lit/unlit):
+- **Direct** (when `isDirect` or `reactivatedAt`): Booked → Connected → Confirmed
+  → Showed → Closed.
+- **Setter-led** (setter-only): Connected → Booked → Showed → Closed.
+- **Reactivation** (when reactivated, under a "↓ lost spot · {date}" divider):
+  Eligible → Connected → Booked → Showed → Closed. Eligible is ALWAYS lit (lost
+  the spot = eligible). Booked/Showed/Closed use the post-handover signals
+  (`reactBooked`/`reactShowed`/`reactClosed`).
+
+**DURABLE Connected-lane logic (signal-based, NOT timing — so form fill-order
+can't break it; this was the Raymond Chacon bug):**
+- Direct Connected = `lead.confirmed || (lead.connected && !lead.reactConnected)`.
+  A **confirmed booking** (`Confirmed Booking` / `– New Time`, i.e. `lead.confirmed`)
+  ALWAYS lights Direct Connected (and Confirmed).
+- Reactive Connected = `lead.reactConnected` (post-handover only). A confirmed
+  booking is a **global** connect but is **NEVER** a reactive connect.
+- `Confirmed` stays **literal** (`lead.confirmed`) — a `DQ / Un-interested`
+  confirmation is NOT "confirmed".
+- DQ leads still render their progress + a terminal red DQ chip.
+
+## F. PER-LEAD LIFECYCLE (day-grouped) — same page, `Lifecycle`
+
+Grouped by **ET day, newest first**, since latest opt-in. Each day shows, side by
+side (NO matching — Drake: "just show both"):
+- **Calls** — time · caller · duration · a link to the per-call review page
+  `/sales-dashboard/calls/[closeCallId]` ("review →" when transcribed, else
+  "open →"). Connected (≥90s) green; sub-90s tagged "(not connected)".
+- **Forms** — disposition · source (Setter triage / Confirmation / Closer) ·
+  **"by {filler}"** (`setter_names[0]` / `closer_names[0]`, see § B).
+- Opt-in + follow-up markers fold into their day.
+- `lead-detail.ts` form events now carry a `by` field; `LeadTimelineEvent`'s
+  `form` variant gained `by: string | null`.
+- The per-call links are the **eventual replacement for the Calls sidebar tab**
+  (NOT deleted yet — Drake verifies first).
+
+## G. FMR (first message response) — `lib/db/funnel-appointment-setting.ts`
+
+**History:** FMR used to be a fixed since-May-24, **creation-based** scan that
+showed 180 while the roster total showed 196. The gap = FMR (a) excluded the **22
+re-opt-ins** (creation predates May 24), (b) had no qualifying-status filter, (c)
+didn't drop the 1 soft-hidden row. Different cohort definition entirely.
+
+**Now (window + cohort-aligned):**
+- `getFmrSignals(range)` — **cached per range** (`unstable_cache`, keyed on
+  start/end); runs the inbound-SMS + ≥90s-outbound-connect scans (`activity_at >=
+  window start`), returns serializable `[leadId, iso][]` arrays.
+- `buildFmrBlocks(cohortRows, signals, label)` — pure; buckets each lead by the ET
+  hour of its **OPT-IN** (a re-opt-in by its re-opt-in moment, not original
+  signup); a response counts only **at/after** opt-in; within-24h is relative to
+  opt-in. `cohortSize` = the cohort length.
+- On `/leads`: FMR is built over `allRows` (the window cohort) so its cohortSize
+  **equals the Total funnel's opt-ins** (196 = 196). It honors the **type filter
+  but ONLY `direct` / `setter` (opt-in)** — `reactivation` is ignored ("response
+  by opt-in hour" isn't meaningful for it), and no/other selection shows the full
+  window cohort. The **stage filter does NOT touch FMR**.
+- Response definition is unchanged from the accurate original (inbound SMS OR ≥90s
+  connect; within-24h either) — only the anchor (opt-in) + cohort changed.
+
+## H. SPEED-TO-LEAD BOXES — filter-aware
+
+`summarizeCohortRows(rows)` was extracted (pure stats fn: avg speed, under-3h,
+intensity, connected rate, cohort size) and is reused by `getSpeedToLeadCohort`
+(no behavior change) AND on `/leads` over the **filtered** roster rows, so the
+boxes track the type/stage filter. The box's "Connected rate" count uses the
+cumulative `reachedStage(r, null, 'connected')` so it matches the Total funnel.
+
+## I. FUNNEL INTEGRITY GUARD — `validateFunnel` (always-on)
+
+Runs inside `getLeadsFunnel`; the Funnel page shows a banner (GREEN "all checks
+pass" when clean, RED with specifics when not — always visible). Invariants:
+- **Per-lead-once** — no duplicate cohort rows. (The cohort is structurally
+  one-row-per-lead: re-opt-ins dedup against new leads at
+  `funnel-appointment-setting.ts` ~`if (newLeadIdSet.has(...)) continue`, and the
+  funnel counts via `count(pred)` = one increment per row. So a lead that books
+  direct THEN reactive is one row, counted once per stage.)
+- **Monotonicity** per box (Total exempt on Books-vs-Connected, by design).
+- **Partition:** Direct.books + Setter.pool == Total.optIns.
+- **Reactivation ⊂ Direct:** reactivation pool ≤ direct books.
+A violation = a real bug (double-count / mis-bucket). Simple framing for Drake:
+"it adds up Direct + Setter and checks they equal total opt-ins."
+
+## J. CEO CONTROL-CENTER MISSING-FORM FLAGS — `lib/db/ceo-missing-forms.ts`
+
+On `(ceo)/control-center`. Always-visible panel (GREEN "all filled" when clean).
+For **today (ET)**:
+- **Setter:** a ≥90s connected outbound call with **no Setter Triage Form 15 min**
+  later → flag (lead + caller, from `close_calls.raw_payload.user_name`).
+- **Closer:** a booked meeting (direct or "partnership call w/") with **no Closer
+  EOC form 1.5 h after its START** → flag (lead + closer `host_user_name`).
+  Meeting→lead resolves by **unique email→name** (utm skipped — for a flag we only
+  want high-confidence matches; unresolved meetings are **dropped, not
+  false-flagged**). Closer trigger is start-based for now (Fathom isn't wired for
+  closing-call END yet — that's the eventual upgrade).
+- "No form" = no Airtable form for that lead filed **at/after** the interaction.
+  One flag per lead per side.
+
+## K. PAGE RESTRUCTURE + ROUTING (recap of the structural change)
+
+- Sidebar is FLAT, no sub-bars: **Funnel · Leads · Talent · Calls**. "Talent" is
+  the **People page renamed** (route is still `/sales-dashboard/people` — display
+  name only). The stacked funnel **moved off `/leads` onto the Funnel page**
+  (`/sales-dashboard/funnel`, renamed from Pulse, was the activity-box page).
+- **Removed routes:** `funnel/appointment-setting`, `funnel/closed`, `revenue/*`
+  (Revenue → future CEO tab). Their `_components/` (PerRepCallActivityTable,
+  CloserScheduledTables) + `actions.ts` + `rep-link.tsx` stay colocated — the
+  Talent page imports them.
+- `funnel-stages.ts` was **trimmed to just `resolveFunnelRange`** (the dead
+  `getFunnelActivity` + FunnelBox/PulseTile types/helpers were removed).
+- Ads + Landing Pages are reached FROM the Funnel page (adspend node + header
+  link). Their "Back to Funnel" (`StageDetailLayout` `backHref`) preserves the
+  window.
+
+## L. BACK-BUTTON / WINDOW + FILTER PRESERVATION
+
+- `buildLeadsQuery(searchParams)` serializes the leads-page state (every param
+  except `q` and `ret`) → a `ret=` param appended to **both** the roster row
+  links AND the lead-**search** result links. The per-lead "Back to leads" rebuilds
+  the URL from `ret`, so you land back on the exact window+filters.
+
+## M. KEY FILES TOUCHED THIS SESSION
+
+- `lib/db/leads.ts` — `connected` / `connectedEffective` / `reactConnected` /
+  `reactBooked/Showed/Closed`, `confirmReachedIds`/`setterTriagedIds`/
+  `postReactTriagedIds`, the post-react connected scan, `statusWord`.
+- `lib/db/leads-funnel.ts` — `reachedStage`/`matchesType`/`matchesLeadFilter`,
+  the boxes, `validateFunnel`, `LeadsFunnel.warnings`.
+- `lib/db/lead-detail.ts` — broad `connected`, `reactConnected`, `isDq`,
+  reactive signals, form-event `by` (filler).
+- `lib/db/funnel-appointment-setting.ts` — `summarizeCohortRows`, `getFmrSignals`,
+  `buildFmrBlocks` (replaced `getFmrTimeBlocks`).
+- `lib/db/funnel-stages.ts` — trimmed to `resolveFunnelRange`.
+- `lib/db/ceo-missing-forms.ts` — NEW (CEO flags).
+- `components/sales/funnel-stack.tsx` — NEW (extracted, link-enabled funnel).
+- `components/sales/speed-to-lead-boxes.tsx` — `connectedLeads` prop.
+- `components/sales/stage-detail.tsx` — `backHref`.
+- `components/sales/fmr-time-block-chart.tsx` — window/cohort labels.
+- `app/(authenticated)/sales-dashboard/funnel/page.tsx` — rewritten (FunnelStack
+  + integrity banner + LP link).
+- `app/(authenticated)/sales-dashboard/leads/page.tsx` — filters, FMR wiring,
+  speed-box wiring, search `ret`.
+- `app/(authenticated)/sales-dashboard/leads/leads-filter-bar.tsx` — NEW.
+- `app/(authenticated)/sales-dashboard/leads/lead-roster.tsx` — Connected column,
+  `backQuery`.
+- `app/(authenticated)/sales-dashboard/leads/[close_id]/page.tsx` — Journey +
+  day-grouped Lifecycle + `ret` back link.
+- `app/(authenticated)/sales-dashboard/sidebar.tsx` — flattened.
+- `app/(authenticated)/(ceo)/control-center/page.tsx` — missing-forms panel.
+- `supabase/migrations/0065_tag_reactivated_leads_3h_lapse.sql` — NEW (trigger 3).
+- `scripts/backfill_reactivated_at.py` — trigger 3 added.
+
+## N. VERIFICATION HANDLES (real leads, for the next instance to eyeball)
+
+- **Presley Caillot** (`lead_GtB7zTmWgOsgLwSgqtNiEMhSKzpDfhdywUvjTWu29qY`) —
+  reactivated + DQ via a `DQ / Un-interested` confirmation; reads connected (her
+  confirmation reached); good for the connected/DQ edge.
+- **Nand Modi** (`lead_hceyWL1wxBG9xoWBraa6x8iScDhDxXdhQUVqKkwJOUv`) — 3 connected
+  calls on Wed May 27 (after opt-in, so visible); good for the day-grouped
+  Lifecycle + per-call review links. (Backups: Hang Vu `lead_kIK2NvY8…`, Matthew
+  Milford `lead_Z1gOJGSdoZpkxvvgXbJRGhpHc0Cd93LmXLOl8nSsMyc`.)
