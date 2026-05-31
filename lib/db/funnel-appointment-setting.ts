@@ -1606,6 +1606,11 @@ export type CallActivityDrillRow = {
   // with no form. Drives the creator-only "hide test call" × — only
   // form-backed rows can be hidden (the × acts on this record).
   formRecordId?: string | null
+  // Form family backing this row: 'closer' (Closer Triage Form),
+  // 'setter' (Setter Triage Form), or null (a connect with no form).
+  // The drill renders only its own family — the Confirmation table shows
+  // closer-backed connects, the Triage table the rest.
+  family: 'setter' | 'closer' | null
 }
 
 export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
@@ -2164,6 +2169,11 @@ export async function getCallActivityForUser(
   // the rep sees the form is on file but pre-redesign, without inflating
   // any per-rep counter.
   const NA_LABEL = 'NA'
+  // Form family of a row's backing form — drives which table's drill shows it.
+  const familyOf = (ft: string | null | undefined): 'setter' | 'closer' | null => {
+    const v = (ft ?? '').toLowerCase()
+    return v.includes('closer') ? 'closer' : v.includes('setter') ? 'setter' : null
+  }
   const statusFor = (f: FormRow | undefined | null): {
     label: string | null
     bucket: TriageCallDrillRow['bucket']
@@ -2204,6 +2214,7 @@ export async function getCallActivityForUser(
       bucket: status.bucket,
       groupedCallCount: session.callIds.length,
       formRecordId: form?.record_id ?? null,
+      family: familyOf(form?.form_type),
     }
   })
 
@@ -2225,6 +2236,7 @@ export async function getCallActivityForUser(
       bucket: status.bucket,
       noMatchingCall: true,
       formRecordId: r.record_id,
+      family: familyOf(r.form_type),
     })
   }
 

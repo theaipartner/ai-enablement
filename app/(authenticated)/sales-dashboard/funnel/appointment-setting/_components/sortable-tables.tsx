@@ -909,7 +909,11 @@ export function PerRepCallActivityTable({
                   </RepLinkPreservingParams>
                   {isSelected ? (
                     <CallActivityDrillTable
-                      calls={drill}
+                      // Scope the drill to this table's form family: the
+                      // Confirmation (closer) table shows closer-backed
+                      // connects only; the Triage (setter) table shows the rest
+                      // (setter-backed + connects with no form).
+                      calls={drill.filter((d) => (variant === 'closer' ? d.family === 'closer' : d.family !== 'closer'))}
                       repName={r.name ?? (r.userId ? r.userId.slice(0, 13) + '…' : '—')}
                       canDelete={canDelete}
                     />
