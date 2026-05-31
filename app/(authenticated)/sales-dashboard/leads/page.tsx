@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
-import { getLeadsForRange, type LeadRow, type Qualification } from '@/lib/db/leads'
+import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
 import { getLeadsFunnel, type LeadsFunnel } from '@/lib/db/leads-funnel'
 import { getFmrTimeBlocks, getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
@@ -12,9 +12,9 @@ import { FmrTimeBlockChart } from '@/components/sales/fmr-time-block-chart'
 import { SpeedToLeadBoxes } from '@/components/sales/speed-to-lead-boxes'
 import { LeadSearch } from './lead-search'
 import { ViewToggle } from './view-toggle'
+import { LeadRoster } from './lead-roster'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
-import { DeleteLeadButton } from './delete-lead-button'
 
 // Sales Dashboard — Leads (top-of-funnel + roster).
 //
@@ -109,16 +109,7 @@ export default async function SalesDashboardLeadsPage({
         <FmrTimeBlockChart fmr={fmr} />
       </div>
 
-      <div style={{ marginTop: 26 }}>
-        <HeaderRow />
-        <div style={{ marginTop: 4 }}>
-          {rows.length === 0 ? (
-            <EmptyState />
-          ) : (
-            rows.map((r) => <LeadRowView key={r.leadId} r={r} canDelete={canDelete} />)
-          )}
-        </div>
-      </div>
+      <LeadRoster rows={rows} canDelete={canDelete} />
     </div>
   )
 }
@@ -361,92 +352,6 @@ function SubLine({ children }: { children: React.ReactNode }) {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Roster table
-// ---------------------------------------------------------------------------
-
-const COLS = '1.6fr 0.8fr 1.1fr 0.9fr 1.5fr 1.2fr 0.85fr 0.7fr 0.35fr'
-const HEADERS = ['Prospect', 'Opt-in', 'Opted in (ET)', 'Qualified', 'Status', 'Time to call', 'Connected', 'Intensity', '']
-
-function HeaderRow() {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '0 0 8px', borderBottom: '1px solid var(--color-geg-border)' }}>
-      {HEADERS.map((h, i) => (
-        <span key={h || `c${i}`} className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}>
-          {h}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function LeadRowView({ r, canDelete }: { r: LeadRow; canDelete: boolean }) {
-  return (
-    <Link href={`/sales-dashboard/leads/${encodeURIComponent(r.leadId)}`} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
-      <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.leadId}>
-        {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
-      </span>
-      <span><OptInBadge type={r.optInType} /></span>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
-      <span><QualifiedTag q={r.qualified} /></span>
-      <span><StatusCell r={r} /></span>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
-        {r.speedSec !== null ? (
-          <>
-            {formatDuration(r.speedSec)}
-            <span style={{ color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>({r.firstTwoDialsConnected ? 'yes' : 'no'})</span>
-          </>
-        ) : (
-          <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>not yet called</span>
-        )}
-      </span>
-      <span
-        className="geg-mono"
-        style={{ fontSize: 11, letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        title="Yes when ANY outbound call to this lead has connected (≥90s). Bracket = total connected talk time; ×N = how many calls connected."
-      >
-        <span style={{ color: r.anyCallConnected ? 'var(--color-geg-pos)' : r.firstCallAt ? 'var(--color-geg-neg)' : 'var(--color-geg-text-faint)' }}>
-          {r.firstCallAt ? (r.anyCallConnected ? 'Yes' : 'No') : '—'}
-        </span>
-        {r.anyCallConnected && r.totalConnectedDurationSec > 0 ? (
-          <span style={{ color: 'var(--color-geg-text-faint)' }}>({formatDuration(r.totalConnectedDurationSec)})</span>
-        ) : null}
-        {r.connectedCallCount >= 2 ? <MultiCallTag count={r.connectedCallCount} /> : null}
-      </span>
-      <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{r.intensity}</span>
-      <span style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        {canDelete ? <DeleteLeadButton closeId={r.leadId} /> : null}
-      </span>
-    </Link>
-  )
-}
-
-// ×N pill marking a lead reached on >1 connected call; the bracketed
-// duration beside it sums talk time across those calls.
-function MultiCallTag({ count }: { count: number }) {
-  return (
-    <span
-      className="geg-mono"
-      title={`${count} separate calls to this lead connected (≥90s). The bracketed duration is their combined talk time.`}
-      style={{ flexShrink: 0, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: 4, border: '1px solid var(--color-geg-border)', color: 'var(--color-geg-text-faint)', background: 'var(--color-geg-bg)' }}
-    >
-      ×{count}
-    </span>
-  )
-}
-
-function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
-  // re-opt-in is light grey (was accent — Drake 2026-05-31); new keeps the
-  // subtle outline.
-  const reoptin = type === 'reoptin'
-  const color = reoptin ? 'var(--color-geg-text-dim)' : 'var(--color-geg-text-3)'
-  return (
-    <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>
-      {reoptin ? 're-opt-in' : 'new'}
-    </span>
-  )
-}
-
 function QualifiedTag({ q }: { q: Qualification }) {
   const text = q === 'qualified' ? 'Qualified' : q === 'non-qualified' ? 'Not qualified' : '—'
   const color = q === 'qualified' ? 'var(--color-geg-pos)' : q === 'non-qualified' ? 'var(--color-geg-text-3)' : 'var(--color-geg-text-faint)'
@@ -457,53 +362,8 @@ function QualifiedTag({ q }: { q: Qualification }) {
   )
 }
 
-// Status cell — the lead's furthest funnel stage (statusWord) in a boxed tag,
-// coloured by lead type: Direct green, Opt-in yellow, Reactivation pale blue,
-// DQ red. Both computed in getLeadsForRange (lifecycle-scoped). A lead with no
-// stage reached yet ("—") shows a plain dash, no box.
-const STATUS_COLOR: Record<LeadRow['leadType'], string> = {
-  direct: 'var(--color-geg-pos)',
-  optin: 'var(--color-geg-warn)',
-  reactivation: '#7ea8dd',
-  dq: 'var(--color-geg-neg)',
-}
-
-function StatusCell({ r }: { r: LeadRow }) {
-  const color = STATUS_COLOR[r.leadType]
-  if (r.statusWord === '—') {
-    return <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
-  }
-  return (
-    <span
-      className="geg-mono"
-      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
-      title={`${r.leadType} lead`}
-    >
-      {r.statusWord}
-    </span>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div className="geg-mono" style={{ padding: '40px 0', textAlign: 'center', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
-      No leads opted in for this range.
-    </div>
-  )
-}
-
 // --- formatters (ET date, mm/ss duration) — local ---
 
 function formatEt(iso: string): string {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
-}
-
-function formatDuration(sec: number): string {
-  if (sec < 60) return `${Math.round(sec)}s`
-  const m = Math.floor(sec / 60)
-  if (m < 60) return `${m}m ${Math.round(sec % 60)}s`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ${m % 60}m`
-  const d = Math.floor(h / 24)
-  return `${d}d ${h % 24}h`
 }
