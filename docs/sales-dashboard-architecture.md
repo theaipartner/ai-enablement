@@ -18,6 +18,14 @@ Companion docs:
 
 ## ⚡ CONTINUATION — START HERE (handoff 2026-05-30, sales-dashboard sprint)
 
+> **2026-05-31 UPDATE:** A large amount has shipped since this 05-30 handoff
+> (reactivation tagging, the stacked lead funnel, the Status column, perf fixes,
+> People-page fixes, sortable roster) **and there is an in-flight plan for the
+> reactivation funnel/status that is NOT yet built.** Before doing anything,
+> read **§ REACTIVATION & LEAD FUNNEL — FULL STATE + PLAN (2026-05-31)** at the
+> BOTTOM of this doc. It is the authoritative current state and the step-by-step
+> plan. This 05-30 section below is now partly historical.
+
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
 
@@ -482,3 +490,304 @@ Treat this section as direction, not commitment.
 - [ ] Timestamps? Store UTC, render ET.
 - [ ] Test rows? `excluded_at` soft-hide; not every surface filters it.
 - [ ] Deploying a parser with new columns? Migration to cloud **first**.
+
+
+---
+
+# ⚡⚡ REACTIVATION & LEAD FUNNEL — FULL STATE + PLAN (2026-05-31) ⚡⚡
+
+**This is the authoritative current state of the `/sales-dashboard/leads` funnel
++ the closer/People per-rep views, and the step-by-step plan for the unfinished
+reactivation funnel/status work.** A fresh instance after a `/clear` should be
+able to execute the plan from this section alone. Read it top to bottom.
+
+## 0. How we work (recap — overrides CLAUDE.md process)
+Drake describes in plain language, often refining mid-stream. Builder (this
+agent) edits directly, verifies with `npx tsc --noEmit`, `npx next lint --file
+<paths>`, `npm run build`, then `git add/commit/push` straight to `main` (Vercel
+auto-deploys). Commit trailer: `Co-Authored-By: Claude Opus 4.8
+<noreply@anthropic.com>`. One logical change per commit. Surface genuine
+ambiguities/landmines BEFORE building; otherwise execute. Migrations are the
+careful path — see §0.2 of this doc (local Docker is up → `supabase db push`
+misroutes → apply via **psycopg2 against the pooler** + manual ledger insert +
+dual-verify). DB ops use `.venv/bin/python` (psycopg2 is there, not in the
+system python).
+
+## 1. What shipped 2026-05-30 → 05-31 (all live on `main`)
+In rough order. Each is a separate commit.
+- **Form-driven per-lead lifecycle timeline** (`lib/db/lead-detail.ts`,
+  `leads/[close_id]/page.tsx`): dropped close_calls from the per-lead timeline;
+  it's opt-in anchor + form outcomes (triage/confirmation/closer) + follow-up,
+  chronological. No reliable form↔call link exists (forms carry only `lead_id`).
+- **FMR chart + speed-to-lead boxes moved onto `/leads`** (shared components
+  `components/sales/fmr-time-block-chart.tsx`, `speed-to-lead-boxes.tsx`). FMR is
+  cohort-wide since May 24 (NOT range-scoped); speed boxes ARE range-scoped.
+- **New `/sales-dashboard/people` page** consolidating the per-rep Call Activity
+  (setters/closers) + Calendly-bookings boxes + per-closer scheduled tables +
+  Cash, with its own date picker. The old Appointment-Setting + Closing funnel
+  pages still exist (Drake compares before deleting them — when deleting, the
+  table components in their `_components/` folders must move to `components/sales/`).
+- **Migration 0063** — `close_leads.reactivated_at` (the persistent reactivation
+  tag). **Migration 0064** — `tag_reactivated_leads()` RPC. Backfill script
+  `scripts/backfill_reactivated_at.py`. Cron call wired into
+  `api/airtable_sync_cron.py` (fail-soft, set-once).
+- **Stacked lead funnel** (Total / Direct / Setter-led / Reactivation) replacing
+  the old 3 side-by-side booking boxes. `lib/db/leads-funnel.ts` (`getLeadsFunnel`).
+- **Dials in a bracket** beside each funnel's lead amount (not a stage), funnel
+  COLOUR coats: Direct green, "New opt-ins (setter-led)" yellow, Reactivation
+  pale blue (`#7ea8dd`, no palette token), Total neutral.
+- **Status column** on the roster (replaced "Booking" + removed "Caller"),
+  re-opt-in tag → light grey (`text-dim`).
+- **Strategy-call timing fix**: `hasDirect` = booked a direct strat link AFTER
+  the lead's latest opt-in (not ever) — `lib/db/leads.ts` `bookedSince`.
+- **Re-opt-in resets all stats**: every per-lead stat is scoped to `optInAt`
+  (cohort call scan skips calls before optInAt; form signals gated to after
+  optInAt; funnel dials lower-bounded at optInAt).
+- **Status as a boxed tag** (4 types: Direct green / Reactivated blue / Opt-in
+  yellow / DQ red), DQ keyed off forms only (NOT Close `status_label`, which is
+  inaccurate — `status_label` is intentionally unused).
+- **Perf option A** (`PERFORMANCE-SCALING-DEBT.md` at repo root): deduped the
+  double cohort fetch on `/leads`; cached `getFmrTimeBlocks` (`unstable_cache`,
+  10-min). **Perf option B step 1**: `getSpeedToLeadCohort`'s `close_calls` +
+  `close_lead_status_changes` scans filter to the cohort via chunked
+  `.in(lead_id)` (provably identical — was scanning all, discarding in JS).
+- **People-page fixes**: canceled meetings show "—" for Showed/Closed; Airtable
+  parser strips a pasted Close-lead-URL to the bare `lead_*` (SARRA);
+  no-show ≠ cancel in the closer drill (only `status=canceled`); closer form
+  matches by **lead_id → email → name**; **invitee email → lead** resolution
+  when utm fails (EDavid); booked-by matches setter by **identity (lead_id →
+  email → phone → name), NOT by date** (Rahul/Connor); the per-rep Call Activity
+  Connected/Missing + the expandable drill are scoped by **form family** (a stray
+  closer form no longer drags a setter's whole volume / connects into the
+  Confirmation table). Dials still "mimic" (total) in both tables.
+- **Sortable lead roster**: `leads/lead-roster.tsx` (client). The roster moved
+  out of `page.tsx` into this client component; clickable column sort.
+
+## 2. REACTIVATION LOGIC — complete spec (the focus)
+
+### 2.1 What "reactivated" means
+A **direct-booking lead** (one that booked an Ai Partner Strategy Call) that has
+**lost its strategy-call spot**. Stored permanently as
+`close_leads.reactivated_at` (timestamptz, null = never reactivated). Set ONCE,
+never cleared. It is the moment they lost the spot, and the sales dashboard uses
+it to (a) classify the lead into the Reactivation funnel and (b) scope that
+funnel's activity to AFTER this timestamp.
+
+### 2.2 The triggers (3 shipped, 1 PLANNED — all additive/OR)
+A lead is reactivated at the **earliest** triggering event of:
+1. **Setter handover** — a Closer Triage Form (the confirmation call form;
+   `airtable_setter_triage_calls.form_type = 'Closer Triage Form'`) with
+   `call_status` containing **`Setter pipeline`**. (The closer fills this form
+   for every direct booking even on a no-answer; "hand off to setter" = this.)
+2. **Lost the meeting** — the strategy-meeting **closer EOC form**
+   (`airtable_full_closer_report`, `form_type='New'`) `call_outcome` is a
+   **ghost/no-show or a cancel** (e.g. `Client Ghosted (no show)`,
+   `Call Cancelled`). Old forms: `no_show_reason` Ghost/Cancelled.
+3. **(PLANNED, NOT BUILT) Strat meeting lapsed >3h** — Aman often just lets a
+   meeting pass without cancelling / handover / no-show. So: the lead has a
+   direct strat booking, has **no active future strat booking**, and the latest
+   strat booking's `start_time + 3h < now()` → reactivated. `reactivated_at` =
+   that lapsed meeting's **`start_time + 3h`**. The 3h grace also absorbs a
+   reschedule's cancel→recreate gap (a drag-dropped reschedule lands a new
+   future booking inside 3h, so it does NOT trigger).
+- **DQ NEVER triggers reactivation.** A DQ'd lead stays a direct-booking lead and
+  is tagged DQ; it is not reactivated.
+- `Rescheduled` / `Confirmed` / `Downsold` / closed / follow-up never trigger.
+
+### 2.3 reactivated_at timestamp
+= the triggering form's `airtable_created_at` (triggers 1 & 2), or `start_time +
+3h` of the lapsed meeting (trigger 3). Earliest across all triggers.
+
+### 2.4 Where it is computed (set-once, permanent)
+- **Backfill**: `scripts/backfill_reactivated_at.py` (run `--apply`). Currently
+  FORMS-ONLY (triggers 1 & 2). Trigger 3 must be ADDED here.
+- **Ongoing**: `tag_reactivated_leads()` Postgres function (migration 0064),
+  called via `db.rpc('tag_reactivated_leads')` at the end of
+  `api/airtable_sync_cron.py`'s 15-min tick (fail-soft). Currently FORMS-ONLY.
+  Trigger 3 must be ADDED here too (this RPC pulls Calendly + does the
+  active-future-booking / 3h-lapse check). NOTE: adding trigger 3 means a NEW
+  migration (e.g. 0065) that `create or replace`s the function — apply via
+  psycopg2 + ledger + dual-verify per §0.2.
+
+### 2.5 Lifecycle scoping — re-opting in resets everything
+ALL per-lead stats are scoped to the lead's **latest opt-in** (`optInAt` =
+`date_created` for new leads, `latest_opt_in_date` for re-opt-ins), NOT the view
+window start. A re-opt-in wipes the prior journey's dials / connects /
+booked / shows / closes / DQ. Implemented in `lib/db/leads.ts` (`afterOptIn`,
+`bookedSince`), the cohort call scan (`getSpeedToLeadCohort`, skip calls before
+`lead.optInAt`), and the funnel dial scan (`scanDialWindows`, lower bound
+`optInAt`).
+
+## 3. THE LEAD FUNNEL MODEL (`/sales-dashboard/leads`)
+
+Four stacked boxes, computed in `lib/db/leads-funnel.ts` `getLeadsFunnel(rows,
+range)` over the SAME view-filtered cohort `rows` the roster shows (boxes +
+roster can't drift). The toggle (`view-toggle.tsx`, `?view=all|unique`) re-scopes
+everything (re-opt-ins in/out).
+
+### Segments
+- **Direct-booking lead** = `hasDirect` (ever booked a direct strat link AFTER
+  the latest opt-in) OR `reactivatedAt != null` (reactivation ⊂ direct).
+- **Setter / "New opt-ins" lead** = everyone else (never booked a strat link).
+- **Reactivation lead** = `reactivatedAt != null` (a subset of Direct).
+
+### Box stages (dials live in a BRACKET beside the lead amount, not a stage)
+- **Total** (neutral): adspend node → opt-ins (+dials bracket) → connected (1/lead)
+  → books → shows → closes.
+- **Direct** (green): qualified opt-ins → **Booked** (= the direct-lead count,
+  +dials bracket) → connected → confirms → shows → closes. Each stage counted
+  **ONCE per lead, cumulative**: Booked once (a reactive re-book never adds a
+  second), Confirmed = confirmed‖showed‖closed, Showed = showed‖closed. A
+  reactivated lead's eventual show/close (even post-reactivation) DOES count here
+  (they are originally direct) — and ALSO appears in the Reactivation box as its
+  reactive-phase outcome (different views; each counts the lead once within
+  itself — that is NOT "double counting" per Drake).
+- **Setter-led / New opt-ins** (yellow): pool (qual/unqual small) → dials (+bracket)
+  → connected → books → shows → closes.
+- **Reactivation** (pale blue): pool → dials → connected → books → shows → closes,
+  **ALL scoped to after `reactivated_at`** (post-reactivation only; pre-reactivation
+  connects/books belong to Direct).
+
+### Cross-cutting
+- **Dials** = RAW outbound dial count, **capped at the lead's close**
+  (`closeTimeIso`, post-close fulfillment dials excluded) and **lower-bounded at
+  `optInAt`**. Reactive dials additionally lower-bounded at `reactivated_at`.
+- **Connected** = 1 per lead (`anyCallConnected`); reactive Connected = a
+  connected call after `reactivated_at`.
+- Computed live (not stored) — cheap over the cohort's already-loaded data, and
+  lifecycle-scoping gives the re-opt-in reset for free.
+
+## 4. THE STATUS COLUMN (roster)
+One word, in the lead-type colour. `leadType` (drives colour) + `statusWord`
+(furthest stage), both computed in `getLeadsForRange` (`lib/db/leads.ts`).
+- **Type precedence (colour): DQ red > Reactivation blue > Direct green > Opt-in
+  yellow.** DQ from FORMS only (any form `DQ`), lifecycle-scoped.
+- **statusWord ladders** (furthest reached, lifecycle-scoped):
+  - Direct: Booked / Confirmed / Showed / Closed.
+  - Opt-in & Reactivation: Connected / Booked / Showed / Closed.
+  - DQ: "DQ".
+- Boxed tag; a not-yet-reached status shows a plain "—".
+
+## 5. THE PLAN — remaining reactivation work (NOT YET BUILT)
+
+Build in this order. The WHY is given for each so a fresh instance understands
+intent, not just mechanics.
+
+### Step 1 — Add the 3h-lapse trigger (trigger 3 above)
+WHY: Aman frequently lets a strat meeting pass without cancelling / handover /
+no-show, so triggers 1 & 2 miss those leads. The 3h-lapse path is the fool-proof
+catch. ADDITIVE — does not change the existing form triggers.
+WHAT: extend BOTH `scripts/backfill_reactivated_at.py` AND the
+`tag_reactivated_leads()` RPC (new migration, e.g. 0065, `create or replace`) to
+also tag: lead has a direct strat booking, no active (status!='canceled', future)
+strat booking, latest strat booking `start_time + 3h < now()` → `reactivated_at`
+= `start_time + 3h`, set-once (only where currently null, and only earlier than
+any existing value). This reintroduces Calendly (`calendly_scheduled_events`
+event_type = `DIRECT_BOOKING_EVENT_TYPE_URI` = `.../event_types/8f6795d3-...`,
+matched to the lead via invitees by utm_term → email → name — utm often doesn't
+resolve, so email/name fallback is essential, same as the closer-list fix).
+Apply migration via psycopg2 + ledger + dual-verify (§0.2). Re-run the backfill.
+
+### Step 2 — Direct funnel: count each stage ONCE, cumulative
+WHY: a lead that reaches Confirmed in direct, falls through to reactive, then
+shows/closes should read Booked·Confirmed·Showed·Closed in the Direct funnel
+(confirm is a prereq to show/close) — but never double-count (a reactive re-book
+is not a 2nd direct Booked).
+WHAT: in `getLeadsFunnel` Direct box — `confirms = count(isDirect && (confirmed ||
+showed || closed))`, `shows = count(isDirect && (showed || closed))`,
+`books = count(isDirect)` (unchanged — already once). showed/closed already
+include post-reactivation (they're optInAt-scoped). This is the main Direct change.
+
+### Step 3 — Reactive funnel: fully post-reactivation
+WHY: the reactive funnel should reflect only what happened AFTER the lead lost
+its spot; pre-reactivation connects/books belong to Direct.
+WHAT: in `getLeadsFunnel` Reactivation box, scope books/shows/closes/connected to
+after `reactivated_at` (dials + connected already are via `scanDialWindows`).
+NOTE: a reactivated lead's shows/closes are *inherently* post-reactivation (they
+lost the strat meeting, so any show/close is via the setter pipeline after) — so
+in practice `showed`/`closed`/`hasPartnership` ≈ post-reactivation already;
+verify against real data and tighten only if needed. Reactive Connected = 0 when
+they only connected pre-reactivation is CORRECT (that connect counts in Direct).
+
+### Step 4 — Roster status for reactivated leads = post-reactivation, floor "Eligible"
+WHY: the Status column should show the lead's CURRENT (reactive-phase) progress,
+not the carried-over direct progress. A reactivated lead with no activity since
+reactivation should read **"Eligible"** (not "Connected").
+WHAT: in `getLeadsForRange` (`lib/db/leads.ts`), for `leadType==='reactivation'`,
+compute `statusWord` from POST-reactivation signals: closed→"Closed",
+showed→"Showed", booked(post)→"Booked", connected(post)→"Connected", else
+**"Eligible"**. This needs a post-reactivation connected signal per reactivated
+lead (few leads — cheap). `statusWord` is currently computed in `leads.ts` which
+has no call data; either (a) add a small post-reactivation call scan there for
+reactivated leads, or (b) compute the reactive statusWord in `leads-funnel.ts`
+(which already scans calls via `scanDialWindows` → `postReactConnected`) and
+thread it back onto the row. DQ still wins the colour.
+
+### Step 5 — Per-lead page: two-phase journey
+WHY: see the lead's direct-funnel progress THEN their reactive-funnel progress
+(and for DQ leads, surface their progress up to the DQ — DQ wins the roster tag
+but the per-lead page should still show how far they got).
+WHAT: `leads/[close_id]/page.tsx` + `lib/db/lead-detail.ts` — render a
+two-segment progress (direct stages reached, then reactive stages reached). The
+existing per-lead timeline already shows the form-driven journey; this adds an
+explicit funnel-progress view. DQ leads show their progress + the DQ.
+
+### Step 6 — #2 verify-only (DONE, no change)
+The May 24-31 "3 reactive in list vs counter 4" is correct: the 4th is **Presley
+Caillot**, reactivated AND DQ → renders the red DQ tag but is still in the
+reactive pool (DQ > reactivation precedence). The `×` soft-hide (`excluded_at`)
+already removes a lead from BOTH the list and the counter (the cohort filters
+`excluded_at is null` before the funnel counts; 0 leads hidden currently). Both
+**confirmed, leave as-is** per Drake.
+
+## 6. KEY FILES MAP (for this area)
+- `lib/db/leads.ts` — `getLeadsForRange`: the cohort enriched per lead with
+  `hasDirect` / `hasPartnership` (both `bookedSince` optInAt), `reactivatedAt`,
+  `closeTimeIso`, `confirmed/showed/closed`, `leadType`, `statusWord`. Booking
+  signals via `collectTimedSignals` (utm→email→name, timestamped). DQ + status
+  computed here. `afterOptIn` = lifecycle gate.
+- `lib/db/leads-funnel.ts` — `getLeadsFunnel`: the 4 boxes; `scanDialWindows`
+  (per-lead outbound-call scan → dialsBeforeClose [optInAt..close],
+  postReactDials/postReactConnected [after reactivated_at]); adspend via
+  `getAdsAggregateLive(clampAdsRange(...))`.
+- `lib/db/funnel-appointment-setting.ts` — `getSpeedToLeadCohort` (the shared
+  cohort; lifecycle-scoped call scan), `getFmrTimeBlocks` (cached), the per-rep
+  `getCallActivityMetrics` / `getCallActivityForUser` (family-scoped
+  Connected/Missing + drill).
+- `lib/db/funnel-closing.ts` — closer scheduled list (`getClosingScheduledList`):
+  event typing, lead grouping, `matchForm` (lead_id→email→name), invitee
+  email→lead fallback, `buildBookedByResolver` (identity, not date), cancel =
+  status=canceled only.
+- `lib/db/calendly-lead-match.ts` — `buildCalendlyLeadResolver` (utm_term→leadId),
+  `inviteeUtmTerm`. `DIRECT_BOOKING_EVENT_TYPE_URI` in `funnel-calendly.ts`.
+- `scripts/backfill_reactivated_at.py`, migration `0063`/`0064`,
+  `api/airtable_sync_cron.py` (RPC call).
+- `app/(authenticated)/sales-dashboard/leads/page.tsx` (server) +
+  `lead-roster.tsx` (client, sortable) + `view-toggle.tsx` +
+  `leads/[close_id]/page.tsx` (per-lead).
+
+## 7. DATA QUIRKS / GOTCHAS (real, observed)
+- Close `status_label` is inaccurate — DO NOT use it. DQ + all status come from
+  forms / Calendly.
+- Triage `confirmed_call_date_time` is sometimes mis-entered (Rahul: a May 3
+  value on a May 30 form, predating the lead's own opt-in). Never key on it for
+  matching — match by identity.
+- Calendly bookings frequently have a `utm_term` ad tag (`aaid_...`) that is NOT
+  in `close_leads.utm_term`, so utm resolution returns null. ALWAYS have an
+  email/name fallback when resolving a booking → lead.
+- Calendly invitee names are often first-name-only ("EDavid" vs form "EDavid
+  Waugh"); closer-form `prospect_email` is often null. The reliable booking→lead
+  key is the invitee EMAIL → `close_leads.contacts`.
+- Forms carry only `lead_id` (no close_call_id / calendly uri) — there is no hard
+  form↔call↔booking link; everything is lead_id + identity + time-proximity.
+- Two strat-call event types exist; `DIRECT_BOOKING_EVENT_TYPE_URI` =
+  `.../event_types/8f6795d3-992a-4cbd-b584-9ecaabb3938c` ("Ai Partner Strategy
+  Call") is the one we treat as direct.
+- The People page defaults to TODAY (single day); broaden the picker to see
+  prior days. Drake works around midnight ET so "today" can roll unexpectedly.
+
+## 8. PERF
+See `PERFORMANCE-SCALING-DEBT.md` (repo root). Option A + B-step-1 shipped; the
+DB-side SQL-aggregation layer (the build-alongside-and-diff items) is deferred.
+The new 3h-lapse RPC + the cohort scans are fine at current scale (5.4k leads,
+16k calls, 158 calendly) but are on that doc's radar.
