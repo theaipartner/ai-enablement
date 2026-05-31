@@ -121,7 +121,6 @@ function FactStrip({ lead }: { lead: Awaited<ReturnType<typeof getLeadDetail>> }
       />
       <Fact label="Reschedules" value={String(lead.rescheduleCount)} />
       <Fact label="Follow-ups" value={String(lead.followUpCount)} />
-      <Fact label="Caller" value={lead.primaryCallerName ?? '—'} />
     </div>
   )
 }
@@ -461,26 +460,31 @@ function CallRow({ c, leadId }: { c: LeadCallEntry; leadId: string }) {
   const color = c.connected ? 'var(--color-geg-pos)' : 'var(--color-geg-text-faint)'
   // Carry the source lead so the per-call page's "Back to lead" returns here.
   const callHref = `/sales-dashboard/calls/${encodeURIComponent(c.closeCallId)}?lead=${encodeURIComponent(leadId)}`
+  const label = `${c.direction === 'inbound' ? 'Inbound call' : 'Call'}${c.setterName ? ` · ${c.setterName}` : ''}`
+  // Sub-90s calls aren't connected and never get a transcript/review, so they
+  // don't link anywhere — render the label as plain text and drop the open
+  // button. Connected calls link to the per-call review/open page.
   return (
     <Row time={formatEtTime(c.activityAt)}>
       <Dot color={color} />
-      <Link
-        href={callHref}
-        className="geg-serif"
-        style={{ fontSize: 13, color: 'var(--color-geg-text)', textDecoration: 'none' }}
-      >
-        {c.direction === 'inbound' ? 'Inbound call' : 'Call'}
-        {c.setterName ? ` · ${c.setterName}` : ''}
-      </Link>
+      {c.connected ? (
+        <Link href={callHref} className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text)', textDecoration: 'none' }}>
+          {label}
+        </Link>
+      ) : (
+        <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)' }}>{label}</span>
+      )}
       <span className="geg-mono" style={{ fontSize: 11, color }}>{formatDuration(c.durationSec)}</span>
       {!c.connected ? <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>(not connected)</span> : null}
-      <Link
-        href={callHref}
-        className="geg-mono"
-        style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 6px', textDecoration: 'none', marginLeft: 'auto' }}
-      >
-        {c.hasTranscript ? 'review →' : 'open →'}
-      </Link>
+      {c.connected ? (
+        <Link
+          href={callHref}
+          className="geg-mono"
+          style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-accent)', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 6px', textDecoration: 'none', marginLeft: 'auto' }}
+        >
+          {c.hasTranscript ? 'review →' : 'open →'}
+        </Link>
+      ) : null}
     </Row>
   )
 }

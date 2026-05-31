@@ -105,7 +105,6 @@ export type LeadDetail = {
   totalConnectedDurationSec: number
   rescheduleCount: number     // Calendly invitees flagged rescheduled
   followUpCount: number       // "AI Partner Sync" bookings
-  primaryCallerName: string | null
   calls: LeadCallEntry[]
   // Lifecycle timeline, newest first, scoped from the latest opt-in.
   timeline: LeadTimelineEvent[]
@@ -279,12 +278,6 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
 
   const connected = calls.filter((c) => c.connected)
   const totalConnectedDurationSec = connected.reduce((sum, c) => sum + c.durationSec, 0)
-  // Primary caller = setter on the most recent connected call (else the
-  // most recent call overall).
-  const primaryCallerName =
-    connected.find((c) => c.setterName)?.setterName ??
-    calls.find((c) => c.setterName)?.setterName ??
-    null
 
   // 6. Calendly bookings — this lead's invitees (by email, then name),
   //    classified by link family. Reschedules = invitees flagged rescheduled;
@@ -598,7 +591,6 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     totalConnectedDurationSec,
     rescheduleCount,
     followUpCount,
-    primaryCallerName,
     calls,
     timeline,
   }
