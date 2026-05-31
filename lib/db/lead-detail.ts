@@ -455,7 +455,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
     for (const r of forms) {
       if (norm(r.call_outcome).includes('dq')) isDq = true
-      const post = afterReact(r.airtable_created_at)
+      // Post-handover if the meeting OR the filing is at/after reactivation —
+      // the reactivation stamp is a coarse daily tag, so a meeting hours before
+      // it that was filed after still belongs to the reactive phase.
+      const post = afterReact(r.date_time_of_call) || afterReact(r.airtable_created_at)
       if (outcomeShowed(r.call_outcome)) {
         showed = true
         if (post) reactShowed = true
@@ -512,7 +515,10 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       const isClosed = norm(r.closed) === 'yes'
       const isDqForm = norm(r.follow_up) === 'no'
       if (isDqForm) isDq = true
-      const post = afterReact(at)
+      // Post-handover if the meeting OR the filing is at/after reactivation
+      // (same coarse-stamp reasoning as the closer report above) — Richard
+      // Harper: DC meeting 17:27, reactivated 19:00, filed next day → reactive.
+      const post = afterReact(r.date_time_of_call) || afterReact(r.airtable_created_at)
       // A filed form = showed.
       showed = true
       if (post) reactShowed = true
