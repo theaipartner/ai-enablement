@@ -1744,15 +1744,18 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // Closer Triage Form → closer. A rep filing both appears in both lists.
   const setterOutcomesByUser = new Map<string, Outcomes>()
   const closerOutcomesByUser = new Map<string, Outcomes>()
-  // Per-rep set of session keys that at least one form matched. Used
-  // by the "missing" calc — every session without an entry here is
-  // missing its EOC. (Sessions, not calls, because multiple chained
-  // calls share one EOC.)
-  const matchedSessionsByUser = new Map<string, Set<string>>()
-  // Per-rep count of form-only rows (in-range forms whose underlying
-  // call wasn't a >90s close_call). Added to sessions to produce the
-  // Connected column; matches the drill table's row count.
-  const formOnlyByUser = new Map<string, number>()
+  // Per-rep set of session keys a form matched, SPLIT by the matched form's
+  // family (Drake 2026-05-31). The Confirmation (closer) table counts only
+  // confirmation-call connections; the Triage (setter) table counts the rest.
+  // Dials stay total (mimic) in both — they're not form-typed — but a stray
+  // closer form must not drag a setter's whole call volume into the
+  // Confirmation table's Connected/Missing.
+  const matchedSessionsCloserByUser = new Map<string, Set<string>>()
+  const matchedSessionsSetterByUser = new Map<string, Set<string>>()
+  // Per-rep count of form-only rows (in-range forms whose underlying call
+  // wasn't a >90s close_call), split by family — bumps each table's Connected.
+  const formOnlyCloserByUser = new Map<string, number>()
+  const formOnlySetterByUser = new Map<string, number>()
   let totalForms = 0
   {
     type FormRow = {
@@ -1848,8 +1851,9 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (m?.matchedCallId) {
         const sessionKey = sessionKeyByCallIdPerUser.get(uid)?.get(m.matchedCallId)
         if (sessionKey) {
-          if (!matchedSessionsByUser.has(uid)) matchedSessionsByUser.set(uid, new Set())
-          matchedSessionsByUser.get(uid)!.add(sessionKey)
+          const fam = isCloserForm ? matchedSessionsCloserByUser : matchedSessionsSetterByUser
+          if (!fam.has(uid)) fam.set(uid, new Set())
+          fam.get(uid)!.add(sessionKey)
         }
       }
     })
@@ -1864,7 +1868,9 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       if (m?.matchedCallId) continue   // matched to a >90s call → already in over90s
       const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
       if (!uid) continue
-      formOnlyByUser.set(uid, (formOnlyByUser.get(uid) ?? 0) + 1)
+      const ft = (r.form_type ?? '').toLowerCase()
+      if (ft.includes('closer')) formOnlyCloserByUser.set(uid, (formOnlyCloserByUser.get(uid) ?? 0) + 1)
+      else if (ft.includes('setter')) formOnlySetterByUser.set(uid, (formOnlySetterByUser.get(uid) ?? 0) + 1)
     }
   }
 
@@ -1872,17 +1878,23 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
   // from the form-type-routed maps.
   const setters: CallActivityRepRow[] = []
   const closers: CallActivityRepRow[] = []
-  const buildRow = (userId: string, o: Outcomes): CallActivityRepRow => {
+  const buildRow = (userId: string, o: Outcomes, family: 'setter' | 'closer'): CallActivityRepRow => {
     const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
-    const sessions = sessionCountByUser.get(userId) ?? 0
-    const matchedSessions = matchedSessionsByUser.get(userId)?.size ?? 0
-    const formOnly = formOnlyByUser.get(userId) ?? 0
+    const totalSessions = sessionCountByUser.get(userId) ?? 0
+    const closerMatched = matchedSessionsCloserByUser.get(userId)?.size ?? 0
+    const setterMatched = matchedSessionsSetterByUser.get(userId)?.size ?? 0
+    // Connections attributed by the matched form's family; unmatched sessions
+    // default to setter (an unproven >90s call isn't a confirmation call, and
+    // setters do the bulk of dialing). Dials + over-90s stay total in both.
+    const familySessions = family === 'closer' ? closerMatched : Math.max(0, totalSessions - closerMatched)
+    const familyMatched = family === 'closer' ? closerMatched : setterMatched
+    const familyFormOnly = (family === 'closer' ? formOnlyCloserByUser : formOnlySetterByUser).get(userId) ?? 0
     return {
       userId,
       name: nameByUser.get(userId) ?? null,
       totalCalls: v.calls,
       totalOver90s: v.over90s,
-      totalConnected: sessions + formOnly,
+      totalConnected: familySessions + familyFormOnly,
       htBookings: o.htBookings,
       dcBookings: o.dcBookings,
       followUps: o.followUps,
@@ -1890,7 +1902,7 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
       confirmedNewTime: o.confirmedNewTime,
       downsellsOnCall: o.downsellsOnCall,
       dqs: o.dqs,
-      missing: Math.max(0, sessions - matchedSessions),
+      missing: Math.max(0, familySessions - familyMatched),
     }
   }
   // Setter list = reps with Setter Triage Form outcomes; closer list =
@@ -1905,8 +1917,8 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     if (role === 'setter') setterUserIds.add(userId)
     else if (role === 'closer') closerUserIds.add(userId)
   }
-  setterUserIds.forEach((uid) => setters.push(buildRow(uid, setterOutcomesByUser.get(uid) ?? newOutcomes())))
-  closerUserIds.forEach((uid) => closers.push(buildRow(uid, closerOutcomesByUser.get(uid) ?? newOutcomes())))
+  setterUserIds.forEach((uid) => setters.push(buildRow(uid, setterOutcomesByUser.get(uid) ?? newOutcomes(), 'setter')))
+  closerUserIds.forEach((uid) => closers.push(buildRow(uid, closerOutcomesByUser.get(uid) ?? newOutcomes(), 'closer')))
   setters.sort((a, b) => b.totalCalls - a.totalCalls)
   closers.sort((a, b) => b.totalCalls - a.totalCalls)
 
