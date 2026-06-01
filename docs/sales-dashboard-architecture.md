@@ -34,8 +34,17 @@ Companion docs:
 > **For the full late-session detail (the "connected" model, the form Call-Status
 > values, the shared funnel predicate, the per-lead Journey + day-grouped
 > Lifecycle, the FMR rewrite, the funnel integrity guard, and the CEO missing-form
-> flags) read the LAST section: § DEEP REFERENCE (2026-05-31, late session) at the
-> very bottom of this doc.** It is the most current and most detailed.
+> flags) read § DEEP REFERENCE (2026-05-31, late session) near the bottom.**
+>
+> **MOST CURRENT: § DIGITAL COLLEGE (2026-05-31, DC session) — the very last
+> block.** It covers the low-ticket Digital College offer woven through every
+> surface (Talent drilldown, setter DC-close credit, leads list, per-lead page,
+> funnel ht/dc split), a batch of journey/lifecycle correctness fixes (direct-
+> phase scoping, event-OR-filed phase attribution, monotonic lanes, journey RESET
+> on re-opt-in + full-history lifecycle, close-overrides-DQ), the per-lead UI
+> tweaks (Caller fact removed, sub-90s call links gated), and site-wide
+> filter/window persistence (`PersistPageState`). It also documents the
+> migration-0066-applied-but-wasn't ops trap. Read it first.
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -1163,3 +1172,203 @@ For **today (ET)**:
   calls on Wed May 27 (after opt-in, so visible); good for the day-grouped
   Lifecycle + per-call review links. (Backups: Hang Vu `lead_kIK2NvY8…`, Matthew
   Milford `lead_Z1gOJGSdoZpkxvvgXbJRGhpHc0Cd93LmXLOl8nSsMyc`.)
+
+---
+
+# ⚡⚡⚡⚡ DIGITAL COLLEGE (LOW-TICKET) + JOURNEY/LIFECYCLE FIXES + FILTER PERSISTENCE (2026-05-31, DC session) ⚡⚡⚡⚡
+
+Most current block. The low-ticket "Digital College" offer was woven through the
+whole dashboard (Talent drilldown, setter credit, leads list, per-lead page,
+funnel), plus a batch of journey/lifecycle correctness fixes and site-wide
+filter/window persistence. All live on `main`.
+
+## A. THE OFFER MODEL — Digital College (DC)
+
+- **DC = the low-ticket offer.** Two products — **Base44** and **Wix** — each
+  sold **Monthly** or **Yearly**. A sale can include Base44, Wix, or both. It's
+  often a **downsell** when a prospect isn't a high-ticket fit.
+- **"Base" on the form = Base44** (display label).
+- **Two recording paths (additive):**
+  - **Aman's downsell** — DC sold on the high-ticket call → lands on the existing
+    `airtable_full_closer_report` with `call_outcome = 'Digital College Closed'`.
+  - **Robby Bryant (dedicated low-ticket closer)** — works end-to-end (booked by
+    setters and self-sets). His sales land on a **new dedicated Airtable form**,
+    "Digital College" (`tbljmzRoMoE5B26lt`) → mirror table
+    `airtable_digital_college_sales`.
+- **Robby's Close user_id (dials):** `user_rt4533Y5VcOsbso6UMYAUn8sCdtVaKYGYDnWYLvBW2l`.
+- **Robby's DC-sales Calendly event type:**
+  `https://api.calendly.com/event_types/6f06c6ba-6ca2-48d2-ae17-a6c5c1ee75ec`
+  ("Call with Robby"). It's his ONLY event type in the mirror — there is no
+  separate onboarding event type to exclude today (a constant
+  `DC_ONBOARDING_EVENT_TYPE_URIS` set is left empty for when one appears).
+- **Close flag** = the DC form's explicit `Closed? = Yes` (plan present).
+- **Follow-up field is mis-built:** `Follow Up? = No` actually means **DQ** (Zain
+  built the field wrong). So DC form outcome = closed (Closed?=Yes) → follow-up
+  (Closed?=No, Follow Up?=Yes) → **DQ** (Closed?=No, Follow Up?=No).
+- **FORM-FIRST for Robby (Drake):** Robby didn't always have a Calendly link, so
+  the **form is the source of truth** for meetings/shows/closes; his Calendly
+  events are **additive** (a booked event with no form = a no-show until a form
+  is filed). Forms and links union per lead.
+
+## B. ⚠️ OPS TRAP THAT BIT THIS SESSION — migration "applied" but wasn't
+
+The handoff claimed migration **0066** (`airtable_digital_college_sales`) was
+"applied to cloud, dual-verified, backfilled." **It was not** — the prior
+instance had verified against the **local** Supabase (see §0.1) and mistook it
+for cloud. Cloud `to_regclass` = None, ledger max = 0065. This is exactly the
+single-query-against-the-wrong-DB failure. **Lesson: dual-verify migrations
+against CLOUD explicitly** (psycopg2 via `supabase/.temp/pooler-url` +
+`SUPABASE_DB_PASSWORD`): `to_regclass('public.<table>')` AND a row in
+`supabase_migrations.schema_migrations`. After applying for real (`supabase db
+push --linked --dns-resolver https --password "$DB_PW" --yes`) + backfilling
+(`scripts/backfill_airtable.py --apply --full --table tbljmzRoMoE5B26lt`, pointed
+at cloud creds), cloud has 10 rows / 3 closes.
+
+## C. DATA: `airtable_digital_college_sales` (migration 0066)
+
+- Mirror of the Airtable "Digital College" form. PK `record_id`; typed columns
+  promoted (`lead_id, prospect_name, date_time_of_call, closer_record_ids,
+  closer_names, setter_record_ids, setter_names, closed, plans[], follow_up,
+  follow_up_date, call_notes`) + `fields_raw` jsonb + `excluded_at` soft-hide.
+- Parser `parse_digital_college` + `TARGET_TABLES['tbljmzRoMoE5B26lt']` +
+  `_parse_for_table` dispatch in `ingestion/airtable/`. Reuses the base-wide
+  webhook + 15-min cron — **no re-registration**. Closer/setter names resolve
+  INLINE via the form's lookup fields (no rec-id→name resolver needed here).
+- Schema doc: `docs/schema/airtable_digital_college_sales.md`.
+
+## D. ROBBY'S DC DRILLDOWN — Talent page
+
+- `lib/db/funnel-digital-college.ts` → `getDigitalCollegeActivity(range)`.
+  Form-first: meetings = DC forms ∪ Robby's Calendly events (deduped by lead);
+  a Calendly event with no form = an un-worked meeting (no-show). Columns:
+  **Dials** (`close_calls` outbound for `ROBBY_CLOSE_USER_ID`) · **Meetings** ·
+  **Shows** (form filed) · **Base44 (Mo/Yr)** · **Wix (Mo/Yr)** (from the `plans`
+  multi-select, on closes) · **Closes** (Closed?=Yes). Plan parse is token-based
+  (`base`/`wix` × `month`/`year|annual`) for label-drift tolerance.
+- UI: `people/_components/digital-college-tables.tsx` (`DigitalCollegeTables`),
+  rendered in its own "DIGITAL COLLEGE" section on the People page (`?dccloser=`
+  drill, separate from `?closer=`). Drill row shows Prospect · Scheduled ·
+  Booked by (setter from the form) · Showed · Outcome (Closed/Follow up/DQ) · Plans.
+
+## E. SETTER DC-CLOSE CREDIT — `funnel-appointment-setting.ts`
+
+- New **"DC Close"** column on the setter Call Activity table
+  (`CallActivityRepRow.dcCloses`). Credits the **booking setter** for a DC close
+  from BOTH paths: Robby's DC form (Closed?=Yes) AND Aman's downsell on the closer
+  report (`call_outcome = 'Digital College Closed'`). Resolved by the existing
+  `resolveFormSetterUserId` (rec-id → close_user_id), deduped by lead,
+  range-filtered by the close's effective time.
+- **Judgment call (flagged to Drake):** the existing "DC Book" column stays on its
+  triage source (`call_status` "Digital College booking"); DC Close is the new
+  close-form-sourced credit. If "DC Book" under-reports (setters mark "Downsell"),
+  that's a separate data-hygiene item.
+
+## F. LEADS LIST + FUNNEL — DC close type
+
+- `lib/db/leads.ts`: reads `airtable_digital_college_sales` per lead — a filed
+  form = **showed**, Closed?=Yes = a **close**, Follow Up?=No = **DQ**. New
+  `LeadRow.closeType: 'ht' | 'dc' | null` tracked from BOTH the closer report
+  (`call_outcome`) and the DC form (HT wins if both). The roster Journey "Closed"
+  status now reads **"High Ticket"** / **"Digital College"** (via `closedWord`).
+  Monotonicity (show/close back-filling earlier stages) is handled downstream by
+  `reachedStage`.
+- `lib/db/leads-funnel.ts`: every box's closes node gains `closesHt`/`closesDc`
+  (a lead reached `closed`, split by `closeType`). `components/sales/funnel-stack.tsx`
+  renders a **`(N HT / N DC)` bracket** on each closes node.
+
+## G. PER-LEAD PAGE — DC + close details
+
+- `lib/db/lead-detail.ts`: reads the DC form → DC rows appear in the **Lifecycle**
+  (source `'dc'`, label "Digital College closed/follow-up/DQ"); the Journey
+  "Closed" stage reads the offer; new `closeType` + `closeDetail` (offer, closer,
+  plan breakdown, time) drive a **"Close details"** section on the page.
+
+## H. JOURNEY / LIFECYCLE CORRECTNESS FIXES (apply to ALL leads)
+
+1. **Direct lane scoped to the direct phase.** A post-handover show/close
+   (reactivation-phase) no longer lights the (frozen) Direct lane — only the
+   Reactivation lane. `lead-detail.ts` tracks `directShowed`/`directClosed`
+   (pre-reactivation) separately; the page Direct lane uses them.
+2. **Phase attribution by event OR filed time.** `reactivated_at` is a coarse
+   daily tag, so a meeting hours before it but filed after counts as
+   post-handover. Both the closer-report and DC loops use
+   `afterReact(event) || afterReact(filed)` (Richard Harper: DC meeting 17:27,
+   reactivated 19:00, filed next day → reactive).
+3. **Monotonic Journey lanes.** Each lane back-fills — once the furthest stage is
+   hit, every earlier one lights (matching the funnel's cumulative
+   `reachedStage`). Kills the "Connected → ⬚ → Showed" skip when forms are sparse.
+4. **Lifecycle shows forms filed in the current journey.** A form's lifecycle
+   inclusion is gated on event time OR filed time (`airtable_created_at`), so a
+   form filed after the latest opt-in shows even if its meeting time slightly
+   predates it (Israel Lopez: DQ event 18:12, opt-in 19:00, filed 19:13).
+5. **Journey RESET on re-opt-in + FULL-HISTORY lifecycle (general).** The per-lead
+   Journey + header stats reset to the **current journey** (activity at/after the
+   latest opt-in), mirroring the roster: form flags gated by `inCycle` (event-OR-
+   filed ≥ latest opt-in), bookingType by booking created-time, connected by call
+   time. The **Lifecycle** now shows the FULL history (all calls + forms, no
+   window) with opt-in markers — original **"Opted in"** + latest **"Re-opted in —
+   new journey"** divider — so old journey → re-opt-in → new journey reads top to
+   bottom. NOTE: the **reactivation tag persists across a re-opt-in** (consistent
+   with `leads.ts`); changing that would be a deliberate roster+detail change.
+6. **A close overrides a DQ.** `isDq = dqLeadIds.has(lead) && !closed` on BOTH the
+   roster and the detail page — a lead that DQ'd early but later closed (Jason
+   Bright: DQ'd 05-25, DC-closed 05-29) reads as the close, not DQ.
+
+## I. PER-LEAD UI TWEAKS
+
+- **Caller fact removed** (a lead can have multiple callers; the single
+  "primary caller" was misleading). Per-call setter still shows on each row.
+  `primaryCallerName` field deleted.
+- **Sub-90s calls** (not connected → no transcript/review) render as plain text
+  with **no link / no open button**. Connected calls keep the review/open link.
+
+## J. SITE-WIDE FILTER + WINDOW PERSISTENCE — `components/sales/persist-page-state.tsx`
+
+- `<PersistPageState window filters={[...]} />` persists the **date window
+  globally** (one `localStorage` key, so a range set anywhere carries everywhere)
+  and **filters per page** (keyed by pathname). It **restores from storage when a
+  page lands with a bare URL** (sidebar click, reload, the back-link chain that
+  dropped params), so filters/window survive ALL navigation. URL stays the source
+  of truth — explicit params, deep links, funnel drill-through always win.
+- Mounted on: leads (`view/type/stage`), funnel, people, ads, landing-pages
+  (`vsl`). **Tradeoff noted:** a bare landing re-renders once (restore →
+  `router.replace`) — an extra fetch on the heavy Leads cohort. If it lags, make
+  the sidebar carry the saved params (single fetch). People drill selections
+  (`rep/closer/dccloser`) are intentionally NOT persisted.
+
+## K. KEY FILES (DC session)
+
+- NEW: `lib/db/funnel-digital-college.ts`,
+  `people/_components/digital-college-tables.tsx`,
+  `components/sales/persist-page-state.tsx`,
+  `supabase/migrations/0066_airtable_digital_college_sales.sql`,
+  `docs/schema/airtable_digital_college_sales.md`.
+- `ingestion/airtable/{__init__,parser,pipeline}.py` — DC table wiring.
+- `lib/db/leads.ts` — DC source + `closeType` + `closedWord` + `isDq && !closed`.
+- `lib/db/leads-funnel.ts` + `components/sales/funnel-stack.tsx` — ht/dc split.
+- `lib/db/lead-detail.ts` — DC forms, `closeType`/`closeDetail`, direct-phase
+  scoping, event-OR-filed phase, journey reset, full-history lifecycle,
+  `isDq && !closed`, dropped `primaryCallerName`.
+- `lib/db/funnel-appointment-setting.ts` +
+  `funnel/appointment-setting/_components/sortable-tables.tsx` — `dcCloses` column.
+- `leads/[close_id]/page.tsx` — closedLabel, Close details, monotonic lanes,
+  re-opt-in marker, Caller removed, sub-90s link gating.
+- People/Funnel/Ads/Landing pages — `<PersistPageState>` mounts.
+
+## L. VERIFICATION HANDLES (DC session)
+
+- **Robby drilldown** (People → Digital College): expect Dials 7, 3 closes,
+  Base44 Mo=3 / Wix Yr=2; setter DC-close credit Connor=2 / Zach=1.
+- **Jason Bright** (`lead_fm2oLHzaR2wzxHkoSDveGC7l0LRSqO2diB61FWuO3ty`) —
+  reactivation + DC close; reads "Digital College" (not DQ); Direct lane stops at
+  Connected, Reactivation lane runs to the close.
+- **Richard Harper** (`lead_suEWwuazKBs7ev6ATnm7rNQi6qKi5PIaPtu4OWQ7LvN`) —
+  reactivation + DC show (no close); Reactivation lane Eligible→Connected→Booked→
+  Showed (no skip).
+- **Israel Lopez** (`lead_tI5B7utZHecZI2EZTknSbPYo5g2NdiDYlCNh4b4J9Yg`) — DQ form
+  filed just after opt-in; shows in the lifecycle.
+- **Daniyal Qasim** (`lead_OTPPgwQb36KddHuDbp8CUt8Y6l13Iyj24sLifgsLZ7o`) — 3
+  opt-ins; Journey reflects the current cycle (DQ), lifecycle shows the
+  "Re-opted in — new journey" divider with old calls beneath.
+- All 3 of Robby's DC closes (Shannon Thompson, Jason Bright, Kareem Memnon) are
+  opt-in/reactivation — **none pure-direct** (verified).
