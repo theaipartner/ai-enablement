@@ -235,28 +235,67 @@ async function loadRobbyEvents(range: DateRange): Promise<RobbyEvent[]> {
   const inScope = events.filter((e) => !DC_ONBOARDING_EVENT_TYPE_URIS.has(e.event_type_uri ?? ''))
   if (inScope.length === 0) return []
 
-  // Resolve each event's invitee for lead identity (lead_id via utm_term, name).
+  // Resolve each event's invitee for lead identity (lead_id via utm_term; email
+  // is the fallback below). Robby's link often has no utm_term, so without the
+  // email fallback a form (keyed by lead_id) and its booking (keyed by name)
+  // don't merge — the lead surfaces twice (Tasha Garza, Drake 2026-05-31).
   const leadResolver = await buildCalendlyLeadResolver(sb)
-  const byEvent = new Map<string, { name: string | null; leadId: string | null }>()
+  const byEvent = new Map<string, { name: string | null; email: string | null; leadId: string | null }>()
   const uris = inScope.map((e) => e.uri)
   for (let i = 0; i < uris.length; i += 200) {
     const chunk = uris.slice(i, i + 200)
     const { data, error } = await sb
       .from('calendly_invitees' as never)
-      .select('event_uri, name, raw_payload')
+      .select('event_uri, name, email, raw_payload')
       .in('event_uri', chunk)
     if (error) throw new Error(`calendly_invitees (DC) read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       event_uri: string
       name: string | null
+      email: string | null
       raw_payload: { tracking?: { utm_term?: string | null } | null } | null
     }>) {
       if (byEvent.has(r.event_uri)) continue
       byEvent.set(r.event_uri, {
         name: r.name,
+        email: r.email,
         leadId: leadResolver(inviteeUtmTerm(r.raw_payload)),
       })
     }
+  }
+
+  // Email → close lead_id fallback for events the utm_term didn't resolve. Once
+  // the booking knows its lead, it groups under the same lead_id as the DC form.
+  const needEmails = new Set<string>()
+  byEvent.forEach((inv) => {
+    if (!inv.leadId && inv.email) needEmails.add(inv.email.toLowerCase().trim())
+  })
+  if (needEmails.size > 0) {
+    const emailToLeadId = new Map<string, string>()
+    for (let fromIdx = 0; ; fromIdx += 1000) {
+      const { data, error } = await sb
+        .from('close_leads' as never)
+        .select('close_id, contacts')
+        .range(fromIdx, fromIdx + 999)
+      if (error) throw new Error(`close_leads (DC email-resolve) read failed: ${error.message}`)
+      const rows = (data ?? []) as unknown as Array<{ close_id: string; contacts: unknown }>
+      if (rows.length === 0) break
+      for (const r of rows) {
+        if (!Array.isArray(r.contacts)) continue
+        for (const c of r.contacts as Array<{ emails?: Array<{ email?: string }> }>) {
+          for (const e of c.emails ?? []) {
+            const em = (e?.email ?? '').toLowerCase().trim()
+            if (em && needEmails.has(em) && !emailToLeadId.has(em)) emailToLeadId.set(em, r.close_id)
+          }
+        }
+      }
+      if (rows.length < 1000) break
+    }
+    byEvent.forEach((inv, uri) => {
+      if (inv.leadId || !inv.email) return
+      const lid = emailToLeadId.get(inv.email.toLowerCase().trim())
+      if (lid) byEvent.set(uri, { ...inv, leadId: lid })
+    })
   }
 
   return inScope.map((e) => {
@@ -305,10 +344,16 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     hasForm: boolean
   }
   const meetings = new Map<string, Meeting>()
+  // Form key by normalized name → so a Calendly booking that resolved to neither
+  // a lead_id nor an email still merges with a form of the same name instead of
+  // doubling the lead (secondary to the lead_id match below).
+  const formKeyByName = new Map<string, string>()
 
   // 1. Forms first — they're the source of truth.
   for (const r of sales) {
     const key = dcLeadKey(r.lead_id, r.prospect_name, `rec:${r.record_id}`)
+    const nm = (r.prospect_name ?? '').toLowerCase().trim()
+    if (nm) formKeyByName.set(nm, key)
     const outcome = dcOutcome(r.closed, r.follow_up)
     const flags = planFlags(r.plans)
     const closerName = (r.closer_names ?? []).find((n) => n && n.trim())?.trim() ?? ROBBY_DISPLAY_NAME
@@ -348,7 +393,10 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
   //    have no form drop out (not a real meeting).
   for (const ev of events) {
     const key = dcLeadKey(ev.leadId, ev.prospectName, `evt:${ev.uri}`)
-    const existing = meetings.get(key)
+    // Direct key (lead_id/name) first, then a name match against the forms —
+    // covers a booking that resolved no lead_id but shares a form's name.
+    const nm = (ev.prospectName ?? '').toLowerCase().trim()
+    const existing = meetings.get(key) ?? (nm ? meetings.get(formKeyByName.get(nm) ?? '') : undefined)
     if (existing) {
       existing.row.hasMeetingLink = true
       // Prefer the Calendly slot time for the scheduled column when present.
