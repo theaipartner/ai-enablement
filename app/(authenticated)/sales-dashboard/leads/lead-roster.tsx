@@ -2,24 +2,24 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import type { LeadRow, Qualification } from '@/lib/db/leads'
+import type { LeadRow } from '@/lib/db/leads'
 import { DeleteLeadButton } from './delete-lead-button'
 
 // Sortable per-lead roster (client). Default order is whatever the server
 // returns (cohort order); clicking a column header sorts by it — desc → asc →
 // back to default. Null/missing values always sort to the end.
 
-const COLS = '1.6fr 0.8fr 1.1fr 0.9fr 1.5fr 1.2fr 0.85fr 0.7fr 0.35fr'
+const COLS = '1.6fr 0.8fr 1.1fr 1.2fr 1.2fr 1.2fr 0.85fr 0.7fr 0.35fr'
 
 type SortKey =
-  | 'prospect' | 'optin' | 'optInAt' | 'qualified' | 'status' | 'speed' | 'connected' | 'intensity' | ''
+  | 'prospect' | 'optin' | 'optInAt' | 'latestStage' | 'status' | 'speed' | 'connected' | 'intensity' | ''
 type SortDir = 'asc' | 'desc' | null
 
 const HEADERS: { label: string; key: SortKey }[] = [
   { label: 'Prospect', key: 'prospect' },
   { label: 'Opt-in', key: 'optin' },
   { label: 'Opted in (ET)', key: 'optInAt' },
-  { label: 'Qualified', key: 'qualified' },
+  { label: 'Latest stage', key: 'latestStage' },
   { label: 'Status', key: 'status' },
   { label: 'Time to call', key: 'speed' },
   { label: 'Connected', key: 'connected' },
@@ -27,15 +27,19 @@ const HEADERS: { label: string; key: SortKey }[] = [
   { label: '', key: '' },
 ]
 
-const QUAL_RANK: Record<Qualification, number> = { qualified: 2, 'non-qualified': 1, unknown: 0 }
 const TYPE_RANK: Record<LeadRow['leadType'], number> = { dq: 3, reactivation: 2, direct: 1, optin: 0 }
+// Stage order for sorting; the three closed labels (offer names) all rank top.
+const STAGE_RANK: Record<string, number> = {
+  'Opted in': 0, Connected: 1, Booked: 2, Confirmed: 3, Showed: 4,
+  Closed: 5, 'High Ticket': 5, 'Digital College': 5,
+}
 
 function sortValue(r: LeadRow, key: SortKey): number | string | null {
   switch (key) {
     case 'prospect': return r.prospectName ?? ''
     case 'optin': return r.optInType
     case 'optInAt': return r.optInAt
-    case 'qualified': return QUAL_RANK[r.qualified]
+    case 'latestStage': return STAGE_RANK[r.latestStageWord] ?? 0
     case 'status': return TYPE_RANK[r.leadType]
     case 'speed': return r.speedSec
     case 'connected': return r.totalConnectedDurationSec
@@ -120,7 +124,7 @@ function LeadRowView({ r, canDelete, backQuery }: { r: LeadRow; canDelete: boole
       </span>
       <span><OptInBadge type={r.optInType} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
-      <span><QualifiedTag q={r.qualified} /></span>
+      <span><LatestStageCell word={r.latestStageWord} /></span>
       <span><StatusCell r={r} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
@@ -175,12 +179,29 @@ function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
   )
 }
 
-function QualifiedTag({ q }: { q: Qualification }) {
-  const text = q === 'qualified' ? 'Qualified' : q === 'non-qualified' ? 'Not qualified' : '—'
-  const color = q === 'qualified' ? 'var(--color-geg-pos)' : q === 'non-qualified' ? 'var(--color-geg-text-3)' : 'var(--color-geg-text-faint)'
+// Latest journey stage — the furthest funnel stage the lead ever reached
+// (Total-funnel ladder), independent of the phase-scoped Status. Closed reads
+// the offer (High Ticket / Digital College).
+const STAGE_COLOR: Record<string, string> = {
+  'Opted in': 'var(--color-geg-text-faint)',
+  Connected: 'var(--color-geg-text-3)',
+  Booked: 'var(--color-geg-text-2)',
+  Confirmed: 'var(--color-geg-accent)',
+  Showed: 'var(--color-geg-text)',
+  Closed: 'var(--color-geg-pos)',
+  'High Ticket': 'var(--color-geg-pos)',
+  'Digital College': 'var(--color-geg-pos)',
+}
+
+function LatestStageCell({ word }: { word: string }) {
+  const color = STAGE_COLOR[word] ?? 'var(--color-geg-text-2)'
   return (
-    <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.03em', color }} title={q === 'unknown' ? 'No marketing_qualified flag on the Close lead' : undefined}>
-      {text}
+    <span
+      className="geg-mono"
+      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
+      title="Furthest funnel stage reached (any phase) — independent of current status"
+    >
+      {word}
     </span>
   )
 }

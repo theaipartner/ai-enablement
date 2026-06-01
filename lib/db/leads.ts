@@ -97,6 +97,12 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // forms; no stored state to drift.
   leadType: 'direct' | 'optin' | 'reactivation' | 'dq'
   statusWord: string
+  // Furthest funnel stage the lead has EVER reached, across all phases —
+  // independent of the phase-scoped statusWord. Mirrors the Total-funnel
+  // reachedStage ladder (Opted in → Connected → Booked → Confirmed → Showed →
+  // Closed). A direct lead who confirmed then fell back to "Eligible" still
+  // reads "Confirmed" here. Closed reads the offer (High Ticket / Digital College).
+  latestStageWord: string
 }
 
 // A ≥90s outbound dial is a "connected" call (the FMR_DIAL_CONNECTED_SEC
@@ -575,6 +581,22 @@ export async function getLeadsForRange(
     // Once closed, the Journey "Closed" stage reads the offer ("High Ticket" /
     // "Digital College") rather than a bare "Closed" (Drake 2026-05-31).
     const closedWord = closeType === 'dc' ? 'Digital College' : closeType === 'ht' ? 'High Ticket' : 'Closed'
+    // Latest journey stage — the furthest stage reached across ALL phases,
+    // mirroring the Total-funnel reachedStage ladder (cumulative, top-down).
+    // Phase-agnostic: unlike statusWord it ignores the reactive-phase floor, so
+    // a lead who confirmed in the direct phase reads "Confirmed" even if their
+    // current status is "Eligible".
+    const latestStageWord = closed
+      ? closedWord
+      : showed
+        ? 'Showed'
+        : confirmed
+          ? 'Confirmed'
+          : hasDirect || hasPartnership
+            ? 'Booked'
+            : connectedEffective
+              ? 'Connected'
+              : 'Opted in'
     let statusWord: string
     if (leadType === 'dq') statusWord = 'DQ'
     else if (leadType === 'direct') statusWord = closed ? closedWord : showed ? 'Showed' : confirmed ? 'Confirmed' : 'Booked'
@@ -613,6 +635,7 @@ export async function getLeadsForRange(
       reactClosed,
       leadType,
       statusWord,
+      latestStageWord,
     }
   })
 }
