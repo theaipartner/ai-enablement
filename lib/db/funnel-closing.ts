@@ -378,6 +378,7 @@ export type CloserCallType = 'direct' | 'setter'
 
 export type CloserScheduledDrillRow = {
   eventUri: string            // the representative (shown) event
+  leadId: string | null       // Close lead_id (for the per-lead link); null = unresolved
   prospectName: string | null
   scheduledTime: string       // ISO UTC — the representative booking's slot
   callType: CloserCallType
@@ -1098,6 +1099,7 @@ export async function getClosingScheduledList(
 
     drillByCloser[host].push({
       eventUri: rep.uri,
+      leadId: invitee.leadId,
       prospectName: invitee.name,
       scheduledTime: rep.startTime,
       callType: rep.callType,

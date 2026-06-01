@@ -331,7 +331,7 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
               <div
                 style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
               >
-                <ProspectCell name={c.prospectName} cancelled={c.cancelled} bookingCount={c.bookingCount} />
+                <ProspectCell name={c.prospectName} leadId={c.leadId} cancelled={c.cancelled} bookingCount={c.bookingCount} />
                 <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
                 <Cell text={callTypeLabel(c.callType)} mono />
                 <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
@@ -624,10 +624,12 @@ function MissingTag() {
 // even if they'd bounced around the calendar first).
 function ProspectCell({
   name,
+  leadId,
   cancelled,
   bookingCount,
 }: {
   name: string | null
+  leadId: string | null
   cancelled: boolean
   bookingCount: number
 }) {
@@ -637,6 +639,16 @@ function ProspectCell({
   // a single clean booking gets nothing. cancelled (no live slot left, a
   // no-show counts as cancel) shows the red tag, otherwise the neutral one.
   const showCount = bookingCount >= 2
+  const nameStyle = {
+    fontSize: 13,
+    color: isDash ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
+    letterSpacing: '-0.002em',
+    fontStyle: isDash ? 'italic' : ('normal' as const),
+    whiteSpace: 'nowrap' as const,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    textDecoration: 'none',
+  }
   return (
     <span
       style={{
@@ -646,20 +658,18 @@ function ProspectCell({
         minWidth: 0,
       }}
     >
-      <span
-        className="geg-serif"
-        style={{
-          fontSize: 13,
-          color: isDash ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
-          letterSpacing: '-0.002em',
-          fontStyle: isDash ? 'italic' : 'normal',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}
-      >
-        {name ?? '—'}
-      </span>
+      {leadId ? (
+        <Link
+          href={`/sales-dashboard/leads/${encodeURIComponent(leadId)}`}
+          className="geg-serif"
+          style={{ ...nameStyle, color: 'var(--color-geg-text)' }}
+          title="Open lead"
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className="geg-serif" style={nameStyle}>{name ?? '—'}</span>
+      )}
       {cancelled ? (
         <CancelledTag count={showCount ? bookingCount : null} />
       ) : showCount ? (

@@ -53,6 +53,7 @@ export type DcOutcome = 'closed' | 'follow_up' | 'dq' | null
 
 export type DcDrillRow = {
   key: string
+  leadId: string | null     // Close lead_id (for the per-lead link); null = unresolved
   prospectName: string | null
   // ISO UTC of the meeting — the DC form's call time, else the Calendly slot.
   scheduledTime: string | null
@@ -372,6 +373,7 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
       hasForm: true,
       row: {
         key,
+        leadId: r.lead_id,
         prospectName: r.prospect_name,
         scheduledTime: tsIso,
         bookedBy,
@@ -410,6 +412,7 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
       hasForm: false,
       row: {
         key,
+        leadId: ev.leadId,
         prospectName: ev.prospectName,
         scheduledTime: ev.startTime,
         bookedBy: null,

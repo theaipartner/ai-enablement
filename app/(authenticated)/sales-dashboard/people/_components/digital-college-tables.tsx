@@ -233,7 +233,7 @@ function DcDrill({ rows, closerName }: { rows: DcDrillRow[]; closerName: string 
           </div>
           {sorted.map((r) => (
             <div key={r.key} style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center' }}>
-              <ProspectCell name={r.prospectName} hasLink={r.hasMeetingLink} hasForm={r.showed} />
+              <ProspectCell name={r.prospectName} leadId={r.leadId} hasLink={r.hasMeetingLink} hasForm={r.showed} />
               <Cell text={formatEtTimestamp(r.scheduledTime)} mono />
               <BookedByCell bookedBy={r.bookedBy} />
               <ShowedTag showed={r.showed} />
@@ -287,20 +287,28 @@ function ShowsCell({ meetings, shows }: { meetings: number; shows: number }) {
   )
 }
 
-function ProspectCell({ name, hasLink, hasForm }: { name: string | null; hasLink: boolean; hasForm: boolean }) {
+function ProspectCell({ name, leadId, hasLink, hasForm }: { name: string | null; leadId: string | null; hasLink: boolean; hasForm: boolean }) {
   const isDash = !name
+  const baseStyle = {
+    fontSize: 13, letterSpacing: '-0.002em', fontStyle: isDash ? ('italic' as const) : ('normal' as const),
+    whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: 'none',
+  }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-      <span
-        className="geg-serif"
-        style={{
-          fontSize: 13, color: isDash ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)',
-          letterSpacing: '-0.002em', fontStyle: isDash ? 'italic' : 'normal',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}
-      >
-        {name ?? '—'}
-      </span>
+      {leadId ? (
+        <Link
+          href={`/sales-dashboard/leads/${encodeURIComponent(leadId)}`}
+          className="geg-serif"
+          style={{ ...baseStyle, color: 'var(--color-geg-text)' }}
+          title="Open lead"
+        >
+          {name}
+        </Link>
+      ) : (
+        <span className="geg-serif" style={{ ...baseStyle, color: isDash ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-2)' }}>
+          {name ?? '—'}
+        </span>
+      )}
       {hasLink && !hasForm ? (
         <span
           className="geg-mono"
