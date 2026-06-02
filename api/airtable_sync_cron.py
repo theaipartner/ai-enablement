@@ -128,20 +128,26 @@ def run_airtable_sync_cron() -> dict[str, Any]:
     since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     outcome = sync_all(client, db, since=since_iso)
 
-    # Maintain close_leads.reactivated_at from the forms just synced
-    # (set-once; tag_reactivated_leads() only ever tags newly-eligible
-    # leads — see migration 0064). Fail-soft: a tagging error must not
-    # halt the cron's read path or its audit write.
-    reactivation_tagged: int | None = None
+    # Re-tag active (non-terminal + new + re-opted) leads from the forms just
+    # synced — the persistent lead-tag system (lead_cycles / lead_cycle_stages,
+    # see shared/lead_tagging.py). Scoped via active_only so it stays bounded as
+    # the lead base grows; the per-lead webhooks keep tags live between ticks.
+    # Replaces the dormant tag_reactivated_leads RPC (migrations 0063-0065).
+    # Fail-soft: a tagging error must not halt the cron's read path or audit.
+    # Needs SUPABASE_DB_POOL_URL (Vercel env, transaction pooler :6543).
+    lead_tag_result: dict[str, Any] = {"attempted": True}
     try:
-        rpc_resp = db.rpc("tag_reactivated_leads").execute()
-        reactivation_tagged = (
-            rpc_resp.data if isinstance(rpc_resp.data, int) else None
+        from shared.lead_tagging import retag  # noqa: PLC0415 — local to keep fail-soft
+
+        summary = retag(active_only=True, trigger="cron")
+        lead_tag_result.update(
+            ok=summary["ok"],
+            leads=summary["lead_count"],
+            anomalies=len(summary["anomalies"]),
         )
     except Exception as exc:  # noqa: BLE001 — fail-soft by design
-        logger.warning(
-            "airtable_sync_cron: reactivation tagging failed: %s", exc,
-        )
+        lead_tag_result.update(ok=False, error=str(exc)[:300])
+        logger.warning("airtable_sync_cron: lead tagging failed: %s", exc)
 
     # Webhook refresh — cheap insurance. Only fires if AIRTABLE_WEBHOOK_ID
     # is set (post-gate-d). Failure here is non-fatal; the read path
@@ -172,7 +178,7 @@ def run_airtable_sync_cron() -> dict[str, Any]:
         "parse_failures": outcome.parse_failures,
         "full_closer_records_seen": outcome.full_closer_records_seen,
         "setter_name_fill_count": outcome.setter_name_fill_count,
-        "reactivation_tagged": reactivation_tagged,
+        "lead_tagging": lead_tag_result,
         "webhook_refresh": refresh_result,
         "errors": outcome.errors[:10],
     }

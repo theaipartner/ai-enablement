@@ -376,15 +376,23 @@ def _compute(cur, lead_ids):
 
 
 def active_lead_ids(cur):
-    """Non-terminal in-scope leads (no dq, no HT close) — the only ones whose
-    tags can still change. The cron retags these each tick (bounded as the total
-    lead base grows); new leads arrive via webhook, drift caught by periodic full."""
+    """In-scope leads whose tags can still change — the bounded set the cron retags
+    each tick. Excludes only stable-terminal leads (closed/dq and not re-opted since),
+    so it stays bounded as the lead base grows. Includes: leads with a non-terminal
+    cycle (can progress / go cold), brand-new opt-ins with no cycle yet, and leads
+    that re-opted since their last stored cycle (a terminal lead that came back)."""
     cur.execute(
-        """select distinct c.close_id from lead_cycles c
-           where c.dq_at is null
-             and not exists (select 1 from lead_cycle_stages s
-                             where s.close_id = c.close_id and s.opt_in_at = c.opt_in_at
-                               and s.closed_at is not null)"""
+        """select cl.close_id from close_leads cl
+           where cl.latest_opt_in_date >= %s and cl.excluded_at is null and (
+             exists (select 1 from lead_cycles c
+                     where c.close_id = cl.close_id and c.dq_at is null
+                       and not exists (select 1 from lead_cycle_stages s
+                                       where s.close_id = c.close_id and s.opt_in_at = c.opt_in_at
+                                         and s.closed_at is not null))
+             or not exists (select 1 from lead_cycles c2 where c2.close_id = cl.close_id)
+             or cl.latest_opt_in_date > (select max(c3.opt_in_at) from lead_cycles c3 where c3.close_id = cl.close_id)
+           )""",
+        (EFFECTIVE_DATE,),
     )
     return [r[0] for r in cur.fetchall()]
 
