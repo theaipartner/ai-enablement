@@ -521,6 +521,15 @@ export async function getLeadsForRange(
   }
 
   // 7. Assemble — classify each lead by which booking links it has ever had.
+  // Phase 5: the persistent tags are the source of truth for the roster's
+  // display fields (type / status / latest-stage / connected / re-opt-in /
+  // opted-in date), one row per person = the latest cycle. We still compute the
+  // legacy live values below (kept for now / fallback when a lead has no cycle)
+  // but override them with the tag values when present.
+  const { getLeadCycleRows, collapseToLatest } = await import('./lead-tags')
+  const tagByLead = new Map(
+    collapseToLatest(await getLeadCycleRows(range)).map((t) => [t.closeId, t]),
+  )
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
@@ -615,6 +624,9 @@ export async function getLeadsForRange(
               : 'Eligible'
     else statusWord = closed ? closedWord : showed ? 'Showed' : booked ? 'Booked' : connected ? 'Connected' : '—'
 
+    // Override the display fields from the persistent tags when the lead has a
+    // cycle (the source of truth); fall back to the live values otherwise.
+    const tag = tagByLead.get(r.leadId)
     return {
       ...r,
       qualified,
@@ -628,14 +640,17 @@ export async function getLeadsForRange(
       reactivatedAt,
       closeTimeIso: closeTime.get(r.leadId) ?? null,
       connected,
-      connectedEffective,
+      connectedEffective: tag ? tag.connected : connectedEffective,
       reactConnected,
       reactBooked,
       reactShowed,
       reactClosed,
-      leadType,
-      statusWord,
-      latestStageWord,
+      leadType: tag ? tag.leadType : leadType,
+      statusWord: tag ? tag.statusWord : statusWord,
+      latestStageWord: tag ? tag.latestStageWord : latestStageWord,
+      // Re-opt-in tag + opted-in date (newest opt-in) from the tags.
+      optInType: tag ? (tag.reOptIn ? 'reoptin' : 'new') : r.optInType,
+      optInAt: tag ? tag.latestOptInAt : r.optInAt,
     }
   })
 }
