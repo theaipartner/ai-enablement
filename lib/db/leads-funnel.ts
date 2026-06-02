@@ -312,7 +312,9 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     ...closesCyc(null),
   }
   const direct: DirectBox = {
-    qualifiedOptIns: qual('direct', 'qualified'),
+    // ALL qualified opt-in cycles (the pool eligible to book a direct strat
+    // call), NOT just the ones that booked — so Booked reads as a subset of it.
+    qualifiedOptIns: qual(null, 'qualified'),
     dials: dialsFor('direct'),
     books: countCyc('direct', 'booked'),
     connected: countCyc('direct', 'connected'),
