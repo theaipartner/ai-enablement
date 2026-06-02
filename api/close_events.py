@@ -235,6 +235,23 @@ class handler(BaseHTTPRequestHandler):
             event_type, route, upserted_id,
         )
 
+        # Live re-tag of the affected lead (persistent lead-tag system —
+        # lead_cycles / lead_cycle_stages). The lead id is event_data.lead_id
+        # for activities (status change / call / sms) or the object id for a
+        # lead event. Fail-soft: a tagging error must never affect the ack.
+        lead_id = event_data.get("lead_id") if isinstance(event_data, dict) else None
+        if not lead_id and object_type == "lead":
+            lead_id = event_object_id
+        if lead_id:
+            try:
+                from shared.lead_tagging import retag
+
+                retag(lead_ids=[lead_id], trigger="webhook:close")
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning(
+                    "close_webhook: lead retag failed lead=%s: %s", lead_id, exc,
+                )
+
         # Live transcription trigger. When the upsert touched close_calls
         # AND the call is eligible (>=90s + has recording + not expired),
         # fire the Deepgram pipeline synchronously. Cheap eligibility
