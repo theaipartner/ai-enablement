@@ -60,6 +60,47 @@ export type LeadCycleRow = {
   statusWord: string
   latestStageWord: string
   closeType: 'ht' | 'dc' | null
+  // Funnel/filter primitives — the per-phase stage hits + membership flags, so
+  // reachedStage/matchesType (below) can count this cycle in any box.
+  becameDirect: boolean
+  reactivatedAt: string | null
+  primaryHits: StageHits
+  reactiveHits: StageHits | null
+}
+
+export type StageHits = { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean }
+export type FunnelStage = 'connected' | 'booked' | 'confirmed' | 'showed' | 'closed'
+export type LeadFilterType = 'direct' | 'setter' | 'reactivation'
+
+function stageHits(s: CycleStages | null): StageHits {
+  return {
+    connected: !!s?.connectedAt, booked: !!s?.bookedAt, confirmed: !!s?.confirmedAt,
+    showed: !!s?.showedAt, closed: !!s?.closedAt,
+  }
+}
+
+// Has this CYCLE reached `stage` within funnel `type`? (cumulative — the tagger's
+// per-phase hits are already monotonic). null type = Total. Direct/opt-in count
+// the furthest across BOTH phases (a post-handover show still counts for the
+// direct lineage); reactivation counts the POST-handover (reactive) phase only.
+export function reachedStage(row: LeadCycleRow, type: LeadFilterType | null, stage: FunnelStage): boolean {
+  const P = row.primaryHits
+  const R = row.reactiveHits
+  if (type === 'reactivation') {
+    if (stage === 'confirmed') return false // reactive funnel has no Confirmed node
+    return !!R?.[stage]
+  }
+  // direct / setter(opt-in) / total — max across phases.
+  return P[stage] || !!R?.[stage]
+}
+
+// Does this cycle belong to the given funnel type? direct = became direct;
+// reactivation = lost its spot; setter(opt-in) = never went direct. null = Total.
+export function matchesType(row: LeadCycleRow, type: LeadFilterType | null): boolean {
+  if (type === 'direct') return row.becameDirect
+  if (type === 'reactivation') return row.reactivatedAt !== null
+  if (type === 'setter') return !row.becameDirect
+  return true
 }
 
 function closedWord(t: 'ht' | 'dc' | null): string {
@@ -184,6 +225,10 @@ export async function getLeadCycleRows(range: DateRange): Promise<LeadCycleRow[]
         leadType, connected: isConnected(c),
         statusWord: statusWord(c), latestStageWord: latestStageWord(c),
         closeType: c.primary?.closeType || c.reactive?.closeType || null,
+        becameDirect: !!c.becameDirectAt,
+        reactivatedAt: c.reactivatedAt,
+        primaryHits: stageHits(c.primary),
+        reactiveHits: c.reactive ? stageHits(c.reactive) : null,
       })
     }
   }
