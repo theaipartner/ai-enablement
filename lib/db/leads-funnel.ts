@@ -35,18 +35,20 @@ import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 // closesHt / closesDc split the closes node so each offer is visible
 // (closesHt + closesDc === closes). DC closes feed connected/booked/shows
 // monotonically via reachedStage, same as HT.
+// dcCloses = cycles in the box that closed Digital College (kept OFF the HT
+// ladder; rendered as a small "DC: N closed" line under the box).
 export type TotalBox = {
   optIns: number; dials: number; connected: number; books: number; confirms: number; shows: number
-  closes: number; closesHt: number; closesDc: number
+  closes: number; closesHt: number; closesDc: number; dcCloses: number
 }
 export type DirectBox = {
   qualifiedOptIns: number; dials: number; books: number; connected: number; confirms: number; shows: number
-  closes: number; closesHt: number; closesDc: number
+  closes: number; closesHt: number; closesDc: number; dcCloses: number
 }
 export type PoolFunnelBox = {
   pool: number; qualified: number; unqualified: number
   dials: number; connected: number; books: number; shows: number
-  closes: number; closesHt: number; closesDc: number
+  closes: number; closesHt: number; closesDc: number; dcCloses: number
 }
 
 export type LeadsFunnel = {
@@ -277,6 +279,9 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     const n = countCyc(type, 'closed')
     return { closes: n, closesHt: n, closesDc: 0 } // HT-only (DC excluded from the tags)
   }
+  // DC closes in the box (off the HT ladder) — the small "DC: N closed" line.
+  const dcClosesCyc = (type: LeadFilterType | null) =>
+    cycles.filter((c) => mt(c, type) && c.dcClosed).length
   // Dials are a per-lead bracket, not a stage — sum over DISTINCT leads in the
   // box so a re-opt lead's dials aren't double-counted.
   const dialsFor = (type: LeadFilterType | null, post = false) => {
@@ -310,6 +315,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     confirms: countCyc(null, 'confirmed'),
     shows: countCyc(null, 'showed'),
     ...closesCyc(null),
+    dcCloses: dcClosesCyc(null),
   }
   const direct: DirectBox = {
     // ALL qualified opt-in cycles (the pool eligible to book a direct strat
@@ -321,6 +327,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     confirms: countCyc('direct', 'confirmed'),
     shows: countCyc('direct', 'showed'),
     ...closesCyc('direct'),
+    dcCloses: dcClosesCyc('direct'),
   }
   const setter: PoolFunnelBox = {
     pool: poolCyc('setter'),
@@ -331,6 +338,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     books: countCyc('setter', 'booked'),
     shows: countCyc('setter', 'showed'),
     ...closesCyc('setter'),
+    dcCloses: dcClosesCyc('setter'),
   }
   // Reactivation cross-cuts (a reactivated lead is also in Direct or Opt-in);
   // every stage is the POST-handover (reactive) phase only.
@@ -343,6 +351,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     books: countCyc('reactivation', 'booked'),
     shows: countCyc('reactivation', 'showed'),
     ...closesCyc('reactivation'),
+    dcCloses: dcClosesCyc('reactivation'),
   }
 
   const funnel: LeadsFunnel = { adspendUsd, uniqueLinkClicks, total, direct, setter, reactivation, warnings: [] }

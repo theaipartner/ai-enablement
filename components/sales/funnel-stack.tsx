@@ -43,6 +43,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
         tone="neutral"
         type={null}
         range={range}
+        dcCloses={t.dcCloses}
         adspend={funnel.adspendUsd}
         adspendHref={adsHref(range)}
         clicks={funnel.uniqueLinkClicks}
@@ -61,6 +62,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
         tone="pos"
         type="direct"
         range={range}
+        dcCloses={d.dcCloses}
         costBase={funnel.adspendUsd}
         stages={[
           { value: d.qualifiedOptIns, caption: 'Qual. opt-ins' },
@@ -76,6 +78,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
         tone="warn"
         type="setter"
         range={range}
+        dcCloses={s.dcCloses}
         costBase={funnel.adspendUsd}
         poolSplit={{ qualified: s.qualified, unqualified: s.unqualified }}
         stages={[
@@ -91,6 +94,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
         tone="blue"
         type="reactivation"
         range={range}
+        dcCloses={re.dcCloses}
         costBase={funnel.adspendUsd}
         stages={[
           { value: re.pool, caption: 'Pool', accent: true, bracket: dials(re.dials) },
@@ -127,6 +131,7 @@ function StackedFunnelBox({
   clicks,
   costBase,
   poolSplit,
+  dcCloses,
   stages,
 }: {
   label: string
@@ -138,6 +143,7 @@ function StackedFunnelBox({
   clicks?: number | null
   costBase?: number | null
   poolSplit?: { qualified: number; unqualified: number }
+  dcCloses?: number
   stages: StageDef[]
 }) {
   // Ordered node list: adspend (if present) → unique link clicks (if present) →
@@ -180,6 +186,11 @@ function StackedFunnelBox({
       <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, marginTop: 12 }}>
         {cells}
       </div>
+      {dcCloses && dcCloses > 0 ? (
+        <div className="geg-mono" style={{ marginTop: 8, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
+          ⌐ Digital College · {dcCloses.toLocaleString('en-US')} closed
+        </div>
+      ) : null}
     </div>
   )
 }

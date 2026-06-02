@@ -39,6 +39,7 @@ export type LeadCycle = {
   reactiveSource: string | null
   dqAt: string | null
   dqSource: string | null
+  dcClosedAt: string | null
   primary: CycleStages | null
   reactive: CycleStages | null
 }
@@ -60,6 +61,8 @@ export type LeadCycleRow = {
   statusWord: string
   latestStageWord: string
   closeType: 'ht' | 'dc' | null
+  // Digital College close (excluded from the HT stages) — for the per-box DC line.
+  dcClosed: boolean
   // Funnel/filter primitives — the per-phase stage hits + membership flags, so
   // reachedStage/matchesType (below) can count this cycle in any box.
   becameDirect: boolean
@@ -160,7 +163,7 @@ export async function getLeadCycles(closeId: string): Promise<LeadCycle[]> {
   const sb = createAdminClient()
   const { data: cyc, error } = await sb
     .from('lead_cycles' as never)
-    .select('opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source')
+    .select('opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at')
     .eq('close_id', closeId)
     .order('opt_in_at', { ascending: false })
   if (error) throw new Error(`lead-tags: cycles read failed: ${error.message}`)
@@ -188,6 +191,7 @@ export async function getLeadCycles(closeId: string): Promise<LeadCycle[]> {
     reactiveSource: (c.reactive_source as string) ?? null,
     dqAt: (c.dq_at as string) ?? null,
     dqSource: (c.dq_source as string) ?? null,
+    dcClosedAt: (c.dc_closed_at as string) ?? null,
     primary: byCyclePhase.get(`${c.opt_in_at}|primary`) ?? null,
     reactive: byCyclePhase.get(`${c.opt_in_at}|reactive`) ?? null,
   }))
@@ -225,6 +229,7 @@ export async function getLeadCycleRows(range: DateRange): Promise<LeadCycleRow[]
         leadType, connected: isConnected(c),
         statusWord: statusWord(c), latestStageWord: latestStageWord(c),
         closeType: c.primary?.closeType || c.reactive?.closeType || null,
+        dcClosed: !!c.dcClosedAt,
         becameDirect: !!c.becameDirectAt,
         reactivatedAt: c.reactivatedAt,
         primaryHits: stageHits(c.primary),

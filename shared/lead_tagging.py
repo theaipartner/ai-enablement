@@ -393,7 +393,7 @@ def _compute(cur, lead_ids):
                 if outcome_close_type(co) == "ht":
                     ph[p]["close"].append(t)
 
-            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source))
+            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at))
 
             for p in ("primary", "reactive"):
                 if reactive_at is None and p == "reactive":
@@ -531,9 +531,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
             cur.execute("delete from lead_cycles where close_id = any(%s)", (touched,))  # cascades stages
         if cycle_rows:
             execute_values(cur,
-                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source) values %s",
+                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at) values %s",
                 cycle_rows,
-                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s)")
+                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz)")
         if stage_rows:
             execute_values(cur,
                 "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
