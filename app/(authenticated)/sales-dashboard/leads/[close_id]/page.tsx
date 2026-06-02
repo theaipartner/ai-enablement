@@ -139,20 +139,33 @@ const REACT_BLUE = '#7ea8dd'
 type JStage = { label: string; hit: boolean }
 type JSegment = { label: string; color: string; stages: JStage[]; since?: string | null }
 
+type JCyc = NonNullable<Awaited<ReturnType<typeof getLeadDetail>>>['journeyCycles'][number]
+
+// One journey block per opt-in cycle (oldest-first). A multi-opt-in lead shows
+// every cycle's progression (Drake 2026-06-02), each headed by its opt-in date.
 function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
+  if (lead.journeyCycles.length === 0) return <Empty>No opt-in cycle yet.</Empty>
+  const multi = lead.journeyCycles.length > 1
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {lead.journeyCycles.map((cyc, ci) => (
+        <CycleJourney key={cyc.optInAt} cyc={cyc} reopt={ci > 0} showLabel={multi} />
+      ))}
+    </div>
+  )
+}
+
+function CycleJourney({ cyc, reopt, showLabel }: { cyc: JCyc; reopt: boolean; showLabel: boolean }) {
   const segments: JSegment[] = []
   // Terminal stage reads the offer (HT-only today; DC is excluded from the tags).
-  const closedLabel =
-    lead.tagCloseType === 'dc' ? 'Digital College' : lead.tagCloseType === 'ht' ? 'High Ticket' : 'Closed'
-  const P = lead.journeyPrimary
-  const R = lead.journeyReactive ?? { connected: false, booked: false, confirmed: false, showed: false, closed: false }
+  const closedLabel = cyc.closeType === 'dc' ? 'Digital College' : cyc.closeType === 'ht' ? 'High Ticket' : 'Closed'
+  const P = cyc.primary
+  const R = cyc.reactive ?? { connected: false, booked: false, confirmed: false, showed: false, closed: false }
 
-  // Primary lane — Direct (self-booked a strat call) or Opt-in, by the tag.
-  // A direct lead is NOT shown an opt-in lane; an opt-in lead (incl. one that
-  // later reactivated) shows the Opt-in lane (Drake 2026-06-02). The tagger's
-  // per-phase stage hits are already monotonic and encode the direct
+  // Primary lane — Direct (self-booked a strat call) or Opt-in, by the tag. The
+  // tagger's per-phase stage hits are already monotonic and encode the direct
   // connected-skip, so we render them directly — no page-side back-fill.
-  if (lead.tagIsDirect) {
+  if (cyc.isDirect) {
     segments.push({
       label: 'Direct',
       color: 'var(--color-geg-pos)',
@@ -177,12 +190,12 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
     })
   }
 
-  // Reactive lane — only when the lead lost its spot. Floors at "Eligible".
-  if (lead.tagReactivatedAt) {
+  // Reactive lane — only when this cycle lost its spot. Floors at "Eligible".
+  if (cyc.reactivatedAt) {
     segments.push({
       label: 'Reactivation',
       color: REACT_BLUE,
-      since: lead.tagReactivatedAt,
+      since: cyc.reactivatedAt,
       stages: [
         { label: 'Eligible', hit: true },
         { label: 'Connected', hit: R.connected },
@@ -193,39 +206,44 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
     })
   }
 
-  // Every lead now has at least one lane (direct or opt-in), so the journey is
-  // always surfaced — no "not booked" empty state.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {segments.map((seg, si) => (
-        <div key={seg.label}>
-          {si > 0 ? (
-            <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', margin: '0 0 8px 2px' }}>
-              ↓ lost spot{seg.since ? ` · ${formatEtDate(seg.since)}` : ''}
-            </div>
-          ) : null}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: seg.color, width: 92, flexShrink: 0 }}>
-              {seg.label}
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-              {seg.stages.map((s, i) => (
-                <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  {i > 0 ? <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>›</span> : null}
-                  <StageChip label={s.label} hit={s.hit} color={seg.color} />
-                </span>
-              ))}
-              {/* DQ terminal marker on the last segment */}
-              {lead.tagIsDq && si === segments.length - 1 ? (
-                <>
-                  <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>·</span>
-                  <DqChip />
-                </>
-              ) : null}
-            </span>
-          </div>
+    <div>
+      {showLabel ? (
+        <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-2)', marginBottom: 8 }}>
+          {reopt ? 'Re-opted in' : 'Opted in'} · {formatEtDate(cyc.optInAt)}
         </div>
-      ))}
+      ) : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {segments.map((seg, si) => (
+          <div key={seg.label}>
+            {si > 0 ? (
+              <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', margin: '0 0 8px 2px' }}>
+                ↓ lost spot{seg.since ? ` · ${formatEtDate(seg.since)}` : ''}
+              </div>
+            ) : null}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: seg.color, width: 92, flexShrink: 0 }}>
+                {seg.label}
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                {seg.stages.map((s, i) => (
+                  <span key={s.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    {i > 0 ? <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>›</span> : null}
+                    <StageChip label={s.label} hit={s.hit} color={seg.color} />
+                  </span>
+                ))}
+                {/* DQ terminal marker on this cycle's last segment */}
+                {cyc.isDq && si === segments.length - 1 ? (
+                  <>
+                    <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>·</span>
+                    <DqChip />
+                  </>
+                ) : null}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

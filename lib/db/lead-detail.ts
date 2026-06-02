@@ -121,6 +121,17 @@ export type LeadDetail = {
   // Per-phase stage hits for the current cycle (already monotonic from the tagger).
   journeyPrimary: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean }
   journeyReactive: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
+  // EVERY opt-in cycle (oldest-first) for the per-lead Journey — a multi-opt-in
+  // lead shows each cycle's progression as its own block (Drake 2026-06-02).
+  journeyCycles: Array<{
+    optInAt: string
+    isDirect: boolean
+    reactivatedAt: string | null
+    isDq: boolean
+    closeType: 'ht' | 'dc' | null
+    primary: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean }
+    reactive: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
+  }>
 }
 
 function qualFromMarketingQualified(mq: string | null): Qualification {
@@ -635,6 +646,19 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   })
   const tagFirstOptIn = tagCycles.length ? tagCycles[tagCycles.length - 1].optInAt : null
   const tagLatestOptIn = tagCycles.length ? tagCycles[0].optInAt : null
+  // All cycles, oldest-first, each as its own journey block for the per-lead page.
+  const journeyCycles = tagCycles
+    .slice()
+    .sort((a, b) => a.optInAt.localeCompare(b.optInAt))
+    .map((c) => ({
+      optInAt: c.optInAt,
+      isDirect: !!c.becameDirectAt,
+      reactivatedAt: c.reactivatedAt,
+      isDq: deriveType(c).isDq,
+      closeType: c.primary?.closeType || c.reactive?.closeType || null,
+      primary: hits(c.primary),
+      reactive: c.reactive ? hits(c.reactive) : null,
+    }))
 
   return {
     leadId: lead.close_id,
@@ -673,6 +697,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     tagCloseType: tagCyc ? (tP?.closeType || tR?.closeType || null) : null,
     journeyPrimary: hits(tP),
     journeyReactive: tR ? hits(tR) : null,
+    journeyCycles,
     // Header stats reflect the CURRENT journey (since the latest opt-in); the
     // lifecycle (`calls`) shows the full history.
     totalCalls: cycleCalls.length,
