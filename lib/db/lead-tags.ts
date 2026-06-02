@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { cache } from 'react'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 
@@ -158,31 +159,29 @@ function isConnected(c: LeadCycle): boolean {
   return !!(c.primary?.connectedAt || c.reactive?.connectedAt)
 }
 
-// Load every cycle (with both phase stage-rows) for one lead, newest cycle first.
-export async function getLeadCycles(closeId: string): Promise<LeadCycle[]> {
-  const sb = createAdminClient()
-  const { data: cyc, error } = await sb
-    .from('lead_cycles' as never)
-    .select('opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at')
-    .eq('close_id', closeId)
-    .order('opt_in_at', { ascending: false })
-  if (error) throw new Error(`lead-tags: cycles read failed: ${error.message}`)
-  const cycles = (cyc ?? []) as unknown as Array<Record<string, string | number | null>>
-  if (cycles.length === 0) return []
+const CYCLE_COLS =
+  'close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at'
+const STAGE_COLS =
+  'close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type'
+// IN-list chunk size. Keeps the PostgREST GET URL well under length limits
+// (~200 close_ids ≈ 5 KB) while collapsing the old per-lead round-trips.
+const ID_CHUNK = 200
 
-  const { data: st, error: stErr } = await sb
-    .from('lead_cycle_stages' as never)
-    .select('opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type')
-    .eq('close_id', closeId)
-  if (stErr) throw new Error(`lead-tags: stages read failed: ${stErr.message}`)
+type RawCycle = Record<string, string | number | null>
+type RawStage = Record<string, string | null>
+
+// Pure mapper: cycle rows + that lead's stage rows -> LeadCycle[]. The stage
+// key (opt_in_at|phase) is unique WITHIN one lead, so this must be called
+// per-lead (never across leads, whose opt_in_at values can collide).
+function buildCycles(cycleRows: RawCycle[], stageRows: RawStage[]): LeadCycle[] {
   const byCyclePhase = new Map<string, CycleStages>()
-  for (const s of (st ?? []) as unknown as Array<Record<string, string | null>>) {
+  for (const s of stageRows) {
     byCyclePhase.set(`${s.opt_in_at}|${s.phase}`, {
       connectedAt: s.connected_at, bookedAt: s.booked_at, confirmedAt: s.confirmed_at,
       showedAt: s.showed_at, closedAt: s.closed_at, closeType: s.close_type as 'ht' | 'dc' | null,
     })
   }
-  return cycles.map((c) => ({
+  return cycleRows.map((c) => ({
     optInAt: c.opt_in_at as string,
     optInSeq: c.opt_in_seq as number,
     source: c.source as string,
@@ -197,10 +196,72 @@ export async function getLeadCycles(closeId: string): Promise<LeadCycle[]> {
   }))
 }
 
+// Load every cycle (with both phase stage-rows) for one lead, newest cycle first.
+export async function getLeadCycles(closeId: string): Promise<LeadCycle[]> {
+  const sb = createAdminClient()
+  const { data: cyc, error } = await sb
+    .from('lead_cycles' as never)
+    .select(CYCLE_COLS)
+    .eq('close_id', closeId)
+    .order('opt_in_at', { ascending: false })
+  if (error) throw new Error(`lead-tags: cycles read failed: ${error.message}`)
+  const cycleRows = (cyc ?? []) as unknown as RawCycle[]
+  if (cycleRows.length === 0) return []
+
+  const { data: st, error: stErr } = await sb
+    .from('lead_cycle_stages' as never)
+    .select(STAGE_COLS)
+    .eq('close_id', closeId)
+  if (stErr) throw new Error(`lead-tags: stages read failed: ${stErr.message}`)
+  return buildCycles(cycleRows, (st ?? []) as unknown as RawStage[])
+}
+
+// Batched equivalent of getLeadCycles for MANY leads: two chunked IN-queries
+// (cycles + stages) instead of 2 round-trips per lead. Returns cid ->
+// LeadCycle[] (newest cycle first, matching getLeadCycles' contract).
+async function getLeadCyclesByIds(ids: string[]): Promise<Map<string, LeadCycle[]>> {
+  const sb = createAdminClient()
+  const cycleRows: RawCycle[] = []
+  const stageRows: RawStage[] = []
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    const chunk = ids.slice(i, i + ID_CHUNK)
+    const [cycRes, stRes] = await Promise.all([
+      sb.from('lead_cycles' as never).select(CYCLE_COLS).in('close_id', chunk),
+      sb.from('lead_cycle_stages' as never).select(STAGE_COLS).in('close_id', chunk),
+    ])
+    if (cycRes.error) throw new Error(`lead-tags: cycles batch read failed: ${cycRes.error.message}`)
+    if (stRes.error) throw new Error(`lead-tags: stages batch read failed: ${stRes.error.message}`)
+    cycleRows.push(...((cycRes.data ?? []) as unknown as RawCycle[]))
+    stageRows.push(...((stRes.data ?? []) as unknown as RawStage[]))
+  }
+  const cyclesByLead = new Map<string, RawCycle[]>()
+  for (const r of cycleRows) {
+    const cid = r.close_id as string
+    const arr = cyclesByLead.get(cid)
+    if (arr) arr.push(r); else cyclesByLead.set(cid, [r])
+  }
+  const stagesByLead = new Map<string, RawStage[]>()
+  for (const s of stageRows) {
+    const cid = s.close_id as string
+    const arr = stagesByLead.get(cid)
+    if (arr) arr.push(s); else stagesByLead.set(cid, [s])
+  }
+  const out = new Map<string, LeadCycle[]>()
+  cyclesByLead.forEach((crows, cid) => {
+    // Newest cycle first, matching getLeadCycles' `order opt_in_at desc`.
+    crows.sort((a, b) => String(b.opt_in_at).localeCompare(String(a.opt_in_at)))
+    out.set(cid, buildCycles(crows, stagesByLead.get(cid) ?? []))
+  })
+  return out
+}
+
 // Per-cycle rows for all leads whose opt-in falls in the range. The funnel counts
 // every row; the roster collapses to the latest cycle per close_id (see
 // collapseToLatest). opt-in count / first / latest are per-lead (across cycles).
-export async function getLeadCycleRows(range: DateRange): Promise<LeadCycleRow[]> {
+//
+// Wrapped in React.cache so the funnel page's two callers (getLeadsForRange +
+// getLeadsFunnel, same `range` object) share ONE computation per request.
+export const getLeadCycleRows = cache(async (range: DateRange): Promise<LeadCycleRow[]> => {
   const sb = createAdminClient()
   // All cycles for leads that have ANY cycle in the window — so per-lead first/
   // latest/count are complete even when an earlier cycle predates the window.
@@ -212,10 +273,11 @@ export async function getLeadCycleRows(range: DateRange): Promise<LeadCycleRow[]
   const ids = Array.from(new Set(((inWin ?? []) as unknown as Array<{ close_id: string }>).map((r) => r.close_id)))
   if (ids.length === 0) return []
 
+  const byLead = await getLeadCyclesByIds(ids)
   const rows: LeadCycleRow[] = []
   for (const cid of ids) {
-    const cycles = await getLeadCycles(cid)
-    if (cycles.length === 0) continue
+    const cycles = byLead.get(cid)
+    if (!cycles || cycles.length === 0) continue
     const sorted = [...cycles].sort((a, b) => a.optInAt.localeCompare(b.optInAt))
     const firstOptInAt = sorted[0].optInAt
     const latestOptInAt = sorted[sorted.length - 1].optInAt
@@ -238,7 +300,7 @@ export async function getLeadCycleRows(range: DateRange): Promise<LeadCycleRow[]
     }
   }
   return rows
-}
+})
 
 // Roster view: one row per person = their LATEST in-window cycle.
 export function collapseToLatest(rows: LeadCycleRow[]): LeadCycleRow[] {
