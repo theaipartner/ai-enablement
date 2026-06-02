@@ -49,6 +49,11 @@ from psycopg2.extras import Json, execute_values
 EFFECTIVE_DATE = "2026-05-24"
 OPT_IN_FORM = "SFedWelr"
 DIRECT_URI = "https://api.calendly.com/event_types/8f6795d3-992a-4cbd-b584-9ecaabb3938c"
+# Robby's dedicated Digital College call. A DC close is now copied onto the
+# regular closer EOC form, so the Calendly event type is how we tell an Aman
+# downsell (on a partnership/strat call → an HT show) from a Robby DC call
+# (NOT an HT show).
+ROBBY_DC_URI = "https://api.calendly.com/event_types/6f06c6ba-6ca2-48d2-ae17-a6c5c1ee75ec"
 CONNECTED_SEC = 90
 COLD = timedelta(days=3)
 
@@ -218,8 +223,8 @@ def _compute(cur, lead_ids):
                   i.email, i.name, i.raw_payload
            from calendly_scheduled_events e
            join calendly_invitees i on i.event_uri = e.uri
-           where (e.event_type_uri = %s or e.name ilike 'Partnership Call w/%%') and e.excluded_at is null""",
-        (DIRECT_URI,),
+           where (e.event_type_uri = any(%s) or e.name ilike 'Partnership Call w/%%') and e.excluded_at is null""",
+        ([DIRECT_URI, ROBBY_DC_URI],),
     )
     bookings = defaultdict(list)
     for etype, ename, start, status, created, iemail, iname, raw in cur.fetchall():
@@ -227,7 +232,8 @@ def _compute(cur, lead_ids):
         phone = raw.get("text_reminder_number") if isinstance(raw, dict) else None
         cid = resolve(utm, iemail, phone, iname)
         if cid in cycles_by_lead:
-            bookings[cid].append(("direct" if etype == DIRECT_URI else "partnership", start, norm(status), created))
+            kind = "direct" if etype == DIRECT_URI else "dc_robby" if etype == ROBBY_DC_URI else "partnership"
+            bookings[cid].append((kind, start, norm(status), created))
 
     # 4. Per-lead signals (forms / calls / sms).
     def fetch(table, cols, extra=""):
@@ -242,8 +248,8 @@ def _compute(cur, lead_ids):
     triage, closer, dc = defaultdict(list), defaultdict(list), defaultdict(list)
     for lid, ft, cs, filed in fetch("airtable_setter_triage_calls", "form_type, call_status, airtable_created_at"):
         triage[lid].append((ft, norm(cs), filed))
-    for lid, co, ev, filed in fetch("airtable_full_closer_report", "call_outcome, date_time_of_call, airtable_created_at", "and form_type='New'"):
-        closer[lid].append((co, ev, filed))
+    for lid, co, ev, filed, cnames in fetch("airtable_full_closer_report", "call_outcome, date_time_of_call, airtable_created_at, closer_names", "and form_type='New'"):
+        closer[lid].append((co, ev, filed, cnames))
     for lid, cl, fu, ev, filed in fetch("airtable_digital_college_sales", "closed, follow_up, date_time_of_call, airtable_created_at", "and excluded_at is null"):
         dc[lid].append((norm(cl), norm(fu), ev, filed))
 
@@ -280,7 +286,7 @@ def _compute(cur, lead_ids):
                     setdq(filed, "confirmation" if ft == "Closer Triage Form" else "triage")
                 if ft != "Closer Triage Form" and "high ticket booking" in cs:
                     setter_htbook_at = filed if setter_htbook_at is None or filed < setter_htbook_at else setter_htbook_at
-            for co, ev, filed in closer.get(cid, []):
+            for co, ev, filed, _cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
@@ -355,11 +361,33 @@ def _compute(cur, lead_ids):
                 else:
                     if "high ticket booking" in cs or cs.startswith("confirmed"):
                         ph[p]["book"].append(filed)
-            for co, ev, filed in closer.get(cid, []):
+            # Nearest Calendly event-kind to a call time (backup signal): a
+            # "Call with Robby" (dc_robby) event near the form = a Robby DC call.
+            def nearest_event_kind(when):
+                if when is None:
+                    return None
+                cands = sorted(
+                    (abs((s - when).total_seconds()), k)
+                    for (k, s, _st, _cr) in bookings.get(cid, []) if s is not None
+                )
+                return cands[0][1] if cands and cands[0][0] <= 2 * 86400 else None
+
+            for co, ev, filed, cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
                 p = phase_of(ev, filed)
+                # A "Digital College Closed" EOC is a DC sale (copied onto the
+                # closer form). It's an HT SHOW only when it was an HT call — i.e.
+                # NOT Robby's. Robby = the EOC submitter is Robby (closer_names),
+                # or it sat on a "Call with Robby" Calendly event. Aman's downsell
+                # on a strat/partnership call IS an HT show.
+                if outcome_close_type(co) == "dc":
+                    submitter_robby = any("robby" in norm(n) for n in (cnames or []))
+                    robby_dc = submitter_robby or nearest_event_kind(ev or filed) == "dc_robby"
+                    if not robby_dc:
+                        ph[p]["show"].append(t)
+                    continue
                 if outcome_showed(co):
                     ph[p]["show"].append(t)
                 if outcome_close_type(co) == "ht":
