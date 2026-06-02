@@ -388,6 +388,55 @@ def _compute(cur, lead_ids):
     return cycle_rows, stage_rows
 
 
+def retag_by_contact(emails=None, phones=None, utm_terms=None, trigger="manual"):
+    """Resolve identity (utm token / email / phone) -> in-scope close_id(s) and
+    retag them. For the Calendly/Typeform webhooks, whose payloads carry the
+    per-lead utm token (aaid_<uuid>) or an email/phone rather than a Close id. No
+    match (e.g. a brand-new opt-in whose Close lead doesn't exist yet) is a clean
+    no-op — the Close webhook tags it once the lead lands."""
+    em = [norm(e) for e in (emails or []) if e]
+    ph = [d for d in (digits10(p) for p in (phones or [])) if d]
+    ut = [t for t in (utm_terms or []) if t]
+    if not em and not ph and not ut:
+        return {"ok": True, "lead_count": 0, "anomalies": [], "trigger": trigger, "lead_ids": []}
+    conn = _connect()
+    cur = conn.cursor()
+    ids = set()
+    if ut:
+        # utm token -> close_id, UNIQUE-mapping only (a token shared across leads
+        # is ambiguous and dropped — same guard as the dashboard resolver).
+        cur.execute("select utm_term, close_id from close_leads where utm_term = any(%s)", (ut,))
+        by_term = defaultdict(set)
+        for term, cid in cur.fetchall():
+            by_term[term].add(cid)
+        for cids in by_term.values():
+            if len(cids) == 1:
+                ids.update(cids)
+    if em:
+        cur.execute(
+            """select cl.close_id from close_leads cl
+               cross join lateral jsonb_array_elements(coalesce(cl.contacts,'[]'::jsonb)) c
+               cross join lateral jsonb_array_elements(coalesce(c->'emails','[]'::jsonb)) e
+               where lower(trim(e->>'email')) = any(%s) and cl.latest_opt_in_date >= %s""",
+            (em, EFFECTIVE_DATE),
+        )
+        ids.update(r[0] for r in cur.fetchall())
+    if ph:
+        cur.execute(
+            r"""select cl.close_id from close_leads cl
+                cross join lateral jsonb_array_elements(coalesce(cl.contacts,'[]'::jsonb)) c
+                cross join lateral jsonb_array_elements(coalesce(c->'phones','[]'::jsonb)) p
+                where right(regexp_replace(p->>'phone','\D','','g'),10) = any(%s) and cl.latest_opt_in_date >= %s""",
+            (ph, EFFECTIVE_DATE),
+        )
+        ids.update(r[0] for r in cur.fetchall())
+    cur.close()
+    conn.close()
+    if not ids:
+        return {"ok": True, "lead_count": 0, "anomalies": [], "trigger": trigger, "lead_ids": []}
+    return retag(lead_ids=list(ids), trigger=trigger)
+
+
 def active_lead_ids(cur):
     """In-scope leads whose tags can still change — the bounded set the cron retags
     each tick. Excludes only stable-terminal leads (closed/dq and not re-opted since),

@@ -220,6 +220,26 @@ class handler(BaseHTTPRequestHandler):
             "typeform_webhook: processed event_type=%s response_id=%s form_id=%s",
             event_type, upserted_id, form_id,
         )
+
+        # Live re-tag for a RE-opt-in (existing lead opts in again -> a new cycle).
+        # Resolve by the response's email + phone; a brand-new opt-in whose Close
+        # lead doesn't exist yet is a clean no-op (Close owns new-lead creation).
+        # Fail-soft.
+        answers = form_response.get("answers") or []
+        tf_email = next((a.get("email") for a in answers if a.get("type") == "email"), None)
+        tf_phone = next((a.get("phone_number") for a in answers if a.get("type") == "phone_number"), None)
+        if tf_email or tf_phone:
+            try:
+                from shared.lead_tagging import retag_by_contact
+
+                retag_by_contact(
+                    emails=[tf_email] if tf_email else None,
+                    phones=[tf_phone] if tf_phone else None,
+                    trigger="webhook:typeform",
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning("typeform_webhook: lead retag failed: %s", exc)
+
         self._respond(
             200,
             {

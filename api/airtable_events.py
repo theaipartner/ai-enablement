@@ -237,6 +237,18 @@ class handler(BaseHTTPRequestHandler):
             notification_id[:48], payload_count,
             outcome.records_upserted, outcome.records_failed, new_cursor,
         )
+
+        # Live re-tag of the leads whose forms just changed (the lead_ids the
+        # pulled records already carry — no new fetch). Forms drive booked/
+        # confirmed/showed/closed/dq, so this is the most important live path.
+        # Fail-soft: never affect the webhook ack.
+        if outcome.touched_lead_ids:
+            try:
+                from shared.lead_tagging import retag
+
+                retag(lead_ids=list(outcome.touched_lead_ids), trigger="webhook:airtable")
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning("airtable_webhook: lead retag failed: %s", exc)
         self._respond(
             200,
             {

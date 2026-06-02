@@ -199,6 +199,27 @@ class handler(BaseHTTPRequestHandler):
             "calendly_webhook: processed event=%s route=%s upserted=%s",
             event_name, route, upserted_id,
         )
+
+        # Live re-tag of the booking's lead — the invitee payload carries the
+        # per-lead utm token (tracking.utm_term, the aaid_<uuid>) which resolves
+        # to a Close lead, with the invitee email as fallback. Fail-soft; a
+        # brand-new invitee whose Close lead doesn't exist yet is a clean no-op
+        # (Close webhook tags it when the lead lands).
+        if isinstance(payload, dict):
+            utm = (payload.get("tracking") or {}).get("utm_term")
+            invitee_email = payload.get("email")
+            if utm or invitee_email:
+                try:
+                    from shared.lead_tagging import retag_by_contact
+
+                    retag_by_contact(
+                        utm_terms=[utm] if utm else None,
+                        emails=[invitee_email] if invitee_email else None,
+                        trigger="webhook:calendly",
+                    )
+                except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                    logger.warning("calendly_webhook: lead retag failed: %s", exc)
+
         self._respond(
             200,
             {"delivered": True, "event": event_name, "upserted_id": upserted_id},

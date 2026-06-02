@@ -58,6 +58,10 @@ class SyncOutcome:
     setter_name_fill_count: int = 0
     full_closer_records_seen: int = 0
     errors: list[str] = field(default_factory=list)
+    # lead_ids of the form records upserted this run — lets the webhook live-retag
+    # exactly the affected leads (the persistent lead-tag system). Additive; the
+    # cron / backfill callers simply ignore it.
+    touched_lead_ids: set[str] = field(default_factory=set)
 
     def record_error(self, where: str, err: Exception | str) -> None:
         self.errors.append(f"{where}: {err}")
@@ -313,6 +317,8 @@ def upsert_changed_records(
                 continue
             outcome.records_parsed += 1
             _count_attribution_signal(row, target_table, outcome)
+            if row.get("lead_id"):
+                outcome.touched_lead_ids.add(row["lead_id"])
             batches.setdefault(target_table, []).append(row)
             rows_to_notify.append((row, target_table))
 
