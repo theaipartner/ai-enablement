@@ -22,6 +22,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: '/control-center', label: 'Control Center', requiredTier: 'admin' },
   { href: '/cost-hub', label: 'Cost Hub', requiredTier: 'admin' },
+  { href: '/lead-tag-log', label: 'Tag Log', requiredTier: 'admin' },
 ]
 
 export function CeoSidebar({ accessTier }: { accessTier: AccessTier }) {
