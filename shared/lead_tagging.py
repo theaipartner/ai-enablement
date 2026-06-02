@@ -85,21 +85,34 @@ def outcome_showed(co):
 
 
 def _connect():
-    """Transaction pooler (Vercel via SUPABASE_DB_POOL_URL); local falls back to
-    the session pooler-url + SUPABASE_DB_PASSWORD (one-shot scripts are fine on it)."""
+    """Connect to Postgres via the transaction pooler.
+
+    Vercel (two env vars, foolproof against password special-chars):
+      SUPABASE_DB_POOL_URL  — password-LESS, e.g.
+        postgresql://postgres.<ref>@aws-...pooler.supabase.com:6543/postgres
+      SUPABASE_DB_PASSWORD  — raw password; the module URL-encodes + injects it.
+    A SUPABASE_DB_POOL_URL that already embeds a password is used verbatim.
+    Local: no SUPABASE_DB_POOL_URL -> fall back to supabase/.temp/pooler-url +
+    SUPABASE_DB_PASSWORD from .env.local (session pooler is fine for one-shots)."""
     url = os.getenv("SUPABASE_DB_POOL_URL")
-    if not url:
-        env = {}
-        env_path = _REPO_ROOT / ".env.local"
-        if env_path.exists():
-            for ln in env_path.read_text().splitlines():
-                if ln.strip() and not ln.startswith("#") and "=" in ln:
-                    k, _, v = ln.partition("=")
-                    env[k.strip()] = v.strip().strip('"').strip("'")
-        pw = urllib.parse.quote(env["SUPABASE_DB_PASSWORD"], safe="")
-        m = re.match(r"^(postgresql://[^@]+)@(.+)$", (_REPO_ROOT / "supabase/.temp/pooler-url").read_text().strip())
-        url = f"{m.group(1)}:{pw}@{m.group(2)}"
-    return psycopg2.connect(url, sslmode="require", connect_timeout=20)
+    pw = os.getenv("SUPABASE_DB_PASSWORD")
+    if url:
+        # Inject the password into a password-less URL (userinfo has no ':pass').
+        m = re.match(r"^(postgresql://)([^:@/]+)(:[^@]*)?@(.+)$", url)
+        if m and not m.group(3) and pw:
+            url = f"{m.group(1)}{m.group(2)}:{urllib.parse.quote(pw, safe='')}@{m.group(4)}"
+        return psycopg2.connect(url, sslmode="require", connect_timeout=20)
+    # Local fallback.
+    env = {}
+    env_path = _REPO_ROOT / ".env.local"
+    if env_path.exists():
+        for ln in env_path.read_text().splitlines():
+            if ln.strip() and not ln.startswith("#") and "=" in ln:
+                k, _, v = ln.partition("=")
+                env[k.strip()] = v.strip().strip('"').strip("'")
+    pw = urllib.parse.quote(env["SUPABASE_DB_PASSWORD"], safe="")
+    m = re.match(r"^(postgresql://[^@]+)@(.+)$", (_REPO_ROOT / "supabase/.temp/pooler-url").read_text().strip())
+    return psycopg2.connect(f"{m.group(1)}:{pw}@{m.group(2)}", sslmode="require", connect_timeout=20)
 
 
 # --------------------------------------------------------------------------- #
