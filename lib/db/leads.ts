@@ -103,6 +103,13 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // Closed). A direct lead who confirmed then fell back to "Eligible" still
   // reads "Confirmed" here. Closed reads the offer (High Ticket / Digital College).
   latestStageWord: string
+  // Latest-cycle tag hits — let the roster filter (reachedStage/matchesType in
+  // leads-funnel.ts) read the persistent tags instead of the live flags, so the
+  // funnel→roster drill stays coherent. null when the lead has no cycle.
+  tagBecameDirect: boolean
+  tagReactivatedAt: string | null
+  tagPrimaryHits: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
+  tagReactiveHits: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
 }
 
 // A ≥90s outbound dial is a "connected" call (the FMR_DIAL_CONNECTED_SEC
@@ -228,11 +235,6 @@ function outcomeShowed(callOutcome: string | null): boolean {
   if (!v) return false
   if (v.includes('ghost') || v.includes('no show') || v.includes('reschedul') || v.includes('cancel')) return false
   return true
-}
-
-// New-form Call Outcome → a full close (Deposit is NOT a close).
-function outcomeClosed(callOutcome: string | null): boolean {
-  return outcomeCloseType(callOutcome) !== null
 }
 
 // New-form Call Outcome → which offer closed, or null. Aman's downsell DC
@@ -651,6 +653,11 @@ export async function getLeadsForRange(
       // Re-opt-in tag + opted-in date (newest opt-in) from the tags.
       optInType: tag ? (tag.reOptIn ? 'reoptin' : 'new') : r.optInType,
       optInAt: tag ? tag.latestOptInAt : r.optInAt,
+      // Latest-cycle tag hits for the roster filter predicate.
+      tagBecameDirect: tag ? tag.becameDirect : false,
+      tagReactivatedAt: tag ? tag.reactivatedAt : null,
+      tagPrimaryHits: tag ? tag.primaryHits : null,
+      tagReactiveHits: tag ? tag.reactiveHits : null,
     }
   })
 }

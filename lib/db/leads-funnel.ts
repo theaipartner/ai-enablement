@@ -36,7 +36,7 @@ import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 // (closesHt + closesDc === closes). DC closes feed connected/booked/shows
 // monotonically via reachedStage, same as HT.
 export type TotalBox = {
-  optIns: number; dials: number; connected: number; books: number; shows: number
+  optIns: number; dials: number; connected: number; books: number; confirms: number; shows: number
   closes: number; closesHt: number; closesDc: number
 }
 export type DirectBox = {
@@ -64,23 +64,12 @@ export type LeadsFunnel = {
 // MUST hold if the funnel is counting each lead once and bucketing cleanly.
 // Empty = clean. A violation means a bug (double-count, mis-bucket, or a stage
 // predicate that lets a later stage exceed an earlier one).
-export function validateFunnel(f: LeadsFunnel, rows: LeadRow[]): string[] {
+export function validateFunnel(f: LeadsFunnel, totalCycles: number, distinctLeads: number): string[] {
   const w: string[] = []
 
-  // (1) Per-lead-once: the cohort must have no duplicate lead rows (every box
-  //     counts per row, so a dup row would double-count that lead everywhere).
-  const seen = new Set<string>()
-  let dups = 0
-  for (const r of rows) {
-    if (seen.has(r.leadId)) dups++
-    else seen.add(r.leadId)
-  }
-  if (dups > 0) w.push(`${dups} duplicate lead row(s) in the cohort — leads would double-count.`)
-
-  // (2) Monotonicity: within each box a later stage can't exceed an earlier one.
-  //     (Total is the exception — Books MAY exceed Connected by design, since a
-  //     self-booked direct lead is booked but not connected — so Total checks
-  //     the two chains that DO hold rather than one straight ladder.)
+  // Monotonicity: within each box a later stage can't exceed an earlier one.
+  // Total is special — Books MAY exceed Connected (a self-booked direct lead is
+  // booked but not connected) — so Total checks the two chains that DO hold.
   const chain = (label: string, ...seq: [string, number][]) => {
     for (let i = 1; i < seq.length; i++) {
       if (seq[i][1] > seq[i - 1][1]) {
@@ -88,20 +77,22 @@ export function validateFunnel(f: LeadsFunnel, rows: LeadRow[]): string[] {
       }
     }
   }
-  chain('Total', ['opt-ins', f.total.optIns], ['connected', f.total.connected], ['shows', f.total.shows], ['closes', f.total.closes])
-  chain('Total', ['opt-ins', f.total.optIns], ['books', f.total.books], ['shows', f.total.shows])
+  chain('Total', ['opt-ins', f.total.optIns], ['books', f.total.books], ['confirms', f.total.confirms], ['shows', f.total.shows], ['closes', f.total.closes])
+  chain('Total', ['opt-ins', f.total.optIns], ['connected', f.total.connected])
   chain('Direct', ['books', f.direct.books], ['connected', f.direct.connected], ['confirms', f.direct.confirms], ['shows', f.direct.shows], ['closes', f.direct.closes])
-  chain('Setter', ['pool', f.setter.pool], ['connected', f.setter.connected], ['books', f.setter.books], ['shows', f.setter.shows], ['closes', f.setter.closes])
+  chain('Opt-in', ['pool', f.setter.pool], ['connected', f.setter.connected], ['books', f.setter.books], ['shows', f.setter.shows], ['closes', f.setter.closes])
   chain('Reactivation', ['pool', f.reactivation.pool], ['connected', f.reactivation.connected], ['books', f.reactivation.books], ['shows', f.reactivation.shows], ['closes', f.reactivation.closes])
 
-  // (3) Partition: every lead is exactly one of Direct or Setter, so the two
-  //     pools must sum to the whole cohort.
+  // Partition: every cycle is exactly Direct (became direct) or Opt-in. Direct
+  // books == direct pool (every direct cycle self-booked), so the two must sum
+  // to all opt-in cycles.
   if (f.direct.books + f.setter.pool !== f.total.optIns) {
-    w.push(`Partition: Direct (${f.direct.books}) + Setter (${f.setter.pool}) ≠ opt-ins (${f.total.optIns}) — a lead is mis-bucketed or counted in both.`)
+    w.push(`Partition: Direct (${f.direct.books}) + Opt-in (${f.setter.pool}) ≠ opt-in cycles (${f.total.optIns}) — a cycle is mis-bucketed.`)
   }
-  // (4) Reactivation ⊂ Direct — the reactive pool can't exceed direct bookings.
-  if (f.reactivation.pool > f.direct.books) {
-    w.push(`Reactivation pool (${f.reactivation.pool}) > Direct books (${f.direct.books}) — reactivation should be a subset of direct.`)
+  // Cycle/person identity: opt-in CYCLES ≥ distinct leads; the gap is exactly the
+  // re-opt-in extra cycles (the roster is per-person, the funnel per-cycle).
+  if (f.total.optIns < distinctLeads) {
+    w.push(`opt-in cycles (${f.total.optIns}) < distinct leads (${distinctLeads}) — impossible (cycles can't be fewer than people).`)
   }
   return w
 }
@@ -117,8 +108,14 @@ export function validateFunnel(f: LeadsFunnel, rows: LeadRow[]): string[] {
 export type LeadFilterType = 'direct' | 'setter' | 'reactivation'
 export type FunnelStage = 'connected' | 'booked' | 'confirmed' | 'showed' | 'closed'
 
-export const isDirect = (r: LeadRow): boolean => r.hasDirect || r.reactivatedAt !== null
-export const isReact = (r: LeadRow): boolean => r.reactivatedAt !== null
+// Tag-aware (latest cycle) with a live fallback when the lead has no cycle.
+// Under the persistent-tag model 'direct' = became direct (reactivation is NO
+// LONGER ⊂ direct — opt-in leads reactivate too), so the partition is clean:
+// direct vs opt-in (setter) by direct-ness; reactivation cross-cuts.
+export const isDirect = (r: LeadRow): boolean =>
+  r.tagPrimaryHits ? r.tagBecameDirect : (r.hasDirect || r.reactivatedAt !== null)
+export const isReact = (r: LeadRow): boolean =>
+  r.tagPrimaryHits ? r.tagReactivatedAt !== null : r.reactivatedAt !== null
 export const isSetter = (r: LeadRow): boolean => !isDirect(r)
 
 // Does the lead belong to the given lead-type? (null = no type restriction = Total.)
@@ -134,11 +131,25 @@ export function matchesType(r: LeadRow, type: LeadFilterType | null): boolean {
 // definitions exactly. `type` null = Total (all leads). Membership (matchesType)
 // is applied separately by the caller; this answers the stage question per type.
 export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: FunnelStage): boolean {
+  // Tag-aware (latest cycle): mirror the reader's per-cycle predicate. The
+  // tagger's per-phase hits are already monotonic; reactivation reads the
+  // post-handover (reactive) phase only, everything else the max across phases.
+  if (r.tagPrimaryHits) {
+    const P = r.tagPrimaryHits
+    const R = r.tagReactiveHits
+    if (type === 'reactivation') {
+      if (stage === 'confirmed') return false
+      return !!R?.[stage]
+    }
+    return P[stage] || !!R?.[stage]
+  }
+
+  // Live fallback (lead has no cycle).
   if (type === 'reactivation') {
     switch (stage) {
       case 'connected': return r.reactConnected || r.reactBooked || r.reactShowed || r.reactClosed
       case 'booked': return r.reactBooked || r.reactShowed || r.reactClosed
-      case 'confirmed': return false // reactive funnel has no Confirmed stage
+      case 'confirmed': return false
       case 'showed': return r.reactShowed || r.reactClosed
       case 'closed': return r.reactClosed
     }
@@ -146,7 +157,7 @@ export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: Fun
   if (type === 'direct') {
     switch (stage) {
       case 'connected': return r.connected || r.confirmed || r.showed || r.closed
-      case 'booked': return true // every direct lead has booked, by definition
+      case 'booked': return true
       case 'confirmed': return r.confirmed || r.showed || r.closed
       case 'showed': return r.showed || r.closed
       case 'closed': return r.closed
@@ -154,21 +165,15 @@ export function reachedStage(r: LeadRow, type: LeadFilterType | null, stage: Fun
   }
   if (type === 'setter') {
     switch (stage) {
-      // Setter connected = a setter booking (hasPartnership) counts, plus the
-      // raw connect / show / close. This is connectedEffective.
       case 'connected': return r.connectedEffective
       case 'booked': return r.hasPartnership || r.showed || r.closed
-      case 'confirmed': return false // setter funnel has no Confirmed stage
+      case 'confirmed': return false
       case 'showed': return r.showed || r.closed
       case 'closed': return r.closed
     }
   }
-  // Total (all leads).
   const booked = r.hasDirect || r.hasPartnership
   switch (stage) {
-    // A PURE DIRECT booking is NOT a connection, so Connected uses
-    // connectedEffective (which excludes hasDirect) while Booked includes it —
-    // Books can therefore exceed Connected in Total, by design.
     case 'connected': return r.connectedEffective
     case 'booked': return booked || r.showed || r.closed
     case 'confirmed': return r.confirmed || r.showed || r.closed
@@ -249,28 +254,42 @@ async function scanDialWindows(
 }
 
 export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise<LeadsFunnel> {
+  // Count PER CYCLE from the persistent tags (a re-opt double-counts). Scope to
+  // the leads the page passed (respects the view filter); the dials bracket +
+  // the integrity identity use the per-PERSON rows. HT-only: closes are HT
+  // closes (DC is excluded from the tags), so closesDc is always 0.
+  const { getLeadCycleRows, reachedStage: rs, matchesType: mt } = await import('./lead-tags')
+  const rowIds = new Set(rows.map((r) => r.leadId))
+  const cycles = (await getLeadCycleRows(range)).filter((c) => rowIds.has(c.closeId))
+  const qualByLead = new Map(rows.map((r) => [r.leadId, r.qualified]))
+
   const win = await scanDialWindows(
     rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
   )
-  const dials = (r: LeadRow) => win.get(r.leadId)?.dialsBeforeClose ?? 0
-  const postDials = (r: LeadRow) => win.get(r.leadId)?.postReactDials ?? 0
 
-  const sum = (pred: (r: LeadRow) => boolean, val: (r: LeadRow) => number) =>
-    rows.reduce((acc, r) => (pred(r) ? acc + val(r) : acc), 0)
-  const count = (pred: (r: LeadRow) => boolean) => rows.reduce((acc, r) => (pred(r) ? acc + 1 : acc), 0)
-  // Closes split by offer for a given funnel type: a lead that reached the
-  // closed stage, counted into ht/dc by its closeType.
-  const closesOf = (type: LeadFilterType | null, member: (r: LeadRow) => boolean = () => true) => {
-    let ht = 0, dc = 0
-    for (const r of rows) {
-      if (!member(r) || !reachedStage(r, type, 'closed')) continue
-      if (r.closeType === 'dc') dc++
-      else ht++ // 'ht' or null (a close with unknown offer falls to HT)
+  const countCyc = (type: LeadFilterType | null, stage: FunnelStage) =>
+    cycles.reduce((a, c) => (mt(c, type) && rs(c, type, stage) ? a + 1 : a), 0)
+  const poolCyc = (type: LeadFilterType) => cycles.filter((c) => mt(c, type)).length
+  const qual = (type: LeadFilterType | null, q: string) =>
+    cycles.filter((c) => mt(c, type) && qualByLead.get(c.closeId) === q).length
+  const closesCyc = (type: LeadFilterType | null) => {
+    const n = countCyc(type, 'closed')
+    return { closes: n, closesHt: n, closesDc: 0 } // HT-only (DC excluded from the tags)
+  }
+  // Dials are a per-lead bracket, not a stage — sum over DISTINCT leads in the
+  // box so a re-opt lead's dials aren't double-counted.
+  const dialsFor = (type: LeadFilterType | null, post = false) => {
+    const seen = new Set<string>()
+    let n = 0
+    for (const c of cycles) {
+      if (!mt(c, type) || seen.has(c.closeId)) continue
+      seen.add(c.closeId)
+      const w = win.get(c.closeId)
+      n += post ? (w?.postReactDials ?? 0) : (w?.dialsBeforeClose ?? 0)
     }
-    return { closes: ht + dc, closesHt: ht, closesDc: dc }
+    return n
   }
 
-  // Adspend for the window (Meta mirror). Provisional/empty → null.
   let adspendUsd: number | null = null
   try {
     const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
@@ -279,76 +298,48 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     adspendUsd = null
   }
 
-  // Every box's stage counts go through reachedStage (the shared predicate), so
-  // a bar's count equals exactly the roster it filters to when clicked. Stages
-  // are cumulative/monotonic: a later stage back-fills the earlier ones, and
-  // "connected" is form-OR-call, so books never exceed connected.
   const total: TotalBox = {
-    optIns: rows.length,
-    dials: sum(() => true, dials),
-    connected: count((r) => reachedStage(r, null, 'connected')),
-    books: count((r) => reachedStage(r, null, 'booked')),
-    shows: count((r) => reachedStage(r, null, 'showed')),
-    ...closesOf(null),
+    optIns: cycles.length,
+    dials: dialsFor(null),
+    connected: countCyc(null, 'connected'),
+    books: countCyc(null, 'booked'),
+    confirms: countCyc(null, 'confirmed'),
+    shows: countCyc(null, 'showed'),
+    ...closesCyc(null),
   }
-
-  // Direct funnel — each stage counted ONCE per lead and CUMULATIVE: reaching a
-  // later stage implies every earlier one, so the ladder is monotonic
-  // (books ≥ connected ≥ confirms ≥ shows ≥ closes). A lead that confirmed in
-  // direct, fell through to reactive, then showed/closed still reads
-  // Booked·Confirmed·Showed·Closed here. Why each later stage back-fills the
-  // earlier ones rather than relying on the raw flag:
-  //   - confirmed: confirmation allows a sub-90s call (§5.2), and a showed/closed
-  //     lead necessarily confirmed — so showed/closed back-fill confirms.
-  //   - connected: a strat-call show/close is a Calendly/Zoom meeting, not a ≥90s
-  //     close_calls outbound dial, so anyCallConnected is often false for leads
-  //     who clearly engaged — confirmed/showed/closed back-fill connected to keep
-  //     the rendered ladder from inverting.
-  // A reactive re-book never adds a second direct Booked (books = count(isDirect),
-  // one per lead). showed/closed are optInAt-scoped, so post-reactivation
-  // outcomes already count here (they're originally direct leads).
   const direct: DirectBox = {
-    qualifiedOptIns: count((r) => r.qualified === 'qualified'),
-    dials: sum(isDirect, dials),
-    books: count((r) => isDirect(r) && reachedStage(r, 'direct', 'booked')),
-    connected: count((r) => isDirect(r) && reachedStage(r, 'direct', 'connected')),
-    confirms: count((r) => isDirect(r) && reachedStage(r, 'direct', 'confirmed')),
-    shows: count((r) => isDirect(r) && reachedStage(r, 'direct', 'showed')),
-    ...closesOf('direct', isDirect),
+    qualifiedOptIns: qual('direct', 'qualified'),
+    dials: dialsFor('direct'),
+    books: countCyc('direct', 'booked'),
+    connected: countCyc('direct', 'connected'),
+    confirms: countCyc('direct', 'confirmed'),
+    shows: countCyc('direct', 'showed'),
+    ...closesCyc('direct'),
   }
-
   const setter: PoolFunnelBox = {
-    pool: count(isSetter),
-    qualified: count((r) => isSetter(r) && r.qualified === 'qualified'),
-    unqualified: count((r) => isSetter(r) && r.qualified === 'non-qualified'),
-    dials: sum(isSetter, dials),
-    connected: count((r) => isSetter(r) && reachedStage(r, 'setter', 'connected')),
-    books: count((r) => isSetter(r) && reachedStage(r, 'setter', 'booked')),
-    shows: count((r) => isSetter(r) && reachedStage(r, 'setter', 'showed')),
-    ...closesOf('setter', isSetter),
+    pool: poolCyc('setter'),
+    qualified: qual('setter', 'qualified'),
+    unqualified: qual('setter', 'non-qualified'),
+    dials: dialsFor('setter'),
+    connected: countCyc('setter', 'connected'),
+    books: countCyc('setter', 'booked'),
+    shows: countCyc('setter', 'showed'),
+    ...closesCyc('setter'),
   }
-
-  // Reactivation funnel — fully POST-handover: every stage counts only activity
-  // after the lead lost its strat spot (reactivatedAt). dials/connected are
-  // already post-react via scanDialWindows; books/shows/closes use the
-  // post-react signals from leads.ts (a pre-handover partnership booking or
-  // show/close belongs to Direct, not here). Cumulative + monotonic like the
-  // Direct box: reaching a later stage back-fills the earlier ones
-  // (books ≥ connected ≥ shows ≥ closes), so a post-react show/close that isn't
-  // mirrored by a ≥90s dial or a captured partnership booking still reads
-  // correctly rather than inverting the ladder.
+  // Reactivation cross-cuts (a reactivated lead is also in Direct or Opt-in);
+  // every stage is the POST-handover (reactive) phase only.
   const reactivation: PoolFunnelBox = {
-    pool: count(isReact),
-    qualified: count((r) => isReact(r) && r.qualified === 'qualified'),
-    unqualified: count((r) => isReact(r) && r.qualified === 'non-qualified'),
-    dials: sum(isReact, postDials),
-    connected: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'connected')),
-    books: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'booked')),
-    shows: count((r) => isReact(r) && reachedStage(r, 'reactivation', 'showed')),
-    ...closesOf('reactivation', isReact),
+    pool: poolCyc('reactivation'),
+    qualified: qual('reactivation', 'qualified'),
+    unqualified: qual('reactivation', 'non-qualified'),
+    dials: dialsFor('reactivation', true),
+    connected: countCyc('reactivation', 'connected'),
+    books: countCyc('reactivation', 'booked'),
+    shows: countCyc('reactivation', 'showed'),
+    ...closesCyc('reactivation'),
   }
 
   const funnel: LeadsFunnel = { adspendUsd, total, direct, setter, reactivation, warnings: [] }
-  funnel.warnings = validateFunnel(funnel, rows)
+  funnel.warnings = validateFunnel(funnel, cycles.length, new Set(cycles.map((c) => c.closeId)).size)
   return funnel
 }

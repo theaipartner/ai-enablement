@@ -31,10 +31,11 @@ function adsHref(range: Range): string {
 export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Range }) {
   const { total: t, direct: d, setter: s, reactivation: re } = funnel
   const dials = (n: number) => `${n.toLocaleString('en-US')} dials`
-  // Closes node bracket — split high-ticket vs Digital College so each is
-  // visible. Shown only when there are closes.
+  // Closes node bracket. The funnel is HT-only (DC is excluded from the tags),
+  // so dc is always 0 today — the bracket only appears if/when a DC branch
+  // re-enters the tagged stages. The closes value itself is the HT count.
   const closeSplit = (ht: number, dc: number): string | undefined =>
-    ht + dc > 0 ? `${ht} HT / ${dc} DC` : undefined
+    dc > 0 ? `${ht} HT / ${dc} DC` : undefined
   return (
     <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
       <StackedFunnelBox
@@ -49,13 +50,14 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
           { value: t.optIns, caption: 'Opt-ins', accent: true, bracket: dials(t.dials) },
           { value: t.connected, caption: 'Connected', stage: 'connected' },
           { value: t.books, caption: 'Books', stage: 'booked' },
+          { value: t.confirms, caption: 'Confirms', stage: 'confirmed' },
           { value: t.shows, caption: 'Shows', stage: 'showed' },
           { value: t.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(t.closesHt, t.closesDc) },
         ]}
       />
       <StackedFunnelBox
         label="Direct"
-        sublabel="Booked a strategy call after opt-in (includes reactivations)"
+        sublabel="Self-booked a strategy call after opt-in"
         tone="pos"
         type="direct"
         range={range}
@@ -85,7 +87,7 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
       />
       <StackedFunnelBox
         label="Reactivation"
-        sublabel="Direct leads that lost their strat spot · activity counted after the handover"
+        sublabel="Any lead that went cold or was re-booked after opt-in · activity counted after the handover"
         tone="blue"
         type="reactivation"
         range={range}
