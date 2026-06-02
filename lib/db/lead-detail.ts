@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { SetterCallReviewFull } from './setter-calls'
 import type { BookingType } from './leads'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
+import { getLeadCycles, deriveType, type CycleStages } from './lead-tags'
 
 // Per-lead detail (the /sales-dashboard/leads/[close_id] page). Pulls one
 // Close lead's identity + opt-in facts, its FULL call history (both
@@ -108,6 +109,18 @@ export type LeadDetail = {
   calls: LeadCallEntry[]
   // Lifecycle timeline, newest first, scoped from the latest opt-in.
   timeline: LeadTimelineEvent[]
+  // --- Phase 5: journey/status sourced from the persistent tags (lead_cycles /
+  // lead_cycle_stages via lead-tags.ts), scoped to the lead's CURRENT (latest)
+  // cycle. These supersede the legacy live-compute fields above (confirmed /
+  // showed / reactConnected / directShowed / …) for the journey render; those
+  // are slated for removal in a follow-up cleanup. ---
+  tagIsDirect: boolean          // current cycle has a direct (strat self-book)
+  tagReactivatedAt: string | null
+  tagIsDq: boolean              // dq tag, not suppressed by an HT close
+  tagCloseType: 'ht' | 'dc' | null
+  // Per-phase stage hits for the current cycle (already monotonic from the tagger).
+  journeyPrimary: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean }
+  journeyReactive: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
 }
 
 function qualFromMarketingQualified(mq: string | null): Qualification {
@@ -606,22 +619,44 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     connected.length > 0 || setterTriaged || confirmReached || hasPartnership || showed || closed
   const reactBooked = partnershipCreatedTimes.some((t) => afterReact(t))
 
+  // Phase 5 — journey/status/connected/opt-in dates from the persistent tags
+  // (the source of truth), scoped to the CURRENT cycle. getLeadCycles returns
+  // newest-first, so [0] is the latest cycle and the last entry is the earliest.
+  const tagCycles = await getLeadCycles(closeId)
+  const tagCyc = tagCycles[0] ?? null
+  const tP = tagCyc?.primary ?? null
+  const tR = tagCyc?.reactive ?? null
+  const hits = (s: CycleStages | null) => ({
+    connected: !!s?.connectedAt,
+    booked: !!s?.bookedAt,
+    confirmed: !!s?.confirmedAt,
+    showed: !!s?.showedAt,
+    closed: !!s?.closedAt,
+  })
+  const tagFirstOptIn = tagCycles.length ? tagCycles[tagCycles.length - 1].optInAt : null
+  const tagLatestOptIn = tagCycles.length ? tagCycles[0].optInAt : null
+
   return {
     leadId: lead.close_id,
     prospectName: lead.display_name,
     dateCreated: lead.date_created,
-    dateFirstOptedIn: lead.date_first_opted_in,
-    latestOptInDate: lead.latest_opt_in_date,
-    numberOfOptIns: lead.number_of_opt_ins,
+    // First/latest opt-in now read from the tags (identical for single-opt-in
+    // leads — kills the old Close-vs-Typeform drift). Fall back to Close only
+    // when the lead has no cycle yet.
+    dateFirstOptedIn: tagFirstOptIn ?? lead.date_first_opted_in,
+    latestOptInDate: tagLatestOptIn ?? lead.latest_opt_in_date,
+    numberOfOptIns: tagCycles.length || lead.number_of_opt_ins,
     qualified: qualFromMarketingQualified(lead.marketing_qualified),
-    reactivatedAt: lead.reactivated_at,
+    // Reactivation now from the tag (not the dormant close_leads.reactivated_at).
+    reactivatedAt: tagCyc?.reactivatedAt ?? null,
     bookingType,
     confirmed,
     showed,
     closed,
     closeType,
     closeDetail,
-    connected: isConnected,
+    // Connected from the tag (current cycle, either phase) when tagged.
+    connected: tagCyc ? !!(tP?.connectedAt || tR?.connectedAt) : isConnected,
     // A close overrides a DQ — a closed lead is no longer DQ even if an earlier
     // form DQ'd them (Drake 2026-05-31, e.g. Jason Bright).
     isDq: isDq && !closed,
@@ -631,6 +666,13 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     reactClosed,
     directShowed,
     directClosed,
+    // Phase 5 tag-sourced journey/status (the render reads these).
+    tagIsDirect: !!tagCyc?.becameDirectAt,
+    tagReactivatedAt: tagCyc?.reactivatedAt ?? null,
+    tagIsDq: tagCyc ? deriveType(tagCyc).isDq : false,
+    tagCloseType: tagCyc ? (tP?.closeType || tR?.closeType || null) : null,
+    journeyPrimary: hits(tP),
+    journeyReactive: tR ? hits(tR) : null,
     // Header stats reflect the CURRENT journey (since the latest opt-in); the
     // lifecycle (`calls`) shows the full history.
     totalCalls: cycleCalls.length,

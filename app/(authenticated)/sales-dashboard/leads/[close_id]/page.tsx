@@ -59,7 +59,7 @@ export default async function LeadDetailPage({
 
       <SectionHeading>Journey</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 10, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>
-        funnel progress · direct phase{lead.reactivatedAt ? ' → reactive phase' : ''}
+        funnel progress · {lead.tagIsDirect ? 'direct' : 'opt-in'} phase{lead.tagReactivatedAt ? ' → reactive phase' : ''}
       </div>
       <JourneyProgress lead={lead} />
 
@@ -140,87 +140,57 @@ type JStage = { label: string; hit: boolean }
 type JSegment = { label: string; color: string; stages: JStage[]; since?: string | null }
 
 function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof getLeadDetail>>> }) {
-  const bt = lead.bookingType
   const segments: JSegment[] = []
-  // Once closed, the terminal stage reads the offer instead of a bare "Closed".
-  const closedLabel = lead.closeType === 'dc' ? 'Digital College' : lead.closeType === 'ht' ? 'High Ticket' : 'Closed'
+  // Terminal stage reads the offer (HT-only today; DC is excluded from the tags).
+  const closedLabel =
+    lead.tagCloseType === 'dc' ? 'Digital College' : lead.tagCloseType === 'ht' ? 'High Ticket' : 'Closed'
+  const P = lead.journeyPrimary
+  const R = lead.journeyReactive ?? { connected: false, booked: false, confirmed: false, showed: false, closed: false }
 
-  // Primary path. A direct/reactivation lead → Direct phase (Booked → Connected
-  // → Confirmed → Showed → Closed, mirroring the Direct funnel ladder). A
-  // setter-only lead → Setter-led (Connected → Booked → Showed → Closed). A
-  // reactivated lead is direct by definition, so it always gets the Direct phase
-  // even if the Calendly booking match didn't resolve here. "Connected" is the
-  // broad form-OR-call signal (so a confirmation-DQ lead like Presley reads as
-  // connected here); "Confirmed" stays literal (a DQ is not a confirm).
-  if (bt === 'direct' || bt === 'reactivation' || lead.reactivatedAt) {
+  // Primary lane — Direct (self-booked a strat call) or Opt-in, by the tag.
+  // A direct lead is NOT shown an opt-in lane; an opt-in lead (incl. one that
+  // later reactivated) shows the Opt-in lane (Drake 2026-06-02). The tagger's
+  // per-phase stage hits are already monotonic and encode the direct
+  // connected-skip, so we render them directly — no page-side back-fill.
+  if (lead.tagIsDirect) {
     segments.push({
       label: 'Direct',
       color: 'var(--color-geg-pos)',
       stages: [
-        { label: 'Booked', hit: true },
-        // Direct-lane Connected = a direct-phase touch: a confirmed booking
-        // (Confirmed Booking / – New Time) always lights it here, OR any connect
-        // that wasn't a post-handover one. Form fill-order can't break this (it's
-        // not timing-based). Post-handover connects move to the Reactivation lane.
-        { label: 'Connected', hit: lead.confirmed || (lead.connected && !lead.reactConnected) },
-        { label: 'Confirmed', hit: lead.confirmed },
-        // Direct-PHASE only: a post-handover show/close lights the Reactivation
-        // lane below, not this (frozen) Direct lane. A reactivated lead can't
-        // retroactively light the direct path it already left.
-        { label: 'Showed', hit: lead.directShowed || lead.directClosed },
-        { label: closedLabel, hit: lead.directClosed },
+        { label: 'Booked', hit: P.booked },
+        { label: 'Connected', hit: P.connected },
+        { label: 'Confirmed', hit: P.confirmed },
+        { label: 'Showed', hit: P.showed },
+        { label: closedLabel, hit: P.closed },
       ],
     })
   } else {
-    // Opt-in lane — surfaced for EVERY non-direct, non-reactivated lead, even
-    // one we haven't connected with yet (no booking, no calls): the journey
-    // starts at Connected and shows the full ladder unlit so you can see where
-    // they are. Booked lights only once they've actually booked a partnership.
     segments.push({
       label: 'Opt-in',
       color: 'var(--color-geg-warn)',
       stages: [
-        { label: 'Connected', hit: lead.connected },
-        // Monotonic: a show/close implies a booking even when no Calendly
-        // partnership link resolved (a self-set DC meeting, say).
-        { label: 'Booked', hit: lead.bookingType === 'setter' || lead.showed || lead.closed },
-        { label: 'Showed', hit: lead.showed || lead.closed },
-        { label: closedLabel, hit: lead.closed },
+        { label: 'Connected', hit: P.connected },
+        { label: 'Booked', hit: P.booked },
+        { label: 'Showed', hit: P.showed },
+        { label: closedLabel, hit: P.closed },
       ],
     })
   }
 
-  // Reactive phase — only when the lead lost its spot. Always floors at
-  // "Eligible" (lost the spot → eligible for reactivation), then the
-  // post-handover ladder. A DQ'd lead still shows Eligible + the terminal DQ
-  // chip (the connection/progress it reached up to the DQ is in the Direct phase).
-  if (lead.reactivatedAt) {
+  // Reactive lane — only when the lead lost its spot. Floors at "Eligible".
+  if (lead.tagReactivatedAt) {
     segments.push({
       label: 'Reactivation',
       color: REACT_BLUE,
-      since: lead.reactivatedAt,
+      since: lead.tagReactivatedAt,
       stages: [
         { label: 'Eligible', hit: true },
-        // Reactive-lane Connected = a POST-handover touch only (a ≥90s dial or
-        // setter triage after reactivatedAt). A confirmed booking is NOT a
-        // reactive connect (it's a direct-phase event, shown in the Direct lane)
-        // — it stays a global connect but doesn't light this stage.
-        { label: 'Connected', hit: lead.reactConnected },
-        { label: 'Booked', hit: lead.reactBooked || lead.reactShowed || lead.reactClosed },
-        { label: 'Showed', hit: lead.reactShowed || lead.reactClosed },
-        { label: closedLabel, hit: lead.reactClosed },
+        { label: 'Connected', hit: R.connected },
+        { label: 'Booked', hit: R.booked },
+        { label: 'Showed', hit: R.showed },
+        { label: closedLabel, hit: R.closed },
       ],
     })
-  }
-
-  // Monotonic back-fill: a funnel ladder can't skip. Once the furthest stage in
-  // a lane is hit, every earlier stage lights — matching the funnel's cumulative
-  // reachedStage. Without this, a lead whose only signal is a late stage (e.g. a
-  // DC show with no confirmation form) renders a gap (Connected → ⬚ → Showed).
-  for (const seg of segments) {
-    let furthest = -1
-    seg.stages.forEach((s, i) => { if (s.hit) furthest = i })
-    for (let i = 0; i < furthest; i++) seg.stages[i].hit = true
   }
 
   // Every lead now has at least one lane (direct or opt-in), so the journey is
@@ -246,7 +216,7 @@ function JourneyProgress({ lead }: { lead: NonNullable<Awaited<ReturnType<typeof
                 </span>
               ))}
               {/* DQ terminal marker on the last segment */}
-              {lead.isDq && si === segments.length - 1 ? (
+              {lead.tagIsDq && si === segments.length - 1 ? (
                 <>
                   <span style={{ color: 'var(--color-geg-text-faint)', fontSize: 10 }}>·</span>
                   <DqChip />
