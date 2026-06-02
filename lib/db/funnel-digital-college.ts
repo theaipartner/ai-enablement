@@ -167,42 +167,69 @@ function emptyDcAggregate(name: string): DcAggregate {
 // Loaders
 // ---------------------------------------------------------------------------
 
-// DC sale forms whose effective meeting time falls in range. Widen the read
-// 14 days back to catch late fills (small table; cheap), then client-filter.
+// Robby's DC meetings — now from the REGULAR closer EOC form (the dedicated DC
+// sale form is retired; Robby files the closer report like everyone else,
+// Drake 2026-06-02). His forms are identified by the closer (closer_names ~
+// Robby) — he's the DC closer, so every form he files is a DC call. Mapped into
+// the DcSaleRow shape so the rest of the assembly is unchanged: a filed form =
+// showed (same show logic), closed = call_outcome 'Digital College Closed',
+// plans = the form's dc_plans, follow-up/dq derived from the outcome. Widen the
+// read 14 days back for late fills, then client-filter to the range.
 async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
   const sb = createAdminClient()
   const widenStartMs = new Date(range.startUtcIso).getTime() - 14 * 24 * 60 * 60 * 1000
   const widenStartIso = new Date(widenStartMs).toISOString()
 
-  let rows: DcSaleRow[] = []
+  type EocRow = {
+    record_id: string; airtable_created_at: string | null; lead_id: string | null
+    prospect_name: string | null; date_time_of_call: string | null
+    closer_names: string[] | null; setter_names: string[] | null
+    call_outcome: string | null; dc_plans: string[] | null
+  }
+  let raw: EocRow[] = []
   let from = 0
   for (;;) {
     const { data, error } = await sb
-      .from('airtable_digital_college_sales' as never)
+      .from('airtable_full_closer_report' as never)
       .select(
         'record_id, airtable_created_at, lead_id, prospect_name, date_time_of_call, ' +
-        'closer_names, setter_names, closed, plans, follow_up',
+        'closer_names, setter_names, call_outcome, dc_plans',
       )
-      .is('excluded_at', null)
+      .eq('form_type', 'New')
       .gte('airtable_created_at', widenStartIso)
       .order('airtable_created_at', { ascending: false })
       .range(from, from + 999)
-    if (error) throw new Error(`airtable_digital_college_sales read failed: ${error.message}`)
-    const page = (data ?? []) as unknown as DcSaleRow[]
+    if (error) throw new Error(`airtable_full_closer_report (DC) read failed: ${error.message}`)
+    const page = (data ?? []) as unknown as EocRow[]
     if (page.length === 0) break
-    rows = rows.concat(page)
+    raw = raw.concat(page)
     if (page.length < 1000) break
     from += 1000
   }
 
-  // Drop blank Airtable rows (no lead, no name, no outcome) and keep rows
-  // whose effective meeting time is in the requested range.
-  return rows.filter((r) => {
-    const isBlank = !r.lead_id && !r.prospect_name && !r.closed && (r.plans ?? []).length === 0
-    if (isBlank) return false
-    const ts = effectiveDcTs(r)
-    return ts != null && ts >= range.startUtcIso && ts < range.endUtcIso
-  })
+  return raw
+    // Robby's forms only (he's the DC closer). Tolerant of 'Robby' / 'Robby Bryant'.
+    .filter((r) => (r.closer_names ?? []).some((n) => (n ?? '').toLowerCase().includes('robby')))
+    .map((r): DcSaleRow => {
+      const co = (r.call_outcome ?? '').toLowerCase()
+      return {
+        record_id: r.record_id,
+        airtable_created_at: r.airtable_created_at,
+        lead_id: r.lead_id,
+        prospect_name: r.prospect_name,
+        date_time_of_call: r.date_time_of_call,
+        closer_names: r.closer_names,
+        setter_names: r.setter_names,
+        closed: co.includes('digital college closed') ? 'Yes' : 'No',
+        plans: r.dc_plans,
+        // dcOutcome: not-closed → 'No' = DQ, else follow-up. DQ outcome → DQ.
+        follow_up: co.includes('dq') ? 'No' : 'Yes',
+      }
+    })
+    .filter((r) => {
+      const ts = effectiveDcTs(r)
+      return ts != null && ts >= range.startUtcIso && ts < range.endUtcIso
+    })
 }
 
 type RobbyEvent = {
