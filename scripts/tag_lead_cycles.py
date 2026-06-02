@@ -200,10 +200,16 @@ def main(apply):
                 if t is not None and in_cycle(t) and (dq_at is None or t < dq_at):
                     dq_at, dq_source = t, src
 
-            ht_close_at, dc_close_at = None, None
+            ht_close_at, dc_close_at, setter_htbook_at = None, None, None
             for ft, cs, filed in triage.get(cid, []):
-                if in_cycle(filed) and "dq" in cs:
+                if not in_cycle(filed):
+                    continue
+                if "dq" in cs:
                     setdq(filed, "confirmation" if ft == "Closer Triage Form" else "triage")
+                # a setter (classic) HT booking on a direct lead = a partnership re-book
+                # (trigger B) — the setter took over after the direct fell through.
+                if ft != "Closer Triage Form" and "high ticket booking" in cs:
+                    setter_htbook_at = filed if setter_htbook_at is None or filed < setter_htbook_at else setter_htbook_at
             for co, ev, filed in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
@@ -240,7 +246,7 @@ def main(apply):
                     if cold < cyc_end and not has_active_future(cold):
                         react_a = cold
                         break
-            react_b = partner_first if (direct_candidate is not None and partner_first is not None) else None
+            react_b = setter_htbook_at if (direct_candidate is not None and setter_htbook_at is not None) else None
             reactive_at, reactive_source = None, None
             for cand, src in ((react_a, "cold"), (react_b, "partnership_rebook")):
                 if cand is not None and (reactive_at is None or cand < reactive_at):
@@ -263,8 +269,12 @@ def main(apply):
             # --- pass 2: HT-only journey stages per phase (DC sales excluded) ---
             ph = {"primary": dict(conn=[], book=[], confirm=[], show=[], close=[]),
                   "reactive": dict(conn=[], book=[], confirm=[], show=[], close=[])}
+            # booked: direct = the Calendly strat self-book; setter-led = the FORM's
+            # booking status (below), NOT the partnership Calendly event (which can't
+            # cleanly distinguish HT from DC). Partnership events feed only cold-suppression.
             for kind, start, status, created in cyc_bookings:
-                ph[phase_of(created)]["book"].append(created)
+                if kind == "direct":
+                    ph[phase_of(created)]["book"].append(created)
             for t in calls90.get(cid, []):
                 if in_cycle(t):
                     ph[phase_of(t)]["conn"].append(t)
@@ -272,13 +282,20 @@ def main(apply):
                 if not in_cycle(filed):
                     continue
                 p = phase_of(filed, filed)
+                reached = bool(cs) and "unresponsive" not in cs and "handover" not in cs
+                if reached:
+                    ph[p]["conn"].append(filed)  # any answered form = connected
                 if ft == "Closer Triage Form":
+                    # confirmation: Confirmed Booking / - New Time -> confirmed (+ booked).
+                    # Downsold -> connected only (HT journey dies; not confirmed).
                     if cs.startswith("confirmed"):
                         ph[p]["confirm"].append(filed)
-                    if cs and "unresponsive" not in cs and "handover" not in cs:
-                        ph[p]["conn"].append(filed)
+                        ph[p]["book"].append(filed)
                 else:
-                    ph[p]["conn"].append(filed)
+                    # classic setter triage: High Ticket booking (or legacy Confirmed) ->
+                    # booked; Digital College booking -> connected only (DC, not HT booked).
+                    if "high ticket booking" in cs or cs.startswith("confirmed"):
+                        ph[p]["book"].append(filed)
             for co, ev, filed in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
