@@ -40,12 +40,13 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
     <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
       <StackedFunnelBox
         label="Total"
-        sublabel="Every opt-in in the window"
         tone="neutral"
         type={null}
         range={range}
         adspend={funnel.adspendUsd}
         adspendHref={adsHref(range)}
+        clicks={funnel.uniqueLinkClicks}
+        costBase={funnel.adspendUsd}
         stages={[
           { value: t.optIns, caption: 'Opt-ins', accent: true, bracket: dials(t.dials) },
           { value: t.connected, caption: 'Connected', stage: 'connected' },
@@ -57,10 +58,10 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
       />
       <StackedFunnelBox
         label="Direct"
-        sublabel="Self-booked a strategy call after opt-in"
         tone="pos"
         type="direct"
         range={range}
+        costBase={funnel.adspendUsd}
         stages={[
           { value: d.qualifiedOptIns, caption: 'Qual. opt-ins' },
           { value: d.books, caption: 'Booked', accent: true, bracket: dials(d.dials), stage: 'booked' },
@@ -72,10 +73,10 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
       />
       <StackedFunnelBox
         label="New opt-ins (setter-led)"
-        sublabel="Never booked a strategy call"
         tone="warn"
         type="setter"
         range={range}
+        costBase={funnel.adspendUsd}
         poolSplit={{ qualified: s.qualified, unqualified: s.unqualified }}
         stages={[
           { value: s.pool, caption: 'Pool', accent: true, bracket: dials(s.dials) },
@@ -87,10 +88,10 @@ export function FunnelStack({ funnel, range }: { funnel: LeadsFunnel; range: Ran
       />
       <StackedFunnelBox
         label="Reactivation"
-        sublabel="Any lead that went cold or was re-booked after opt-in · activity counted after the handover"
         tone="blue"
         type="reactivation"
         range={range}
+        costBase={funnel.adspendUsd}
         stages={[
           { value: re.pool, caption: 'Pool', accent: true, bracket: dials(re.dials) },
           { value: re.connected, caption: 'Connected', stage: 'connected' },
@@ -114,53 +115,53 @@ const TONE_STYLE: Record<FunnelTone, { background: string; border: string }> = {
   blue: { background: 'rgba(125, 168, 224, 0.10)', border: 'rgba(125, 168, 224, 0.45)' },
 }
 
+type FNode = { value: number | null; caption: string; usd?: boolean; accent?: boolean; bracket?: string; stage?: FunnelStage; href?: string }
+
 function StackedFunnelBox({
   label,
-  sublabel,
   tone = 'neutral',
   type,
   range,
   adspend,
   adspendHref,
+  clicks,
+  costBase,
   poolSplit,
   stages,
 }: {
   label: string
-  sublabel: string
   tone?: FunnelTone
   type: LeadFilterType | null
   range: Range
   adspend?: number | null
   adspendHref?: string
+  clicks?: number | null
+  costBase?: number | null
   poolSplit?: { qualified: number; unqualified: number }
   stages: StageDef[]
 }) {
-  // Optional adspend node, then the stages — every node chevron-separated, so
-  // cells alternate node/chevron/node and the grid columns alternate 1fr/auto.
-  const cells: React.ReactNode[] = []
-  if (adspend !== undefined) {
-    cells.push(
-      <FunnelNode
-        key="adspend"
-        value={adspend ?? null}
-        caption="Adspend"
-        usd
-        href={adspendHref}
-      />,
-    )
-    cells.push(<Chevron key="ch-adspend" />)
+  // Ordered node list: adspend (if present) → unique link clicks (if present) →
+  // stages. Each gap shows the conversion % (this/prev); each count node shows
+  // cost-per-unit (total adspend / count) in small font under the number.
+  const nodes: FNode[] = []
+  if (adspend !== undefined) nodes.push({ value: adspend ?? null, caption: 'Adspend', usd: true, href: adspendHref })
+  if (clicks !== undefined) nodes.push({ value: clicks ?? null, caption: 'Link clicks' })
+  for (const s of stages) {
+    nodes.push({ value: s.value, caption: s.caption, accent: s.accent, bracket: s.bracket, stage: s.stage, href: leadsHref(range, type, s.stage ?? null) })
   }
-  stages.forEach((s, i) => {
-    if (i > 0) cells.push(<Chevron key={`ch${i}`} />)
+
+  const costPer = (n: FNode): number | null =>
+    !n.usd && costBase != null && n.value != null && n.value > 0 ? costBase / n.value : null
+  // Conversion from prev → cur, only between two count nodes (skip across $).
+  const conv = (p: FNode, c: FNode): number | null =>
+    !p.usd && !c.usd && p.value != null && p.value > 0 && c.value != null ? (c.value / p.value) * 100 : null
+
+  const cells: React.ReactNode[] = []
+  nodes.forEach((n, i) => {
+    if (i > 0) cells.push(<Chevron key={`ch${i}`} conversion={conv(nodes[i - 1], n)} />)
     cells.push(
-      <FunnelNode
-        key={s.caption}
-        value={s.value}
-        caption={s.caption}
-        accent={s.accent}
-        bracket={s.bracket}
-        href={leadsHref(range, type, s.stage ?? null)}
-      />,
+      <FunnelNode key={n.caption} value={n.value} caption={n.caption} accent={n.accent}
+        bracket={n.bracket} usd={n.usd} href={n.href} costPerUnit={costPer(n)} />,
     )
   })
   const cols = cells.map((_, i) => (i % 2 === 0 ? '1fr' : 'auto')).join(' ')
@@ -179,7 +180,6 @@ function StackedFunnelBox({
       <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, marginTop: 12 }}>
         {cells}
       </div>
-      <SubLine>{sublabel}</SubLine>
     </div>
   )
 }
@@ -193,6 +193,7 @@ function FunnelNode({
   bracket,
   usd,
   href,
+  costPerUnit,
 }: {
   value: number | null
   caption: string
@@ -200,6 +201,7 @@ function FunnelNode({
   bracket?: string
   usd?: boolean
   href?: string
+  costPerUnit?: number | null
 }) {
   const pending = value === null
   const valueColor = pending
@@ -226,6 +228,11 @@ function FunnelNode({
       <div className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
         {caption}
       </div>
+      {costPerUnit != null ? (
+        <div className="geg-mono" style={{ fontSize: 8, letterSpacing: '0.02em', color: 'var(--color-geg-text-faint)', marginTop: 1 }}>
+          {compactUsd(costPerUnit)}/ea
+        </div>
+      ) : null}
     </>
   )
   if (href) {
@@ -238,8 +245,15 @@ function FunnelNode({
   return <div style={{ textAlign: 'center', minWidth: 0 }}>{inner}</div>
 }
 
-function Chevron() {
-  return <span className="geg-mono" style={{ fontSize: 12, color: 'var(--color-geg-text-faint)', textAlign: 'center' }}>›</span>
+function Chevron({ conversion }: { conversion?: number | null }) {
+  return (
+    <span className="geg-mono" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', color: 'var(--color-geg-text-faint)' }}>
+      <span style={{ fontSize: 12 }}>›</span>
+      {conversion != null ? (
+        <span style={{ fontSize: 8, letterSpacing: '0.02em', marginTop: 1 }}>{Math.round(conversion)}%</span>
+      ) : null}
+    </span>
+  )
 }
 
 function BoxLabel({ children }: { children: React.ReactNode }) {
@@ -253,10 +267,3 @@ function BoxLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
-function SubLine({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="geg-mono" style={{ marginTop: 6, fontSize: 9.5, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
-      {children}
-    </div>
-  )
-}

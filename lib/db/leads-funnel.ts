@@ -51,6 +51,7 @@ export type PoolFunnelBox = {
 
 export type LeadsFunnel = {
   adspendUsd: number | null
+  uniqueLinkClicks: number | null
   total: TotalBox
   direct: DirectBox
   setter: PoolFunnelBox
@@ -291,11 +292,14 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
   }
 
   let adspendUsd: number | null = null
+  let uniqueLinkClicks: number | null = null
   try {
     const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
     adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
+    uniqueLinkClicks = ads.find((m) => m.id === 'unique-clicks')?.value ?? null
   } catch {
     adspendUsd = null
+    uniqueLinkClicks = null
   }
 
   const total: TotalBox = {
@@ -339,7 +343,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     ...closesCyc('reactivation'),
   }
 
-  const funnel: LeadsFunnel = { adspendUsd, total, direct, setter, reactivation, warnings: [] }
+  const funnel: LeadsFunnel = { adspendUsd, uniqueLinkClicks, total, direct, setter, reactivation, warnings: [] }
   funnel.warnings = validateFunnel(funnel, cycles.length, new Set(cycles.map((c) => c.closeId)).size)
   return funnel
 }
