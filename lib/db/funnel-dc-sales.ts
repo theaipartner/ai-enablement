@@ -6,54 +6,59 @@ import type { LeadCycleRow } from './lead-tags'
 // Funnel · Digital College sales tally (Drake 2026-06-03).
 //
 // Counts Digital College (low-ticket) SALES for the funnel screen, broken down
-// two ways: by sale type (Base44 / Wix × Monthly / Yearly), by which funnel the
-// lead came through (direct / setter / reactivation), AND by the sale's ORIGIN
-// (where they became a DC lead).
+// two ways: by which funnel the lead came through (direct / setter /
+// reactivation) and by the sale's ORIGIN (triage / confirmation / downsell /
+// Robby direct). Each bucket shows the sale-type composition (Base44 / Wix ×
+// Monthly / Yearly).
+//
+// ONLY PLAN-BACKED SALES COUNT (Drake 2026-06-03). A real DC close has a
+// recorded plan; the tagger over-counts because it marks dc_closed from a bare
+// EOC `call_outcome = 'Digital College Closed'` even when no plan was logged and
+// the dedicated form says follow-up/DQ. So a DC-closed lead is only counted here
+// when at least one plan parses (Base44/Wix × Mo/Yr). The excluded (plan-less)
+// count is surfaced so the drop is visible, not silent.
 //
 // Sources — a DC sale lands on EITHER form (deduped to one row per lead):
 //   - airtable_full_closer_report (form_type='New', call_outcome='Digital
-//     College Closed') — the CURRENT path. Plans in `dc_plans`; `closer_names`
-//     tells Robby's DC closes apart from a non-Robby HT-meeting downsell.
-//   - airtable_digital_college_sales (closed='Yes') — the RETIRED dedicated DC
+//     College Closed') — plans in `dc_plans`; `closer_names` distinguishes
+//     Robby's close from a non-Robby (Aman) HT-meeting downsell.
+//   - airtable_digital_college_sales (closed='Yes') — the retired dedicated DC
 //     form (Robby's). Plans in `plans`.
-// Plan flags are OR-ed across both forms per lead.
 //
-// Origin (precedence, per lead): a confirmation/triage `call_status` of
-// 'Digital College booking' = a confirmed DC booking; 'Downsold' = downsold off
-// a confirmation; an EOC 'Digital College Closed' by a non-Robby closer = a DC
-// close from a high-ticket meeting; otherwise (Robby's close / dedicated form,
-// no upstream DC-entry signal) = Robby direct.
+// Origin (precedence): a setter-triage `call_status='Digital College booking'`
+// = triage; the same on a confirmation form (Closer Triage Form) = confirmation;
+// a confirmation `Downsold` OR a non-Robby EOC DC close (downsold on a
+// high-ticket call) = downsell; otherwise = Robby direct.
 
 export type DcPath = 'direct' | 'setter' | 'reactivation'
-export type DcOrigin = 'confirmed_booking' | 'downsell' | 'ht_meeting' | 'robby_direct'
+export type DcOrigin = 'triage' | 'confirmation' | 'downsell' | 'robby'
 
 export type DcPlanCounts = {
   base44Monthly: number
   base44Yearly: number
   wixMonthly: number
   wixYearly: number
-  // Distinct DC-sale leads in this bucket. A sale can carry more than one plan
-  // (e.g. Base44 + Wix), so the plan fields can sum to more than `sales`.
+  // Distinct plan-backed DC-sale leads in this bucket. A sale can carry more
+  // than one plan (e.g. Base44 + Wix), so the plan fields can sum past `sales`.
   sales: number
 }
 
 export type DcSalesTally = {
-  // By which funnel the lead came through (mutually exclusive).
   byPath: { direct: DcPlanCounts; setter: DcPlanCounts; reactivation: DcPlanCounts }
-  // By where the DC sale originated (mutually exclusive).
   byOrigin: Record<DcOrigin, DcPlanCounts>
-  // All DC sales (= the sum of either breakdown).
   total: DcPlanCounts
+  // DC-closed leads dropped for having no recorded plan (surfaced, not silent).
+  excludedNoPlan: number
 }
 
 type Flags = { base44Monthly: boolean; base44Yearly: boolean; wixMonthly: boolean; wixYearly: boolean }
 
-// Per-lead signals gathered from the forms, used to derive plan flags + origin.
 type SaleInfo = {
   flags: Flags
-  hasDcBooking: boolean      // confirmation/triage call_status 'Digital College booking'
-  hasDownsell: boolean       // confirmation call_status 'Downsold'
-  hasNonRobbyEocClose: boolean // EOC 'Digital College Closed' by a non-Robby closer
+  dcBookingTriage: boolean        // 'Digital College booking' on a setter triage form
+  dcBookingConfirmation: boolean  // 'Digital College booking' on a confirmation form
+  hasDownsell: boolean            // confirmation 'Downsold'
+  hasNonRobbyEocClose: boolean    // EOC DC close by a non-Robby closer (HT-meeting downsell)
 }
 
 function emptyCounts(): DcPlanCounts {
@@ -61,8 +66,7 @@ function emptyCounts(): DcPlanCounts {
 }
 
 // Token-tolerant plan parse — Base44 if the label mentions "base", Wix if
-// "wix"; monthly/yearly by "month" / "year"|"annual" (labels seen: "Base
-// Monthly", "Base Yearly", "Wix Monthly", "Wix Yearly"). OR-s into the flags.
+// "wix"; monthly/yearly by "month" / "year"|"annual". OR-s into the flags.
 function mergePlanFlags(into: Flags, plans: string[] | null): void {
   for (const raw of plans ?? []) {
     const p = (raw ?? '').toLowerCase()
@@ -75,6 +79,10 @@ function mergePlanFlags(into: Flags, plans: string[] | null): void {
     if (isWix && monthly) into.wixMonthly = true
     if (isWix && yearly) into.wixYearly = true
   }
+}
+
+function hasPlan(f: Flags | undefined): boolean {
+  return !!f && (f.base44Monthly || f.base44Yearly || f.wixMonthly || f.wixYearly)
 }
 
 function isRobby(closerNames: string[] | null): boolean {
@@ -90,7 +98,8 @@ async function loadDcSaleInfo(leadIds: string[]): Promise<Map<string, SaleInfo>>
     if (!s) {
       s = {
         flags: { base44Monthly: false, base44Yearly: false, wixMonthly: false, wixYearly: false },
-        hasDcBooking: false,
+        dcBookingTriage: false,
+        dcBookingConfirmation: false,
         hasDownsell: false,
         hasNonRobbyEocClose: false,
       }
@@ -114,7 +123,7 @@ async function loadDcSaleInfo(leadIds: string[]): Promise<Map<string, SaleInfo>>
         .in('lead_id', chunk),
       sb
         .from('airtable_setter_triage_calls' as never)
-        .select('lead_id, call_status')
+        .select('lead_id, form_type, call_status')
         .is('excluded_at', null)
         .in('lead_id', chunk),
     ])
@@ -134,10 +143,14 @@ async function loadDcSaleInfo(leadIds: string[]): Promise<Map<string, SaleInfo>>
       if ((r.closed ?? '').trim().toLowerCase() !== 'yes') continue
       mergePlanFlags(infoFor(r.lead_id).flags, r.plans)
     }
-    for (const r of (tri.data ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null }>) {
+    for (const r of (tri.data ?? []) as unknown as Array<{ lead_id: string | null; form_type: string | null; call_status: string | null }>) {
       if (!r.lead_id) continue
       const cs = (r.call_status ?? '').toLowerCase()
-      if (cs.includes('digital college')) infoFor(r.lead_id).hasDcBooking = true
+      const isConfirmation = r.form_type === 'Closer Triage Form'
+      if (cs.includes('digital college')) {
+        if (isConfirmation) infoFor(r.lead_id).dcBookingConfirmation = true
+        else infoFor(r.lead_id).dcBookingTriage = true
+      }
       if (cs.includes('downsold')) infoFor(r.lead_id).hasDownsell = true
     }
   }
@@ -151,16 +164,19 @@ function dcPath(c: LeadCycleRow): DcPath {
   return 'setter'
 }
 
-// Mutually-exclusive origin from the per-lead signals (see header for the rule).
+// Mutually-exclusive origin (see header): triage > confirmation > downsell >
+// robby. Downsell folds in a non-Robby EOC DC close (a high-ticket-meeting
+// downsell) alongside an explicit confirmation 'Downsold'.
 function dcOrigin(info: SaleInfo | undefined): DcOrigin {
-  if (info?.hasDcBooking) return 'confirmed_booking'
-  if (info?.hasDownsell) return 'downsell'
-  if (info?.hasNonRobbyEocClose) return 'ht_meeting'
-  return 'robby_direct'
+  if (info?.dcBookingTriage) return 'triage'
+  if (info?.dcBookingConfirmation) return 'confirmation'
+  if (info?.hasDownsell || info?.hasNonRobbyEocClose) return 'downsell'
+  return 'robby'
 }
 
-// DC-sales tally over the funnel's cohort cycles. Deduped to one row per lead
-// (the lead's latest in-window DC-closed cycle decides its funnel path).
+// DC-sales tally over the funnel's cohort cycles. Deduped to one row per lead;
+// ONLY counts leads with a recorded plan (plan-less DC-closed leads are dropped
+// and reported via excludedNoPlan).
 export async function getDcSalesTally(cycles: LeadCycleRow[]): Promise<DcSalesTally> {
   const pathByLead = new Map<string, { path: DcPath; optInAt: string }>()
   for (const c of cycles) {
@@ -171,30 +187,31 @@ export async function getDcSalesTally(cycles: LeadCycleRow[]): Promise<DcSalesTa
 
   const tally: DcSalesTally = {
     byPath: { direct: emptyCounts(), setter: emptyCounts(), reactivation: emptyCounts() },
-    byOrigin: {
-      confirmed_booking: emptyCounts(),
-      downsell: emptyCounts(),
-      ht_meeting: emptyCounts(),
-      robby_direct: emptyCounts(),
-    },
+    byOrigin: { triage: emptyCounts(), confirmation: emptyCounts(), downsell: emptyCounts(), robby: emptyCounts() },
     total: emptyCounts(),
+    excludedNoPlan: 0,
   }
   const leadIds = Array.from(pathByLead.keys())
   if (leadIds.length === 0) return tally
 
   const infoByLead = await loadDcSaleInfo(leadIds)
-  const add = (b: DcPlanCounts, f: Flags | undefined) => {
+  const add = (b: DcPlanCounts, f: Flags) => {
     b.sales += 1
-    if (f?.base44Monthly) b.base44Monthly += 1
-    if (f?.base44Yearly) b.base44Yearly += 1
-    if (f?.wixMonthly) b.wixMonthly += 1
-    if (f?.wixYearly) b.wixYearly += 1
+    if (f.base44Monthly) b.base44Monthly += 1
+    if (f.base44Yearly) b.base44Yearly += 1
+    if (f.wixMonthly) b.wixMonthly += 1
+    if (f.wixYearly) b.wixYearly += 1
   }
   pathByLead.forEach(({ path }, leadId) => {
     const info = infoByLead.get(leadId)
-    add(tally.byPath[path], info?.flags)
-    add(tally.byOrigin[dcOrigin(info)], info?.flags)
-    add(tally.total, info?.flags)
+    if (!hasPlan(info?.flags)) {
+      tally.excludedNoPlan += 1
+      return
+    }
+    const f = info!.flags
+    add(tally.byPath[path], f)
+    add(tally.byOrigin[dcOrigin(info)], f)
+    add(tally.total, f)
   })
   return tally
 }

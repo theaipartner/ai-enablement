@@ -108,7 +108,7 @@ export function DcSalesTally({ tally }: { tally: DcSalesTally }) {
           Digital College sales
         </div>
         <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginTop: 3 }}>
-          Closes in this window · deduped per lead · both forms (closer EOC + retired DC form)
+          Plan-backed closes in this window · deduped per lead · both forms (closer EOC + retired DC form)
         </div>
       </div>
 
@@ -120,23 +120,26 @@ export function DcSalesTally({ tally }: { tally: DcSalesTally }) {
           <Row label="Reactivation" counts={tally.byPath.reactivation} />
 
           <SectionHeader title="By origin" />
-          <Row label="Confirmed DC booking" counts={tally.byOrigin.confirmed_booking} />
-          <Row label="Downsell (confirmation)" counts={tally.byOrigin.downsell} />
-          <Row label="HT-meeting close" counts={tally.byOrigin.ht_meeting} />
-          <Row label="Robby direct" counts={tally.byOrigin.robby_direct} />
-
-          <div
-            className="geg-mono"
-            style={{ padding: '8px 14px', borderTop: '1px solid var(--color-geg-border)', fontSize: 9, letterSpacing: '0.04em', lineHeight: 1.6, color: 'var(--color-geg-text-faint)' }}
-          >
-            ↳ Confirmed DC bookings route straight to Robby — both Confirmed DC booking and Robby direct are Robby&rsquo;s closes. Only HT-meeting close is a non-Robby (Aman) downsell.
-          </div>
+          <Row label="Triage booking" counts={tally.byOrigin.triage} />
+          <Row label="Confirmation booking" counts={tally.byOrigin.confirmation} />
+          <Row label="Downsell" counts={tally.byOrigin.downsell} />
+          <Row label="Robby direct" counts={tally.byOrigin.robby} />
 
           <Row label="Total" counts={tally.total} isTotal />
+
+          {tally.excludedNoPlan > 0 ? (
+            <div
+              className="geg-mono"
+              style={{ padding: '8px 14px', borderTop: '1px solid var(--color-geg-border)', fontSize: 9, letterSpacing: '0.04em', lineHeight: 1.6, color: 'var(--color-geg-text-faint)' }}
+            >
+              ↳ {tally.excludedNoPlan} DC-closed lead{tally.excludedNoPlan === 1 ? '' : 's'} excluded — marked closed but no plan recorded (follow-up / DQ on Robby&rsquo;s form).
+            </div>
+          ) : null}
         </>
       ) : (
         <div className="geg-mono" style={{ padding: '14px', borderTop: '1px solid var(--color-geg-border)', fontSize: 11, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)' }}>
-          No Digital College sales in this window.
+          No plan-backed Digital College sales in this window
+          {tally.excludedNoPlan > 0 ? ` (${tally.excludedNoPlan} closed but plan-less, excluded)` : ''}.
         </div>
       )}
     </div>
