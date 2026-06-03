@@ -1155,23 +1155,35 @@ export async function getSpeedToLeadCohort(
     optInAt: string
   }
 
+  // "DC Revival Lead" Close custom field (cf_QivX…). Set by the re-engagement
+  // SMS automation on revival-campaign leads — many of which Close auto-creates
+  // as 'New Opt-in' when first texted. Drop any tagged lead from the cohort so
+  // the revival batch never bombards the leads list / funnel / speed boxes /
+  // FMR (all of which share this cohort). Drake 2026-06-03.
+  const REVIVAL_CF = 'cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P'
+  const isRevival = (cf: Record<string, unknown> | null | undefined): boolean => {
+    const v = cf?.[REVIVAL_CF]
+    return v != null && String(v).trim() !== ''
+  }
+
   // --- NEW opt-ins: created in window ---
   // `excluded_at is null` drops creator-soft-hidden (fake) leads from the
   // lead list — here + the Leads page. Per-rep Call Activity is unaffected.
   const { data: leads, error: leadsErr } = await sb
     .from('close_leads' as never)
-    .select('close_id, display_name, date_created, status_id')
+    .select('close_id, display_name, date_created, status_id, custom_fields_raw')
     .is('excluded_at', null)
     .gte('date_created', range.startUtcIso)
     .lt('date_created', range.endUtcIso)
     .range(0, 9999)
   if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-  const newLeadRows = (leads ?? []) as unknown as Array<{
+  const newLeadRows = ((leads ?? []) as unknown as Array<{
     close_id: string
     display_name: string | null
     date_created: string
     status_id: string | null
-  }>
+    custom_fields_raw: Record<string, unknown> | null
+  }>).filter((l) => !isRevival(l.custom_fields_raw))  // drop revival-tagged leads
   const newLeadIdSet = new Set(newLeadRows.map((l) => l.close_id))
 
   // Initial-status qualification for NEW leads (earliest old_status_id
@@ -1224,7 +1236,7 @@ export async function getSpeedToLeadCohort(
   {
     const { data: reopt, error: reErr } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, date_created, status_id, latest_opt_in_date')
+      .select('close_id, display_name, date_created, status_id, latest_opt_in_date, custom_fields_raw')
       .is('excluded_at', null)
       .lt('date_first_opted_in', range.startEtDate)
       .gte('latest_opt_in_date', range.startUtcIso)
@@ -1237,8 +1249,10 @@ export async function getSpeedToLeadCohort(
       date_created: string
       status_id: string | null
       latest_opt_in_date: string
+      custom_fields_raw: Record<string, unknown> | null
     }>) {
       if (newLeadIdSet.has(r.close_id)) continue // disjoint by construction; defensive
+      if (isRevival(r.custom_fields_raw)) continue // drop revival-tagged leads
       cohortLeads.push({
         close_id: r.close_id,
         display_name: r.display_name,
