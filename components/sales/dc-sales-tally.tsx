@@ -125,6 +125,13 @@ export function DcSalesTally({ tally }: { tally: DcSalesTally }) {
           <Row label="HT-meeting close" counts={tally.byOrigin.ht_meeting} />
           <Row label="Robby direct" counts={tally.byOrigin.robby_direct} />
 
+          <div
+            className="geg-mono"
+            style={{ padding: '8px 14px', borderTop: '1px solid var(--color-geg-border)', fontSize: 9, letterSpacing: '0.04em', lineHeight: 1.6, color: 'var(--color-geg-text-faint)' }}
+          >
+            ↳ Confirmed DC bookings route straight to Robby — both Confirmed DC booking and Robby direct are Robby&rsquo;s closes. Only HT-meeting close is a non-Robby (Aman) downsell.
+          </div>
+
           <Row label="Total" counts={tally.total} isTotal />
         </>
       ) : (
