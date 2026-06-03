@@ -40,3 +40,20 @@ export function isHighTicketVsl(hashedId: string | null | undefined): boolean {
     (HIGH_TICKET_VSL_HASHED_IDS as readonly string[]).includes(hashedId)
   )
 }
+
+// Meta ad-campaign funnel token. High-ticket campaigns are named
+// `... | Booking | Closer Funnel` (cortana_campaign_daily.entity_name).
+// Adspend is locked by summing ONLY campaigns matching this token, so a new
+// funnel's campaigns (carrying their own token) never inflate high-ticket
+// spend. Matched case-insensitively as a substring so `Closer Funnel (Copy)`
+// also counts. The retired "Call Funnel" high-ticket name is intentionally
+// not matched — those days predate the per-campaign mirror and fall back to
+// the account total anyway (see funnel-ads.ts loadMetaRows).
+export const HIGH_TICKET_AD_CAMPAIGN_TOKEN = 'closer funnel'
+
+export function isHighTicketCampaign(campaignName: string | null | undefined): boolean {
+  return (
+    campaignName != null &&
+    campaignName.toLowerCase().includes(HIGH_TICKET_AD_CAMPAIGN_TOKEN)
+  )
+}

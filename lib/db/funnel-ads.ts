@@ -3,8 +3,21 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { AggMetric } from './funnel-mocks'
 import { todayEtDate } from './funnel-window'
+import {
+  HIGH_TICKET_AD_CAMPAIGN_TOKEN,
+  isHighTicketCampaign,
+} from './funnel-assets'
 
-// Funnel · Ads stage — REAL data from `meta_ad_daily`.
+// Funnel · Ads stage — high-ticket-scoped ad metrics.
+//
+// SOURCE LOCK: spend/impressions/clicks are summed from ONLY the
+// high-ticket funnel's campaigns (cortana_campaign_daily rows whose name
+// carries the `Closer Funnel` token) rather than the account-wide
+// `meta_ad_daily` total, so another funnel's ad spend (e.g. Digital
+// College) can never inflate high-ticket numbers. Per-campaign data only
+// reaches back to 2026-05-26; older days fall back to the `meta_ad_daily`
+// account total (pre-cutover there was no separate ad funnel, so the
+// account total IS high-ticket). See `loadMetaRows`.
 //
 // Range semantics (driven by the page's date-range picker):
 //   - Lower bound: max(user-picked start, ADS_FLOOR_ET).
@@ -52,7 +65,9 @@ export function clampAdsRange(startEtDate: string, endEtDate: string): AdsRange 
   }
 }
 
-async function loadMetaRows(range: AdsRange): Promise<MetaAdDailyRow[]> {
+// Account-wide daily totals (meta_ad_daily). Used ONLY as the fallback for
+// days that predate the per-campaign mirror — see `loadMetaRows`.
+async function loadAccountRows(range: AdsRange): Promise<MetaAdDailyRow[]> {
   if (range.isEmptyRange) return []
   const sb = createAdminClient()
   const { data, error } = await sb
@@ -63,6 +78,119 @@ async function loadMetaRows(range: AdsRange): Promise<MetaAdDailyRow[]> {
     .order('day', { ascending: true })
   if (error) throw new Error(`meta_ad_daily read failed: ${error.message}`)
   return (data ?? []) as unknown as MetaAdDailyRow[]
+}
+
+// Raw per-campaign-per-day row from the Cortana mirror.
+type CampaignDayRow = {
+  day: string
+  entity_name: string | null
+  spent: number | null
+  impressions: number | null
+  reach: number | null
+  clicks: number | null
+  inline_link_clicks: number | null
+  unique_inline_link_clicks: number | null
+}
+
+// High-ticket-scoped daily rows synthesized from cortana_campaign_daily:
+// per day, sum ONLY the Closer-Funnel campaigns into the MetaAdDailyRow
+// shape (so all downstream aggregation is unchanged). Rate columns are
+// recomputed from that day's scoped totals. Returns a day→row map holding
+// only days that have campaign data.
+async function loadFunnelScopedCampaignRows(range: AdsRange): Promise<Map<string, MetaAdDailyRow>> {
+  if (range.isEmptyRange) return new Map()
+  const sb = createAdminClient()
+  const { data, error } = await sb
+    .from('cortana_campaign_daily' as never)
+    .select('day, entity_name, spent, impressions, reach, clicks, inline_link_clicks, unique_inline_link_clicks')
+    .gte('day', range.startEtDate)
+    .lte('day', range.endEtDate)
+  if (error) throw new Error(`cortana_campaign_daily read failed: ${error.message}`)
+  const rows = (data ?? []) as unknown as CampaignDayRow[]
+
+  type Acc = { spend: number; impr: number; reach: number; clicksAll: number; linkClicks: number; uniqueLinkClicks: number }
+  const byDay = new Map<string, Acc>()
+  // Guard: spend on campaign-data days that did NOT match the high-ticket
+  // token. During the single-funnel era this is ~$0; a non-trivial value
+  // means either another funnel is running ads (expected once Digital
+  // College launches — wire it its own scope) OR a high-ticket campaign was
+  // mis-named (would otherwise silently vanish from spend). Logged, not
+  // thrown, so the page never breaks.
+  const unmatched = new Map<string, number>()
+  let unmatchedSpend = 0
+  for (const r of rows) {
+    const spent = numericOrZero(r.spent)
+    if (!isHighTicketCampaign(r.entity_name)) {
+      if (spent > 0) {
+        const key = r.entity_name ?? '(unnamed)'
+        unmatchedSpend += spent
+        unmatched.set(key, (unmatched.get(key) ?? 0) + spent)
+      }
+      continue
+    }
+    const a = byDay.get(r.day) ?? { spend: 0, impr: 0, reach: 0, clicksAll: 0, linkClicks: 0, uniqueLinkClicks: 0 }
+    a.spend += spent
+    a.impr += numericOrZero(r.impressions)
+    a.reach += numericOrZero(r.reach)
+    a.clicksAll += numericOrZero(r.clicks)
+    a.linkClicks += numericOrZero(r.inline_link_clicks)
+    a.uniqueLinkClicks += numericOrZero(r.unique_inline_link_clicks)
+    byDay.set(r.day, a)
+  }
+
+  if (unmatchedSpend > 1) {
+    const top = Array.from(unmatched.entries())
+      .sort((x, y) => y[1] - x[1])
+      .slice(0, 5)
+      .map(([n, s]) => `${n} ($${s.toFixed(2)})`)
+      .join('; ')
+    console.warn(
+      `[funnel-ads] $${unmatchedSpend.toFixed(2)} of campaign spend did not match the ` +
+        `'${HIGH_TICKET_AD_CAMPAIGN_TOKEN}' token and is EXCLUDED from high-ticket adspend: ${top}`,
+    )
+  }
+
+  const out = new Map<string, MetaAdDailyRow>()
+  Array.from(byDay.entries()).forEach(([day, a]) => {
+    out.set(day, {
+      day,
+      amount_spent: a.spend,
+      impressions: a.impr,
+      unique_link_clicks: a.uniqueLinkClicks,
+      link_clicks: a.linkClicks,
+      clicks_all: a.clicksAll,
+      frequency: a.reach > 0 ? a.impr / a.reach : null,
+      ctr: a.impr > 0 ? (a.linkClicks / a.impr) * 100 : null,
+      cpm: a.impr > 0 ? (a.spend / a.impr) * 1000 : null,
+      cost_per_unique_link_click: a.uniqueLinkClicks > 0 ? a.spend / a.uniqueLinkClicks : null,
+    })
+  })
+  return out
+}
+
+// The funnel-scoped daily rows the whole module consumes. Per day, prefer
+// the high-ticket campaign sum (cortana_campaign_daily); for days with no
+// campaign data yet (before 2026-05-26), fall back to the meta_ad_daily
+// account total. Same MetaAdDailyRow shape and ascending order as before,
+// so every downstream aggregate/trend/table is unchanged — only the source
+// is locked to the high-ticket funnel.
+async function loadMetaRows(range: AdsRange): Promise<MetaAdDailyRow[]> {
+  if (range.isEmptyRange) return []
+  const [accountRows, campaignByDay] = await Promise.all([
+    loadAccountRows(range),
+    loadFunnelScopedCampaignRows(range),
+  ])
+  const accountByDay = new Map(accountRows.map((r) => [r.day, r]))
+  const dayKeys = Array.from(
+    new Set(Array.from(accountByDay.keys()).concat(Array.from(campaignByDay.keys()))),
+  )
+  const out: MetaAdDailyRow[] = []
+  dayKeys.forEach((day) => {
+    const row = campaignByDay.get(day) ?? accountByDay.get(day)
+    if (row) out.push(row)
+  })
+  out.sort((a, b) => (a.day < b.day ? -1 : 1))
+  return out
 }
 
 function sum(rows: MetaAdDailyRow[], field: keyof MetaAdDailyRow): number {
@@ -211,7 +339,6 @@ function numericOrNull(v: number | string | null | undefined): number | null {
 // Pulse tiles. Returns the daily series oldest→newest; pads with
 // zeros only if meta_ad_daily has gaps inside the 7-day window.
 export async function getAdsUniqueClicksTrend7d(): Promise<number[]> {
-  const sb = createAdminClient()
   // Hard cap at the ADS_FLOOR_ET so we never include days from before
   // tracking started — mirrors the Pulse history floor.
   const today = todayEtDate()
@@ -231,14 +358,9 @@ export async function getAdsUniqueClicksTrend7d(): Promise<number[]> {
   })()
   if (start > yesterday) return []
 
-  const { data, error } = await sb
-    .from('meta_ad_daily' as never)
-    .select('day, unique_link_clicks')
-    .gte('day', start)
-    .lte('day', yesterday)
-    .order('day', { ascending: true })
-  if (error) throw new Error(`meta_ad_daily trend read failed: ${error.message}`)
-
-  const rows = (data ?? []) as unknown as Array<{ day: string; unique_link_clicks: number | null }>
+  // Funnel-scoped via loadMetaRows — the 7-day window is entirely within
+  // the per-campaign era, so this is the high-ticket unique-link-clicks
+  // series (the LP-visits proxy), not the account total.
+  const rows = await loadMetaRows({ startEtDate: start, endEtDate: yesterday, isEmptyRange: false })
   return rows.map((r) => numericOrNull(r.unique_link_clicks) ?? 0)
 }
