@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { FunnelStack } from '@/components/sales/funnel-stack'
+import { DcSalesTally } from '@/components/sales/dc-sales-tally'
 import { getLeadsForRange } from '@/lib/db/leads'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
@@ -97,6 +98,8 @@ export default async function SalesDashboardFunnelPage({
       })()}
 
       <FunnelStack funnel={funnel} range={range} />
+
+      <DcSalesTally tally={funnel.dcSales} />
 
       <div
         className="geg-mono"
