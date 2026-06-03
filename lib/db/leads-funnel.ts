@@ -4,7 +4,6 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import type { LeadRow } from './leads'
 import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
-import { getDcSalesTally, type DcSalesTally } from './funnel-dc-sales'
 
 // Leads-page funnel stack (Drake 2026-05-31). Four stacked boxes computed over
 // the SAME cohort the roster shows (rows are passed in already view-filtered, so
@@ -59,9 +58,6 @@ export type LeadsFunnel = {
   direct: DirectBox
   setter: PoolFunnelBox
   reactivation: PoolFunnelBox
-  // Digital College sales (Base44/Wix × Mo/Yr) by funnel path — the tally
-  // rendered under the funnel stack. See funnel-dc-sales.ts.
-  dcSales: DcSalesTally
   // Integrity warnings (empty = clean). Surfaced as a banner on the Funnel page
   // so a silent miscount / cross-contamination can't hide as volume grows.
   warnings: string[]
@@ -358,9 +354,7 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     dcCloses: dcClosesCyc('reactivation'),
   }
 
-  const dcSales = await getDcSalesTally(cycles)
-
-  const funnel: LeadsFunnel = { adspendUsd, uniqueLinkClicks, total, direct, setter, reactivation, dcSales, warnings: [] }
+  const funnel: LeadsFunnel = { adspendUsd, uniqueLinkClicks, total, direct, setter, reactivation, warnings: [] }
   funnel.warnings = validateFunnel(funnel, cycles.length, new Set(cycles.map((c) => c.closeId)).size)
   return funnel
 }

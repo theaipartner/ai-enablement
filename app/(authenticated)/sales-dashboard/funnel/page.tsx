@@ -4,6 +4,7 @@ import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcSalesTally } from '@/components/sales/dc-sales-tally'
 import { getLeadsForRange } from '@/lib/db/leads'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
+import { getDcSalesTally } from '@/lib/db/funnel-dc-sales'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
@@ -37,6 +38,9 @@ export default async function SalesDashboardFunnelPage({
   const cohort = await getSpeedToLeadCohort(range)
   const rows = await getLeadsForRange(range, cohort)
   const funnel = await getLeadsFunnel(rows, range)
+  // DC sales tally is all-time + EOC-sourced (independent of the cohort), so it
+  // doesn't drop sales the tagger skipped — see funnel-dc-sales.ts.
+  const dcSales = await getDcSalesTally()
 
   const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
 
@@ -99,7 +103,7 @@ export default async function SalesDashboardFunnelPage({
 
       <FunnelStack funnel={funnel} range={range} />
 
-      <DcSalesTally tally={funnel.dcSales} />
+      <DcSalesTally tally={dcSales} />
 
       <div
         className="geg-mono"

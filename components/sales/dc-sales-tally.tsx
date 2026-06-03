@@ -108,7 +108,7 @@ export function DcSalesTally({ tally }: { tally: DcSalesTally }) {
           Digital College sales
         </div>
         <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginTop: 3 }}>
-          Plan-backed closes in this window · deduped per lead · both forms (closer EOC + retired DC form)
+          All plan-backed DC closes to date · deduped per lead · closer EOC only
         </div>
       </div>
 
@@ -132,7 +132,7 @@ export function DcSalesTally({ tally }: { tally: DcSalesTally }) {
               className="geg-mono"
               style={{ padding: '8px 14px', borderTop: '1px solid var(--color-geg-border)', fontSize: 9, letterSpacing: '0.04em', lineHeight: 1.6, color: 'var(--color-geg-text-faint)' }}
             >
-              ↳ {tally.excludedNoPlan} DC-closed lead{tally.excludedNoPlan === 1 ? '' : 's'} excluded — marked closed but no plan recorded (follow-up / DQ on Robby&rsquo;s form).
+              ↳ {tally.excludedNoPlan} DC-closed lead{tally.excludedNoPlan === 1 ? '' : 's'} excluded — EOC marked Digital College Closed but no plan recorded.
             </div>
           ) : null}
         </>
