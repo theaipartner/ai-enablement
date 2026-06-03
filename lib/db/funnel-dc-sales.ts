@@ -21,9 +21,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // All-time (not window-scoped): DC volume is tiny and the EOC call-date is
 // unreliable (mis-entered future dates), so the tally shows every real DC sale.
 //
-// Path (from close_leads, NOT the tagger — uniform across all leads incl. ones
-// the tagger skipped): reactivated_at set = reactivation; else direct_call_booked
-// = direct; else setter.
+// Path = lead_cycles (the tagger) — the SAME source of truth the cohort/funnel
+// use for lead type (see isReact/isDirect in leads-funnel.ts). Latest cycle:
+// reactive_at set = reactivation; else became_direct_at = direct; else setter.
+// Falls back to close_leads (reactivated_at / direct_call_booked) ONLY for leads
+// the tagger never tagged (e.g. Kareem Memnon has no lead_cycles row), matching
+// the cohort's own tag-primary / close_leads-fallback rule.
 //
 // Origin (precedence): a setter-triage `call_status='Digital College booking'` =
 // triage; the same on a confirmation form (Closer Triage Form) = confirmation; a
@@ -85,9 +88,17 @@ function isRobby(closerNames: string[] | null): boolean {
 type LeadMeta = { path: DcPath }
 type OriginSig = { triage: boolean; confirmation: boolean; downsell: boolean }
 
-// Path from close_leads (tagger-independent so leads the tagger skipped still
-// classify): reactivation > direct > setter.
-function leadPath(reactivatedAt: string | null, directCallBooked: string | null): DcPath {
+// Path from the lead's latest lead_cycles row (the tagger — cohort source of
+// truth): reactivation > direct > setter.
+function cyclePath(reactiveAt: string | null, becameDirectAt: string | null): DcPath {
+  if (reactiveAt != null) return 'reactivation'
+  if (becameDirectAt != null) return 'direct'
+  return 'setter'
+}
+
+// Fallback path from close_leads, used ONLY when the lead has no lead_cycles row
+// (matches the cohort's tag-primary / close_leads-fallback rule).
+function fallbackPath(reactivatedAt: string | null, directCallBooked: string | null): DcPath {
   if (reactivatedAt != null) return 'reactivation'
   if ((directCallBooked ?? '').trim().toLowerCase() === 'yes') return 'direct'
   return 'setter'
@@ -122,9 +133,12 @@ export async function getDcSalesTally(): Promise<DcSalesTally> {
   const leadIds = Array.from(saleLeads.keys())
   if (leadIds.length === 0) return tally
 
-  // 2. close_leads — path signals + drop test / soft-hidden / placeholder leads.
-  const leadMeta = new Map<string, LeadMeta>()
-  // 3. Origin signals from the triage/confirmation forms.
+  // 2. Per-lead signals across chunks:
+  //    - close_leads: test/soft-hidden/placeholder filter + fallback path.
+  //    - lead_cycles: PRIMARY path (latest cycle), the cohort source of truth.
+  //    - triage/confirmation forms: origin.
+  const clById = new Map<string, { reactivatedAt: string | null; directCallBooked: string | null }>()
+  const cycById = new Map<string, { optInAt: string; reactiveAt: string | null; becameDirectAt: string | null }>()
   const originSig = new Map<string, OriginSig>()
   const originFor = (id: string): OriginSig => {
     let o = originSig.get(id)
@@ -133,10 +147,14 @@ export async function getDcSalesTally(): Promise<DcSalesTally> {
   }
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
-    const [cl, tri] = await Promise.all([
+    const [cl, cyc, tri] = await Promise.all([
       sb
         .from('close_leads' as never)
         .select('close_id, display_name, reactivated_at, direct_call_booked, excluded_at')
+        .in('close_id', chunk),
+      sb
+        .from('lead_cycles' as never)
+        .select('close_id, opt_in_at, reactive_at, became_direct_at')
         .in('close_id', chunk),
       sb
         .from('airtable_setter_triage_calls' as never)
@@ -145,11 +163,18 @@ export async function getDcSalesTally(): Promise<DcSalesTally> {
         .in('lead_id', chunk),
     ])
     if (cl.error) throw new Error(`dc-sales: close_leads read failed: ${cl.error.message}`)
+    if (cyc.error) throw new Error(`dc-sales: lead_cycles read failed: ${cyc.error.message}`)
     if (tri.error) throw new Error(`dc-sales: triage/confirmation read failed: ${tri.error.message}`)
     for (const r of (cl.data ?? []) as unknown as Array<{ close_id: string; display_name: string | null; reactivated_at: string | null; direct_call_booked: string | null; excluded_at: string | null }>) {
       if (r.excluded_at != null) continue
       if ((r.display_name ?? '').trim().toLowerCase() === 'test') continue
-      leadMeta.set(r.close_id, { path: leadPath(r.reactivated_at, r.direct_call_booked) })
+      clById.set(r.close_id, { reactivatedAt: r.reactivated_at, directCallBooked: r.direct_call_booked })
+    }
+    for (const r of (cyc.data ?? []) as unknown as Array<{ close_id: string; opt_in_at: string; reactive_at: string | null; became_direct_at: string | null }>) {
+      const prev = cycById.get(r.close_id)
+      if (!prev || r.opt_in_at > prev.optInAt) {
+        cycById.set(r.close_id, { optInAt: r.opt_in_at, reactiveAt: r.reactive_at, becameDirectAt: r.became_direct_at })
+      }
     }
     for (const r of (tri.data ?? []) as unknown as Array<{ lead_id: string | null; form_type: string | null; call_status: string | null }>) {
       if (!r.lead_id) continue
@@ -161,6 +186,14 @@ export async function getDcSalesTally(): Promise<DcSalesTally> {
       if (cs.includes('downsold')) originFor(r.lead_id).downsell = true
     }
   }
+
+  // 3. Path per surviving lead: lead_cycles (latest) if tagged, else close_leads.
+  const leadMeta = new Map<string, LeadMeta>()
+  clById.forEach((cl, id) => {
+    const cyc = cycById.get(id)
+    const path = cyc ? cyclePath(cyc.reactiveAt, cyc.becameDirectAt) : fallbackPath(cl.reactivatedAt, cl.directCallBooked)
+    leadMeta.set(id, { path })
+  })
 
   // 4. Aggregate. A lead missing from close_leads (placeholder / hidden / test)
   //    is dropped entirely; a real lead with no plan is excluded + counted.

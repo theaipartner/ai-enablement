@@ -641,6 +641,23 @@ In rough order. Each is a separate commit.
 
 ## 2. REACTIVATION LOGIC — complete spec (the focus)
 
+> **⚠️ SOURCE OF TRUTH for lead type / reactivation (Drake 2026-06-03):** the
+> cohort + funnel classify a lead's type — direct / setter / reactivation — from
+> the **persistent lead-tag system (`lead_cycles` / `lead_cycle_stages`, read via
+> `lib/db/lead-tags.ts`)**, NOT from `close_leads.reactivated_at`.
+> `isReact` / `isDirect` (`lib/db/leads-funnel.ts`) read the tag
+> (`tagReactivatedAt` / `tagBecameDirect`, sourced from `lead_cycles.reactive_at` /
+> `became_direct_at`) and fall back to `close_leads.reactivated_at` (and a live
+> direct-booking check) **only** for a lead that has no `lead_cycles` row. So
+> `lead_cycles` is authoritative; `close_leads.reactivated_at` is the legacy
+> backfill column + the untagged-lead fallback. **The two can disagree** — observed
+> opposite for Jason Bright and Shannon Thompson — and when they do, the **tag
+> wins**. Any surface that buckets leads by type must follow this same
+> tag-primary / close_leads-fallback rule; the DC sales tally
+> (`lib/db/funnel-dc-sales.ts`) does. The `close_leads.reactivated_at` references
+> below predate the tag system — read them as "the legacy column," not "the
+> classifier the dashboard reads."
+
 ### 2.1 What "reactivated" means
 A **direct-booking lead** (one that booked an Ai Partner Strategy Call) that has
 **lost its strategy-call spot**. Stored permanently as
