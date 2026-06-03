@@ -51,6 +51,7 @@ def post_review_to_slack(
     prospect_name: str | None,
     duration_s: float | None,
     direction: str | None,
+    is_revival: bool = False,
 ) -> str | None:
     """Post one review to the sales-reviews channel. Returns the Slack
     `ts` on success, None on failure or skip.
@@ -75,6 +76,7 @@ def post_review_to_slack(
         prospect_name=prospect_name,
         duration_s=duration_s,
         direction=direction,
+        is_revival=is_revival,
     )
 
     result = post_message(channel_id=channel, text=text, blocks=blocks)
@@ -125,6 +127,7 @@ def _build_message(
     prospect_name: str | None,
     duration_s: float | None,
     direction: str | None,
+    is_revival: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Compose the Slack mrkdwn message + Block Kit payload.
 
@@ -149,6 +152,7 @@ def _build_message(
     # any client that doesn't render the Block Kit payload). Keep
     # under ~250 chars so push notifications surface the gist.
     fallback_text = (
+        f"{'🔁 REVIVAL  ·  ' if is_revival else ''}"
         f"{setter} → {prospect}  ·  Score {score}/10"
         f"{'  ·  DQ FLAGGED' if dq else ''}"
         f"  ·  {'Booked' if booked else 'Not booked'}"
@@ -173,6 +177,9 @@ def _build_message(
     ]
     if dq:
         headline_parts.append(":rotating_light: *DQ flagged*")
+    # Revival chip — a call to a cold pre-horizon lead (re-engagement campaign).
+    if is_revival:
+        headline_parts.append(":repeat: *Revival*")
     headline = "  ·  ".join(headline_parts)
 
     # Sub-line — duration / direction / call-id (short).

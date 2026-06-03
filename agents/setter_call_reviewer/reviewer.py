@@ -28,6 +28,10 @@ from agents.setter_call_reviewer.prompt import PROMPT_VERSION, SYSTEM_PROMPT
 from agents.setter_call_reviewer.slack_post import post_review_to_slack
 from agents.setter_call_reviewer.talk_time import compute_talk_time
 from shared.claude_client import DEFAULT_MODEL, complete
+
+# Gregory's active-lead horizon. A lead whose latest opt-in is before this is a
+# cold pre-horizon lead — a call to them is a "revival" (re-engagement) call.
+REVIVAL_HORIZON = "2026-05-24"
 from shared.db import get_client
 
 logger = logging.getLogger("ai_enablement.setter_call_reviewer")
@@ -177,6 +181,7 @@ def _maybe_post_to_slack(
             prospect_name=ctx["prospect_name"],
             duration_s=ctx["duration_s"],
             direction=ctx["direction"],
+            is_revival=ctx.get("is_revival", False),
         )
     except Exception as exc:
         # Defensive — post_review_to_slack already swallows Slack
@@ -215,22 +220,29 @@ def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
             setter_name = tm_resp.data.get("full_name")
 
     prospect_name: str | None = None
+    is_revival = False
     if call.get("lead_id"):
         ld_resp = (
             db.table("close_leads")
-            .select("display_name")
+            .select("display_name, latest_opt_in_date")
             .eq("close_id", call["lead_id"])
             .maybe_single()
             .execute()
         )
         if ld_resp and ld_resp.data:
             prospect_name = ld_resp.data.get("display_name")
+            # Revival = a cold pre-horizon lead being re-engaged (latest opt-in
+            # before the Gregory horizon). Covers the revival SMS batch, since
+            # every batch lead is pre-horizon by construction.
+            opt_in = ld_resp.data.get("latest_opt_in_date")
+            is_revival = bool(opt_in) and str(opt_in)[:10] < REVIVAL_HORIZON
 
     return {
         "setter_name": setter_name,
         "prospect_name": prospect_name,
         "duration_s": call.get("duration"),
         "direction": call.get("direction"),
+        "is_revival": is_revival,
     }
 
 
