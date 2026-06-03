@@ -187,7 +187,7 @@ function StackedFunnelBox({
         {cells}
       </div>
       {dcCloses && dcCloses > 0 ? (
-        <div className="geg-mono" style={{ marginTop: 8, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
+        <div className="geg-mono" style={{ marginTop: 8, fontSize: 11, letterSpacing: '0.06em', color: 'var(--color-geg-text-dim)' }}>
           ⌐ Digital College · {dcCloses.toLocaleString('en-US')} closed
         </div>
       ) : null}
@@ -231,16 +231,16 @@ function FunnelNode({
       >
         {pending ? '—' : usd ? compactUsd(value) : value.toLocaleString('en-US')}
         {bracket ? (
-          <span className="geg-mono" style={{ fontSize: 9, fontWeight: 400, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
+          <span className="geg-mono" style={{ fontSize: 10, fontWeight: 400, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
             ({bracket})
           </span>
         ) : null}
       </div>
-      <div className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
+      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
         {caption}
       </div>
       {costPerUnit != null ? (
-        <div className="geg-mono" style={{ fontSize: 8, letterSpacing: '0.02em', color: 'var(--color-geg-text-faint)', marginTop: 1 }}>
+        <div className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.02em', color: 'var(--color-geg-text-dim)', marginTop: 2 }}>
           {compactUsd(costPerUnit)}/ea
         </div>
       ) : null}
@@ -261,7 +261,7 @@ function Chevron({ conversion }: { conversion?: number | null }) {
     <span className="geg-mono" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', color: 'var(--color-geg-text-faint)' }}>
       <span style={{ fontSize: 12 }}>›</span>
       {conversion != null ? (
-        <span style={{ fontSize: 8, letterSpacing: '0.02em', marginTop: 1 }}>{Math.round(conversion)}%</span>
+        <span style={{ fontSize: 11, letterSpacing: '0.02em', marginTop: 1, color: 'var(--color-geg-text-dim)' }}>{Math.round(conversion)}%</span>
       ) : null}
     </span>
   )
