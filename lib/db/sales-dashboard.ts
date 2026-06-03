@@ -10,6 +10,11 @@ import {
   WINDOW_DAYS,
   inferredFormat,
 } from './sales-dashboard-shared'
+import {
+  HIGH_TICKET_VSL_HASHED_IDS,
+  HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
+  HIGH_TICKET_TYPEFORM_FORM_ID,
+} from './funnel-assets'
 
 // Server-side data layer for /sales-dashboard.
 //
@@ -35,9 +40,11 @@ export * from './sales-dashboard-shared'
 // ingestion/calendly/__init__.py `CLOSER_EVENT_TYPE_NAMES`.
 const CLOSER_EVENT_NAMES_LOWER = ['ai partner strategy call']
 
-// Wistia canonical media ids. Source of truth: docs/schema/wistia_medias.md.
-const VSL_HASHED_IDS = ['i1173gx76b', 'nbump1crwb']
-const TYP_HASHED_ID = 'fbgjxwe62y'
+// Wistia canonical media ids + the high-ticket Typeform form. Sourced from
+// the high-ticket funnel asset lock (lib/db/funnel-assets.ts) so these
+// surfaces can never read another funnel's VSL or form.
+const VSL_HASHED_IDS = HIGH_TICKET_VSL_HASHED_IDS as unknown as string[]
+const TYP_HASHED_ID = HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID
 // Stable reference so the React.cache wrapper on loadWistia7d dedupes
 // calls for TYP across the two TYP-derived fetchers (engagement rate +
 // avg view duration). A fresh `[TYP_HASHED_ID]` per call would miss
@@ -281,9 +288,13 @@ const wistiaTypAvgViewDuration: Fetcher = async (w) => {
 
 const typeformSubmits: Fetcher = async (w) => {
   const sb = createAdminClient()
+  // Locked to the high-ticket form. Without this filter the count summed
+  // every form in the mirror (Setter Funnel, YouTube, any future funnel),
+  // silently inflating high-ticket submits.
   const { count, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id', { count: 'exact', head: true })
+    .eq('form_id', HIGH_TICKET_TYPEFORM_FORM_ID)
     .gte('submitted_at', getWindowStartIso(w))
   if (error) throw new Error(`typeform_responses count failed: ${error.message}`)
   return count ?? 0

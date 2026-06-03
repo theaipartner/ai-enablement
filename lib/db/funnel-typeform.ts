@@ -3,6 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
+import { HIGH_TICKET_TYPEFORM_FORM_ID } from './funnel-assets'
 
 // Funnel · Typeform metrics — used by the consolidated LP detail page.
 //
@@ -17,9 +18,10 @@ import { getDateRangeFromWindow, type DateRange } from './funnel-window'
 
 // Form_id for the main coaching application form. All qualification
 // parsing assumes this form's schema (the budget question's field ref
-// is form-specific). Other forms in the mirror are ignored by the LP
-// page — they belong to other funnels.
-const MAIN_FORM_ID = 'SFedWelr'
+// is form-specific). Other forms in the mirror are ignored — they belong
+// to other funnels. Sourced from the high-ticket funnel asset lock so
+// every Typeform read here is pinned to the same form.
+const MAIN_FORM_ID = HIGH_TICKET_TYPEFORM_FORM_ID
 
 // Field ref of the qualification question (3rd field on the SFedWelr
 // form): "Imagine... 6 months from today... how much are you willing
