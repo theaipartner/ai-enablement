@@ -65,6 +65,13 @@ const TOGGLE_OPTIONS = [
   { value: 'off', label: 'Off' },
 ] as const
 
+// Meetings-this-month bucket filter (count from client_meetings / Google
+// Calendar). Two OR'd buckets around a threshold of 2; pick one to narrow.
+const MEETINGS_OPTIONS = [
+  { value: 'gte2', label: '2 or more' },
+  { value: 'lt2', label: 'Under 2' },
+] as const
+
 function parseMulti(raw: string | null): string[] {
   if (raw === null || raw === '') return []
   return raw.split(',').filter(Boolean)
@@ -133,6 +140,7 @@ export function FilterBar({
     searchParams.get('needs_review') === '1' ? ['1'] : []
   const missingSlackSelected =
     searchParams.get('missing_slack') === '1' ? ['1'] : []
+  const meetingsSelected = parseMulti(searchParams.get('meetings'))
 
   const primaryCsmDropdownOptions = primaryCsmOptions.map((o) => ({
     value: o.id,
@@ -219,7 +227,8 @@ export function FilterBar({
     accountabilitySelected.length > 0 ||
     npsToggleSelected.length > 0 ||
     needsReviewSelected.length > 0 ||
-    missingSlackSelected.length > 0
+    missingSlackSelected.length > 0 ||
+    meetingsSelected.length > 0
 
   return (
     <div
@@ -316,6 +325,12 @@ export function FilterBar({
           options={countryDropdownOptions}
           selected={countrySelected}
           onChange={(values) => setMulti('country', values)}
+        />
+        <MultiSelectDropdown
+          label="Meetings (mo.)"
+          options={MEETINGS_OPTIONS}
+          selected={meetingsSelected}
+          onChange={(values) => setMulti('meetings', values)}
         />
       </div>
     </div>

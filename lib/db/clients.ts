@@ -136,6 +136,10 @@ export type ClientsListFilters = {
   // Both badges (channel + user) on /clients[/[id]] feed off the same
   // two underlying nullable fields.
   missing_slack?: boolean
+  // meetings_this_month buckets (computed read-time from client_meetings):
+  // 'gte2' → 2 or more meetings this month, 'lt2' → under 2. Multi-select
+  // semantics (OR'd) — selecting both is a no-op (all clients).
+  meetings_this_month?: Array<'gte2' | 'lt2'>
   search?: string
 }
 
@@ -353,6 +357,17 @@ export async function getClientsList(
   if (filters.missing_slack === true) {
     rows = rows.filter(
       (r) => r.slack_channel_id === null || r.slack_user_id === null,
+    )
+  }
+
+  // meetings_this_month buckets — OR'd, applied after the calendar count is
+  // derived above. Selecting both buckets matches every client (no-op).
+  if (filters.meetings_this_month && filters.meetings_this_month.length > 0) {
+    const buckets = new Set(filters.meetings_this_month)
+    rows = rows.filter(
+      (r) =>
+        (buckets.has('gte2') && r.meetings_this_month >= 2) ||
+        (buckets.has('lt2') && r.meetings_this_month < 2),
     )
   }
 

@@ -91,6 +91,9 @@ function readFilters(searchParams: Record<string, string | string[] | undefined>
     nps_toggle: npsToggle,
     needs_review: get('needs_review') === '1',
     missing_slack: get('missing_slack') === '1',
+    meetings_this_month: parseMulti(get('meetings')).filter(
+      (v): v is 'gte2' | 'lt2' => v === 'gte2' || v === 'lt2',
+    ),
     search: get('q'),
   }
 }
