@@ -420,8 +420,12 @@ export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
     channel_created_at: string | null
     last_client_message_at: string | null
     ghost_dismissed_at: string | null
+    channel_has_messages: boolean
   }>) {
     if (!row.channel_created_at) continue
+    // No ingested messages at all → the bot isn't in this channel, so we
+    // have no visibility. Don't claim "ghost" for a channel we can't see.
+    if (!row.channel_has_messages) continue
     // Channel must be old enough that 14d of silence is meaningful.
     if (new Date(row.channel_created_at).getTime() > silenceCutoff) continue
     const last = row.last_client_message_at
