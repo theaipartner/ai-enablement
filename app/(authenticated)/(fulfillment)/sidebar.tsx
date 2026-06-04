@@ -24,7 +24,7 @@ type NavItem = {
 }
 
 const NAV: NavItem[] = [
-  { href: '/dashboard', label: 'Dashboard', requiredTier: 'csm' },
+  { href: '/dashboard', label: 'Dashboard', requiredTier: 'head_csm' },
   { href: '/clients', label: 'Clients', requiredTier: 'csm' },
   { href: '/calls', label: 'Calls', requiredTier: 'csm' },
   { href: '/teams', label: 'Meeting Tracker', requiredTier: 'head_csm' },
