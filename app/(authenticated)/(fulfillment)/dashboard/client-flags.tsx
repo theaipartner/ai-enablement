@@ -294,11 +294,6 @@ function GhostFlagRow({ ghost }: { ghost: GhostClientFlag }) {
   const [markOpen, setMarkOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const silentLabel =
-    ghost.days_silent === null
-      ? 'no client message on record'
-      : `silent ${ghost.days_silent}d`
-
   function confirmMarkGhost() {
     setError(null)
     startTransition(async () => {
@@ -324,16 +319,31 @@ function GhostFlagRow({ ghost }: { ghost: GhostClientFlag }) {
   return (
     <div style={ROW_STYLE}>
       <div style={{ minWidth: 0 }}>
-        <Link
-          href={`/clients/${ghost.id}`}
-          style={{
-            fontSize: 14,
-            color: 'var(--color-geg-text)',
-            textDecoration: 'underline',
-          }}
-        >
-          {ghost.full_name}
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <Link
+            href={`/clients/${ghost.id}`}
+            style={{
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {ghost.full_name}
+          </Link>
+          <span
+            className="geg-mono"
+            style={{
+              fontSize: 11,
+              color: 'var(--color-geg-warn)',
+              flexShrink: 0,
+            }}
+          >
+            {ghost.days_silent === null ? 'no msgs' : `${ghost.days_silent}d`}
+          </span>
+        </div>
         <div
           className="geg-mono"
           style={{
@@ -345,10 +355,9 @@ function GhostFlagRow({ ghost }: { ghost: GhostClientFlag }) {
             whiteSpace: 'nowrap',
           }}
         >
-          {silentLabel}
           {ghost.last_client_message_at
-            ? ` · last reply ${formatGhostDate(ghost.last_client_message_at)}`
-            : ''}
+            ? `last reply ${formatGhostDate(ghost.last_client_message_at)}`
+            : 'no client message on record'}
         </div>
       </div>
 
