@@ -282,13 +282,13 @@ function CashSection({ money }: { money: ClosingMoney }) {
       title="Sales, upfront cash, contract value, AOV — from the closer form."
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-        <CountTile label="Sales (closes)" value={money.closes} subtitle={`${money.closesHt} HT · ${money.closesDc} DC`} />
+        <CountTile label="Sales (HT closes)" value={money.closes} />
         <MoneyTile label="Total upfront collected" value={money.upfrontCollected} />
         <MoneyTile label="Total contract value" value={money.totalContractValue} />
         <MoneyTile label="AOV (contract / closed)" value={money.aov} />
       </div>
       <div className="geg-mono" style={{ marginTop: 10, fontSize: 10, letterSpacing: '0.12em', color: 'var(--color-geg-text-faint)', lineHeight: 1.6 }}>
-        Sales + upfront from the closer form&apos;s Call Outcome / <code>amount_paid_today_number</code> (new form) and legacy <code>Closed?</code> / <code>amount_paid_today_currency</code> (old form). Includes instant-book meetings filed with no Calendly booking. Deposits collect cash but aren&apos;t counted as closes.
+        High-ticket only — Digital College sales + cash are excluded here (see the DC tally on the funnel page). Sales + upfront from the closer form&apos;s Call Outcome / <code>amount_paid_today_number</code> (new form) and legacy <code>Closed?</code> / <code>amount_paid_today_currency</code> (old form), including instant-book meetings filed with no Calendly booking.
       </div>
     </SectionBox>
   )

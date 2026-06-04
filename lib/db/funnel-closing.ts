@@ -53,12 +53,11 @@ export type CloserCallDrillRow = {
 
 export type ClosingMoney = {
   upfrontCollected: number
-  // Sales = full closes (deposits excluded), split by offer. Counts new-form
-  // closes (call_outcome) + legacy closes, including instant-book / form-only
-  // meetings (this is a pure form read — no Calendly dependency).
+  // Sales = full HIGH-TICKET closes (deposits excluded). Digital College is
+  // excluded — it has its own tally on the funnel page — so DC closes and their
+  // cash don't count here. Includes instant-book / form-only meetings (pure form
+  // read, no Calendly dependency).
   closes: number
-  closesHt: number
-  closesDc: number
   totalContractValue: number
   aov: number | null
   upfrontFieldUsed: string
@@ -287,7 +286,7 @@ function buildLeaderboard(rows: CloserReportRow[]): { closers: CloserLeaderboard
 
 function buildMoney(rows: CloserReportRow[]): ClosingMoney {
   let upfront = 0, contract = 0, contractClosedSum = 0
-  let closes = 0, closesHt = 0, closesDc = 0
+  let closes = 0
   for (const r of rows) {
     // Close + offer + deposit: new forms via call_outcome, legacy via closed/plan.
     let isClose = false, isDeposit = false
@@ -301,6 +300,9 @@ function buildMoney(rows: CloserReportRow[]): ClosingMoney {
       isClose = r.closed === 'Yes'
       closeType = isClose ? classifyPlan(r.payment_plan_type) : null
     }
+    // Digital College is excluded from the talent-page money — it has its own
+    // tally on the funnel page. Skip a DC close entirely (its count + its cash).
+    if (closeType === 'dc') continue
     // Upfront = cash collected today; new field preferred, legacy fallback. A
     // deposit collects the deposit amount.
     const paid = toNum(r.amount_paid_today_number) ?? toNum(r.amount_paid_today_currency)
@@ -311,8 +313,6 @@ function buildMoney(rows: CloserReportRow[]): ClosingMoney {
     }
     if (isClose) {
       closes++
-      if (closeType === 'ht') closesHt++
-      else if (closeType === 'dc') closesDc++
       if (typeof r.total_contract_amount === 'number' && Number.isFinite(r.total_contract_amount)) {
         contractClosedSum += r.total_contract_amount
       }
@@ -321,8 +321,6 @@ function buildMoney(rows: CloserReportRow[]): ClosingMoney {
   return {
     upfrontCollected: upfront,
     closes,
-    closesHt,
-    closesDc,
     totalContractValue: contract,
     aov: closes > 0 ? contractClosedSum / closes : null,
     upfrontFieldUsed: 'amount_paid_today_number',
