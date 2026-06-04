@@ -83,7 +83,7 @@ function GhostFlagRow({ ghost }: { ghost: GhostClientFlag }) {
 
   const silentLabel =
     ghost.days_silent === null
-      ? 'no client reply in 90+ days'
+      ? 'no client message on record'
       : `silent ${ghost.days_silent}d`
 
   function confirmMarkGhost() {

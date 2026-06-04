@@ -8,6 +8,7 @@
 // because the dataset is tiny (~200 active clients, ~30 events/day per
 // CSM, ~30 reviews/day worst case).
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { JOURNEY_STAGE_LABEL } from '@/lib/client-vocab'
 import { getEstPeriodBoundary } from '@/lib/time/est-periods'
@@ -390,115 +391,59 @@ export async function getNeedsReviewMergeCandidates(): Promise<
 // client posts again (any message since the dismissal un-hides it).
 
 const GHOST_SILENCE_DAYS = 14
-// Window for the last-message date + dismissal-reset check. Beyond this we
-// just report "90+ days" rather than scanning unbounded history.
-const GHOST_LOOKBACK_DAYS = 90
 
 export type GhostClientFlag = {
   id: string
   full_name: string
-  last_client_message_at: string | null // null when silent beyond the lookback
+  last_client_message_at: string | null // null when the client has never posted
   days_silent: number | null
 }
 
 export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
-  const supabase = createAdminClient()
+  // The per-channel "last client message" aggregation runs in Postgres
+  // (ghost_client_candidates RPC, migration 0072). Doing it from here with a
+  // slack_messages fetch hit PostgREST's 1000-row cap and silently flagged
+  // actively-messaging clients as ghosts — see the migration header. The RPC
+  // isn't in the generated types yet; reach it through an untyped handle
+  // (same pattern as lib/db/client-meetings.ts).
+  const supabase = createAdminClient() as unknown as SupabaseClient
+  const { data, error } = await supabase.rpc('ghost_client_candidates')
+  if (error) throw error
+
   const now = Date.now()
-  const silenceCutoff = new Date(now - GHOST_SILENCE_DAYS * 86_400_000)
-  const lookbackStart = new Date(now - GHOST_LOOKBACK_DAYS * 86_400_000)
-
-  const { data: clientRows, error: clientErr } = await supabase
-    .from('clients')
-    .select(
-      'id, full_name, metadata, slack_channels(slack_channel_id, is_archived, created_at)',
-    )
-    .eq('status', 'active')
-    .is('archived_at', null)
-  if (clientErr) throw clientErr
-
-  type Candidate = {
-    id: string
-    full_name: string
-    channel_id: string
-    dismissed_at: string | null
-  }
-  const candidates: Candidate[] = []
-  for (const row of (clientRows ?? []) as Array<{
-    id: string
-    full_name: string | null
-    metadata: Record<string, unknown> | null
-    slack_channels: Array<{
-      slack_channel_id: string
-      is_archived: boolean
-      created_at: string
-    }> | null
-  }>) {
-    const active = (row.slack_channels ?? [])
-      .filter((c) => !c.is_archived)
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0]
-    if (!active) continue // no Slack channel → can't be a channel-ghost
-    if (new Date(active.created_at) > silenceCutoff) continue // too new
-    const meta = row.metadata ?? {}
-    candidates.push({
-      id: row.id,
-      full_name: row.full_name ?? '(no name)',
-      channel_id: active.slack_channel_id,
-      dismissed_at:
-        typeof meta.ghost_dismissed_at === 'string'
-          ? meta.ghost_dismissed_at
-          : null,
-    })
-  }
-  if (candidates.length === 0) return []
-
-  const { data: msgRows, error: msgErr } = await supabase
-    .from('slack_messages')
-    .select('slack_channel_id, sent_at')
-    .eq('author_type', 'client')
-    .gte('sent_at', lookbackStart.toISOString())
-    .in(
-      'slack_channel_id',
-      candidates.map((c) => c.channel_id),
-    )
-  if (msgErr) throw msgErr
-
-  const latestByChannel = new Map<string, string>()
-  const msgsByChannel = new Map<string, string[]>()
-  for (const m of (msgRows ?? []) as Array<{
-    slack_channel_id: string
-    sent_at: string
-  }>) {
-    const prev = latestByChannel.get(m.slack_channel_id)
-    if (!prev || m.sent_at > prev) {
-      latestByChannel.set(m.slack_channel_id, m.sent_at)
-    }
-    const arr = msgsByChannel.get(m.slack_channel_id) ?? []
-    arr.push(m.sent_at)
-    msgsByChannel.set(m.slack_channel_id, arr)
-  }
+  const silenceCutoff = now - GHOST_SILENCE_DAYS * 86_400_000
 
   const flags: GhostClientFlag[] = []
-  for (const c of candidates) {
-    const latest = latestByChannel.get(c.channel_id) ?? null
+  for (const row of (data ?? []) as Array<{
+    client_id: string
+    full_name: string | null
+    channel_created_at: string | null
+    last_client_message_at: string | null
+    ghost_dismissed_at: string | null
+  }>) {
+    if (!row.channel_created_at) continue
+    // Channel must be old enough that 14d of silence is meaningful.
+    if (new Date(row.channel_created_at).getTime() > silenceCutoff) continue
+    const last = row.last_client_message_at
+      ? new Date(row.last_client_message_at).getTime()
+      : null
     // Posted within the silence window → not a ghost.
-    if (latest && new Date(latest) >= silenceCutoff) continue
+    if (last !== null && last >= silenceCutoff) continue
     // Dismissed and nothing since → stay hidden until they re-engage.
-    if (c.dismissed_at) {
-      const msgs = msgsByChannel.get(c.channel_id) ?? []
-      const messagedSince = msgs.some((t) => t > c.dismissed_at!)
-      if (!messagedSince) continue
+    if (row.ghost_dismissed_at) {
+      const dismissed = new Date(row.ghost_dismissed_at).getTime()
+      if (last === null || last <= dismissed) continue
     }
     flags.push({
-      id: c.id,
-      full_name: c.full_name,
-      last_client_message_at: latest,
-      days_silent: latest
-        ? Math.floor((now - new Date(latest).getTime()) / 86_400_000)
-        : null,
+      id: row.client_id,
+      full_name: row.full_name ?? '(no name)',
+      last_client_message_at: row.last_client_message_at,
+      days_silent:
+        last !== null ? Math.floor((now - last) / 86_400_000) : null,
     })
   }
 
-  // Longest-silent first; unknown (silent beyond the lookback) is most silent.
+  // Longest-silent first; never-posted (null) sorts as most silent.
   flags.sort(
     (a, b) =>
       (b.days_silent ?? Number.POSITIVE_INFINITY) -
