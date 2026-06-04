@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import {
   getDashboardNotifications,
+  getGhostClientFlags,
   getNeedsReviewClients,
   getNeedsReviewMergeCandidates,
   type Notification,
@@ -23,11 +24,13 @@ export const dynamic = 'force-dynamic'
 const EST_LOCALE = 'America/New_York'
 
 export default async function FulfillmentDashboardPage() {
-  const [notifications, needsReview, mergeCandidates] = await Promise.all([
-    getDashboardNotifications(),
-    getNeedsReviewClients(),
-    getNeedsReviewMergeCandidates(),
-  ])
+  const [notifications, needsReview, mergeCandidates, ghosts] =
+    await Promise.all([
+      getDashboardNotifications(),
+      getNeedsReviewClients(),
+      getNeedsReviewMergeCandidates(),
+      getGhostClientFlags(),
+    ])
 
   return (
     <div style={{ padding: '32px 48px 64px', maxWidth: 1480, width: '100%' }}>
@@ -64,9 +67,13 @@ export default async function FulfillmentDashboardPage() {
         <FlagGroup
           eyebrow="CLIENT FLAGS"
           title="Clients."
-          count={needsReview.length}
+          count={needsReview.length + ghosts.length}
         >
-          <ClientFlags clients={needsReview} candidates={mergeCandidates} />
+          <ClientFlags
+            needsReview={needsReview}
+            candidates={mergeCandidates}
+            ghosts={ghosts}
+          />
         </FlagGroup>
       </div>
     </div>

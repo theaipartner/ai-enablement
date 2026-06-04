@@ -14,28 +14,34 @@ import {
 } from '@/components/ui/dialog'
 import { SearchableClientSelect } from '@/components/searchable-client-select'
 import type { CandidateClient } from '@/lib/db/merge'
-import type { NeedsReviewClient } from '@/lib/db/fulfillment-dashboard'
+import type {
+  GhostClientFlag,
+  NeedsReviewClient,
+} from '@/lib/db/fulfillment-dashboard'
 import {
   dashboardArchiveNeedsReviewAction,
   dashboardClearNeedsReviewAction,
+  dashboardDismissGhostFlagAction,
+  dashboardMarkGhostAction,
   dashboardMergeNeedsReviewAction,
 } from './actions'
 import { FlagTaskPill } from './flag-task-pill'
 
-// Client flags list for the dashboard notification section. Today the only
-// task kind is "needs review" (auto-created clients), but the section is
-// built to hold other client-level tasks later — each row carries a
-// task-type pill so kinds are visually differentiated. Rows for needs_review
-// keep the three dispositions: clear the tag, merge into a real client, or
-// delete (soft-archive).
+// Client flags list for the dashboard notification section. Holds multiple
+// client-level task kinds, each row tagged with a task-type pill so kinds are
+// visually differentiated:
+//   - "Needs review" — auto-created clients: clear tag / merge / delete.
+//   - "Ghost" — active clients silent in Slack 14+ days: mark ghost / dismiss.
 export function ClientFlags({
-  clients,
+  needsReview,
   candidates,
+  ghosts,
 }: {
-  clients: NeedsReviewClient[]
+  needsReview: NeedsReviewClient[]
   candidates: CandidateClient[]
+  ghosts: GhostClientFlag[]
 }) {
-  if (clients.length === 0) {
+  if (needsReview.length === 0 && ghosts.length === 0) {
     return (
       <div
         style={{
@@ -45,7 +51,7 @@ export function ClientFlags({
           fontStyle: 'italic',
         }}
       >
-        No client flags. Every auto-created client has been resolved.
+        No client flags. Nothing needs attention right now.
       </div>
     )
   }
@@ -59,11 +65,151 @@ export function ClientFlags({
         flexDirection: 'column',
       }}
     >
-      {clients.map((c) => (
-        <NeedsReviewFlagRow key={c.id} client={c} candidates={candidates} />
+      {needsReview.map((c) => (
+        <NeedsReviewFlagRow key={`nr:${c.id}`} client={c} candidates={candidates} />
+      ))}
+      {ghosts.map((g) => (
+        <GhostFlagRow key={`ghost:${g.id}`} ghost={g} />
       ))}
     </div>
   )
+}
+
+function GhostFlagRow({ ghost }: { ghost: GhostClientFlag }) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const [markOpen, setMarkOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const silentLabel =
+    ghost.days_silent === null
+      ? 'no client reply in 90+ days'
+      : `silent ${ghost.days_silent}d`
+
+  function confirmMarkGhost() {
+    setError(null)
+    startTransition(async () => {
+      const r = await dashboardMarkGhostAction(ghost.id)
+      if (r.success) {
+        setMarkOpen(false)
+        router.refresh()
+      } else {
+        setError(r.error)
+      }
+    })
+  }
+
+  function dismiss() {
+    setError(null)
+    startTransition(async () => {
+      const r = await dashboardDismissGhostFlagAction(ghost.id)
+      if (r.success) router.refresh()
+      else setError(r.error)
+    })
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '12px 2px',
+        borderBottom: '1px solid var(--color-geg-border)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <FlagTaskPill label="Ghost" tone="warn" />
+        <div style={{ minWidth: 0 }}>
+          <Link
+            href={`/clients/${ghost.id}`}
+            style={{
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
+            }}
+          >
+            {ghost.full_name}
+          </Link>
+          <div
+            className="geg-mono"
+            style={{
+              marginTop: 3,
+              fontSize: 11,
+              color: 'var(--color-geg-text-faint)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {silentLabel}
+            {ghost.last_client_message_at
+              ? ` · last reply ${formatGhostDate(ghost.last_client_message_at)}`
+              : ''}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setError(null)
+            setMarkOpen(true)
+          }}
+          disabled={isPending}
+        >
+          Mark ghost
+        </Button>
+        <Button variant="outline" size="sm" onClick={dismiss} disabled={isPending}>
+          Remove notification
+        </Button>
+      </div>
+
+      {/* Mark-ghost confirm dialog */}
+      <Dialog
+        open={markOpen}
+        onOpenChange={(next) => {
+          setMarkOpen(next)
+          if (!next) setError(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark {ghost.full_name} as ghost?</DialogTitle>
+            <DialogDescription>
+              Sets the client&apos;s status to ghost. This reassigns them to
+              the chasing queue and disables accountability + NPS (the standard
+              status cascade). Reversible by changing their status back.
+            </DialogDescription>
+          </DialogHeader>
+          {error ? <p className="text-sm text-rose-700">Error: {error}</p> : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMarkOpen(false)}
+              disabled={isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmMarkGhost} disabled={isPending}>
+              {isPending ? 'Marking…' : 'Mark ghost'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function formatGhostDate(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(iso))
 }
 
 function NeedsReviewFlagRow({

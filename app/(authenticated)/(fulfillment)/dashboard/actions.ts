@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { mergeClient, type MergeResult } from '@/lib/db/merge'
+import { updateClientStatusWithHistory } from '@/lib/db/clients'
 
 // Server actions for the dashboard "Needs Review" box. Three dispositions
 // on an auto-created (needs_review-tagged) client:
@@ -98,4 +99,54 @@ export async function dashboardMergeNeedsReviewAction(
     revalidatePath(`/clients/${targetClientId}`)
   }
   return result
+}
+
+// --- Ghost client flag actions --------------------------------------------
+
+// "Mark ghost" — flip status active → ghost via the same history+cascade RPC
+// the client page uses. The cascade (CSM reassignment, accountability/NPS
+// disable, csm_standing=at_risk, history row) fires exactly as elsewhere.
+export async function dashboardMarkGhostAction(
+  clientId: string,
+): Promise<ActionResult> {
+  const result = await updateClientStatusWithHistory(clientId, 'ghost')
+  if (result.success) {
+    revalidatePath('/dashboard')
+    revalidatePath('/clients')
+    revalidatePath(`/clients/${clientId}`)
+  }
+  return result
+}
+
+// "Remove notification" — dismiss the ghost flag for this client by stamping
+// metadata.ghost_dismissed_at. The flag stays hidden until the client posts
+// again in their channel (any message after the dismissal un-hides it). Does
+// not touch status or any other field.
+export async function dashboardDismissGhostFlagAction(
+  clientId: string,
+): Promise<ActionResult> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('clients')
+    .select('metadata')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (error || !data) {
+    return { success: false, error: error?.message ?? 'Client not found' }
+  }
+  const metadata = (data.metadata as Record<string, unknown> | null) ?? {}
+  const newMetadata = {
+    ...metadata,
+    ghost_dismissed_at: new Date().toISOString(),
+  }
+  const { error: writeErr } = await supabase
+    .from('clients')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ metadata: newMetadata as any })
+    .eq('id', clientId)
+  if (writeErr) return { success: false, error: writeErr.message }
+
+  revalidatePath('/dashboard')
+  revalidatePath('/clients')
+  return { success: true }
 }

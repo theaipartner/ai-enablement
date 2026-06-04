@@ -24,7 +24,7 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 | `start_date` | `date` | When the client entered the program |
 | `program_type` | `text` | `9k_consumer`, `b2b_enterprise`, etc. |
 | `tags` | `text[]` | Ad-hoc labels; GIN-indexed |
-| `metadata` | `jsonb` | Long-tail attributes (goals, SWOT, profession, age, etc.). Known keys include `alternate_emails` / `alternate_names` (case-insensitive resolution surface — see § Client Identity Resolution in CLAUDE.md), `profile.*` (sub-object for free-text fields editable from the Profile section), `auto_create_*` breadcrumbs (set on auto-create — see § needs_review lifecycle), `needs_review_cleared_at` ISO timestamp (audit field stamped when the dashboard's "Mark as reviewed" button clears the tag) |
+| `metadata` | `jsonb` | Long-tail attributes (goals, SWOT, profession, age, etc.). Known keys include `alternate_emails` / `alternate_names` (case-insensitive resolution surface — see § Client Identity Resolution in CLAUDE.md), `profile.*` (sub-object for free-text fields editable from the Profile section), `auto_create_*` breadcrumbs (set on auto-create — see § needs_review lifecycle), `needs_review_cleared_at` ISO timestamp (audit field stamped when the dashboard's "Mark as reviewed" button clears the tag), `ghost_dismissed_at` ISO timestamp (set by the dashboard Client-flags "Remove notification" action — suppresses the ghost flag until the client posts in Slack again; see `lib/db/fulfillment-dashboard.ts` `getGhostClientFlags`) |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
 | `archived_at` | `timestamptz` | Soft delete |

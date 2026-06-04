@@ -376,3 +376,133 @@ export async function getNeedsReviewMergeCandidates(): Promise<
     email: (r.email as string | null) ?? '',
   }))
 }
+
+// ---------------------------------------------------------------------------
+// Ghost client flags
+// ---------------------------------------------------------------------------
+//
+// Active clients who have not posted in their Slack channel in 14 days. A
+// "client message" is a slack_messages row with author_type='client'
+// (resolved at ingest — distinguishes the client from CSM / Ella / bot).
+// Channels younger than 14 days are excluded (a brand-new client hasn't had
+// time to go quiet). A CSM can dismiss a flag ("remove notification"), which
+// stamps clients.metadata.ghost_dismissed_at; the flag stays hidden until the
+// client posts again (any message since the dismissal un-hides it).
+
+const GHOST_SILENCE_DAYS = 14
+// Window for the last-message date + dismissal-reset check. Beyond this we
+// just report "90+ days" rather than scanning unbounded history.
+const GHOST_LOOKBACK_DAYS = 90
+
+export type GhostClientFlag = {
+  id: string
+  full_name: string
+  last_client_message_at: string | null // null when silent beyond the lookback
+  days_silent: number | null
+}
+
+export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
+  const supabase = createAdminClient()
+  const now = Date.now()
+  const silenceCutoff = new Date(now - GHOST_SILENCE_DAYS * 86_400_000)
+  const lookbackStart = new Date(now - GHOST_LOOKBACK_DAYS * 86_400_000)
+
+  const { data: clientRows, error: clientErr } = await supabase
+    .from('clients')
+    .select(
+      'id, full_name, metadata, slack_channels(slack_channel_id, is_archived, created_at)',
+    )
+    .eq('status', 'active')
+    .is('archived_at', null)
+  if (clientErr) throw clientErr
+
+  type Candidate = {
+    id: string
+    full_name: string
+    channel_id: string
+    dismissed_at: string | null
+  }
+  const candidates: Candidate[] = []
+  for (const row of (clientRows ?? []) as Array<{
+    id: string
+    full_name: string | null
+    metadata: Record<string, unknown> | null
+    slack_channels: Array<{
+      slack_channel_id: string
+      is_archived: boolean
+      created_at: string
+    }> | null
+  }>) {
+    const active = (row.slack_channels ?? [])
+      .filter((c) => !c.is_archived)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0]
+    if (!active) continue // no Slack channel → can't be a channel-ghost
+    if (new Date(active.created_at) > silenceCutoff) continue // too new
+    const meta = row.metadata ?? {}
+    candidates.push({
+      id: row.id,
+      full_name: row.full_name ?? '(no name)',
+      channel_id: active.slack_channel_id,
+      dismissed_at:
+        typeof meta.ghost_dismissed_at === 'string'
+          ? meta.ghost_dismissed_at
+          : null,
+    })
+  }
+  if (candidates.length === 0) return []
+
+  const { data: msgRows, error: msgErr } = await supabase
+    .from('slack_messages')
+    .select('slack_channel_id, sent_at')
+    .eq('author_type', 'client')
+    .gte('sent_at', lookbackStart.toISOString())
+    .in(
+      'slack_channel_id',
+      candidates.map((c) => c.channel_id),
+    )
+  if (msgErr) throw msgErr
+
+  const latestByChannel = new Map<string, string>()
+  const msgsByChannel = new Map<string, string[]>()
+  for (const m of (msgRows ?? []) as Array<{
+    slack_channel_id: string
+    sent_at: string
+  }>) {
+    const prev = latestByChannel.get(m.slack_channel_id)
+    if (!prev || m.sent_at > prev) {
+      latestByChannel.set(m.slack_channel_id, m.sent_at)
+    }
+    const arr = msgsByChannel.get(m.slack_channel_id) ?? []
+    arr.push(m.sent_at)
+    msgsByChannel.set(m.slack_channel_id, arr)
+  }
+
+  const flags: GhostClientFlag[] = []
+  for (const c of candidates) {
+    const latest = latestByChannel.get(c.channel_id) ?? null
+    // Posted within the silence window → not a ghost.
+    if (latest && new Date(latest) >= silenceCutoff) continue
+    // Dismissed and nothing since → stay hidden until they re-engage.
+    if (c.dismissed_at) {
+      const msgs = msgsByChannel.get(c.channel_id) ?? []
+      const messagedSince = msgs.some((t) => t > c.dismissed_at!)
+      if (!messagedSince) continue
+    }
+    flags.push({
+      id: c.id,
+      full_name: c.full_name,
+      last_client_message_at: latest,
+      days_silent: latest
+        ? Math.floor((now - new Date(latest).getTime()) / 86_400_000)
+        : null,
+    })
+  }
+
+  // Longest-silent first; unknown (silent beyond the lookback) is most silent.
+  flags.sort(
+    (a, b) =>
+      (b.days_silent ?? Number.POSITIVE_INFINITY) -
+      (a.days_silent ?? Number.POSITIVE_INFINITY),
+  )
+  return flags
+}
