@@ -781,3 +781,63 @@ export async function getLeftSlackClients(): Promise<LeftSlackClient[]> {
     a.left_at < b.left_at ? 1 : -1,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Daily digest flags
+// ---------------------------------------------------------------------------
+//
+// The messages Ella flagged for the daily digest (emotional / money /
+// complaint / serious program-uncertainty). 3-day rolling window, floored at
+// 2026-06-05 — the day the tightened flagging criteria went live — so the
+// older, more-liberal flags don't pollute the box. Once the rolling window
+// passes the floor (~2026-06-08) the floor is moot.
+const DIGEST_LAUNCH_FLOOR_ISO = '2026-06-05T04:00:00Z'
+
+export type DigestFlag = {
+  id: string
+  client_id: string | null
+  client_name: string | null
+  category: string | null
+  message: string | null
+  occurred_at: string
+}
+
+export async function getDigestFlags(): Promise<DigestFlag[]> {
+  // pending_digest_items isn't in the generated Supabase types (lag), so reach
+  // it through an untyped handle — same pattern as the RPC readers above.
+  const supabase = createAdminClient() as unknown as SupabaseClient
+  const rolling = new Date(Date.now() - 3 * 86_400_000).toISOString()
+  const since =
+    rolling > DIGEST_LAUNCH_FLOOR_ISO ? rolling : DIGEST_LAUNCH_FLOOR_ISO
+
+  const { data, error } = await supabase
+    .from('pending_digest_items')
+    .select('id, client_id, message_text, digest_category, created_at')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+
+  const rows = (data ?? []) as Array<{
+    id: string
+    client_id: string | null
+    message_text: string | null
+    digest_category: string | null
+    created_at: string
+  }>
+  const clientIds = Array.from(
+    new Set(rows.map((r) => r.client_id).filter((x): x is string => !!x)),
+  )
+  const { data: clientRows } = clientIds.length
+    ? await supabase.from('clients').select('id, full_name').in('id', clientIds)
+    : { data: [] as Array<{ id: string; full_name: string }> }
+  const nameById = new Map((clientRows ?? []).map((c) => [c.id, c.full_name]))
+
+  return rows.map((r) => ({
+    id: r.id,
+    client_id: r.client_id,
+    client_name: r.client_id ? nameById.get(r.client_id) ?? null : null,
+    category: r.digest_category,
+    message: r.message_text,
+    occurred_at: r.created_at,
+  }))
+}
