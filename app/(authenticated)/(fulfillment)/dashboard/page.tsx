@@ -7,17 +7,18 @@ import {
   getNeedsReviewMergeCandidates,
   type Notification,
 } from '@/lib/db/fulfillment-dashboard'
-import { ClientFlags } from './client-flags'
+import { CollapsibleSection } from './collapsible-section'
+import { NeedsReviewList, GhostList } from './client-flags'
 import { FlagTaskPill } from './flag-task-pill'
 
 // Fulfillment Dashboard — notification surface.
 //
-// One stacked notification section split into flag groups: Channel flags,
-// Call flags, Client flags. Each group is a card listing flag items, each
-// item tagged with a task-type pill so multiple kinds can coexist in a
-// group. Channel flags is a placeholder for now; Call flags carries the
-// negative-sentiment + missing-recording notifications; Client flags carries
-// needs-review (auto-created) clients with their dispositions.
+// A responsive grid of collapsible flag sections, collapsed by default and
+// laid out side by side (the page is expected to grow many sections, so the
+// default view stays compact). Today: Channel flags (placeholder), Call flags
+// (negative-sentiment + missing-recording), Needs review (auto-created
+// clients), Ghost (active clients silent in Slack 14+ days). Needs review and
+// Ghost are their own sections now (formerly bundled under "Client flags").
 
 export const dynamic = 'force-dynamic'
 
@@ -38,17 +39,18 @@ export default async function FulfillmentDashboardPage() {
 
       <div
         style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 18,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))',
+          gap: 16,
           marginTop: 28,
+          alignItems: 'start',
         }}
       >
-        <FlagGroup eyebrow="CHANNEL FLAGS" title="Channels." count={0}>
+        <CollapsibleSection eyebrow="CHANNEL FLAGS" title="Channels." count={0}>
           <EmptyFlags message="No channel flags yet." />
-        </FlagGroup>
+        </CollapsibleSection>
 
-        <FlagGroup
+        <CollapsibleSection
           eyebrow="CALL FLAGS"
           title="Calls."
           count={notifications.length}
@@ -62,94 +64,25 @@ export default async function FulfillmentDashboardPage() {
               ))}
             </div>
           )}
-        </FlagGroup>
+        </CollapsibleSection>
 
-        <FlagGroup
-          eyebrow="CLIENT FLAGS"
-          title="Clients."
-          count={needsReview.length + ghosts.length}
+        <CollapsibleSection
+          eyebrow="NEEDS REVIEW"
+          title="Auto-created."
+          count={needsReview.length}
         >
-          <ClientFlags
-            needsReview={needsReview}
-            candidates={mergeCandidates}
-            ghosts={ghosts}
-          />
-        </FlagGroup>
+          <NeedsReviewList clients={needsReview} candidates={mergeCandidates} />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          eyebrow="GHOST"
+          title="Gone quiet."
+          count={ghosts.length}
+        >
+          <GhostList ghosts={ghosts} />
+        </CollapsibleSection>
       </div>
     </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Section shell
-// ---------------------------------------------------------------------------
-
-function FlagGroup({
-  eyebrow,
-  title,
-  count,
-  children,
-}: {
-  eyebrow: string
-  title: string
-  count: number
-  children: React.ReactNode
-}) {
-  return (
-    <section
-      style={{
-        padding: '22px 26px 24px',
-        background: 'var(--color-geg-bg-elev)',
-        border: '1px solid var(--color-geg-border)',
-        borderRadius: 10,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div
-            className="geg-mono"
-            style={{
-              fontSize: 10,
-              letterSpacing: '0.18em',
-              textTransform: 'uppercase',
-              color: 'var(--color-geg-text-3)',
-            }}
-          >
-            {eyebrow}
-          </div>
-          <div
-            className="geg-serif"
-            style={{
-              marginTop: 6,
-              fontSize: 22,
-              color: 'var(--color-geg-text)',
-              letterSpacing: '-0.012em',
-            }}
-          >
-            {title}
-          </div>
-        </div>
-        <div
-          className="geg-mono"
-          style={{
-            fontSize: 10,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: 'var(--color-geg-text-faint)',
-          }}
-        >
-          {count} {count === 1 ? 'flag' : 'flags'}
-        </div>
-      </div>
-      {children}
-    </section>
   )
 }
 
@@ -197,7 +130,7 @@ function CallFlagRow({ n }: { n: Notification }) {
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 12,
-        padding: '12px 2px',
+        padding: '11px 2px',
         borderBottom: '1px solid var(--color-geg-border)',
       }}
     >
