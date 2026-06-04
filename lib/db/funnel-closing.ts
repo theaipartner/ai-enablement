@@ -1123,14 +1123,23 @@ export async function getClosingScheduledList(
   //     range whose lead has NO Calendly event (by lead_id / email / name)
   //     becomes its own drill row, attributed to the form's closer. These are
   //     real worked meetings, so they count in the aggregates like Calendly ones.
+  // Exclusion is keyed to IN-RANGE events only — the ones that actually
+  // produced a drill row this range. A lead whose only Calendly event is
+  // OUTSIDE the range (e.g. Kristina booked a strat call May 25, then closed
+  // via an instant re-engagement Jun 3 with no new booking) gets no event row
+  // here, so its in-range close must still surface as form-only. Keying off
+  // all-time events wrongly hid it.
   const eventLeadIds = new Set<string>()
   const eventEmails = new Set<string>()
   const eventNames = new Set<string>()
-  inviteeByEvent.forEach((inv) => {
+  for (const { e } of typed) {
+    if (!(e.start_time >= range.startUtcIso && e.start_time < range.endUtcIso)) continue
+    const inv = inviteeByEvent.get(e.uri)
+    if (!inv) continue
     if (inv.leadId) eventLeadIds.add(inv.leadId)
     if (inv.email) eventEmails.add(inv.email.toLowerCase().trim())
     if (inv.name) eventNames.add(inv.name.toLowerCase().trim())
-  })
+  }
   const formOnlyCandidates = forms.filter((f) => {
     if (f.form_type !== 'New') return false
     const ts = f.date_time_of_call ?? f.airtable_created_at
