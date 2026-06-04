@@ -405,6 +405,10 @@ export type CloserScheduledDrillRow = {
   // as a cancel). Shows the "cancelled" tag (with the count when ≥2) and
   // is excluded from aggregates.
   cancelled: boolean
+  // True when this row came from a closer EOC form with NO Calendly booking —
+  // an instant-book meeting that never created an event. eventUri is a
+  // synthetic `form:<record_id>` key (no calendly row to hide). Drake 2026-06-04.
+  formOnly?: boolean
 }
 
 export type CloserScheduledAggregate = {
@@ -1110,6 +1114,90 @@ export async function getClosingScheduledList(
       upfront,
       bookingCount,
       cancelled,
+    })
+  }
+
+  // 5b. Form-only meetings (Drake 2026-06-04). Instant-book closer calls leave
+  //     NO Calendly event, so the closer files an EOC with nothing to match.
+  //     Mirror the setter drill's form-only rows: a New EOC form in the view
+  //     range whose lead has NO Calendly event (by lead_id / email / name)
+  //     becomes its own drill row, attributed to the form's closer. These are
+  //     real worked meetings, so they count in the aggregates like Calendly ones.
+  const eventLeadIds = new Set<string>()
+  const eventEmails = new Set<string>()
+  const eventNames = new Set<string>()
+  inviteeByEvent.forEach((inv) => {
+    if (inv.leadId) eventLeadIds.add(inv.leadId)
+    if (inv.email) eventEmails.add(inv.email.toLowerCase().trim())
+    if (inv.name) eventNames.add(inv.name.toLowerCase().trim())
+  })
+  const formOnlyCandidates = forms.filter((f) => {
+    if (f.form_type !== 'New') return false
+    const ts = f.date_time_of_call ?? f.airtable_created_at
+    if (!ts || ts < range.startUtcIso || ts >= range.endUtcIso) return false
+    if (f.lead_id && eventLeadIds.has(f.lead_id)) return false
+    const email = (f.prospect_email ?? '').toLowerCase().trim()
+    if (email && eventEmails.has(email)) return false
+    const name = (f.prospect_name ?? '').toLowerCase().trim()
+    if (name && eventNames.has(name)) return false
+    return true
+  })
+  // Drop test / soft-hidden leads — the Calendly side filters excluded_at on the
+  // event, but forms have no such flag, so check the backing lead.
+  const hiddenOrTest = new Set<string>()
+  const candidateLeadIds = Array.from(
+    new Set(formOnlyCandidates.map((f) => f.lead_id).filter((x): x is string => !!x)),
+  )
+  for (let i = 0; i < candidateLeadIds.length; i += 200) {
+    const chunk = candidateLeadIds.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, excluded_at')
+      .in('close_id', chunk)
+    if (error) throw new Error(`close_leads (form-only filter) read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null; excluded_at: string | null }>) {
+      if (r.excluded_at != null || (r.display_name ?? '').trim().toLowerCase() === 'test') hiddenOrTest.add(r.close_id)
+    }
+  }
+  for (const f of formOnlyCandidates) {
+    if (f.lead_id && hiddenOrTest.has(f.lead_id)) continue
+    if (!f.lead_id && (f.prospect_name ?? '').trim().toLowerCase() === 'test') continue
+    const ts = (f.date_time_of_call ?? f.airtable_created_at) as string
+    const d = deriveNewOutcome(f.call_outcome)
+    const hasSetter =
+      (f.setter_record_ids ?? []).some((s) => s && s.trim()) ||
+      (f.setter_names ?? []).some((n) => n && n.trim() && n.trim().toLowerCase() !== 'no setter')
+    const callType: CloserCallType = hasSetter ? 'setter' : 'direct'
+    const host = displayHost((f.closer_names ?? []).find((n) => n && n.trim())?.trim() ?? null)
+    const agg = bumpAgg(host)
+    const paid = toNum(f.amount_paid_today_number) ?? toNum(f.amount_paid_today_currency)
+    const upfront = d.closed === 'deposit' ? (toNum(f.deposit_amount) ?? paid) : paid
+    const bookedBy = callType === 'setter' ? (setterNameResolver(f.setter_record_ids) ?? null) : null
+    agg.calls++
+    if (callType === 'direct') agg.directCalls++
+    else agg.setterCalls++
+    if (d.showed === 'yes' || d.showed === 'short_follow' || d.showed === 'long_follow') agg.showed++
+    if (d.showed === 'no') agg.noShows++
+    if (d.closed === 'yes') {
+      agg.closed++
+      if (d.closeType === 'ht') agg.closedHt++
+      if (d.closeType === 'dc') agg.closedDc++
+    }
+    if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
+    drillByCloser[host].push({
+      eventUri: `form:${f.record_id}`,
+      leadId: f.lead_id,
+      prospectName: f.prospect_name,
+      scheduledTime: ts,
+      callType,
+      bookedBy,
+      showed: d.showed,
+      closed: d.closed,
+      closeType: d.closeType,
+      upfront,
+      bookingCount: 1,
+      cancelled: false,
+      formOnly: true,
     })
   }
 

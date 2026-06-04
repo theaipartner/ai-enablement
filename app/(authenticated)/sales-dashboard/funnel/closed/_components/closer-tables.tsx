@@ -352,7 +352,7 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
               <div
                 style={{ display: 'grid', gridTemplateColumns: DRILL_COLS, gap: 10, padding: '9px 0', borderBottom: '1px dashed var(--color-geg-border)', alignItems: 'center', opacity: dimmed ? 0.62 : 1 }}
               >
-                <ProspectCell name={c.prospectName} leadId={c.leadId} cancelled={c.cancelled} bookingCount={c.bookingCount} />
+                <ProspectCell name={c.prospectName} leadId={c.leadId} cancelled={c.cancelled} bookingCount={c.bookingCount} formOnly={c.formOnly} />
                 <Cell text={formatEtTimestamp(c.scheduledTime)} mono />
                 <Cell text={callTypeLabel(c.callType)} mono />
                 <BookedByCell callType={c.callType} bookedBy={c.bookedBy} />
@@ -363,8 +363,9 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
             )
             // Non-creators see the row exactly as before. The creator
             // gets a fixed trailing gutter with a "hide test booking" ×
-            // (acts on the backing calendly_scheduled_events row).
-            if (!canDelete) return <div key={c.eventUri}>{rowInner}</div>
+            // (acts on the backing calendly_scheduled_events row). Form-only
+            // rows have no Calendly event to hide, so they skip the button.
+            if (!canDelete || c.formOnly) return <div key={c.eventUri}>{rowInner}</div>
             return (
               <div key={c.eventUri} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{rowInner}</div>
@@ -648,11 +649,13 @@ function ProspectCell({
   leadId,
   cancelled,
   bookingCount,
+  formOnly,
 }: {
   name: string | null
   leadId: string | null
   cancelled: boolean
   bookingCount: number
+  formOnly?: boolean
 }) {
   const isDash = !name
   // The badge number is the lead's net booking count (every attempt on a
@@ -691,11 +694,34 @@ function ProspectCell({
       ) : (
         <span className="geg-serif" style={nameStyle}>{name ?? '—'}</span>
       )}
+      {formOnly ? <FormOnlyTag /> : null}
       {cancelled ? (
         <CancelledTag count={showCount ? bookingCount : null} />
       ) : showCount ? (
         <RebookingTag count={bookingCount} />
       ) : null}
+    </span>
+  )
+}
+
+// Form-only meeting: a closer EOC with no Calendly booking (an instant book).
+function FormOnlyTag() {
+  return (
+    <span
+      className="geg-mono"
+      title="Instant book — meeting filed from the closer form with no Calendly booking."
+      style={{
+        fontSize: 9,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        color: 'var(--color-geg-text-2)',
+        border: '1px solid var(--color-geg-border)',
+        borderRadius: 4,
+        padding: '1px 5px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      form only
     </span>
   )
 }
