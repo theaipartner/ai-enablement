@@ -8,6 +8,7 @@
 // because the dataset is tiny (~200 active clients, ~30 events/day per
 // CSM, ~30 reviews/day worst case).
 
+import { cache } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { JOURNEY_STAGE_LABEL } from '@/lib/client-vocab'
@@ -379,19 +380,45 @@ export async function getNeedsReviewMergeCandidates(): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Ghost client flags
+// Client channel signals (ghost flags + uninstrumented channels)
 // ---------------------------------------------------------------------------
 //
-// Active clients who have not posted in their Slack channel in 14 days. A
-// "client message" is a slack_messages row with author_type='client'
-// (resolved at ingest — distinguishes the client from CSM / Ella / bot).
-// Channels younger than 14 days are excluded (a brand-new client hasn't had
-// time to go quiet). A CSM can dismiss a flag ("remove notification"), which
-// stamps clients.metadata.ghost_dismissed_at; the flag stays hidden until the
-// client posts again (any message since the dismissal un-hides it).
+// Both derive from one Postgres aggregate (client_channel_signals RPC,
+// migration 0074) — per active client, the latest author_type='client'
+// message in their channel plus whether the channel has ANY ingested message.
+// The aggregate runs server-side to avoid PostgREST's 1000-row fetch cap (see
+// the migration header). The RPC isn't in the generated types yet; reach it
+// through an untyped handle (same pattern as lib/db/client-meetings.ts).
 
 const GHOST_SILENCE_DAYS = 14
 
+type ClientChannelSignal = {
+  client_id: string
+  full_name: string | null
+  slack_channel_id: string | null
+  channel_name: string | null
+  channel_created_at: string | null
+  last_client_message_at: string | null
+  ghost_dismissed_at: string | null
+  channel_has_messages: boolean
+}
+
+// cache() dedupes the RPC to a single call per request even though both the
+// ghost and the uninstrumented-channel readers below consume it.
+const getClientChannelSignals = cache(
+  async function getClientChannelSignals(): Promise<ClientChannelSignal[]> {
+    const supabase = createAdminClient() as unknown as SupabaseClient
+    const { data, error } = await supabase.rpc('client_channel_signals')
+    if (error) throw error
+    return (data ?? []) as ClientChannelSignal[]
+  },
+)
+
+// Active clients silent in their Slack channel 14+ days. Channels with no
+// ingested messages (bot not present) are excluded — we have no visibility,
+// so we don't claim "ghost" (those surface under getUninstrumentedChannels).
+// Channels younger than 14 days are excluded (no time to go quiet). A CSM can
+// dismiss via metadata.ghost_dismissed_at; hidden until the client posts again.
 export type GhostClientFlag = {
   id: string
   full_name: string
@@ -400,40 +427,19 @@ export type GhostClientFlag = {
 }
 
 export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
-  // The per-channel "last client message" aggregation runs in Postgres
-  // (ghost_client_candidates RPC, migration 0072). Doing it from here with a
-  // slack_messages fetch hit PostgREST's 1000-row cap and silently flagged
-  // actively-messaging clients as ghosts — see the migration header. The RPC
-  // isn't in the generated types yet; reach it through an untyped handle
-  // (same pattern as lib/db/client-meetings.ts).
-  const supabase = createAdminClient() as unknown as SupabaseClient
-  const { data, error } = await supabase.rpc('ghost_client_candidates')
-  if (error) throw error
-
+  const rows = await getClientChannelSignals()
   const now = Date.now()
   const silenceCutoff = now - GHOST_SILENCE_DAYS * 86_400_000
 
   const flags: GhostClientFlag[] = []
-  for (const row of (data ?? []) as Array<{
-    client_id: string
-    full_name: string | null
-    channel_created_at: string | null
-    last_client_message_at: string | null
-    ghost_dismissed_at: string | null
-    channel_has_messages: boolean
-  }>) {
+  for (const row of rows) {
     if (!row.channel_created_at) continue
-    // No ingested messages at all → the bot isn't in this channel, so we
-    // have no visibility. Don't claim "ghost" for a channel we can't see.
-    if (!row.channel_has_messages) continue
-    // Channel must be old enough that 14d of silence is meaningful.
+    if (!row.channel_has_messages) continue // bot not in channel — no visibility
     if (new Date(row.channel_created_at).getTime() > silenceCutoff) continue
     const last = row.last_client_message_at
       ? new Date(row.last_client_message_at).getTime()
       : null
-    // Posted within the silence window → not a ghost.
     if (last !== null && last >= silenceCutoff) continue
-    // Dismissed and nothing since → stay hidden until they re-engage.
     if (row.ghost_dismissed_at) {
       const dismissed = new Date(row.ghost_dismissed_at).getTime()
       if (last === null || last <= dismissed) continue
@@ -447,11 +453,35 @@ export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
     })
   }
 
-  // Longest-silent first; never-posted (null) sorts as most silent.
   flags.sort(
     (a, b) =>
       (b.days_silent ?? Number.POSITIVE_INFINITY) -
       (a.days_silent ?? Number.POSITIVE_INFINITY),
   )
   return flags
+}
+
+// Channels for active clients with ZERO ingested messages — i.e. the Slack
+// bot / Ella isn't a member, so we capture nothing (and Ella's digest is
+// blind to them). Surfaces under the dashboard's "Channel flags" section as a
+// to-do for inviting the bot. Resolves automatically once the bot is added
+// and a message ingests.
+export type UninstrumentedChannel = {
+  client_id: string
+  full_name: string
+  channel_name: string | null
+}
+
+export async function getUninstrumentedChannels(): Promise<
+  UninstrumentedChannel[]
+> {
+  const rows = await getClientChannelSignals()
+  return rows
+    .filter((r) => !r.channel_has_messages)
+    .map((r) => ({
+      client_id: r.client_id,
+      full_name: r.full_name ?? '(no name)',
+      channel_name: r.channel_name,
+    }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name))
 }

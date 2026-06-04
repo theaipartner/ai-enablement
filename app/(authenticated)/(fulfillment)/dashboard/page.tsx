@@ -5,7 +5,9 @@ import {
   getGhostClientFlags,
   getNeedsReviewClients,
   getNeedsReviewMergeCandidates,
+  getUninstrumentedChannels,
   type Notification,
+  type UninstrumentedChannel,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
 import { NeedsReviewList, GhostList } from './client-flags'
@@ -25,13 +27,19 @@ export const dynamic = 'force-dynamic'
 const EST_LOCALE = 'America/New_York'
 
 export default async function FulfillmentDashboardPage() {
-  const [notifications, needsReview, mergeCandidates, ghosts] =
-    await Promise.all([
-      getDashboardNotifications(),
-      getNeedsReviewClients(),
-      getNeedsReviewMergeCandidates(),
-      getGhostClientFlags(),
-    ])
+  const [
+    notifications,
+    needsReview,
+    mergeCandidates,
+    ghosts,
+    uninstrumented,
+  ] = await Promise.all([
+    getDashboardNotifications(),
+    getNeedsReviewClients(),
+    getNeedsReviewMergeCandidates(),
+    getGhostClientFlags(),
+    getUninstrumentedChannels(),
+  ])
 
   return (
     <div style={{ padding: '32px 48px 64px', maxWidth: 1480, width: '100%' }}>
@@ -46,8 +54,20 @@ export default async function FulfillmentDashboardPage() {
           alignItems: 'start',
         }}
       >
-        <CollapsibleSection eyebrow="CHANNEL FLAGS" title="Channels." count={0}>
-          <EmptyFlags message="No channel flags yet." />
+        <CollapsibleSection
+          eyebrow="CHANNEL FLAGS"
+          title="No Ella."
+          count={uninstrumented.length}
+        >
+          {uninstrumented.length === 0 ? (
+            <EmptyFlags message="Ella is in every active client channel." />
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              {uninstrumented.map((u) => (
+                <UninstrumentedRow key={u.client_id} channel={u} />
+              ))}
+            </div>
+          )}
         </CollapsibleSection>
 
         <CollapsibleSection
@@ -82,6 +102,50 @@ export default async function FulfillmentDashboardPage() {
           <GhostList ghosts={ghosts} />
         </CollapsibleSection>
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Channel flags — active client channels the bot/Ella isn't in (zero ingested
+// messages). Informational: invite the bot in Slack and it resolves itself.
+// ---------------------------------------------------------------------------
+
+function UninstrumentedRow({ channel }: { channel: UninstrumentedChannel }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '11px 2px',
+        borderBottom: '1px solid var(--color-geg-border)',
+      }}
+    >
+      <Link
+        href={`/clients/${channel.client_id}`}
+        style={{
+          fontSize: 14,
+          color: 'var(--color-geg-text)',
+          textDecoration: 'underline',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {channel.full_name}
+      </Link>
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: 11,
+          color: 'var(--color-geg-text-faint)',
+          flexShrink: 0,
+        }}
+      >
+        {channel.channel_name ?? '—'}
+      </span>
     </div>
   )
 }
