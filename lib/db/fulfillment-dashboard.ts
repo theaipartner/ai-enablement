@@ -658,11 +658,12 @@ export async function getMissingSlackClients(): Promise<MissingSlackClient[]> {
 // ---------------------------------------------------------------------------
 //
 // Clients who removed themselves from their Slack channel (often a lapsed $5
-// Slack membership). Detected from the Slackbot system messages we already
-// ingest: "<name> has removed themselves from this channel." (leave) and
-// "This channel is now shared with <name>." (re-join). A channel counts as
-// currently-left when its most recent of these two is a leave — so once the
-// client is added back, the newer "now shared" message drops them off.
+// Slack membership). Detected from data we already ingest: the leave message
+// "<name> has removed themselves from this channel." is consistent; the
+// re-join signal is not, so a channel counts as currently-left only when that
+// leave is newer than ALL of: a "was added to this channel" message, a "now
+// shared with" message, and the client's own most recent message. Re-adding
+// the client (or them posting again) drops them off automatically.
 //
 // (A structured member_left_channel / member_joined_channel event subscription
 // would be cleaner, but these Slackbot messages flow through normal ingestion
@@ -675,38 +676,69 @@ export type LeftSlackClient = {
 
 export async function getLeftSlackClients(): Promise<LeftSlackClient[]> {
   const supabase = createAdminClient()
-  const [{ data: leaves, error: leaveErr }, { data: shares, error: shareErr }] =
-    await Promise.all([
-      supabase
-        .from('slack_messages')
-        .select('slack_channel_id, sent_at')
-        .eq('author_type', 'bot')
-        .ilike('text', '%removed themselves from this channel%'),
-      supabase
-        .from('slack_messages')
-        .select('slack_channel_id, sent_at')
-        .eq('author_type', 'bot')
-        .ilike('text', '%this channel is now shared with%'),
-    ])
+
+  // Leave events per channel. "removed themselves from this channel" is the
+  // consistent leave message; the re-join message varies ("was added to this
+  // channel by …" / "now shared with …"), so we treat ANY of those — or the
+  // client simply posting again — as a re-join signal.
+  const { data: leaves, error: leaveErr } = await supabase
+    .from('slack_messages')
+    .select('slack_channel_id, sent_at')
+    .eq('author_type', 'bot')
+    .ilike('text', '%removed themselves from this channel%')
   if (leaveErr) throw leaveErr
-  if (shareErr) throw shareErr
 
-  const latest = (rows: Array<{ slack_channel_id: string; sent_at: string }> | null) => {
-    const m = new Map<string, string>()
-    for (const r of rows ?? []) {
-      const prev = m.get(r.slack_channel_id)
-      if (!prev || r.sent_at > prev) m.set(r.slack_channel_id, r.sent_at)
-    }
-    return m
+  const latestLeave = new Map<string, string>()
+  for (const r of leaves ?? []) {
+    const prev = latestLeave.get(r.slack_channel_id)
+    if (!prev || r.sent_at > prev) latestLeave.set(r.slack_channel_id, r.sent_at)
   }
-  const latestLeave = latest(leaves)
-  const latestShare = latest(shares)
+  if (latestLeave.size === 0) return []
+  const candidates = Array.from(latestLeave.keys())
 
-  // Currently-left: most recent membership event is a leave.
+  // Latest "back" signal per candidate channel.
+  const backAt = new Map<string, string>()
+  const bump = (ch: string, ts: string | null | undefined) => {
+    if (!ts) return
+    const prev = backAt.get(ch)
+    if (!prev || ts > prev) backAt.set(ch, ts)
+  }
+  const [{ data: added }, { data: shared }] = await Promise.all([
+    supabase
+      .from('slack_messages')
+      .select('slack_channel_id, sent_at')
+      .eq('author_type', 'bot')
+      .ilike('text', '%was added to%')
+      .in('slack_channel_id', candidates),
+    supabase
+      .from('slack_messages')
+      .select('slack_channel_id, sent_at')
+      .eq('author_type', 'bot')
+      .ilike('text', '%now shared with%')
+      .in('slack_channel_id', candidates),
+  ])
+  for (const r of added ?? []) bump(r.slack_channel_id, r.sent_at)
+  for (const r of shared ?? []) bump(r.slack_channel_id, r.sent_at)
+  // The client posting again is the strongest re-join signal. Per-channel
+  // limit-1 keeps it exact without the 1000-row fetch cap on busy channels.
+  await Promise.all(
+    candidates.map(async (ch) => {
+      const { data } = await supabase
+        .from('slack_messages')
+        .select('sent_at')
+        .eq('slack_channel_id', ch)
+        .eq('author_type', 'client')
+        .order('sent_at', { ascending: false })
+        .limit(1)
+      bump(ch, data?.[0]?.sent_at)
+    }),
+  )
+
+  // Currently-left: the leave is newer than every back signal.
   const leftChannels = new Map<string, string>() // channel → left_at
   for (const [ch, leftAt] of Array.from(latestLeave.entries())) {
-    const shared = latestShare.get(ch)
-    if (!shared || leftAt > shared) leftChannels.set(ch, leftAt)
+    const back = backAt.get(ch)
+    if (!back || leftAt > back) leftChannels.set(ch, leftAt)
   }
   if (leftChannels.size === 0) return []
 
