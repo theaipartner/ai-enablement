@@ -151,6 +151,7 @@ async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingAc
 
 type CloserReportRow = {
   record_id: string
+  lead_id: string | null
   airtable_created_at: string
   date_time_of_call: string | null
   call_type: string | null
@@ -195,7 +196,7 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
     const { data, error } = await sb
       .from('airtable_full_closer_report' as never)
       .select(
-        'record_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
+        'record_id, lead_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
         'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, prospect_name, ' +
         'form_type, call_outcome, amount_paid_today_number, deposit_amount',
       )
@@ -213,12 +214,32 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
   // Effective-date filter — keep rows whose CALL time falls inside the
   // user-requested range. UTC ISO comparison is valid because both
   // bounds are derived from ET-anchored midnights (see funnel-window).
-  return rows.filter((r) => {
-    // Drop test forms — these feed the Cash totals + sales count, and test
-    // closes (named "test") would otherwise inflate them.
-    if ((r.prospect_name ?? '').trim().toLowerCase() === 'test') return false
+  const inRange = rows.filter((r) => {
     const ts = effectiveTsIso(r)
     return ts >= range.startUtcIso && ts < range.endUtcIso
+  })
+
+  // Drop test / soft-hidden forms, keyed on the BACKING LEAD (display_name
+  // 'test' or excluded_at) — same as the closer drill. The form's own
+  // prospect_name is unreliable here (e.g. a "testr" form on the 'test' lead),
+  // so a name-only filter let test closes inflate the Cash totals.
+  const leadIds = Array.from(new Set(inRange.map((r) => r.lead_id).filter((x): x is string => !!x)))
+  const hiddenOrTest = new Set<string>()
+  for (let i = 0; i < leadIds.length; i += 200) {
+    const chunk = leadIds.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, excluded_at')
+      .in('close_id', chunk)
+    if (error) throw new Error(`close_leads (closer-report filter) read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null; excluded_at: string | null }>) {
+      if (r.excluded_at != null || (r.display_name ?? '').trim().toLowerCase() === 'test') hiddenOrTest.add(r.close_id)
+    }
+  }
+  return inRange.filter((r) => {
+    if (r.lead_id && hiddenOrTest.has(r.lead_id)) return false
+    if ((r.prospect_name ?? '').trim().toLowerCase() === 'test') return false
+    return true
   })
 }
 
