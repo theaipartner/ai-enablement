@@ -150,3 +150,87 @@ export async function dashboardDismissGhostFlagAction(
   revalidatePath('/clients')
   return { success: true }
 }
+
+// --- Missing Slack IDs actions --------------------------------------------
+
+// Set clients.slack_user_id (Slack "U…" id). Trims; rejects empty.
+export async function dashboardSetSlackUserIdAction(
+  clientId: string,
+  slackUserId: string,
+): Promise<ActionResult> {
+  const value = slackUserId.trim()
+  if (!value) return { success: false, error: 'Slack user ID is required' }
+
+  const supabase = createAdminClient()
+  const { error } = await supabase
+    .from('clients')
+    .update({ slack_user_id: value })
+    .eq('id', clientId)
+  if (error) return { success: false, error: error.message }
+
+  revalidatePath('/dashboard')
+  revalidatePath('/clients')
+  revalidatePath(`/clients/${clientId}`)
+  return { success: true }
+}
+
+// Link a Slack channel id to a client by inserting (or re-attaching) a
+// slack_channels row. Mirrors the onboarding RPC defaults: name = client
+// full_name, is_private=false, passive monitoring on. Refuses to steal a
+// channel already linked to a different client.
+export async function dashboardLinkSlackChannelAction(
+  clientId: string,
+  slackChannelId: string,
+): Promise<ActionResult> {
+  const channelId = slackChannelId.trim()
+  if (!channelId) return { success: false, error: 'Slack channel ID is required' }
+
+  const supabase = createAdminClient()
+
+  const { data: client, error: clientErr } = await supabase
+    .from('clients')
+    .select('full_name')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (clientErr || !client) {
+    return { success: false, error: clientErr?.message ?? 'Client not found' }
+  }
+  const name = client.full_name ?? channelId
+
+  const { data: existing, error: existErr } = await supabase
+    .from('slack_channels')
+    .select('id, client_id')
+    .eq('slack_channel_id', channelId)
+    .maybeSingle()
+  if (existErr) return { success: false, error: existErr.message }
+
+  if (existing) {
+    if (existing.client_id && existing.client_id !== clientId) {
+      return {
+        success: false,
+        error: 'That channel is already linked to another client',
+      }
+    }
+    const { error: updErr } = await supabase
+      .from('slack_channels')
+      .update({ client_id: clientId, is_archived: false, name })
+      .eq('id', existing.id)
+    if (updErr) return { success: false, error: updErr.message }
+  } else {
+    const { error: insErr } = await supabase.from('slack_channels').insert({
+      slack_channel_id: channelId,
+      client_id: clientId,
+      name,
+      is_private: false,
+      is_archived: false,
+      passive_monitoring_enabled: true,
+      metadata: { created_via: 'dashboard_missing_slack' },
+    })
+    if (insErr) return { success: false, error: insErr.message }
+  }
+
+  revalidatePath('/dashboard')
+  revalidatePath('/clients')
+  revalidatePath(`/clients/${clientId}`)
+  return { success: true }
+}

@@ -7,12 +7,14 @@ import {
   getNeedsReviewClients,
   getNeedsReviewMergeCandidates,
   getUninstrumentedChannels,
+  getMissingSlackClients,
   type SentimentCallFlag,
   type MissingRecordingFlag,
   type UninstrumentedChannel,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
 import { NeedsReviewList, GhostList } from './client-flags'
+import { MissingSlackList } from './missing-slack'
 import { FlagTaskPill } from './flag-task-pill'
 
 // Fulfillment Dashboard — notification surface.
@@ -36,6 +38,7 @@ export default async function FulfillmentDashboardPage() {
     mergeCandidates,
     ghosts,
     uninstrumented,
+    missingSlack,
   ] = await Promise.all([
     getSentimentCallFlags(),
     getMissingRecordingFlags(),
@@ -43,6 +46,7 @@ export default async function FulfillmentDashboardPage() {
     getNeedsReviewMergeCandidates(),
     getGhostClientFlags(),
     getUninstrumentedChannels(),
+    getMissingSlackClients(),
   ])
 
   return (
@@ -72,6 +76,14 @@ export default async function FulfillmentDashboardPage() {
               ))}
             </div>
           )}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          eyebrow="MISSING SLACK IDS"
+          title="No IDs."
+          count={missingSlack.length}
+        >
+          <MissingSlackList clients={missingSlack} />
         </CollapsibleSection>
 
         <CollapsibleSection

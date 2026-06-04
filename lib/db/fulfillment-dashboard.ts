@@ -411,6 +411,7 @@ const GHOST_SILENCE_DAYS = 14
 type ClientChannelSignal = {
   client_id: string
   full_name: string | null
+  slack_user_id: string | null
   slack_channel_id: string | null
   channel_name: string | null
   channel_created_at: string | null
@@ -450,6 +451,9 @@ export async function getGhostClientFlags(): Promise<GhostClientFlag[]> {
   const flags: GhostClientFlag[] = []
   for (const row of rows) {
     if (!row.channel_created_at) continue
+    // No slack_user_id → their messages can't be attributed (they'd look
+    // silent regardless). They belong in Missing Slack IDs, not here.
+    if (!row.slack_user_id) continue
     if (!row.channel_has_messages) continue // bot not in channel — no visibility
     if (new Date(row.channel_created_at).getTime() > silenceCutoff) continue
     const last = row.last_client_message_at
@@ -493,11 +497,60 @@ export async function getUninstrumentedChannels(): Promise<
 > {
   const rows = await getClientChannelSignals()
   return rows
-    .filter((r) => !r.channel_has_messages)
+    // Missing slack_user_id → surfaced under Missing Slack IDs instead; only
+    // clients with complete IDs belong here.
+    .filter((r) => !r.channel_has_messages && !!r.slack_user_id)
     .map((r) => ({
       client_id: r.client_id,
       full_name: r.full_name ?? '(no name)',
       channel_name: r.channel_name,
     }))
     .sort((a, b) => a.full_name.localeCompare(b.full_name))
+}
+
+// ---------------------------------------------------------------------------
+// Missing Slack IDs
+// ---------------------------------------------------------------------------
+//
+// Active clients with no slack_user_id and/or no mapped (non-archived) Slack
+// channel — the same condition the client list/detail flags via pills. Shown
+// on the dashboard with inline actions to add either id, so it no longer needs
+// a manual curl. Clients here are excluded from No Ella / Ghost until complete.
+
+export type MissingSlackClient = {
+  client_id: string
+  full_name: string
+  missing_user: boolean
+  missing_channel: boolean
+}
+
+export async function getMissingSlackClients(): Promise<MissingSlackClient[]> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id, full_name, slack_user_id, slack_channels(slack_channel_id, is_archived)')
+    .eq('status', 'active')
+    .is('archived_at', null)
+  if (error) throw error
+
+  const out: MissingSlackClient[] = []
+  for (const row of (data ?? []) as Array<{
+    id: string
+    full_name: string | null
+    slack_user_id: string | null
+    slack_channels: Array<{ slack_channel_id: string; is_archived: boolean }> | null
+  }>) {
+    const hasChannel = (row.slack_channels ?? []).some((c) => !c.is_archived)
+    const missing_user = !row.slack_user_id
+    const missing_channel = !hasChannel
+    if (missing_user || missing_channel) {
+      out.push({
+        client_id: row.id,
+        full_name: row.full_name ?? '(no name)',
+        missing_user,
+        missing_channel,
+      })
+    }
+  }
+  return out.sort((a, b) => a.full_name.localeCompare(b.full_name))
 }
