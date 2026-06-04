@@ -3,11 +3,14 @@ import { HeaderBand } from '@/components/gregory/header-band'
 import {
   getActiveClientsAggregate,
   getDashboardNotifications,
+  getNeedsReviewClients,
+  getNeedsReviewMergeCandidates,
   type ActiveClientsAggregate,
   type CsmCount,
   type JourneyStageCount,
   type Notification,
 } from '@/lib/db/fulfillment-dashboard'
+import { NeedsReviewBox } from './needs-review-box'
 
 // Fulfillment Dashboard.
 //
@@ -23,14 +26,19 @@ export const dynamic = 'force-dynamic'
 const EST_LOCALE = 'America/New_York'
 
 export default async function FulfillmentDashboardPage() {
-  const [aggregate, notifications] = await Promise.all([
-    getActiveClientsAggregate(),
-    getDashboardNotifications(),
-  ])
+  const [aggregate, notifications, needsReview, mergeCandidates] =
+    await Promise.all([
+      getActiveClientsAggregate(),
+      getDashboardNotifications(),
+      getNeedsReviewClients(),
+      getNeedsReviewMergeCandidates(),
+    ])
 
   return (
     <div style={{ padding: '32px 48px 64px', maxWidth: 1480, width: '100%' }}>
       <HeaderBand eyebrow="FULFILLMENT" title="Dashboard." />
+
+      <NeedsReviewBox clients={needsReview} candidates={mergeCandidates} />
 
       <div
         style={{

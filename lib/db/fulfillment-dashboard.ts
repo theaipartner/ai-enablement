@@ -296,3 +296,83 @@ export async function getDashboardNotifications(): Promise<Notification[]> {
     a.occurred_at < b.occurred_at ? 1 : -1,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Needs-review clients
+// ---------------------------------------------------------------------------
+//
+// Clients auto-created by the Fathom classifier when it couldn't
+// confidently resolve a call participant. They carry the `needs_review`
+// tag (see docs/schema/clients.md) and surface in the dashboard box so
+// the CSM lead can clear the tag, merge the row into the real client, or
+// archive it. `metadata` carries the auto-create breadcrumbs we show as
+// context (what call spawned the row).
+
+export type NeedsReviewClient = {
+  id: string
+  full_name: string
+  email: string
+  created_at: string
+  auto_create_reason: string | null
+  auto_created_from_call_title: string | null
+}
+
+export async function getNeedsReviewClients(): Promise<NeedsReviewClient[]> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id, full_name, email, created_at, metadata')
+    .contains('tags', ['needs_review'])
+    .is('archived_at', null)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  const rows = (data ?? []) as Array<{
+    id: string
+    full_name: string | null
+    email: string | null
+    created_at: string
+    metadata: Record<string, unknown> | null
+  }>
+
+  return rows.map((r) => {
+    const meta = r.metadata ?? {}
+    return {
+      id: r.id,
+      full_name: r.full_name ?? '(no name)',
+      email: r.email ?? '',
+      created_at: r.created_at,
+      auto_create_reason:
+        typeof meta.auto_create_reason === 'string'
+          ? meta.auto_create_reason
+          : null,
+      auto_created_from_call_title:
+        typeof meta.auto_created_from_call_title === 'string'
+          ? meta.auto_created_from_call_title
+          : null,
+    }
+  })
+}
+
+// All active (non-archived) clients as merge targets for the dashboard
+// needs-review box. Mirrors listMergeCandidates (lib/db/merge.ts) but
+// without a single-source exclusion — the box has many sources, so each
+// row filters itself out client-side. email coerced to '' so the
+// SearchableClientSelect's string ops are safe.
+export async function getNeedsReviewMergeCandidates(): Promise<
+  { id: string; full_name: string; email: string }[]
+> {
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id, full_name, email')
+    .is('archived_at', null)
+    .order('full_name', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    full_name: (r.full_name as string | null) ?? '(no name)',
+    email: (r.email as string | null) ?? '',
+  }))
+}
