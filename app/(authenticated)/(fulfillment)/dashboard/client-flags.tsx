@@ -20,106 +20,53 @@ import {
   dashboardClearNeedsReviewAction,
   dashboardMergeNeedsReviewAction,
 } from './actions'
+import { FlagTaskPill } from './flag-task-pill'
 
-// Dashboard "Needs Review" box. Scrollable list of auto-created
-// (needs_review-tagged) clients with three per-row dispositions:
-// clear the tag, merge into a real client, or delete (soft-archive).
-// Mirrors the visual language of the existing dashboard stat boxes
-// (elevated card, eyebrow + serif title, mono labels).
-
-export function NeedsReviewBox({
+// Client flags list for the dashboard notification section. Today the only
+// task kind is "needs review" (auto-created clients), but the section is
+// built to hold other client-level tasks later — each row carries a
+// task-type pill so kinds are visually differentiated. Rows for needs_review
+// keep the three dispositions: clear the tag, merge into a real client, or
+// delete (soft-archive).
+export function ClientFlags({
   clients,
   candidates,
 }: {
   clients: NeedsReviewClient[]
   candidates: CandidateClient[]
 }) {
-  return (
-    <section style={{ marginTop: 28 }}>
+  if (clients.length === 0) {
+    return (
       <div
         style={{
-          padding: '22px 26px 24px',
-          background: 'var(--color-geg-bg-elev)',
-          border: '1px solid var(--color-geg-border)',
-          borderRadius: 10,
+          padding: '4px 0',
+          fontSize: 13,
+          color: 'var(--color-geg-text-3)',
+          fontStyle: 'italic',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            marginBottom: 14,
-          }}
-        >
-          <div>
-            <div
-              className="geg-mono"
-              style={{
-                fontSize: 10,
-                letterSpacing: '0.18em',
-                textTransform: 'uppercase',
-                color: 'var(--color-geg-text-3)',
-              }}
-            >
-              NEEDS REVIEW
-            </div>
-            <div
-              className="geg-serif"
-              style={{
-                marginTop: 6,
-                fontSize: 22,
-                color: 'var(--color-geg-text)',
-                letterSpacing: '-0.012em',
-              }}
-            >
-              Auto-created clients.
-            </div>
-          </div>
-          <div
-            className="geg-mono"
-            style={{
-              fontSize: 10,
-              letterSpacing: '0.14em',
-              textTransform: 'uppercase',
-              color: 'var(--color-geg-text-faint)',
-            }}
-          >
-            {clients.length} {clients.length === 1 ? 'client' : 'clients'}
-          </div>
-        </div>
-
-        {clients.length === 0 ? (
-          <div
-            style={{
-              padding: '8px 0 4px',
-              fontSize: 13,
-              color: 'var(--color-geg-text-3)',
-              fontStyle: 'italic',
-            }}
-          >
-            Nothing to review. Every auto-created client has been resolved.
-          </div>
-        ) : (
-          <div
-            style={{
-              maxHeight: 300,
-              overflowY: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            {clients.map((c) => (
-              <NeedsReviewRow key={c.id} client={c} candidates={candidates} />
-            ))}
-          </div>
-        )}
+        No client flags. Every auto-created client has been resolved.
       </div>
-    </section>
+    )
+  }
+
+  return (
+    <div
+      style={{
+        maxHeight: 300,
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      {clients.map((c) => (
+        <NeedsReviewFlagRow key={c.id} client={c} candidates={candidates} />
+      ))}
+    </div>
   )
 }
 
-function NeedsReviewRow({
+function NeedsReviewFlagRow({
   client,
   candidates,
 }: {
@@ -134,8 +81,7 @@ function NeedsReviewRow({
   const [error, setError] = useState<string | null>(null)
 
   const mergeCandidates = candidates.filter((c) => c.id !== client.id)
-  const targetClient =
-    mergeCandidates.find((c) => c.id === targetId) ?? null
+  const targetClient = mergeCandidates.find((c) => c.id === targetId) ?? null
   const context =
     client.auto_created_from_call_title ?? client.auto_create_reason ?? null
 
@@ -187,40 +133,38 @@ function NeedsReviewRow({
         borderBottom: '1px solid var(--color-geg-border)',
       }}
     >
-      <div style={{ minWidth: 0 }}>
-        <Link
-          href={`/clients/${client.id}`}
-          style={{
-            fontSize: 14,
-            color: 'var(--color-geg-text)',
-            textDecoration: 'underline',
-          }}
-        >
-          {client.full_name}
-        </Link>
-        <div
-          className="geg-mono"
-          style={{
-            marginTop: 3,
-            fontSize: 11,
-            color: 'var(--color-geg-text-faint)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {client.email || '(no email)'}
-          {context ? ` · ${context}` : ''}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <FlagTaskPill label="Needs review" tone="info" />
+        <div style={{ minWidth: 0 }}>
+          <Link
+            href={`/clients/${client.id}`}
+            style={{
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
+            }}
+          >
+            {client.full_name}
+          </Link>
+          <div
+            className="geg-mono"
+            style={{
+              marginTop: 3,
+              fontSize: 11,
+              color: 'var(--color-geg-text-faint)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {client.email || '(no email)'}
+            {context ? ` · ${context}` : ''}
+          </div>
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={clearTag}
-          disabled={isPending}
-        >
+        <Button variant="outline" size="sm" onClick={clearTag} disabled={isPending}>
           Reviewed
         </Button>
         <Button
@@ -272,9 +216,7 @@ function NeedsReviewRow({
             value={targetId}
             onChange={setTargetId}
           />
-          {error ? (
-            <p className="text-sm text-rose-700">Error: {error}</p>
-          ) : null}
+          {error ? <p className="text-sm text-rose-700">Error: {error}</p> : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -311,9 +253,7 @@ function NeedsReviewRow({
               clearing archived_at in SQL.
             </DialogDescription>
           </DialogHeader>
-          {error ? (
-            <p className="text-sm text-rose-700">Error: {error}</p>
-          ) : null}
+          {error ? <p className="text-sm text-rose-700">Error: {error}</p> : null}
           <DialogFooter>
             <Button
               variant="outline"
