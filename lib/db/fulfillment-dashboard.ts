@@ -315,6 +315,104 @@ export async function getMissingRecordingFlags(): Promise<MissingRecordingFlag[]
   return flags.sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1))
 }
 
+// ---- Late-start flags: client calls whose Fathom recording began 10+ minutes
+// after the scheduled calendar start, past 3 days. A call is matched to a
+// calendar event by normalized title within a ±30-min window (so 10–30 min
+// late is detectable); the client comes from the call's primary_client_id.
+const LATE_START_THRESHOLD_MIN = 10
+
+export type LateStartFlag = {
+  call_id: string
+  call_title: string | null
+  client_id: string | null
+  client_name: string | null
+  minutes_late: number
+  occurred_at: string
+}
+
+export async function getLateStartFlags(): Promise<LateStartFlag[]> {
+  const supabase = createAdminClient()
+  const now = Date.now()
+  const since = new Date(now - CALL_FLAG_LOOKBACK_DAYS * 86_400_000).toISOString()
+  const nowIso = new Date(now).toISOString()
+
+  const [
+    { data: events, error: eventsErr },
+    { data: calls, error: callsErr },
+  ] = await Promise.all([
+    supabase
+      .from('calendar_events')
+      .select('title, start_time')
+      .gte('start_time', since)
+      .lte('start_time', nowIso),
+    supabase
+      .from('calls')
+      .select('id, title, started_at, primary_client_id')
+      .eq('call_category', 'client')
+      .gte('started_at', since)
+      .lte('started_at', nowIso),
+  ])
+  if (eventsErr) throw eventsErr
+  if (callsErr) throw callsErr
+
+  const eventList = (events ?? []) as Array<{
+    title: string | null
+    start_time: string
+  }>
+  const callList = (calls ?? []) as Array<{
+    id: string
+    title: string | null
+    started_at: string
+    primary_client_id: string | null
+  }>
+
+  const clientIds = Array.from(
+    new Set(
+      callList.map((c) => c.primary_client_id).filter((x): x is string => !!x),
+    ),
+  )
+  const { data: clientRows } = clientIds.length
+    ? await supabase.from('clients').select('id, full_name').in('id', clientIds)
+    : { data: [] as Array<{ id: string; full_name: string }> }
+  const nameById = new Map((clientRows ?? []).map((c) => [c.id, c.full_name]))
+
+  const flags: LateStartFlag[] = []
+  for (const call of callList) {
+    const titleNorm = normalizeTitle(call.title)
+    if (!titleNorm) continue
+    const callStart = new Date(call.started_at).getTime()
+
+    // Closest same-title event within ±30 min = the scheduled meeting.
+    let bestStart: number | null = null
+    let bestDelta = Number.POSITIVE_INFINITY
+    for (const ev of eventList) {
+      if (normalizeTitle(ev.title) !== titleNorm) continue
+      const evStart = new Date(ev.start_time).getTime()
+      const delta = Math.abs(callStart - evStart)
+      if (delta <= 30 * 60 * 1000 && delta < bestDelta) {
+        bestDelta = delta
+        bestStart = evStart
+      }
+    }
+    if (bestStart === null) continue
+
+    const minutesLate = Math.round((callStart - bestStart) / 60000)
+    if (minutesLate < LATE_START_THRESHOLD_MIN) continue
+
+    flags.push({
+      call_id: call.id,
+      call_title: call.title,
+      client_id: call.primary_client_id ?? null,
+      client_name: call.primary_client_id
+        ? nameById.get(call.primary_client_id) ?? null
+        : null,
+      minutes_late: minutesLate,
+      occurred_at: call.started_at,
+    })
+  }
+  return flags.sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1))
+}
+
 // ---------------------------------------------------------------------------
 // Needs-review clients
 // ---------------------------------------------------------------------------

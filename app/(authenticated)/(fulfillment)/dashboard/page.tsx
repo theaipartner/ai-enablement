@@ -3,6 +3,7 @@ import { HeaderBand } from '@/components/gregory/header-band'
 import {
   getSentimentCallFlags,
   getMissingRecordingFlags,
+  getLateStartFlags,
   getGhostClientFlags,
   getNeedsReviewClients,
   getNeedsReviewMergeCandidates,
@@ -10,6 +11,7 @@ import {
   getMissingSlackClients,
   type SentimentCallFlag,
   type MissingRecordingFlag,
+  type LateStartFlag,
   type UninstrumentedChannel,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
@@ -34,6 +36,7 @@ export default async function FulfillmentDashboardPage() {
   const [
     sentimentCalls,
     missingRecordings,
+    lateStarts,
     needsReview,
     mergeCandidates,
     ghosts,
@@ -42,6 +45,7 @@ export default async function FulfillmentDashboardPage() {
   ] = await Promise.all([
     getSentimentCallFlags(),
     getMissingRecordingFlags(),
+    getLateStartFlags(),
     getNeedsReviewClients(),
     getNeedsReviewMergeCandidates(),
     getGhostClientFlags(),
@@ -113,6 +117,22 @@ export default async function FulfillmentDashboardPage() {
             <div style={{ maxHeight: 300, overflowY: 'auto' }}>
               {missingRecordings.map((m) => (
                 <MissingRecordingRow key={m.google_event_id} flag={m} />
+              ))}
+            </div>
+          )}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          eyebrow="LATE STARTS"
+          title="Started late."
+          count={lateStarts.length}
+        >
+          {lateStarts.length === 0 ? (
+            <EmptyFlags message="No calls started 10+ minutes late in the past 3 days." />
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              {lateStarts.map((l) => (
+                <LateStartRow key={l.call_id} flag={l} />
               ))}
             </div>
           )}
@@ -245,6 +265,34 @@ function SentimentRow({ flag }: { flag: SentimentCallFlag }) {
           label={isNegative ? 'Negative' : 'Mixed'}
           tone={isNegative ? 'neg' : 'warn'}
         />
+        <div style={{ minWidth: 0 }}>
+          <Link
+            href={`/calls/${flag.call_id}`}
+            style={{
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
+            }}
+          >
+            {flag.call_title ?? 'Untitled call'}
+          </Link>
+          <div className="geg-mono" style={META_STYLE}>
+            {flag.client_name ?? '—'}
+          </div>
+        </div>
+      </div>
+      <div className="geg-mono" style={DATE_STYLE}>
+        {formatFlagDate(flag.occurred_at)}
+      </div>
+    </div>
+  )
+}
+
+function LateStartRow({ flag }: { flag: LateStartFlag }) {
+  return (
+    <div style={ROW_STYLE}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <FlagTaskPill label={`${flag.minutes_late}m late`} tone="warn" />
         <div style={{ minWidth: 0 }}>
           <Link
             href={`/calls/${flag.call_id}`}
