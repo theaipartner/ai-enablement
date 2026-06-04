@@ -1,12 +1,14 @@
 import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import {
-  getDashboardNotifications,
+  getSentimentCallFlags,
+  getMissingRecordingFlags,
   getGhostClientFlags,
   getNeedsReviewClients,
   getNeedsReviewMergeCandidates,
   getUninstrumentedChannels,
-  type Notification,
+  type SentimentCallFlag,
+  type MissingRecordingFlag,
   type UninstrumentedChannel,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
@@ -28,13 +30,15 @@ const EST_LOCALE = 'America/New_York'
 
 export default async function FulfillmentDashboardPage() {
   const [
-    notifications,
+    sentimentCalls,
+    missingRecordings,
     needsReview,
     mergeCandidates,
     ghosts,
     uninstrumented,
   ] = await Promise.all([
-    getDashboardNotifications(),
+    getSentimentCallFlags(),
+    getMissingRecordingFlags(),
     getNeedsReviewClients(),
     getNeedsReviewMergeCandidates(),
     getGhostClientFlags(),
@@ -72,15 +76,31 @@ export default async function FulfillmentDashboardPage() {
 
         <CollapsibleSection
           eyebrow="CALL FLAGS"
-          title="Calls."
-          count={notifications.length}
+          title="Sentiment."
+          count={sentimentCalls.length}
         >
-          {notifications.length === 0 ? (
-            <EmptyFlags message="No call flags. All recordings landed and reviewed calls came back green or yellow." />
+          {sentimentCalls.length === 0 ? (
+            <EmptyFlags message="No mixed or negative calls in the past 3 days." />
           ) : (
             <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-              {notifications.map((n) => (
-                <CallFlagRow key={callFlagKey(n)} n={n} />
+              {sentimentCalls.map((c) => (
+                <SentimentRow key={c.call_id} flag={c} />
+              ))}
+            </div>
+          )}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          eyebrow="MISSING RECORDINGS"
+          title="No Fathom."
+          count={missingRecordings.length}
+        >
+          {missingRecordings.length === 0 ? (
+            <EmptyFlags message="No missing recordings for at-risk or problem clients in the past 3 days." />
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              {missingRecordings.map((m) => (
+                <MissingRecordingRow key={m.google_event_id} flag={m} />
               ))}
             </div>
           )}
@@ -166,16 +186,10 @@ function EmptyFlags({ message }: { message: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Call flags
+// Call flags (mixed / negative sentiment, past 3 days) + missing recordings
 // ---------------------------------------------------------------------------
 
-function callFlagKey(n: Notification): string {
-  return n.kind === 'negative_sentiment'
-    ? `sent:${n.call_id}`
-    : `miss:${n.google_event_id}`
-}
-
-function formatNotificationDate(iso: string): string {
+function formatFlagDate(iso: string): string {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: EST_LOCALE,
     month: 'short',
@@ -185,70 +199,90 @@ function formatNotificationDate(iso: string): string {
   }).format(new Date(iso))
 }
 
-function CallFlagRow({ n }: { n: Notification }) {
-  const isNegative = n.kind === 'negative_sentiment'
+const ROW_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: '11px 2px',
+  borderBottom: '1px solid var(--color-geg-border)',
+}
+
+const META_STYLE: React.CSSProperties = {
+  marginTop: 3,
+  fontSize: 11,
+  color: 'var(--color-geg-text-faint)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const DATE_STYLE: React.CSSProperties = {
+  fontSize: 11,
+  color: 'var(--color-geg-text-2)',
+  letterSpacing: '0.04em',
+  flexShrink: 0,
+}
+
+function SentimentRow({ flag }: { flag: SentimentCallFlag }) {
+  const isNegative = flag.sentiment === 'red'
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        padding: '11px 2px',
-        borderBottom: '1px solid var(--color-geg-border)',
-      }}
-    >
+    <div style={ROW_STYLE}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <FlagTaskPill
-          label={isNegative ? 'Negative sentiment' : 'Missing recording'}
+          label={isNegative ? 'Negative' : 'Mixed'}
           tone={isNegative ? 'neg' : 'warn'}
         />
         <div style={{ minWidth: 0 }}>
-          {isNegative ? (
-            <Link
-              href={`/calls/${n.call_id}`}
-              style={{
-                fontSize: 14,
-                color: 'var(--color-geg-text)',
-                textDecoration: 'underline',
-              }}
-            >
-              {n.call_title ?? 'Untitled call'}
-            </Link>
-          ) : (
-            <span style={{ fontSize: 14, color: 'var(--color-geg-text)' }}>
-              {n.event_title ?? 'Untitled event'}
-            </span>
-          )}
-          <div
-            className="geg-mono"
+          <Link
+            href={`/calls/${flag.call_id}`}
             style={{
-              marginTop: 3,
-              fontSize: 11,
-              color: 'var(--color-geg-text-faint)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
             }}
           >
-            {isNegative
-              ? n.client_id && n.client_name
-                ? n.client_name
-                : '—'
-              : (n.csm_name ?? 'Unassigned')}
+            {flag.call_title ?? 'Untitled call'}
+          </Link>
+          <div className="geg-mono" style={META_STYLE}>
+            {flag.client_name ?? '—'}
           </div>
         </div>
       </div>
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 11,
-          color: 'var(--color-geg-text-2)',
-          letterSpacing: '0.04em',
-          flexShrink: 0,
-        }}
-      >
-        {formatNotificationDate(n.occurred_at)}
+      <div className="geg-mono" style={DATE_STYLE}>
+        {formatFlagDate(flag.occurred_at)}
+      </div>
+    </div>
+  )
+}
+
+function MissingRecordingRow({ flag }: { flag: MissingRecordingFlag }) {
+  return (
+    <div style={ROW_STYLE}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <FlagTaskPill
+          label={flag.csm_standing === 'problem' ? 'Problem' : 'At risk'}
+          tone="neg"
+        />
+        <div style={{ minWidth: 0 }}>
+          <Link
+            href={`/clients/${flag.client_id}`}
+            style={{
+              fontSize: 14,
+              color: 'var(--color-geg-text)',
+              textDecoration: 'underline',
+            }}
+          >
+            {flag.client_name}
+          </Link>
+          <div className="geg-mono" style={META_STYLE}>
+            {flag.event_title ?? 'Untitled event'}
+            {flag.csm_name ? ` · ${flag.csm_name}` : ''}
+          </div>
+        </div>
+      </div>
+      <div className="geg-mono" style={DATE_STYLE}>
+        {formatFlagDate(flag.occurred_at)}
       </div>
     </div>
   )

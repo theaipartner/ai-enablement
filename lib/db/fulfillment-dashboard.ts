@@ -12,7 +12,6 @@ import { cache } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { JOURNEY_STAGE_LABEL } from '@/lib/client-vocab'
-import { getEstPeriodBoundary } from '@/lib/time/est-periods'
 
 // ---------------------------------------------------------------------------
 // Active clients aggregations
@@ -117,103 +116,52 @@ export async function getActiveClientsAggregate(): Promise<ActiveClientsAggregat
 // Notifications feed
 // ---------------------------------------------------------------------------
 
-export type Notification =
-  | {
-      kind: 'negative_sentiment'
-      occurred_at: string
-      call_id: string
-      call_title: string | null
-      client_id: string | null
-      client_name: string | null
-    }
-  | {
-      kind: 'missed_recording'
-      occurred_at: string
-      google_event_id: string
-      event_title: string | null
-      csm_name: string | null
-      end_time: string
-    }
+// Lookback window for both call-flag feeds (sentiment + missing recording).
+const CALL_FLAG_LOOKBACK_DAYS = 3
 
 function normalizeTitle(t: string | null | undefined): string {
   return (t ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-export async function getDashboardNotifications(): Promise<Notification[]> {
+// ---- Sentiment call flags: mixed (yellow) or negative (red) call reviews
+// from the past 3 days.
+export type SentimentCallFlag = {
+  call_id: string
+  call_title: string | null
+  client_id: string | null
+  client_name: string | null
+  sentiment: 'yellow' | 'red'
+  occurred_at: string
+}
+
+export async function getSentimentCallFlags(): Promise<SentimentCallFlag[]> {
   const supabase = createAdminClient()
+  const since = new Date(
+    Date.now() - CALL_FLAG_LOOKBACK_DAYS * 86_400_000,
+  ).toISOString()
 
-  const todayStartEt = getEstPeriodBoundary('today')
-  const now = new Date()
-
-  // ---- Negative-sentiment call_reviews (today in ET).
-  const sentimentPromise = supabase
+  const { data: docs, error } = await supabase
     .from('documents')
     .select('id, metadata, created_at')
     .eq('document_type', 'call_review')
-    .gte('created_at', todayStartEt.toISOString())
+    .gte('created_at', since)
     .order('created_at', { ascending: false })
+  if (error) throw error
 
-  // ---- Calendar events whose end_time + 30 min has passed.
-  // Window: events that started today (EST). Since calendar_events has
-  // both start_time and end_time non-null, no yesterday fallback is
-  // needed — we only surface today's events where the 30-min-post-end
-  // grace period has already elapsed AND no matching call landed.
-  const matchWindowStart = todayStartEt.toISOString()
-  const matchWindowEnd = new Date(now.getTime() + 30 * 60 * 1000).toISOString()
-  const eventsPromise = supabase
-    .from('calendar_events')
-    .select('google_event_id, title, start_time, end_time, team_member_id')
-    .gte('start_time', matchWindowStart)
-    .lte('start_time', now.toISOString())
-    .order('start_time', { ascending: false })
-
-  const callsPromise = supabase
-    .from('calls')
-    .select('id, title, started_at')
-    .eq('call_category', 'client')
-    .gte('started_at', matchWindowStart)
-    .lt('started_at', matchWindowEnd)
-
-  const [
-    { data: sentimentDocs, error: sentimentError },
-    { data: events, error: eventsError },
-    { data: candidateCalls, error: callsError },
-  ] = await Promise.all([sentimentPromise, eventsPromise, callsPromise])
-
-  if (sentimentError) throw sentimentError
-  if (eventsError) throw eventsError
-  if (callsError) throw callsError
-
-  // ---- Build negative-sentiment notifications.
-  const negativeRows = (sentimentDocs ?? []).filter((d) => {
-    const meta = (d.metadata ?? {}) as Record<string, unknown>
-    return meta.sentiment_tier === 'red'
+  const rows = (docs ?? []).filter((d) => {
+    const t = ((d.metadata ?? {}) as Record<string, unknown>).sentiment_tier
+    return t === 'red' || t === 'yellow'
   }) as Array<{
-    id: string
     created_at: string
-    metadata: {
-      sentiment_tier?: string
-      call_id?: string
-      client_id?: string | null
-      started_at?: string
-    }
+    metadata: { sentiment_tier?: string; call_id?: string; client_id?: string | null }
   }>
 
   const clientIds = Array.from(
-    new Set(
-      negativeRows
-        .map((r) => r.metadata.client_id)
-        .filter((x): x is string => !!x),
-    ),
+    new Set(rows.map((r) => r.metadata.client_id).filter((x): x is string => !!x)),
   )
   const callIds = Array.from(
-    new Set(
-      negativeRows
-        .map((r) => r.metadata.call_id)
-        .filter((x): x is string => !!x),
-    ),
+    new Set(rows.map((r) => r.metadata.call_id).filter((x): x is string => !!x)),
   )
-
   const [clientLookup, callLookup] = await Promise.all([
     clientIds.length
       ? supabase.from('clients').select('id, full_name').in('id', clientIds)
@@ -227,76 +175,144 @@ export async function getDashboardNotifications(): Promise<Notification[]> {
   const clientNameById = new Map(
     (clientLookup.data ?? []).map((c) => [c.id, c.full_name]),
   )
-  const callById = new Map(
-    (callLookup.data ?? []).map((c) => [c.id, c]),
-  )
+  const callById = new Map((callLookup.data ?? []).map((c) => [c.id, c]))
 
-  const sentimentNotifications: Notification[] = negativeRows
+  return rows
     .filter((r) => !!r.metadata.call_id)
     .map((r) => {
       const call = callById.get(r.metadata.call_id!) ?? null
       return {
-        kind: 'negative_sentiment' as const,
-        occurred_at: call?.started_at ?? r.created_at,
         call_id: r.metadata.call_id!,
         call_title: call?.title ?? null,
         client_id: r.metadata.client_id ?? null,
         client_name: r.metadata.client_id
           ? clientNameById.get(r.metadata.client_id) ?? null
           : null,
+        sentiment: (r.metadata.sentiment_tier === 'red' ? 'red' : 'yellow') as
+          | 'red'
+          | 'yellow',
+        occurred_at: call?.started_at ?? r.created_at,
       }
     })
+    .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1))
+}
 
-  // ---- Build missed-recording notifications.
+// ---- Missing-recording flags: calendar events from the past 3 days whose
+// 30-min post-end grace has elapsed with no matching Fathom call, scoped to
+// clients with at-risk / problem CSM standing. The client is resolved from
+// the event's external attendees (email / alternate_emails).
+export type MissingRecordingFlag = {
+  google_event_id: string
+  event_title: string | null
+  client_id: string
+  client_name: string
+  csm_standing: string
+  csm_name: string | null
+  occurred_at: string
+}
+
+export async function getMissingRecordingFlags(): Promise<MissingRecordingFlag[]> {
+  const supabase = createAdminClient()
+  const now = Date.now()
+  const since = new Date(now - CALL_FLAG_LOOKBACK_DAYS * 86_400_000).toISOString()
+
+  // At-risk / problem clients → email lookup (email + alternate_emails).
+  const { data: flaggedClients, error: clientErr } = await supabase
+    .from('clients')
+    .select('id, full_name, email, metadata, csm_standing')
+    .in('csm_standing', ['at_risk', 'problem'])
+    .is('archived_at', null)
+  if (clientErr) throw clientErr
+
+  type FlaggedClient = { id: string; full_name: string; csm_standing: string }
+  const emailToClient = new Map<string, FlaggedClient>()
+  for (const c of flaggedClients ?? []) {
+    const fc: FlaggedClient = {
+      id: c.id as string,
+      full_name: (c.full_name as string | null) ?? '(no name)',
+      csm_standing: c.csm_standing as string,
+    }
+    const reg = (e: string | null | undefined) => {
+      if (e && e.trim()) emailToClient.set(e.trim().toLowerCase(), fc)
+    }
+    reg(c.email as string | null)
+    const meta = (c.metadata ?? {}) as Record<string, unknown>
+    for (const alt of (meta.alternate_emails as string[] | undefined) ?? []) {
+      if (typeof alt === 'string') reg(alt)
+    }
+  }
+  if (emailToClient.size === 0) return []
+
+  const [
+    { data: events, error: eventsErr },
+    { data: candidateCalls, error: callsErr },
+  ] = await Promise.all([
+    supabase
+      .from('calendar_events')
+      .select('google_event_id, title, start_time, end_time, team_member_id, attendees')
+      .gte('start_time', since)
+      .lte('start_time', new Date(now).toISOString())
+      .order('start_time', { ascending: false }),
+    supabase
+      .from('calls')
+      .select('id, title, started_at')
+      .eq('call_category', 'client')
+      .gte('started_at', since)
+      .lt('started_at', new Date(now + 30 * 60 * 1000).toISOString()),
+  ])
+  if (eventsErr) throw eventsErr
+  if (callsErr) throw callsErr
   const calls = candidateCalls ?? []
-  // CSM name lookup for the events.
-  const teamMemberIds = Array.from(
-    new Set((events ?? []).map((e) => e.team_member_id).filter((x): x is string => !!x)),
+
+  const tmIds = Array.from(
+    new Set(
+      (events ?? []).map((e) => e.team_member_id).filter((x): x is string => !!x),
+    ),
   )
-  const { data: teamMemberRows } = teamMemberIds.length
-    ? await supabase
-        .from('team_members')
-        .select('id, full_name')
-        .in('id', teamMemberIds)
+  const { data: tms } = tmIds.length
+    ? await supabase.from('team_members').select('id, full_name').in('id', tmIds)
     : { data: [] as Array<{ id: string; full_name: string }> }
-  const csmNameById = new Map(
-    (teamMemberRows ?? []).map((tm) => [tm.id, tm.full_name]),
-  )
+  const csmNameById = new Map((tms ?? []).map((t) => [t.id, t.full_name]))
 
-  const missedNotifications: Notification[] = []
+  const flags: MissingRecordingFlag[] = []
   for (const ev of events ?? []) {
-    // End_time + 30 min cutoff. If end_time is null (shouldn't happen
-    // per schema), treat as not-yet-passed and skip — we don't want to
-    // surface alerts for events still in the future.
     if (!ev.end_time) continue
-    const cutoffMs = new Date(ev.end_time).getTime() + 30 * 60 * 1000
-    if (cutoffMs > now.getTime()) continue
-
-    // Title + ±30 min match (same shape as teams.ts).
-    const evTitleNorm = normalizeTitle(ev.title)
-    if (!evTitleNorm) continue
+    if (new Date(ev.end_time).getTime() + 30 * 60 * 1000 > now) continue
+    const titleNorm = normalizeTitle(ev.title)
+    if (!titleNorm) continue
     const evStartMs = new Date(ev.start_time).getTime()
-    const matched = calls.some((c) => {
-      if (normalizeTitle(c.title) !== evTitleNorm) return false
-      const deltaMs = Math.abs(new Date(c.started_at).getTime() - evStartMs)
-      return deltaMs <= 30 * 60 * 1000
-    })
+    const matched = calls.some(
+      (c) =>
+        normalizeTitle(c.title) === titleNorm &&
+        Math.abs(new Date(c.started_at).getTime() - evStartMs) <= 30 * 60 * 1000,
+    )
     if (matched) continue
 
-    missedNotifications.push({
-      kind: 'missed_recording',
-      occurred_at: ev.start_time,
+    // Attribute to a flagged client via the event's external attendees.
+    let client: FlaggedClient | null = null
+    for (const a of (ev.attendees ?? []) as Array<{ email?: string }>) {
+      const e = (a.email ?? '').trim().toLowerCase()
+      const hit = e ? emailToClient.get(e) : undefined
+      if (hit) {
+        client = hit
+        break
+      }
+    }
+    if (!client) continue
+
+    flags.push({
       google_event_id: ev.google_event_id,
       event_title: ev.title,
-      csm_name: ev.team_member_id ? csmNameById.get(ev.team_member_id) ?? null : null,
-      end_time: ev.end_time,
+      client_id: client.id,
+      client_name: client.full_name,
+      csm_standing: client.csm_standing,
+      csm_name: ev.team_member_id
+        ? csmNameById.get(ev.team_member_id) ?? null
+        : null,
+      occurred_at: ev.start_time,
     })
   }
-
-  // Combine + sort newest-first.
-  return [...sentimentNotifications, ...missedNotifications].sort((a, b) =>
-    a.occurred_at < b.occurred_at ? 1 : -1,
-  )
+  return flags.sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1))
 }
 
 // ---------------------------------------------------------------------------
