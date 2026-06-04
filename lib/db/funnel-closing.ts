@@ -53,9 +53,15 @@ export type CloserCallDrillRow = {
 
 export type ClosingMoney = {
   upfrontCollected: number
+  // Sales = full closes (deposits excluded), split by offer. Counts new-form
+  // closes (call_outcome) + legacy closes, including instant-book / form-only
+  // meetings (this is a pure form read — no Calendly dependency).
+  closes: number
+  closesHt: number
+  closesDc: number
   totalContractValue: number
   aov: number | null
-  upfrontFieldUsed: 'amount_paid_today_currency'
+  upfrontFieldUsed: string
   provisional: boolean
 }
 
@@ -157,6 +163,12 @@ type CloserReportRow = {
   total_contract_amount: number | null
   closer_names: string[] | null
   prospect_name: string | null
+  // New-form (redesigned) fields — the close + cash live here on New forms;
+  // the legacy `closed` / `amount_paid_today_currency` are null on them.
+  form_type: string | null
+  call_outcome: string | null
+  amount_paid_today_number: number | null
+  deposit_amount: number | string | null
 }
 
 // Effective call date = date_time_of_call when present, else airtable_created_at.
@@ -185,7 +197,8 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
       .from('airtable_full_closer_report' as never)
       .select(
         'record_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
-        'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, prospect_name',
+        'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, prospect_name, ' +
+        'form_type, call_outcome, amount_paid_today_number, deposit_amount',
       )
       .gte('airtable_created_at', widenStartIso)
       .order('airtable_created_at', { ascending: false })
@@ -202,6 +215,9 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
   // user-requested range. UTC ISO comparison is valid because both
   // bounds are derived from ET-anchored midnights (see funnel-window).
   return rows.filter((r) => {
+    // Drop test forms — these feed the Cash totals + sales count, and test
+    // closes (named "test") would otherwise inflate them.
+    if ((r.prospect_name ?? '').trim().toLowerCase() === 'test') return false
     const ts = effectiveTsIso(r)
     return ts >= range.startUtcIso && ts < range.endUtcIso
   })
@@ -270,24 +286,47 @@ function buildLeaderboard(rows: CloserReportRow[]): { closers: CloserLeaderboard
 }
 
 function buildMoney(rows: CloserReportRow[]): ClosingMoney {
-  let upfront = 0, contract = 0, closedCount = 0, contractClosedSum = 0
+  let upfront = 0, contract = 0, contractClosedSum = 0
+  let closes = 0, closesHt = 0, closesDc = 0
   for (const r of rows) {
-    const u = pickUpfront(r)
-    if (u != null) upfront += u
+    // Close + offer + deposit: new forms via call_outcome, legacy via closed/plan.
+    let isClose = false, isDeposit = false
+    let closeType: 'ht' | 'dc' | null = null
+    if (r.form_type === 'New') {
+      const d = deriveNewOutcome(r.call_outcome)
+      isClose = d.closed === 'yes'
+      isDeposit = d.closed === 'deposit'
+      closeType = d.closeType
+    } else {
+      isClose = r.closed === 'Yes'
+      closeType = isClose ? classifyPlan(r.payment_plan_type) : null
+    }
+    // Upfront = cash collected today; new field preferred, legacy fallback. A
+    // deposit collects the deposit amount.
+    const paid = toNum(r.amount_paid_today_number) ?? toNum(r.amount_paid_today_currency)
+    const u = isDeposit ? (toNum(r.deposit_amount) ?? paid) : paid
+    if (u != null && Number.isFinite(u)) upfront += u
     if (typeof r.total_contract_amount === 'number' && Number.isFinite(r.total_contract_amount)) {
       contract += r.total_contract_amount
-      if (r.closed === 'Yes') {
+    }
+    if (isClose) {
+      closes++
+      if (closeType === 'ht') closesHt++
+      else if (closeType === 'dc') closesDc++
+      if (typeof r.total_contract_amount === 'number' && Number.isFinite(r.total_contract_amount)) {
         contractClosedSum += r.total_contract_amount
-        closedCount++
       }
     }
   }
   return {
     upfrontCollected: upfront,
+    closes,
+    closesHt,
+    closesDc,
     totalContractValue: contract,
-    aov: closedCount > 0 ? contractClosedSum / closedCount : null,
-    upfrontFieldUsed: 'amount_paid_today_currency',
-    provisional: true,
+    aov: closes > 0 ? contractClosedSum / closes : null,
+    upfrontFieldUsed: 'amount_paid_today_number',
+    provisional: false,
   }
 }
 

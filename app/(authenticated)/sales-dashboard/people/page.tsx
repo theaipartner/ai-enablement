@@ -279,17 +279,36 @@ function CashSection({ money }: { money: ClosingMoney }) {
   return (
     <SectionBox
       eyebrow="CASH"
-      title="Upfront, contract value, AOV — from the closer form."
+      title="Sales, upfront cash, contract value, AOV — from the closer form."
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        <MoneyTile label="Total upfront collected" value={money.upfrontCollected} provisional={money.provisional} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <CountTile label="Sales (closes)" value={money.closes} subtitle={`${money.closesHt} HT · ${money.closesDc} DC`} />
+        <MoneyTile label="Total upfront collected" value={money.upfrontCollected} />
         <MoneyTile label="Total contract value" value={money.totalContractValue} />
         <MoneyTile label="AOV (contract / closed)" value={money.aov} />
       </div>
       <div className="geg-mono" style={{ marginTop: 10, fontSize: 10, letterSpacing: '0.12em', color: 'var(--color-geg-text-faint)', lineHeight: 1.6 }}>
-        Upfront sourced from <code>{money.upfrontFieldUsed}</code> · provisional until canonical cash field is confirmed (sibling field <code>amount_paid_today_number</code> exists in the mirror).
+        Sales + upfront from the closer form&apos;s Call Outcome / <code>amount_paid_today_number</code> (new form) and legacy <code>Closed?</code> / <code>amount_paid_today_currency</code> (old form). Includes instant-book meetings filed with no Calendly booking. Deposits collect cash but aren&apos;t counted as closes.
       </div>
     </SectionBox>
+  )
+}
+
+function CountTile({ label, value, subtitle }: { label: string; value: number; subtitle?: string }) {
+  return (
+    <div style={{ padding: '14px 16px 12px', background: 'var(--color-geg-bg)', border: '1px solid var(--color-geg-border)', borderRadius: 8 }}>
+      <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 6 }}>
+        {label}
+      </div>
+      <div className="geg-numeric-serif" style={{ fontSize: 22, lineHeight: '26px', letterSpacing: '-0.02em', color: 'var(--color-geg-text)' }}>
+        {value}
+      </div>
+      {subtitle ? (
+        <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', marginTop: 3 }}>
+          {subtitle}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
