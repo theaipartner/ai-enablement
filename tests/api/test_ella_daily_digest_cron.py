@@ -133,7 +133,7 @@ def _ranker_echo(monkeypatch):
     monkeypatch.setattr("api.ella_daily_digest_cron.complete", _complete)
 
 
-def _item(client_id="cli-1", ts="1745500100.000100", cat="confusion"):
+def _item(client_id="cli-1", ts="1745500100.000100", cat="serious_uncertainty"):
     return {
         "id": f"dg-{ts}",
         "client_id": client_id,
@@ -221,14 +221,14 @@ def test_ranker_fallback_on_haiku_failure(fake_db, _slack_ok, monkeypatch):
 
     monkeypatch.setattr("api.ella_daily_digest_cron.complete", _boom)
     fake_db.items = [
-        _item("cli-1", "q.0", cat="question_program"),
+        _item("cli-1", "q.0", cat="other"),
         _item("cli-1", "m.0", cat="money_commitment"),
     ]
     fake_db.clients = [{"id": "cli-1", "full_name": "Acme"}]
     result = cron.run_ella_daily_digest_cron()
     assert result["status"] == "ok"
     assert result["posted_count"] == 2
-    # Fallback priority: money_commitment (m.0) ranks above question_program.
+    # Fallback priority: money_commitment (m.0) ranks above the catch-all.
     body = _slack_ok[0][1]
     assert body.index("pm0") < body.index("pq0")
 

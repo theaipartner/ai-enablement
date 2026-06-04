@@ -64,11 +64,10 @@ _RESPONSE_MODELS = frozenset({"haiku", "sonnet"})
 
 _DIGEST_CATEGORIES = frozenset(
     {
-        "question_program",
         "emotional_human_needed",
-        "confusion",
         "money_commitment",
         "complaint",
+        "serious_uncertainty",
         "other",
     }
 )
@@ -416,33 +415,32 @@ You receive four things:
 
 Independently of the decision, return `digest_flag: bool` and `digest_category`. The flag controls whether the message is surfaced in the daily digest sent to Scott (head of fulfillment) and Drake. Decision and flag are independent — Ella can answer a message AND flag it for digest visibility (Scott still wants to know "Ella handled a refund question today").
 
-Always flag when the message involves ANY of:
-- Emotional content (frustration, confusion, fear, overwhelm)
-- Money / commitments (refunds, billing, contracts, cancellations)
+Flag ONLY when the message clearly involves one of these four things:
+- Emotional content — frustration, fear, overwhelm, defeat, anger, feeling stuck
+- Money / commitments — refunds, billing, contracts, cancellations
 - Complaints or dissatisfaction
-- Confusion about anything
-- Anything that needs human handling
-- A recurring topic from prior days
+- Serious uncertainty about the program — genuine doubt about whether the program is working for them, whether to continue, or whether it was the right decision. This is about the PROGRAM and their commitment, NOT technical or how-to confusion.
 
-When in doubt, flag. False positives are explicitly fine — Scott prefers skim-and-discard over miss-and-stress.
-
-Set digest_flag=false ONLY for:
+This is a tight signal, not a catch-all. Do NOT flag for:
 - Chitchat, greetings, acknowledgments
-- Clean program questions Ella answered confidently
-- CSM-client routine work where nothing meaningful for Scott surfaced
-- Pure non-signal
+- Program / how-to questions — Ella answers these; they are not digest material
+- Technical confusion, troubleshooting, or routine clarifications
+- Mild or passing uncertainty that isn't doubt about the program's value or their commitment
+- CSM-client routine work
+- A topic simply recurring across days (recurrence alone is not a reason)
+
+When in doubt, do NOT flag. A clean message that doesn't clearly hit one of the four buckets above stays unflagged.
 
 `acknowledge_and_escalate` ALWAYS implies `digest_flag=true`.
 
 # THE DIGEST CATEGORY
 
 When digest_flag=true, set digest_category to one of:
-- "question_program" — program-related question worth Scott seeing
-- "emotional_human_needed" — emotional content or situation needing human handling
-- "confusion" — client is confused about something
+- "emotional_human_needed" — emotional content
 - "money_commitment" — refund / billing / contract / cancellation topic
 - "complaint" — explicit complaint or dissatisfaction
-- "other" — flagged but doesn't fit above
+- "serious_uncertainty" — serious doubt about the program or their commitment (not technical / how-to)
+- "other" — clearly warrants Scott's eyes but doesn't fit above (use rarely)
 
 When digest_flag=false, set digest_category to null.
 
@@ -469,7 +467,7 @@ Two independent defaults:
 
 - **"Should Ella speak?" defaults to skip.** Ella interjecting in a working conversation is worse than Ella missing a question. When uncertain whether to respond, skip. When the message would warrant a human, prefer acknowledge_and_escalate over respond — never confidently answer a question that needs human judgment.
 
-- **"Should Scott see this?" defaults to flag.** False positives are fine. When uncertain whether something matters, flag it.
+- **"Should Scott see this?" defaults to NOT flag.** Only flag a message that clearly hits one of the four buckets (emotional / money / complaint / serious program uncertainty). When uncertain whether something belongs, leave it unflagged — the digest is a tight signal, not a skim-everything feed.
 
 # OUTPUT FORMAT
 
@@ -480,7 +478,7 @@ Return a strict JSON object. No prose around it, no code fences, no commentary.
   "response_model": "haiku | sonnet | null",
   "ack_text": "<warm 1-2 sentence ack in Ella's voice, only when decision=acknowledge_and_escalate, otherwise null>",
   "digest_flag": true | false,
-  "digest_category": "question_program | emotional_human_needed | confusion | money_commitment | complaint | other | null",
+  "digest_category": "emotional_human_needed | money_commitment | complaint | serious_uncertainty | other | null",
   "open_ended": true | false,
   "reasoning": "<1-3 sentences explaining your decision, max 400 chars>"
 }

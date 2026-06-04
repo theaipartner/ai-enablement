@@ -104,9 +104,8 @@ _CATEGORY_PRIORITY = {
     "money_commitment": 0,
     "complaint": 1,
     "emotional_human_needed": 2,
-    "confusion": 3,
-    "question_program": 4,
-    "other": 5,
+    "serious_uncertainty": 3,
+    "other": 4,
 }
 
 _RANKER_SYSTEM = """You rank flagged client messages for a daily digest sent to Scott, the head of fulfillment. Each item is a client message Ella flagged today as worth Scott's attention.
@@ -115,7 +114,7 @@ Rank them MOST IMPORTANT FIRST, using this priority:
 1. Money / commitment concerns (refunds, billing, contracts, cancellations).
 2. Complaints or dissatisfaction.
 3. Negative emotional reactions (frustration, fear, feeling stuck/overwhelmed).
-4. Help requests and questions.
+4. Serious uncertainty about the program (doubt it's working / whether to continue).
 5. Everything else.
 
 Within a tier, put the more urgent / higher-signal message first.
