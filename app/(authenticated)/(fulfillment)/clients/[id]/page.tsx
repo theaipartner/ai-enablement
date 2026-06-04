@@ -23,6 +23,7 @@ import { ActionItemsList, type ActionItemRow } from './action-items-list'
 import { BackToClientsButton } from './back-to-clients-button'
 import { MergeClientButton } from './merge-client-button'
 import { RemoveNeedsReviewButton } from './remove-needs-review-button'
+import { MeetingsMonthPicker } from '@/components/client-detail/meetings-month-picker'
 
 // Clients redesign · § 2 — /clients/[id] detail page.
 //
@@ -177,7 +178,6 @@ export default async function ClientDetailPage({
   // Top 3 recent calls (already sorted by getClientById).
   const recentCalls = client.recent_calls.slice(0, 3)
   const totalCalls = client.total_calls
-  const meetingsThisMonth = client.meetings_this_month
 
   return (
     <div style={{ padding: '24px 48px 28px' }}>
@@ -552,11 +552,7 @@ export default async function ClientDetailPage({
                 }}
               >
                 <Stat label="Total calls" value={totalCalls} />
-                <Stat
-                  label="This month"
-                  value={meetingsThisMonth}
-                  bordered
-                />
+                <MeetingsMonthPicker months={client.meetings_by_month} />
               </div>
               {recentCalls.length === 0 ? (
                 <p

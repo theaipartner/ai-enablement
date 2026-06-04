@@ -2,6 +2,11 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Database } from '@/lib/supabase/types'
+import {
+  getCurrentMonthMeetingCounts,
+  getClientMeetingMonths,
+  type MeetingMonth,
+} from '@/lib/db/client-meetings'
 
 type ClientRow = Database['public']['Tables']['clients']['Row']
 
@@ -244,13 +249,12 @@ export async function getClientsList(
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  // M5.7 — month start (UTC) for the meetings_this_month aggregation, and
-  // the 30-day-ago threshold for the inactivity flag. Both reuse the
-  // existing calls.started_at nested select; no extra round trip.
+  // meetings_this_month now comes from client_meetings (Google Calendar),
+  // not the Fathom calls join — see lib/db/client-meetings.ts. The calls
+  // nested select is still used for last_call_date + the 30-day inactivity
+  // flag below.
+  const meetingCounts = await getCurrentMonthMeetingCounts()
   const now = new Date()
-  const monthStart = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
-  )
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
   let rows: ClientsListRow[] = data.map((row) => {
@@ -283,9 +287,6 @@ export async function getClientsList(
         : calls.reduce((best, c) =>
             new Date(c.started_at) > new Date(best.started_at) ? c : best,
           )
-    const meetingsThisMonth = calls.filter(
-      (c) => new Date(c.started_at) >= monthStart,
-    ).length
     // Inactive when there are no calls at all OR the most recent call is
     // older than 30 days. Never-called clients land inactive a fortiori —
     // "no recent meeting" trivially applies when there's no meeting at all.
@@ -336,7 +337,7 @@ export async function getClientsList(
       last_call_date: latestCall?.started_at ?? null,
       open_action_items_count: openItems.length,
       overdue_action_items_count: overdueItems.length,
-      meetings_this_month: meetingsThisMonth,
+      meetings_this_month: meetingCounts.get(client.id) ?? 0,
       inactive,
       slack_channel_id: activeChannel?.slack_channel_id ?? null,
     }
@@ -421,10 +422,12 @@ export type ClientDetail = ClientRow & {
   total_slack_messages: number // 0 if slack_user_id is null
   upsells: UpsellRow[] // sold_at desc nulls last
   slack_channel_id: string | null // most recently created active channel
-  // M5.7 — derived from all_calls (no extra round trip). Same semantics as
-  // ClientsListRow's fields: meetings_this_month is current calendar month
-  // (UTC); inactive is true when no calls or latest > 30 days ago.
+  // meetings_this_month now comes from client_meetings (Google Calendar),
+  // EST current month — see lib/db/client-meetings.ts. meetings_by_month is
+  // the last 12 EST months (newest first) powering the month picker.
+  // inactive is still calls-based: true when no calls or latest > 30 days ago.
   meetings_this_month: number
+  meetings_by_month: MeetingMonth[]
   inactive: boolean
 }
 
@@ -575,17 +578,15 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
   const allCalls = (callsRes.data ?? []) as CallSummary[]
   const totalCalls = callsRes.count ?? allCalls.length
   const recentCalls = allCalls.slice(0, 5)
-  // M5.7 — meetings_this_month + inactive. Same semantics as the list view.
+  // meetings_this_month + the 12-month history come from client_meetings
+  // (Google Calendar) via lib/db/client-meetings.ts. inactive stays
+  // calls-based (no recent Fathom call in 30 days).
+  const meetingsByMonth = await getClientMeetingMonths(id, 12)
+  const meetingsThisMonth = meetingsByMonth[0]?.count ?? 0
   const detailNow = new Date()
-  const detailMonthStart = new Date(
-    Date.UTC(detailNow.getUTCFullYear(), detailNow.getUTCMonth(), 1),
-  )
   const detailThirtyDaysAgo = new Date(
     detailNow.getTime() - 30 * 24 * 60 * 60 * 1000,
   )
-  const meetingsThisMonth = allCalls.filter(
-    (c) => new Date(c.started_at) >= detailMonthStart,
-  ).length
   const detailLatestStartedAt = allCalls[0]?.started_at ?? null
   const inactive =
     detailLatestStartedAt === null ||
@@ -638,6 +639,7 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
     upsells,
     slack_channel_id: slackChannelId,
     meetings_this_month: meetingsThisMonth,
+    meetings_by_month: meetingsByMonth,
     inactive,
   }
 }
