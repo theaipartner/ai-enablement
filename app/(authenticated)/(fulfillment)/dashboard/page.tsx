@@ -9,10 +9,12 @@ import {
   getNeedsReviewMergeCandidates,
   getUninstrumentedChannels,
   getMissingSlackClients,
+  getLeftSlackClients,
   type SentimentCallFlag,
   type MissingRecordingFlag,
   type LateStartFlag,
   type UninstrumentedChannel,
+  type LeftSlackClient,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
 import { NeedsReviewList, GhostList } from './client-flags'
@@ -42,6 +44,7 @@ export default async function FulfillmentDashboardPage() {
     ghosts,
     uninstrumented,
     missingSlack,
+    leftSlack,
   ] = await Promise.all([
     getSentimentCallFlags(),
     getMissingRecordingFlags(),
@@ -51,6 +54,7 @@ export default async function FulfillmentDashboardPage() {
     getGhostClientFlags(),
     getUninstrumentedChannels(),
     getMissingSlackClients(),
+    getLeftSlackClients(),
   ])
 
   return (
@@ -88,6 +92,22 @@ export default async function FulfillmentDashboardPage() {
           count={missingSlack.length}
         >
           <MissingSlackList clients={missingSlack} />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          eyebrow="LEFT SLACK"
+          title="Removed self."
+          count={leftSlack.length}
+        >
+          {leftSlack.length === 0 ? (
+            <EmptyFlags message="No clients have left their Slack channel." />
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              {leftSlack.map((c) => (
+                <LeftSlackRow key={c.client_id} client={c} />
+              ))}
+            </div>
+          )}
         </CollapsibleSection>
 
         <CollapsibleSection
@@ -197,6 +217,46 @@ function UninstrumentedRow({ channel }: { channel: UninstrumentedChannel }) {
         }}
       >
         {channel.channel_name ?? '—'}
+      </span>
+    </div>
+  )
+}
+
+function LeftSlackRow({ client }: { client: LeftSlackClient }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '11px 2px',
+        borderBottom: '1px solid var(--color-geg-border)',
+      }}
+    >
+      <Link
+        href={`/clients/${client.client_id}`}
+        style={{
+          fontSize: 14,
+          color: 'var(--color-geg-text)',
+          textDecoration: 'underline',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {client.full_name}
+      </Link>
+      <span
+        className="geg-mono"
+        style={{
+          fontSize: 11,
+          color: 'var(--color-geg-text-2)',
+          letterSpacing: '0.04em',
+          flexShrink: 0,
+        }}
+      >
+        left {formatFlagDate(client.left_at)}
       </span>
     </div>
   )

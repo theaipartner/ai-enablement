@@ -652,3 +652,100 @@ export async function getMissingSlackClients(): Promise<MissingSlackClient[]> {
   }
   return out.sort((a, b) => a.full_name.localeCompare(b.full_name))
 }
+
+// ---------------------------------------------------------------------------
+// Left Slack (self-removed from channel)
+// ---------------------------------------------------------------------------
+//
+// Clients who removed themselves from their Slack channel (often a lapsed $5
+// Slack membership). Detected from the Slackbot system messages we already
+// ingest: "<name> has removed themselves from this channel." (leave) and
+// "This channel is now shared with <name>." (re-join). A channel counts as
+// currently-left when its most recent of these two is a leave — so once the
+// client is added back, the newer "now shared" message drops them off.
+//
+// (A structured member_left_channel / member_joined_channel event subscription
+// would be cleaner, but these Slackbot messages flow through normal ingestion
+// already, so no new Slack wiring is needed.)
+export type LeftSlackClient = {
+  client_id: string
+  full_name: string
+  left_at: string
+}
+
+export async function getLeftSlackClients(): Promise<LeftSlackClient[]> {
+  const supabase = createAdminClient()
+  const [{ data: leaves, error: leaveErr }, { data: shares, error: shareErr }] =
+    await Promise.all([
+      supabase
+        .from('slack_messages')
+        .select('slack_channel_id, sent_at')
+        .eq('author_type', 'bot')
+        .ilike('text', '%removed themselves from this channel%'),
+      supabase
+        .from('slack_messages')
+        .select('slack_channel_id, sent_at')
+        .eq('author_type', 'bot')
+        .ilike('text', '%this channel is now shared with%'),
+    ])
+  if (leaveErr) throw leaveErr
+  if (shareErr) throw shareErr
+
+  const latest = (rows: Array<{ slack_channel_id: string; sent_at: string }> | null) => {
+    const m = new Map<string, string>()
+    for (const r of rows ?? []) {
+      const prev = m.get(r.slack_channel_id)
+      if (!prev || r.sent_at > prev) m.set(r.slack_channel_id, r.sent_at)
+    }
+    return m
+  }
+  const latestLeave = latest(leaves)
+  const latestShare = latest(shares)
+
+  // Currently-left: most recent membership event is a leave.
+  const leftChannels = new Map<string, string>() // channel → left_at
+  for (const [ch, leftAt] of Array.from(latestLeave.entries())) {
+    const shared = latestShare.get(ch)
+    if (!shared || leftAt > shared) leftChannels.set(ch, leftAt)
+  }
+  if (leftChannels.size === 0) return []
+
+  const { data: chRows, error: chErr } = await supabase
+    .from('slack_channels')
+    .select('slack_channel_id, client_id')
+    .in('slack_channel_id', Array.from(leftChannels.keys()))
+    .not('client_id', 'is', null)
+    .eq('is_archived', false)
+  if (chErr) throw chErr
+  const channelToClient = new Map(
+    (chRows ?? []).map((r) => [r.slack_channel_id, r.client_id as string]),
+  )
+  const clientIds = Array.from(new Set(channelToClient.values()))
+  if (clientIds.length === 0) return []
+
+  const { data: clientRows } = await supabase
+    .from('clients')
+    .select('id, full_name')
+    .in('id', clientIds)
+    .eq('status', 'active')
+    .is('archived_at', null)
+  const nameById = new Map((clientRows ?? []).map((c) => [c.id, c.full_name]))
+
+  // Dedupe by client (a client could in theory have >1 channel) — keep latest.
+  const byClient = new Map<string, LeftSlackClient>()
+  for (const [ch, leftAt] of Array.from(leftChannels.entries())) {
+    const cid = channelToClient.get(ch)
+    if (!cid || !nameById.has(cid)) continue
+    const existing = byClient.get(cid)
+    if (!existing || leftAt > existing.left_at) {
+      byClient.set(cid, {
+        client_id: cid,
+        full_name: nameById.get(cid) ?? '(no name)',
+        left_at: leftAt,
+      })
+    }
+  }
+  return Array.from(byClient.values()).sort((a, b) =>
+    a.left_at < b.left_at ? 1 : -1,
+  )
+}
