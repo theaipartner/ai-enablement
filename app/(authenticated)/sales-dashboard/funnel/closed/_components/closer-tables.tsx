@@ -278,8 +278,17 @@ type DrillSortKey =
 const DRILL_COLS = '1.3fr 1fr 0.7fr 1fr 0.6fr 0.9fr 0.7fr'
 
 function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledDrillRow[]; closerName: string; canDelete?: boolean }) {
+  // Cancelled bookings (fell-through: canceled / no-showed with no rebooking) are
+  // shown by default but already excluded from calls/showed/closed. Toggle hides
+  // them so the drill reads as just the live/worked meetings.
+  const [hideCancelled, setHideCancelled] = useState(false)
+  const cancelledCount = useMemo(() => calls.filter((c) => c.cancelled).length, [calls])
+  const visible = useMemo(
+    () => (hideCancelled ? calls.filter((c) => !c.cancelled) : calls),
+    [calls, hideCancelled],
+  )
   const { sorted, state, onToggle } = useColumnSort<CloserScheduledDrillRow, DrillSortKey>(
-    calls,
+    visible,
     (r, k) => {
       switch (k) {
         case 'prospect': return r.prospectName ?? null
@@ -304,13 +313,25 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
 
   return (
     <div style={{ margin: '0 -12px 10px', padding: '14px 16px 16px', background: 'var(--color-geg-bg)', border: '1px solid var(--color-geg-border)', borderRadius: 8 }}>
-      <div
-        className="geg-mono"
-        style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 10 }}
-      >
-        {closerName} · scheduled calls · {calls.length} {calls.length === 1 ? 'lead' : 'leads'} {state.dir === null ? '(most recent first)' : `· sorted ${state.dir}`}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+        <div
+          className="geg-mono"
+          style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}
+        >
+          {closerName} · scheduled calls · {visible.length} {visible.length === 1 ? 'lead' : 'leads'} {state.dir === null ? '(most recent first)' : `· sorted ${state.dir}`}
+        </div>
+        {cancelledCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setHideCancelled((v) => !v)}
+            className="geg-mono"
+            style={{ background: 'none', border: '1px solid var(--color-geg-border)', borderRadius: 6, padding: '3px 8px', fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-2)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            {hideCancelled ? `Show cancelled (${cancelledCount})` : `Hide cancelled (${cancelledCount})`}
+          </button>
+        ) : null}
       </div>
-      {calls.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="geg-serif" style={{ padding: '14px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 14 }}>
           No scheduled calls in this range for this closer.
         </div>
