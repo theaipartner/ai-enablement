@@ -51,6 +51,11 @@
       "maxDuration": 60,
       "excludeFiles": "{.next,node_modules}/**"
     },
+    "api/client_meetings_sync_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
+    },
     "api/faq_digest_cron.py": {
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
@@ -138,6 +143,7 @@
     { "path": "/api/accountability_notification_cron", "schedule": "0 12 * * *" },
     { "path": "/api/passive_ella_cron", "schedule": "* * * * *" },
     { "path": "/api/teams_calendar_sync_cron", "schedule": "*/30 * * * *" },
+    { "path": "/api/client_meetings_sync_cron", "schedule": "30 4 * * *" },
     { "path": "/api/faq_digest_cron", "schedule": "0 19 * * 5" },
     { "path": "/api/ella_daily_digest_cron", "schedule": "30 20 * * *" },
     { "path": "/api/ella_unanswered_flagger_cron", "schedule": "*/15 * * * *" },
