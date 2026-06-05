@@ -63,6 +63,29 @@ ROBBY_DC_URI = "https://api.calendly.com/event_types/6f06c6ba-6ca2-48d2-ae17-a6c
 CONNECTED_SEC = 90
 COLD = timedelta(days=3)
 
+# Closer-identity routing (Drake 2026-06-05): the closer name on a form decides
+# which funnel its outcome feeds. DC closers (low-ticket) are the named
+# exception; everyone else is an HT closer. An HT closer can dip into DC via a
+# downsell; a DC closer never touches HT.
+DC_CLOSER_NAMES = ("robby",)  # add "adam" when his identifiers land
+
+
+def is_dc_closer(names):
+    """True if any closer name on the form is a Digital College closer."""
+    return any(any(d in norm(n) for d in DC_CLOSER_NAMES) for n in (names or []))
+
+
+def has_dc_plan(dc_plans):
+    """A DC close is real only when a PLAN is actually selected — not just a
+    'Digital College Closed' outcome (Robby marks that on everything). dc_plans
+    is the closer-report 'What plan did we get them on?' text[] field."""
+    return bool(dc_plans) and any((p or "").strip() for p in dc_plans)
+
+
+def _earliest(*ts):
+    vals = [t for t in ts if t is not None]
+    return min(vals) if vals else None
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -290,11 +313,11 @@ def _compute(cur, lead_ids):
     # Showed?/Closed?/Payment Plan Type instead of Call Outcome, and were being
     # dropped entirely (Mush Eli's HT close + show, May 29). closer_form_outcome
     # normalizes both shapes downstream.
-    for lid, ft, co, sh, cl, pl, ev, filed, cnames in fetch(
+    for lid, ft, co, sh, cl, pl, dcpl, ev, filed, cnames in fetch(
         "airtable_full_closer_report",
-        "form_type, call_outcome, showed, closed, payment_plan_type, date_time_of_call, airtable_created_at, closer_names",
+        "form_type, call_outcome, showed, closed, payment_plan_type, dc_plans, date_time_of_call, airtable_created_at, closer_names",
     ):
-        closer[lid].append((ft, co, sh, cl, pl, ev, filed, cnames))
+        closer[lid].append((ft, co, sh, cl, pl, dcpl, ev, filed, cnames))
     for lid, cl, fu, ev, filed in fetch("airtable_digital_college_sales", "closed, follow_up, date_time_of_call, airtable_created_at", "and excluded_at is null"):
         dc[lid].append((norm(cl), norm(fu), ev, filed))
 
@@ -333,7 +356,7 @@ def _compute(cur, lead_ids):
                     setdq(filed, "confirmation" if ft == "Closer Triage Form" else "triage")
                 if ft != "Closer Triage Form" and "high ticket booking" in cs:
                     setter_htbook_at = filed if setter_htbook_at is None or filed < setter_htbook_at else setter_htbook_at
-            for ft, co, sh, cl, pl, ev, filed, _cnames in closer.get(cid, []):
+            for ft, co, sh, cl, pl, dcpl, ev, filed, _cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
@@ -342,16 +365,58 @@ def _compute(cur, lead_ids):
                     setdq(t, "closer_eoc")
                 if ct == "ht":
                     ht_close_at = t if ht_close_at is None or t < ht_close_at else ht_close_at
-                elif ct == "dc":
-                    dc_close_at = t if dc_close_at is None or t < dc_close_at else dc_close_at
             for cl, fu, ev, filed in dc.get(cid, []):
+                # DC sale form (airtable_digital_college_sales): keep its DQ
+                # contribution only. The DC funnel itself is sourced from the
+                # main closer EOC form (per Drake), computed in the DC block below.
                 t = ev or filed
                 if not in_cycle(t):
                     continue
                 if fu == "no":
                     setdq(t, "dc_followup_no")
-                if cl == "yes":
-                    dc_close_at = t if dc_close_at is None or t < dc_close_at else dc_close_at
+
+            # --- Digital College funnel (closer-identity routed; Drake 2026-06-05).
+            # Sourced from the main closer EOC form (airtable_full_closer_report),
+            # NOT the DC-sale form. DC closer (Robby) = the main DC funnel; an HT
+            # closer (Aman) with a DC plan, or a confirmation "Downsold", = a
+            # downsell. SHOWED = a DC-closer form is present; CLOSED = a real PLAN
+            # is selected (not the unreliable "Digital College Closed" output).
+            dc_book_at = dc_show_at = dc_closer_close_at = None
+            downsell_meeting_at = downsell_confirm_at = None
+            for ft, cs, filed in triage.get(cid, []):
+                if not in_cycle(filed):
+                    continue
+                if ft != "Closer Triage Form" and "digital college booking" in cs:
+                    dc_book_at = _earliest(dc_book_at, filed)        # setter booked a DC call
+                if ft == "Closer Triage Form" and "downsold" in cs:
+                    downsell_confirm_at = _earliest(downsell_confirm_at, filed)  # Aman downsell at confirmation
+            for ft, co, sh, cl, pl, dcpl, ev, filed, cnames in closer.get(cid, []):
+                t = ev or filed
+                if not in_cycle(t):
+                    continue
+                if is_dc_closer(cnames):
+                    dc_show_at = _earliest(dc_show_at, t)            # DC-closer form present = showed
+                    dc_book_at = _earliest(dc_book_at, t)
+                    if has_dc_plan(dcpl):
+                        dc_closer_close_at = _earliest(dc_closer_close_at, t)
+                elif has_dc_plan(dcpl):
+                    downsell_meeting_at = _earliest(downsell_meeting_at, t)  # HT closer downsold on the meeting
+            # DC close + origin. A downsell (HT closer) wins over dc_closer — the
+            # sale ORIGINATED from the downsell even if Robby later processed it.
+            dc_close_origin = None
+            if downsell_meeting_at is not None:
+                dc_close_at, dc_close_origin = downsell_meeting_at, "downsell_ht_meeting"
+            elif downsell_confirm_at is not None:
+                dc_close_at, dc_close_origin = downsell_confirm_at, "downsell_confirmation"
+            elif dc_closer_close_at is not None:
+                dc_close_at, dc_close_origin = dc_closer_close_at, "dc_closer"
+            # Monotonic back-fill on the dc_closer (main-funnel) path only.
+            if dc_close_origin == "dc_closer":
+                dc_show_at = dc_show_at or dc_close_at
+                dc_book_at = dc_book_at or dc_show_at
+            digital_college_at = _earliest(dc_book_at, dc_show_at, dc_closer_close_at,
+                                           downsell_meeting_at, downsell_confirm_at, dc_close_at)
+
             terminals = [x for x in (dq_at, ht_close_at, dc_close_at) if x is not None]
             terminal_time = min(terminals) if terminals else None
 
@@ -425,7 +490,7 @@ def _compute(cur, lead_ids):
                 )
                 return cands[0][1] if cands and cands[0][0] <= 2 * 86400 else None
 
-            for ft, co, sh, cl, pl, ev, filed, cnames in closer.get(cid, []):
+            for ft, co, sh, cl, pl, dcpl, ev, filed, cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
@@ -453,7 +518,7 @@ def _compute(cur, lead_ids):
                 if ct == "ht":
                     ph[p]["close"].append(t)
 
-            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at))
+            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin))
 
             for p in ("primary", "reactive"):
                 if reactive_at is None and p == "reactive":
@@ -596,9 +661,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
             cur.execute("delete from lead_cycles where close_id = any(%s)", (list(lead_ids),))  # cascades stages
         if cycle_rows:
             execute_values(cur,
-                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at) values %s",
+                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin) values %s",
                 cycle_rows,
-                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz)")
+                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s)")
         if stage_rows:
             execute_values(cur,
                 "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
