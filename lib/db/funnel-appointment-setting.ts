@@ -646,6 +646,28 @@ export type SpeedToLeadLeadRow = {
 // so the arithmetic mean isn't dragged by a long tail.
 const SPEED_CAP_SEC = 24 * 60 * 60
 
+// PostgREST caps a single response at db-max-rows (1000); a bare
+// `.range(0, 9999)` SILENTLY truncates to 1000 rather than erroring. For a
+// query that can exceed 1000 rows — e.g. close_leads created in a wide window
+// (1,464 on May 24–Jun 5) — that truncation undercounts the cohort, and a WIDER
+// window can return FEWER leads. Paginate to fetch the full set. (Drake
+// 2026-06-05: this was the funnel-cohort undercount on wide windows.)
+async function fetchAllPaged<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+  label: string,
+): Promise<T[]> {
+  const PAGE = 1000
+  const out: T[] = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build(from, from + PAGE - 1)
+    if (error) throw new Error(`${label} read failed: ${error.message}`)
+    const rows = (data ?? []) as T[]
+    out.push(...rows)
+    if (rows.length < PAGE) break
+  }
+  return out
+}
+
 export async function getSpeedToLead(arg: Window | DateRange): Promise<SpeedToLeadResult> {
   const range = resolveRange(arg)
   const sb = createAdminClient()
@@ -674,18 +696,19 @@ export async function getSpeedToLead(arg: Window | DateRange): Promise<SpeedToLe
   // status (New Opt-in or Unconfirmed Booking) via the status-
   // changes table below — that's what excludes test/manual leads
   // that started in some other status.
-  const { data: leads, error: leadsErr } = await sb
-    .from('close_leads' as never)
-    .select('close_id, date_created, status_id')
-    .gte('date_created', range.startUtcIso)
-    .lt('date_created', range.endUtcIso)
-    .range(0, 9999)
-  if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-  const leadRows = (leads ?? []) as unknown as Array<{
+  const leadRows = await fetchAllPaged<{
     close_id: string
     date_created: string
     status_id: string | null
-  }>
+  }>(
+    (f, t) => sb
+      .from('close_leads' as never)
+      .select('close_id, date_created, status_id')
+      .gte('date_created', range.startUtcIso)
+      .lt('date_created', range.endUtcIso)
+      .range(f, t),
+    'close_leads',
+  )
   if (leadRows.length === 0) return { setters: [], closers: [] }
   const leadIdSet = new Set(leadRows.map((l) => l.close_id))
 
@@ -830,19 +853,20 @@ export async function getSpeedToLeadLeadsForUser(
   const sb = createAdminClient()
 
   // Cohort identical to getSpeedToLead.
-  const { data: leads, error: leadsErr } = await sb
-    .from('close_leads' as never)
-    .select('close_id, display_name, date_created, status_id')
-    .gte('date_created', range.startUtcIso)
-    .lt('date_created', range.endUtcIso)
-    .range(0, 9999)
-  if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-  const leadRows = (leads ?? []) as unknown as Array<{
+  const leadRows = await fetchAllPaged<{
     close_id: string
     display_name: string | null
     date_created: string
     status_id: string | null
-  }>
+  }>(
+    (f, t) => sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, date_created, status_id')
+      .gte('date_created', range.startUtcIso)
+      .lt('date_created', range.endUtcIso)
+      .range(f, t),
+    'close_leads',
+  )
   if (leadRows.length === 0) return []
   const leadIdSet = new Set(leadRows.map((l) => l.close_id))
 
@@ -1169,21 +1193,23 @@ export async function getSpeedToLeadCohort(
   // --- NEW opt-ins: created in window ---
   // `excluded_at is null` drops creator-soft-hidden (fake) leads from the
   // lead list — here + the Leads page. Per-rep Call Activity is unaffected.
-  const { data: leads, error: leadsErr } = await sb
-    .from('close_leads' as never)
-    .select('close_id, display_name, date_created, status_id, custom_fields_raw')
-    .is('excluded_at', null)
-    .gte('date_created', range.startUtcIso)
-    .lt('date_created', range.endUtcIso)
-    .range(0, 9999)
-  if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-  const newLeadRows = ((leads ?? []) as unknown as Array<{
+  const newLeadsAll = await fetchAllPaged<{
     close_id: string
     display_name: string | null
     date_created: string
     status_id: string | null
     custom_fields_raw: Record<string, unknown> | null
-  }>).filter((l) => !isRevival(l.custom_fields_raw))  // drop revival-tagged leads
+  }>(
+    (f, t) => sb
+      .from('close_leads' as never)
+      .select('close_id, display_name, date_created, status_id, custom_fields_raw')
+      .is('excluded_at', null)
+      .gte('date_created', range.startUtcIso)
+      .lt('date_created', range.endUtcIso)
+      .range(f, t),
+    'close_leads',
+  )
+  const newLeadRows = newLeadsAll.filter((l) => !isRevival(l.custom_fields_raw))  // drop revival-tagged leads
   const newLeadIdSet = new Set(newLeadRows.map((l) => l.close_id))
 
   // Initial-status qualification for NEW leads (earliest old_status_id
@@ -1234,23 +1260,25 @@ export async function getSpeedToLeadCohort(
   // No junk filter (established leads returning). date_first_opted_in is
   // a `date` column → compare to the ET calendar start.
   {
-    const { data: reopt, error: reErr } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, date_created, status_id, latest_opt_in_date, custom_fields_raw')
-      .is('excluded_at', null)
-      .lt('date_first_opted_in', range.startEtDate)
-      .gte('latest_opt_in_date', range.startUtcIso)
-      .lt('latest_opt_in_date', range.endUtcIso)
-      .range(0, 9999)
-    if (reErr) throw new Error(`close_leads re-opt-in read failed: ${reErr.message}`)
-    for (const r of (reopt ?? []) as unknown as Array<{
+    const reopt = await fetchAllPaged<{
       close_id: string
       display_name: string | null
       date_created: string
       status_id: string | null
       latest_opt_in_date: string
       custom_fields_raw: Record<string, unknown> | null
-    }>) {
+    }>(
+      (f, t) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, date_created, status_id, latest_opt_in_date, custom_fields_raw')
+        .is('excluded_at', null)
+        .lt('date_first_opted_in', range.startEtDate)
+        .gte('latest_opt_in_date', range.startUtcIso)
+        .lt('latest_opt_in_date', range.endUtcIso)
+        .range(f, t),
+      'close_leads re-opt-in',
+    )
+    for (const r of reopt) {
       if (newLeadIdSet.has(r.close_id)) continue // disjoint by construction; defensive
       if (isRevival(r.custom_fields_raw)) continue // drop revival-tagged leads
       cohortLeads.push({
