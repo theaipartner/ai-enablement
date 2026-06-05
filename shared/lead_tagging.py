@@ -392,7 +392,13 @@ def _compute(cur, lead_ids):
                 if reached:
                     ph[p]["conn"].append(filed)
                 if ft == "Closer Triage Form":
-                    if cs.startswith("confirmed"):
+                    # A confirmation form is a CONFIRM when it records the HT
+                    # booking itself ("High Ticket booking") OR an explicit
+                    # "Confirmed Booking" — both mean the HT booking is locked in
+                    # (Drake 2026-06-05). Previously only "Confirmed*" counted, so
+                    # an HT-booking marked on a confirmation form (Jason Bright)
+                    # was dropped.
+                    if cs.startswith("confirmed") or "high ticket booking" in cs:
                         ph[p]["confirm"].append(filed)
                         ph[p]["book"].append(filed)
                 else:
@@ -413,17 +419,23 @@ def _compute(cur, lead_ids):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
+                # Robby is the Digital College (low-ticket) closer, NOT an HT
+                # closer. Any closer form he submitted means the lead went to the
+                # DC track — they didn't show for / were handed off from the HT
+                # call — so NONE of his forms count toward HT show/close (Drake
+                # 2026-06-05). Previously only his DC-CLOSE forms were excluded,
+                # so a Robby "Short-Term Follow Up" leaked in as an HT show
+                # (Tyler King, Hovannes Jarkezian). DQ + the DC close tally are
+                # computed in the earlier loop and are unaffected.
+                if any("robby" in norm(n) for n in (cnames or [])):
+                    continue
                 p = phase_of(ev, filed)
                 showed_b, ct, _is_dq = closer_form_outcome(ft, co, sh, cl, pl)
-                # A "Digital College Closed" EOC is a DC sale (copied onto the
-                # closer form). It's an HT SHOW only when it was an HT call — i.e.
-                # NOT Robby's. Robby = the EOC submitter is Robby (closer_names),
-                # or it sat on a "Call with Robby" Calendly event. Aman's downsell
-                # on a strat/partnership call IS an HT show.
+                # A "Digital College Closed" EOC by a NON-Robby closer = Aman's
+                # downsell on an HT strat/partnership call → an HT SHOW. Still drop
+                # it if it sat on a "Call with Robby" Calendly event.
                 if ct == "dc":
-                    submitter_robby = any("robby" in norm(n) for n in (cnames or []))
-                    robby_dc = submitter_robby or nearest_event_kind(ev or filed) == "dc_robby"
-                    if not robby_dc:
+                    if nearest_event_kind(ev or filed) != "dc_robby":
                         ph[p]["show"].append(t)
                     continue
                 if showed_b:
