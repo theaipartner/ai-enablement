@@ -1,7 +1,12 @@
 # Spec: DC funnel + closer-identity routing + downsell tracking
 
 **Slug:** dc-funnel-closer-routing
-**Status:** in-flight (awaiting Drake verification, then execute all at once)
+**Status:** shipped 2026-06-05 — data layer (migration 0076 + tagger + retag) and
+the funnel-page DC section + downsell line are live and verified (HT funnel
+unchanged: connected 137 / confirmed 27 / showed 11 / closed 2; DC: 16 booked /
+9 showed / 4 closed). **Deferred:** the Talent-page HT-closer "downsell closes"
+stat (§6) — 0 downsells in the current unique-leads window, so nothing to render
+or verify yet; build it when the first real downsell lands.
 
 ## Goal
 
