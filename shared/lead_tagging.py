@@ -48,6 +48,12 @@ from psycopg2.extras import Json, execute_values
 
 EFFECTIVE_DATE = "2026-05-24"
 OPT_IN_FORM = "SFedWelr"
+# "DC Revival Lead" Close custom field. The re-engagement SMS auto-creates these
+# leads in Close as New Opt-ins; the dashboard excludes them everywhere (the
+# funnel cohort already filters them in getSpeedToLeadCohort). Exclude them from
+# the tag universe too so lead_cycles never carries a revival lead (Drake
+# 2026-06-05).
+REVIVAL_CF = "cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P"
 DIRECT_URI = "https://api.calendly.com/event_types/8f6795d3-992a-4cbd-b584-9ecaabb3938c"
 # Robby's dedicated Digital College call. A DC close is now copied onto the
 # regular closer EOC form, so the Calendly event type is how we tell an Aman
@@ -152,14 +158,16 @@ def _compute(cur, lead_ids):
     if scoped:
         cur.execute(
             "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
-            "where close_id = any(%s) and latest_opt_in_date >= %s and excluded_at is null",
-            (list(lead_ids), EFFECTIVE_DATE),
+            "where close_id = any(%s) and latest_opt_in_date >= %s and excluded_at is null "
+            "and coalesce(custom_fields_raw->>%s, '') = ''",
+            (list(lead_ids), EFFECTIVE_DATE, REVIVAL_CF),
         )
     else:
         cur.execute(
             "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
-            "where latest_opt_in_date >= %s and excluded_at is null",
-            (EFFECTIVE_DATE,),
+            "where latest_opt_in_date >= %s and excluded_at is null "
+            "and coalesce(custom_fields_raw->>%s, '') = ''",
+            (EFFECTIVE_DATE, REVIVAL_CF),
         )
     lead_emails, lead_phones, lead_name, lead_latest = {}, {}, {}, {}
     for cid, dname, contacts, latest in cur.fetchall():
