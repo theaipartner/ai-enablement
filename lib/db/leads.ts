@@ -650,8 +650,12 @@ export async function getLeadsForRange(
       leadType: tag ? tag.leadType : leadType,
       statusWord: tag ? tag.statusWord : statusWord,
       latestStageWord: tag ? tag.latestStageWord : latestStageWord,
-      // Re-opt-in tag + opted-in date (newest opt-in) from the tags.
-      optInType: tag ? (tag.reOptIn ? 'reoptin' : 'new') : r.optInType,
+      // Every cohort member is a NEW high-ticket opt-in (May 24 onward);
+      // returning leads no longer enter the cohort, so there is no re-opt-in
+      // member type. A new lead that opts in twice is still ONE person here —
+      // its extra cycle counts only in the funnel's event total. `optInAt`
+      // tracks the newest opt-in for lifecycle scoping (re-opt resets journey).
+      optInType: 'new',
       optInAt: tag ? tag.latestOptInAt : r.optInAt,
       // Latest-cycle tag hits for the roster filter predicate.
       tagBecameDirect: tag ? tag.becameDirect : false,

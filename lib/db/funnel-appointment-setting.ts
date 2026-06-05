@@ -1190,10 +1190,49 @@ export async function getSpeedToLeadCohort(
     return v != null && String(v).trim() !== ''
   }
 
-  // --- NEW opt-ins: created in window ---
-  // `excluded_at is null` drops creator-soft-hidden (fake) leads from the
-  // lead list — here + the Leads page. Per-rep Call Activity is unaffected.
-  const newLeadsAll = await fetchAllPaged<{
+  // --- Membership: NEW high-ticket opt-ins, May 24 onward ---
+  // A lead is in the cohort iff BOTH hold (Drake 2026-06-05):
+  //   (a) it has a Typeform-sourced opt-in cycle in the window
+  //       (`lead_cycles.source = 'typeform'`). Typeform (SFedWelr) is the
+  //       high-ticket gate AND the only true opt-in-event record; close_fallback
+  //       cycles (a Close opt-in date with no Typeform match) are NOT counted.
+  //   (b) its FIRST-EVER opt-in (Close `date_first_opted_in`) falls in the
+  //       window. Returning leads — those who first opted in BEFORE the window
+  //       but re-opted-in during it — are excluded everywhere (lead list +
+  //       funnel). Their re-opt activity still lives in lead_cycles and on the
+  //       Talent / per-lead surfaces; it just isn't counted in this cohort.
+  // Revival-tagged and soft-hidden (test) leads are dropped. Every cohort lead
+  // is `optInType: 'new'` — there is no longer a re-opt-in member type (a new
+  // lead who opts in twice still contributes its extra cycles to the funnel's
+  // event count, but is ONE person in the list). Replaces the prior
+  // Close-status-qualified "new ∪ re-opt-in" membership.
+  //
+  // NOTE: `date_first_opted_in` is read from Close, NOT lead_cycles.firstOptInAt
+  // — the tagger floors opt-ins at the May-24 horizon, so its firstOptInAt can't
+  // tell a genuinely-new lead from a returning one. Close's field is the only
+  // record of the true original opt-in.
+
+  // (a) Typeform opt-in cycles in the window → earliest opt-in timestamp per
+  // lead (the speed-to-lead anchor). Paginated against the 1000-row cap.
+  const tfCycles = await fetchAllPaged<{ close_id: string; opt_in_at: string }>(
+    (f, t) => sb
+      .from('lead_cycles' as never)
+      .select('close_id, opt_in_at')
+      .eq('source', 'typeform')
+      .gte('opt_in_at', range.startUtcIso)
+      .lt('opt_in_at', range.endUtcIso)
+      .range(f, t),
+    'lead_cycles typeform',
+  )
+  const firstTfOptIn = new Map<string, string>()
+  for (const r of tfCycles) {
+    const prev = firstTfOptIn.get(r.close_id)
+    if (!prev || r.opt_in_at < prev) firstTfOptIn.set(r.close_id, r.opt_in_at)
+  }
+
+  // (b) close_leads whose FIRST-EVER opt-in falls in the ET window, not
+  // soft-hidden. `date_first_opted_in` is a bare `date` → ET calendar compare.
+  const candidates = await fetchAllPaged<{
     close_id: string
     display_name: string | null
     date_created: string
@@ -1204,92 +1243,25 @@ export async function getSpeedToLeadCohort(
       .from('close_leads' as never)
       .select('close_id, display_name, date_created, status_id, custom_fields_raw')
       .is('excluded_at', null)
-      .gte('date_created', range.startUtcIso)
-      .lt('date_created', range.endUtcIso)
+      .gte('date_first_opted_in', range.startEtDate)
+      .lte('date_first_opted_in', range.endEtDate)
       .range(f, t),
-    'close_leads',
+    'close_leads first-opt-in-window',
   )
-  const newLeadRows = newLeadsAll.filter((l) => !isRevival(l.custom_fields_raw))  // drop revival-tagged leads
-  const newLeadIdSet = new Set(newLeadRows.map((l) => l.close_id))
 
-  // Initial-status qualification for NEW leads (earliest old_status_id
-  // from status changes, or current status_id if no change exists).
-  const earliestOld = new Map<string, string | null>()
-  if (newLeadRows.length > 0) {
-    const scStart = range.startUtcIso
-    const scEnd = new Date(new Date(range.endUtcIso).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
-    // DB-side filter to the NEW-lead set (was: scan all status changes in the
-    // window+14d, discard non-cohort in JS). Chunked `.in(lead_id)` over the
-    // close_lead_status_changes(lead_id) index — same rows kept, just filtered
-    // before transfer. Provably identical: all of a lead's changes land in its
-    // chunk, ordered by date_created, so earliest-old per lead is unchanged.
-    const newIds = Array.from(newLeadIdSet)
-    for (let i = 0; i < newIds.length; i += 100) {
-      const idChunk = newIds.slice(i, i + 100)
-      let scFrom = 0
-      for (;;) {
-        const { data: page, error } = await sb
-          .from('close_lead_status_changes' as never)
-          .select('lead_id, old_status_id, date_created')
-          .in('lead_id', idChunk)
-          .gte('date_created', scStart)
-          .lt('date_created', scEnd)
-          .order('date_created', { ascending: true })
-          .range(scFrom, scFrom + 999)
-        if (error) throw new Error(`status changes read failed: ${error.message}`)
-        const rows = (page ?? []) as unknown as Array<{ lead_id: string; old_status_id: string | null; date_created: string }>
-        if (rows.length === 0) break
-        for (const r of rows) {
-          if (!newLeadIdSet.has(r.lead_id)) continue
-          if (!earliestOld.has(r.lead_id)) earliestOld.set(r.lead_id, r.old_status_id)
-        }
-        if (rows.length < 1000) break
-        scFrom += 1000
-      }
-    }
-  }
   const cohortLeads: CohortLead[] = []
-  for (const l of newLeadRows) {
-    const initial = earliestOld.has(l.close_id) ? earliestOld.get(l.close_id) : l.status_id
-    if (initial != null && QUALIFYING_INITIAL_STATUSES.has(initial)) {
-      cohortLeads.push({ ...l, optInType: 'new', optInAt: l.date_created })
-    }
-  }
-
-  // --- RE-OPT-INS: first opt-in before the window, latest opt-in in it.
-  // No junk filter (established leads returning). date_first_opted_in is
-  // a `date` column → compare to the ET calendar start.
-  {
-    const reopt = await fetchAllPaged<{
-      close_id: string
-      display_name: string | null
-      date_created: string
-      status_id: string | null
-      latest_opt_in_date: string
-      custom_fields_raw: Record<string, unknown> | null
-    }>(
-      (f, t) => sb
-        .from('close_leads' as never)
-        .select('close_id, display_name, date_created, status_id, latest_opt_in_date, custom_fields_raw')
-        .is('excluded_at', null)
-        .lt('date_first_opted_in', range.startEtDate)
-        .gte('latest_opt_in_date', range.startUtcIso)
-        .lt('latest_opt_in_date', range.endUtcIso)
-        .range(f, t),
-      'close_leads re-opt-in',
-    )
-    for (const r of reopt) {
-      if (newLeadIdSet.has(r.close_id)) continue // disjoint by construction; defensive
-      if (isRevival(r.custom_fields_raw)) continue // drop revival-tagged leads
-      cohortLeads.push({
-        close_id: r.close_id,
-        display_name: r.display_name,
-        date_created: r.date_created,
-        status_id: r.status_id,
-        optInType: 'reoptin',
-        optInAt: r.latest_opt_in_date,
-      })
-    }
+  for (const l of candidates) {
+    if (isRevival(l.custom_fields_raw)) continue // drop revival-tagged leads
+    const optInAt = firstTfOptIn.get(l.close_id)
+    if (!optInAt) continue // no Typeform match → not a high-ticket opt-in
+    cohortLeads.push({
+      close_id: l.close_id,
+      display_name: l.display_name,
+      date_created: l.date_created,
+      status_id: l.status_id,
+      optInType: 'new',
+      optInAt,
+    })
   }
 
   if (cohortLeads.length === 0) {
