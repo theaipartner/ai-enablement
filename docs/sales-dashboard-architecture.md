@@ -45,6 +45,18 @@ Companion docs:
 > tweaks (Caller fact removed, sub-90s call links gated), and site-wide
 > filter/window persistence (`PersistPageState`). It also documents the
 > migration-0066-applied-but-wasn't ops trap. Read it first.
+>
+> **🚨 MOST CURRENT (supersedes the above for data-accuracy work): § FUNNEL DATA
+> ACCURACY — TAGGER · REVIVAL · THE 1000-ROW CAP (2026-06-05) — the very last
+> block.** The 2026-06-05 session made the May-24-onward funnel numbers
+> trustworthy: it found + fixed the bug that made the funnel show 63 opt-ins
+> instead of ~331 (the PostgREST 1000-row cap silently truncating an
+> unpaginated `close_leads` read — a WIDER window returned FEWER leads), fixed
+> the tagger to read legacy/old-style closer forms (not just the New form),
+> excluded DC-revival leads everywhere (cohort AND tagger), and documents the
+> tagger (`shared/lead_tagging.py`) as the funnel's source of truth. **If you
+> are doing the data clean-up, read that block FIRST** — especially the
+> 1000-row-cap trap, which can lurk in any other unpaginated read.
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -1389,3 +1401,201 @@ at cloud creds), cloud has 10 rows / 3 closes.
   "Re-opted in — new journey" divider with old calls beneath.
 - All 3 of Robby's DC closes (Shannon Thompson, Jason Bright, Kareem Memnon) are
   opt-in/reactivation — **none pure-direct** (verified).
+
+---
+
+# ⚡⚡⚡⚡⚡ FUNNEL DATA ACCURACY — TAGGER · REVIVAL · THE 1000-ROW CAP (2026-06-05) ⚡⚡⚡⚡⚡
+
+This session's goal: make **every funnel number from May 24 onward trustworthy**
+before a dedicated data clean-up pass. It found and fixed the bug that made the
+funnel undercount badly, hardened the lead tagger, and excluded revival leads
+everywhere. **If you're doing the data clean-up, read A and B first.** Everything
+below is live on `main`.
+
+## A. The funnel data pipeline + SOURCE OF TRUTH
+
+The Funnel page (`/sales-dashboard/funnel`) composes three layers — know which
+owns what:
+
+1. **`close_leads`** — raw mirror. `date_created`, `latest_opt_in_date`,
+   `date_first_opted_in`, `status_id`, `custom_fields_raw`, `marketing_qualified`.
+2. **The cohort spine — `getSpeedToLeadCohort(range)`** (`funnel-appointment-setting.ts`).
+   Reads `close_leads` DIRECTLY (not the tagger). Defines WHICH leads are in the
+   window: **NEW opt-ins** (`date_created` in window, non-revival, qualifying
+   *initial* status) **∪ RE-OPT-INS** (`date_first_opted_in` < window start,
+   `latest_opt_in_date` in window, non-revival). Qualifying initial statuses =
+   `{New Opt-in, Unconfirmed Booking}` (`QUALIFYING_INITIAL_STATUSES`); initial
+   status = earliest `old_status_id` from `close_lead_status_changes`, else
+   current `status_id`. Feeds the roster, FMR, speed boxes, AND the funnel.
+3. **The tagger — `lead_cycles` / `lead_cycle_stages`** (written by
+   `shared/lead_tagging.py`, read via `lib/db/lead-tags.ts`). The **source of
+   truth for lead TYPE (direct/setter/reactivation) and STAGES
+   (connected/booked/confirmed/showed/closed)**. See § C.
+
+**The funnel's opt-in count** = `getLeadCycleRows(range)` (cycles whose
+`opt_in_at` is in window) **∩** the cohort lead IDs (`getLeadsForRange` → its
+rows are exactly `cohort.rows`). So a lead must be BOTH in the non-revival cohort
+AND have a tag cycle in the window. The two are normally the same set (~331 for
+May 24–Jun 5). **Every funnel lead goes through the tagging system** — that's by
+design and is the rule going forward.
+
+## B. ⚠️🚨 THE 1000-ROW POSTGREST CAP — the bug that broke the funnel (MUST-READ)
+
+**Symptom:** the funnel showed **63 opt-ins** for May 24–Jun 5 (should be ~331),
+and a WIDER window returned FEWER leads (May 24–Jun 2 = 260 correct; May 24–Jun 5
+= 63). A wider window returning fewer rows is the tell-tale signature.
+
+**Root cause:** PostgREST caps any single response at **`db-max-rows` = 1000**.
+A bare **`.range(0, 9999)` SILENTLY TRUNCATES to 1000 — it does NOT error.**
+`getSpeedToLeadCohort`'s "leads created in window" read used `.range(0, 9999)`;
+once the window held >1000 created leads (May 24–Jun 5 had **1,464** — mostly
+DC-revival auto-creates), it returned only the first 1,000, and after the
+revival + qualifying filters the surviving cohort collapsed to 63. May 24–Jun 2
+worked only because it had 254 creates (≤1000). Verified directly: the REST call
+returned `Content-Range: 0-999/1464`.
+
+**The fix:** `fetchAllPaged<T>(build, label)` in `funnel-appointment-setting.ts`
+— pages `.range(from, from+999)` until a page returns <1000, accumulating all
+rows. All four `close_leads` `.range(0,9999)` reads were converted
+(`getSpeedToLeadCohort` new + re-opt-in, `getSpeedToLead`,
+`getSpeedToLeadLeadsForUser`).
+
+**🔑 GENERALIZE THIS for the data clean-up:** ANY unpaginated Supabase/PostgREST
+read that can exceed 1,000 rows silently truncates — numbers look plausible but
+are wrong, and the error is invisible. Suspect it wherever a count is "too low"
+or non-monotonic over a widening window. Audit candidates: any `.from(...).select()`
+WITHOUT a pagination loop on a table that can return >1000 rows in scope
+(`close_leads`, `close_calls`, `close_sms`, `lead_cycles`/`lead_cycle_stages`,
+`calendly_*`, `airtable_*`, `typeform_responses`). `getLeadCycleRows`' first
+query (`lib/db/lead-tags.ts`) is unpaginated and currently safe only because
+in-window cycles < 1000 — it WILL break on a wide-enough window; paginate it as
+part of the clean-up. (The status-change + close_calls scans already paginate.)
+
+## C. The lead tagger — `shared/lead_tagging.py` (deep reference)
+
+The ONE place tags are computed; the funnel/roster/per-lead all read its output.
+
+- **Universe (horizon):** `close_leads` where `latest_opt_in_date >=
+  EFFECTIVE_DATE` (`"2026-05-24"`), `excluded_at is null`, AND not revival (the
+  revival CF filter added this session). **Leads whose latest opt-in predates
+  May 24 are NEVER tagged** — they have no `lead_cycles` row at all, so they
+  can't appear in the funnel in any range (e.g. Kareem Memnon opted in May 21 →
+  untagged; his DC sale shows in the EOC-sourced DC tally but not the cohort
+  funnel). To extend coverage backward you must lower `EFFECTIVE_DATE` and
+  re-tag — a deliberate, larger op that re-tags the whole universe.
+- **Cycle reconstruction:** opt-in times = Typeform `SFedWelr` submissions
+  (matched by the lead's email/phone) since `EFFECTIVE_DATE`, ELSE a single
+  fallback cycle at `latest_opt_in_date`. Multiple submissions → multiple cycles
+  (a re-opt-in). `opt_in_at` is the cycle anchor.
+- **Signals read per lead/cycle:** `close_calls` (≥90s = connected), inbound
+  `close_sms`, `airtable_setter_triage_calls` (triage + confirmation
+  `call_status`), `airtable_full_closer_report` (closer EOC), and
+  `airtable_digital_college_sales`. Calendly bookings for direct/partnership.
+- **Closer-form reading (fixed this session):** previously the tagger fetched
+  ONLY `form_type='New'` and read outcomes from `call_outcome`, so **old-style
+  forms** (`form_type` null/Old, outcome in the legacy `Showed?`/`Closed?`/
+  `Payment Plan Type` fields) were dropped — their shows/closes never reached the
+  funnel (e.g. Mush Eli's $4,400 HT close, May 29). Now it fetches ALL closer
+  forms and normalizes via `closer_form_outcome(form_type, call_outcome, showed,
+  closed, plan)` (New → call_outcome; legacy → Showed?/Closed?/plan, HT unless
+  the plan names DC) in both the terminal loop and the stage loop.
+- **HT vs DC in the tagger:** `closed_at`/`close_type` are HT-only on the
+  stages; a DC close is tracked separately as `lead_cycles.dc_closed_at` (so the
+  funnel's HT closed stage excludes DC; the per-box "DC: N closed" line uses
+  `dcClosed`). The DC sales tally on the funnel page is sourced independently
+  from the EOC (see `funnel-dc-sales.ts`), NOT from the tagger.
+- **Revival exclusion (added this session):** the universe query now drops leads
+  with the DC-revival CF (`REVIVAL_CF`), so `lead_cycles` never carries a revival
+  lead. 0 impact on current data (the in-scope universe had none) but keeps it
+  consistent + future-proof.
+- **Re-running it:** `.venv/bin/python scripts/backfill_lead_tags.py` (dry-run,
+  reports distribution + HT-close count) then `--apply` (wipe-and-rebuild all
+  in-scope leads, transactional, logs to `lead_tag_runs`). The Vercel cron runs
+  `retag(active_only=True)` every 15 min (≈282 non-terminal leads); webhooks
+  retag touched leads. A code change to the tagger needs a `--apply` retag to
+  rewrite existing rows (the cron only refreshes active leads). Runs against
+  CLOUD via `supabase/.temp/pooler-url` + `SUPABASE_DB_PASSWORD` (§0.1/§0.2 caveats).
+
+## D. Revival leads — excluded EVERYWHERE (Drake: the dashboard must reflect none)
+
+DC-revival = the re-engagement SMS auto-creates a lead in Close as a "New Opt-in"
+when it first texts someone. These inflate `close_leads.date_created` massively
+(May 24–Jun 5: **1,113 of 1,464 created leads were revival**) but are NOT real
+opt-ins. Identified by the Close custom field
+`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P` (`REVIVAL_CF`).
+Excluded in: `getSpeedToLeadCohort` (cohort), `getSpeedToLeadCohort` cohort scan,
+the tagger universe (this session). If you add a new surface that counts leads,
+it MUST drop revival.
+
+## E. Cohort vs activity — recent closes for OLD cohorts don't show (by design)
+
+The funnel is an **opt-in-cohort** funnel: it counts leads who OPTED IN during
+the window and tracks THAT cohort's eventual shows/closes. A close that happens
+this week for a lead who opted in weeks ago does NOT appear in a recent window —
+that's intended (it measures "of this window's opt-ins, how many converted").
+"Closes that happened this week regardless of cohort" is an activity metric and
+lives on the Talent/Cash surfaces (which are form-sourced, see § G), not the
+cohort funnel. Don't try to bolt activity closes onto the cohort funnel — it
+breaks the integrity guard (shows ≤ connected ≤ books ≤ opt-ins).
+
+## F. Reconciliation method + data quirks (for the clean-up)
+
+- **Reconcile forms vs tagger:** count leads with a showed/closed *form* (EOC New
+  `call_outcome` close/show OR legacy `Closed?='Yes'`/`Showed?='Yes'`; DC via the
+  DC form or `Digital College Closed`) and compare to `lead_cycle_stages`
+  `showed_at`/`closed_at`. Mismatches = old-style forms (now fixed), DC (excluded
+  from HT stages by design), or pre-horizon untagged leads (§ C).
+- **Test leads:** filter on the BACKING LEAD, not the form. A test form can carry
+  a different `prospect_name` ("testr") while its lead's `display_name` is
+  "test" (lead `lead_chEop1…`). Drop `close_leads.display_name = 'test'` and
+  `excluded_at is not null`. A name-only filter on the form misses these (this
+  inflated Cash upfront by a $2,122 test deposit this session).
+- **UTC vs ET boundary:** `latest_opt_in_date`/`date_created` display as the UTC
+  date but the funnel cohorts by ET calendar day (ADR 0003). Kristina Rues' opt-in
+  is `2026-05-24 00:58 UTC` = **May 23 20:58 ET** → she's in the May-23 cohort,
+  not May 24. Always reason in ET when checking which window a lead falls in.
+- **`status_label` is unreliable** (already known) — use forms/Calendly/tags.
+
+## G. Surfaces shipped this session (all live, all read-side)
+
+- **High-ticket asset lock — `lib/db/funnel-assets.ts`** (single source of truth):
+  VSLs `i1173gx76b`/`nbump1crwb`, confirm video `fbgjxwe62y`, Typeform `SFedWelr`,
+  ad-campaign token `closer funnel`. Every high-ticket read routes through it so
+  another funnel's VSL/Typeform/ads can't leak in. Ingestion stays wide open
+  (mirror everything); the lock is READ-side. A new funnel gets its OWN asset set.
+- **Adspend locked to Closer Funnel campaigns — `funnel-ads.ts`:** sums
+  `cortana_campaign_daily` rows whose name carries the `closer funnel` token
+  (per-campaign), with a per-day fallback to the `meta_ad_daily` account total
+  for days before the per-campaign mirror existed (pre-2026-05-26). Was the
+  account-wide total (blended all funnels). Logs unmatched campaign spend.
+- **DC sales tally under the funnel — `funnel-dc-sales.ts` + `dc-sales-tally.tsx`:**
+  plan-backed EOC `Digital College Closed` closes ONLY (no plan = excluded +
+  counted as `excludedNoPlan`), sourced from the EOC directly (NOT the tagger
+  cohort — so it catches pre-horizon leads like Kareem). Two breakdowns: by
+  funnel (direct/setter/reactivation, path from `lead_cycles` w/ `close_leads`
+  fallback) and by origin (triage/confirmation/downsell/robby). All-time, EOC-only
+  (the dedicated DC form is unwired).
+- **Talent-page Cash — `getClosingActivity`/`buildMoney`:** now reads new-form
+  fields (`call_outcome`, `amount_paid_today_number`, deposits) not just legacy,
+  shows a Sales (HT closes) count, **excludes DC** (it has its own tally), and
+  drops test/hidden leads by the backing lead.
+- **Form-only meetings in the closer drill — `funnel-closing.ts` `getClosingScheduledList`:**
+  instant-book closer calls leave no Calendly event; a New EOC in range whose lead
+  has no IN-RANGE Calendly event becomes its own `formOnly` drill row (counted in
+  the per-closer aggregates). Mirrors the setter drill's form-only rows.
+
+## H. Open items / data-cleanup checklist for the next instance
+
+1. **Audit other unpaginated reads for the 1000-row cap** (§ B) — paginate
+   `getLeadCycleRows`' first query and any large `.select()` without a loop.
+2. **Verify the funnel now reads ~331 opt-ins for May 24–Jun 5** (post-deploy) and
+   that extending the end date only ever INCREASES the count.
+3. **Pre-horizon leads** (opt-in < May 24, e.g. Kareem, Zach Yaniv): decide
+   whether to lower `EFFECTIVE_DATE` + re-tag, or leave them out of the cohort
+   funnel (they still surface in the EOC-sourced DC/Cash views).
+4. **Go stage by stage** (opt-ins → connected → booked → confirmed → showed →
+   closed) reconciling the funnel against the forms/tagger per § F, fixing any
+   remaining gaps. Start with opt-ins (now ~correct), then connected, etc.
+5. Watch for old-style forms in other surfaces — the tagger handles them now, but
+   any surface reading `call_outcome` alone (without the legacy `Closed?`/`Showed?`
+   fallback) will still miss them.
