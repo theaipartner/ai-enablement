@@ -89,6 +89,28 @@ def outcome_showed(co):
     return not any(x in v for x in ("ghost", "no show", "reschedul", "cancel"))
 
 
+def classify_plan(plan):
+    """Offer for a LEGACY closer form's close, from payment_plan_type. Legacy
+    closer-report closes predate DC-on-the-closer-form, so default to HT unless
+    the plan explicitly names Digital College / Base44 / Wix."""
+    v = norm(plan)
+    if v and ("digital college" in v or "base44" in v or "base 44" in v or "wix" in v):
+        return "dc"
+    return "ht"
+
+
+def closer_form_outcome(form_type, call_outcome, showed, closed, plan):
+    """Normalize a closer EOC form to (showed_bool, close_type, is_dq). New forms
+    use Call Outcome; legacy/old forms (form_type not 'New') use the Showed? /
+    Closed? / Payment Plan Type fields the redesign replaced. Legacy forms have
+    no clean DQ field, so is_dq is False for them (DQ still comes from the new
+    Call Outcome, triage, and DC paths)."""
+    if form_type == "New":
+        return outcome_showed(call_outcome), outcome_close_type(call_outcome), ("dq" in norm(call_outcome))
+    is_closed = norm(closed) == "yes"
+    return (norm(showed) == "yes"), (classify_plan(plan) if is_closed else None), False
+
+
 def _connect():
     """Connect to Postgres via the transaction pooler.
 
@@ -248,8 +270,15 @@ def _compute(cur, lead_ids):
     triage, closer, dc = defaultdict(list), defaultdict(list), defaultdict(list)
     for lid, ft, cs, filed in fetch("airtable_setter_triage_calls", "form_type, call_status, airtable_created_at"):
         triage[lid].append((ft, norm(cs), filed))
-    for lid, co, ev, filed, cnames in fetch("airtable_full_closer_report", "call_outcome, date_time_of_call, airtable_created_at, closer_names", "and form_type='New'"):
-        closer[lid].append((co, ev, filed, cnames))
+    # ALL closer forms (not just New) — legacy/old forms record the outcome in
+    # Showed?/Closed?/Payment Plan Type instead of Call Outcome, and were being
+    # dropped entirely (Mush Eli's HT close + show, May 29). closer_form_outcome
+    # normalizes both shapes downstream.
+    for lid, ft, co, sh, cl, pl, ev, filed, cnames in fetch(
+        "airtable_full_closer_report",
+        "form_type, call_outcome, showed, closed, payment_plan_type, date_time_of_call, airtable_created_at, closer_names",
+    ):
+        closer[lid].append((ft, co, sh, cl, pl, ev, filed, cnames))
     for lid, cl, fu, ev, filed in fetch("airtable_digital_college_sales", "closed, follow_up, date_time_of_call, airtable_created_at", "and excluded_at is null"):
         dc[lid].append((norm(cl), norm(fu), ev, filed))
 
@@ -286,13 +315,13 @@ def _compute(cur, lead_ids):
                     setdq(filed, "confirmation" if ft == "Closer Triage Form" else "triage")
                 if ft != "Closer Triage Form" and "high ticket booking" in cs:
                     setter_htbook_at = filed if setter_htbook_at is None or filed < setter_htbook_at else setter_htbook_at
-            for co, ev, filed, _cnames in closer.get(cid, []):
+            for ft, co, sh, cl, pl, ev, filed, _cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
-                if "dq" in norm(co):
+                _showed, ct, is_dq = closer_form_outcome(ft, co, sh, cl, pl)
+                if is_dq:
                     setdq(t, "closer_eoc")
-                ct = outcome_close_type(co)
                 if ct == "ht":
                     ht_close_at = t if ht_close_at is None or t < ht_close_at else ht_close_at
                 elif ct == "dc":
@@ -372,25 +401,26 @@ def _compute(cur, lead_ids):
                 )
                 return cands[0][1] if cands and cands[0][0] <= 2 * 86400 else None
 
-            for co, ev, filed, cnames in closer.get(cid, []):
+            for ft, co, sh, cl, pl, ev, filed, cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
                 p = phase_of(ev, filed)
+                showed_b, ct, _is_dq = closer_form_outcome(ft, co, sh, cl, pl)
                 # A "Digital College Closed" EOC is a DC sale (copied onto the
                 # closer form). It's an HT SHOW only when it was an HT call — i.e.
                 # NOT Robby's. Robby = the EOC submitter is Robby (closer_names),
                 # or it sat on a "Call with Robby" Calendly event. Aman's downsell
                 # on a strat/partnership call IS an HT show.
-                if outcome_close_type(co) == "dc":
+                if ct == "dc":
                     submitter_robby = any("robby" in norm(n) for n in (cnames or []))
                     robby_dc = submitter_robby or nearest_event_kind(ev or filed) == "dc_robby"
                     if not robby_dc:
                         ph[p]["show"].append(t)
                     continue
-                if outcome_showed(co):
+                if showed_b:
                     ph[p]["show"].append(t)
-                if outcome_close_type(co) == "ht":
+                if ct == "ht":
                     ph[p]["close"].append(t)
 
             cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at))
