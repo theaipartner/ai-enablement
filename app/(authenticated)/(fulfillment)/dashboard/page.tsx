@@ -16,11 +16,11 @@ import {
   type LateStartFlag,
   type UninstrumentedChannel,
   type LeftSlackClient,
-  type DigestFlag,
 } from '@/lib/db/fulfillment-dashboard'
 import { CollapsibleSection } from './collapsible-section'
 import { NeedsReviewList, GhostList } from './client-flags'
 import { MissingSlackList } from './missing-slack'
+import { DigestList } from './digest-flags'
 import { FlagTaskPill } from './flag-task-pill'
 
 // Fulfillment Dashboard — notification surface.
@@ -170,11 +170,7 @@ export default async function FulfillmentDashboardPage() {
           {digestFlags.length === 0 ? (
             <EmptyFlags message="Nothing Ella flagged in the past 3 days." />
           ) : (
-            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-              {digestFlags.map((d) => (
-                <DigestRow key={d.id} flag={d} />
-              ))}
-            </div>
+            <DigestList flags={digestFlags} />
           )}
         </CollapsibleSection>
 
@@ -238,55 +234,6 @@ function UninstrumentedRow({ channel }: { channel: UninstrumentedChannel }) {
       >
         {channel.channel_name ?? '—'}
       </span>
-    </div>
-  )
-}
-
-const DIGEST_CATEGORY_META: Record<
-  string,
-  { label: string; tone: 'neg' | 'warn' | 'neutral' }
-> = {
-  money_commitment: { label: 'Money', tone: 'neg' },
-  complaint: { label: 'Complaint', tone: 'neg' },
-  emotional_human_needed: { label: 'Emotional', tone: 'warn' },
-  serious_uncertainty: { label: 'Uncertainty', tone: 'warn' },
-  other: { label: 'Other', tone: 'neutral' },
-}
-
-function DigestRow({ flag }: { flag: DigestFlag }) {
-  const meta = DIGEST_CATEGORY_META[flag.category ?? 'other'] ?? {
-    label: 'Other',
-    tone: 'neutral' as const,
-  }
-  return (
-    <div style={ROW_STYLE}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        <FlagTaskPill label={meta.label} tone={meta.tone} />
-        <div style={{ minWidth: 0 }}>
-          {flag.client_id && flag.client_name ? (
-            <Link
-              href={`/clients/${flag.client_id}`}
-              style={{
-                fontSize: 14,
-                color: 'var(--color-geg-text)',
-                textDecoration: 'underline',
-              }}
-            >
-              {flag.client_name}
-            </Link>
-          ) : (
-            <span style={{ fontSize: 14, color: 'var(--color-geg-text)' }}>
-              {flag.client_name ?? '—'}
-            </span>
-          )}
-          <div className="geg-mono" style={META_STYLE}>
-            {flag.message ?? ''}
-          </div>
-        </div>
-      </div>
-      <div className="geg-mono" style={DATE_STYLE}>
-        {formatFlagDate(flag.occurred_at)}
-      </div>
     </div>
   )
 }

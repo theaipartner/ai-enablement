@@ -797,6 +797,7 @@ export type DigestFlag = {
   id: string
   client_id: string | null
   client_name: string | null
+  csm_standing: string | null
   category: string | null
   message: string | null
   occurred_at: string
@@ -828,16 +829,37 @@ export async function getDigestFlags(): Promise<DigestFlag[]> {
     new Set(rows.map((r) => r.client_id).filter((x): x is string => !!x)),
   )
   const { data: clientRows } = clientIds.length
-    ? await supabase.from('clients').select('id, full_name').in('id', clientIds)
-    : { data: [] as Array<{ id: string; full_name: string }> }
-  const nameById = new Map((clientRows ?? []).map((c) => [c.id, c.full_name]))
+    ? await supabase
+        .from('clients')
+        .select('id, full_name, csm_standing')
+        .in('id', clientIds)
+    : {
+        data: [] as Array<{
+          id: string
+          full_name: string
+          csm_standing: string | null
+        }>,
+      }
+  const byId = new Map(
+    (clientRows ?? []).map((c) => [
+      c.id as string,
+      {
+        full_name: c.full_name as string,
+        csm_standing: (c.csm_standing as string | null) ?? null,
+      },
+    ]),
+  )
 
-  return rows.map((r) => ({
-    id: r.id,
-    client_id: r.client_id,
-    client_name: r.client_id ? nameById.get(r.client_id) ?? null : null,
-    category: r.digest_category,
-    message: r.message_text,
-    occurred_at: r.created_at,
-  }))
+  return rows.map((r) => {
+    const client = r.client_id ? byId.get(r.client_id) : undefined
+    return {
+      id: r.id,
+      client_id: r.client_id,
+      client_name: client?.full_name ?? null,
+      csm_standing: client?.csm_standing ?? null,
+      category: r.digest_category,
+      message: r.message_text,
+      occurred_at: r.created_at,
+    }
+  })
 }

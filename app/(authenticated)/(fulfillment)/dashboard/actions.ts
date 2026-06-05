@@ -3,7 +3,10 @@
 import { revalidatePath } from 'next/cache'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { mergeClient, type MergeResult } from '@/lib/db/merge'
-import { updateClientStatusWithHistory } from '@/lib/db/clients'
+import {
+  updateClientStatusWithHistory,
+  updateClientCsmStandingWithHistory,
+} from '@/lib/db/clients'
 
 // Server actions for the dashboard "Needs Review" box. Three dispositions
 // on an auto-created (needs_review-tagged) client:
@@ -149,6 +152,21 @@ export async function dashboardDismissGhostFlagAction(
   revalidatePath('/dashboard')
   revalidatePath('/clients')
   return { success: true }
+}
+
+// Set a client's CSM standing from the digest modal (history + cascade via
+// the shared RPC). Thin wrapper that also revalidates the dashboard.
+export async function dashboardSetCsmStandingAction(
+  clientId: string,
+  standing: 'happy' | 'content' | 'at_risk' | 'problem',
+): Promise<ActionResult> {
+  const result = await updateClientCsmStandingWithHistory(clientId, standing)
+  if (result.success) {
+    revalidatePath('/dashboard')
+    revalidatePath('/clients')
+    revalidatePath(`/clients/${clientId}`)
+  }
+  return result
 }
 
 // --- Missing Slack IDs actions --------------------------------------------
