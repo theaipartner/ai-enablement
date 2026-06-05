@@ -33,8 +33,6 @@ export const dynamic = 'force-dynamic'
 // appointment-setting page; 60s headroom prevents a cold-start 500.
 export const maxDuration = 60
 
-type View = 'all' | 'unique'
-
 export default async function SalesDashboardLeadsPage({
   searchParams,
 }: {
@@ -59,7 +57,6 @@ export default async function SalesDashboardLeadsPage({
   const end = parseEtDateString(searchParams?.end)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
-  const view: View = pickView(searchParams?.view)
   // Lead-type (multi) + stage (single, cumulative) filters — set by the Funnel
   // page's stage links and the filter bar. The funnel and roster share the
   // reachedStage predicate, so a clicked bar opens exactly its leads.
@@ -78,11 +75,10 @@ export default async function SalesDashboardLeadsPage({
   const allRows = await getLeadsForRange(range, speedCohort)
   const canDelete = access?.tier === 'creator'
 
-  // Unique = new opt-ins only (re-opt-ins removed). All = the full cohort.
-  const viewRows = view === 'unique' ? allRows.filter((r) => r.optInType === 'new') : allRows
-  // Roster honors the type/stage filter. The speed-to-lead boxes recompute over
-  // the SAME filtered rows so they track the filter.
-  const rows = viewRows.filter((r) => matchesLeadFilter(r, types, stage))
+  // The cohort is already unique NEW opt-ins (May 24 onward) — returning leads
+  // never enter it — so there's no view toggle. Roster honors the type/stage
+  // filter; the speed-to-lead boxes recompute over the SAME filtered rows.
+  const rows = allRows.filter((r) => matchesLeadFilter(r, types, stage))
   const filteredCohort = { ...speedCohort, ...summarizeCohortRows(rows), rows }
   // FMR follows the window, and ALSO the type filter — but only the Direct /
   // Opt-in (setter) values, since "response by hour of opt-in" isn't meaningful
@@ -105,7 +101,7 @@ export default async function SalesDashboardLeadsPage({
 
   return (
     <div>
-      <PersistPageState window filters={['view', 'type', 'stage']} />
+      <PersistPageState window filters={['type', 'stage']} />
       <HeaderBand
         eyebrow="SALES · LEADS"
         title="Leads."
@@ -120,7 +116,7 @@ export default async function SalesDashboardLeadsPage({
       <LeadSearch initial="" />
 
       <div style={{ marginTop: 20 }}>
-        <LeadsFilterBar view={view} types={types} stage={stage} />
+        <LeadsFilterBar types={types} stage={stage} />
       </div>
 
       <div style={{ marginTop: 26 }}>
@@ -154,11 +150,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   )
-}
-
-function pickView(raw: string | string[] | undefined): View {
-  const v = Array.isArray(raw) ? raw[0] : raw
-  return v === 'unique' ? 'unique' : 'all'
 }
 
 const VALID_TYPES: LeadFilterType[] = ['direct', 'setter', 'reactivation']

@@ -9,15 +9,14 @@ import { DeleteLeadButton } from './delete-lead-button'
 // returns (cohort order); clicking a column header sorts by it — desc → asc →
 // back to default. Null/missing values always sort to the end.
 
-const COLS = '1.6fr 0.8fr 1.1fr 1.2fr 1.2fr 1.2fr 0.85fr 0.7fr 0.35fr'
+const COLS = '1.6fr 1.1fr 1.2fr 1.2fr 1.2fr 0.85fr 0.7fr 0.35fr'
 
 type SortKey =
-  | 'prospect' | 'optin' | 'optInAt' | 'latestStage' | 'status' | 'speed' | 'connected' | 'intensity' | ''
+  | 'prospect' | 'optInAt' | 'latestStage' | 'status' | 'speed' | 'connected' | 'intensity' | ''
 type SortDir = 'asc' | 'desc' | null
 
 const HEADERS: { label: string; key: SortKey }[] = [
   { label: 'Prospect', key: 'prospect' },
-  { label: 'Opt-in', key: 'optin' },
   { label: 'Opted in (ET)', key: 'optInAt' },
   { label: 'Latest stage', key: 'latestStage' },
   { label: 'Status', key: 'status' },
@@ -37,7 +36,6 @@ const STAGE_RANK: Record<string, number> = {
 function sortValue(r: LeadRow, key: SortKey): number | string | null {
   switch (key) {
     case 'prospect': return r.prospectName ?? ''
-    case 'optin': return r.optInType
     case 'optInAt': return r.optInAt
     case 'latestStage': return STAGE_RANK[r.latestStageWord] ?? 0
     case 'status': return TYPE_RANK[r.leadType]
@@ -122,7 +120,6 @@ function LeadRowView({ r, canDelete, backQuery }: { r: LeadRow; canDelete: boole
       <span className="geg-serif" style={{ fontSize: 13, color: 'var(--color-geg-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.leadId}>
         {r.prospectName ?? <span style={{ fontStyle: 'italic', color: 'var(--color-geg-text-faint)' }}>(no name)</span>}
       </span>
-      <span><OptInBadge type={r.optInType} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
       <span><LatestStageCell word={r.latestStageWord} /></span>
       <span><StatusCell r={r} /></span>
@@ -169,15 +166,6 @@ function MultiCallTag({ count }: { count: number }) {
   )
 }
 
-function OptInBadge({ type }: { type: LeadRow['optInType'] }) {
-  const reoptin = type === 'reoptin'
-  const color = reoptin ? 'var(--color-geg-text-dim)' : 'var(--color-geg-text-3)'
-  return (
-    <span className="geg-mono" style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>
-      {reoptin ? 're-opt-in' : 'new'}
-    </span>
-  )
-}
 
 // Latest journey stage — the furthest funnel stage the lead ever reached
 // (Total-funnel ladder), independent of the phase-scoped Status. Closed reads

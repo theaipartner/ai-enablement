@@ -3,16 +3,15 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { LeadFilterType, FunnelStage } from '@/lib/db/leads-funnel'
 
-// Leads filter bar. Three controls, all URL-driven (so shareable + preserved by
+// Leads filter bar. Two controls, all URL-driven (so shareable + preserved by
 // the per-lead back button, and set by the Funnel page's stage links):
-//   - View      all | unique  (re-opt-ins in/out — repurposed from the old toggle)
 //   - Lead type direct / opt-in / reactivation  (multi-select; 'direct' includes
 //               reactivation as a subset, matching the Direct funnel)
 //   - Stage     connected → booked → [confirmed] → showed → closed  (single,
 //               CUMULATIVE: picking Showed includes Closed. Confirmed only shows
 //               when Direct is selected.)
-
-export type LeadsView = 'all' | 'unique'
+// (The old all/unique View toggle was removed 2026-06-05 — the cohort is now
+// unique NEW opt-ins only, so the toggle had nothing to switch.)
 
 const TYPE_OPTS: { id: LeadFilterType; label: string; color: string }[] = [
   { id: 'direct', label: 'Direct', color: 'var(--color-geg-pos)' },
@@ -29,11 +28,9 @@ const STAGE_OPTS: { id: FunnelStage; label: string; directOnly?: boolean }[] = [
 ]
 
 export function LeadsFilterBar({
-  view,
   types,
   stage,
 }: {
-  view: LeadsView
   types: LeadFilterType[]
   stage: FunnelStage | null
 }) {
@@ -47,9 +44,6 @@ export function LeadsFilterBar({
     const qs = sp.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
-
-  const setView = (v: LeadsView) =>
-    push((sp) => (v === 'all' ? sp.delete('view') : sp.set('view', v)))
 
   const toggleType = (t: LeadFilterType) =>
     push((sp) => {
@@ -69,17 +63,6 @@ export function LeadsFilterBar({
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 18 }}>
-      <Group label="View">
-        <Segmented
-          opts={[
-            { id: 'all', label: 'All opt-ins' },
-            { id: 'unique', label: 'New only' },
-          ]}
-          current={view}
-          onPick={(id) => setView(id as LeadsView)}
-        />
-      </Group>
-
       <Group label="Type">
         <div style={{ display: 'inline-flex', gap: 6 }}>
           {TYPE_OPTS.map((o) => (
@@ -106,44 +89,6 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </span>
       {children}
-    </div>
-  )
-}
-
-function Segmented({
-  opts,
-  current,
-  onPick,
-}: {
-  opts: { id: string; label: string }[]
-  current: string
-  onPick: (id: string) => void
-}) {
-  return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--color-geg-border-strong)', borderRadius: 6, overflow: 'hidden' }}>
-      {opts.map((o) => {
-        const active = o.id === current
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onPick(o.id)}
-            className="geg-mono"
-            style={{
-              border: 'none',
-              cursor: 'pointer',
-              padding: '6px 12px',
-              fontSize: 10,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              background: active ? 'var(--color-geg-accent-fill)' : 'transparent',
-              color: active ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)',
-            }}
-          >
-            {o.label}
-          </button>
-        )
-      })}
     </div>
   )
 }
