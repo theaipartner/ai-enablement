@@ -154,18 +154,24 @@ def _connect():
 # --------------------------------------------------------------------------- #
 def _compute(cur, lead_ids):
     scoped = lead_ids is not None
-    # 1. In-scope lead universe + identity.
+    # 1. In-scope lead universe + identity. The tagger universe IS the unique
+    # leads list (Drake 2026-06-05): a lead is tagged only if it ORIGINALLY opted
+    # in on/after EFFECTIVE_DATE (date_first_opted_in, not just latest_opt_in_date
+    # — returning leads who first opted in earlier are excluded), is non-revival,
+    # and is not soft-hidden. The Typeform-match requirement is enforced in the
+    # cycle-reconstruction step below (no Typeform = not a high-ticket opt-in =
+    # no cycle). So lead_cycles == the unique leads list; everything reads from it.
     if scoped:
         cur.execute(
             "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
-            "where close_id = any(%s) and latest_opt_in_date >= %s and excluded_at is null "
+            "where close_id = any(%s) and date_first_opted_in >= %s and excluded_at is null "
             "and coalesce(custom_fields_raw->>%s, '') = ''",
             (list(lead_ids), EFFECTIVE_DATE, REVIVAL_CF),
         )
     else:
         cur.execute(
             "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
-            "where latest_opt_in_date >= %s and excluded_at is null "
+            "where date_first_opted_in >= %s and excluded_at is null "
             "and coalesce(custom_fields_raw->>%s, '') = ''",
             (EFFECTIVE_DATE, REVIVAL_CF),
         )
@@ -189,7 +195,7 @@ def _compute(cur, lead_ids):
     if not ids:
         return [], []
 
-    # 2. Cycle reconstruction — Typeform SFedWelr by email/phone, else fallback.
+    # 2. Cycle reconstruction — Typeform SFedWelr by email/phone (REQUIRED).
     cur.execute(
         """select submitted_at,
              lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
@@ -218,10 +224,12 @@ def _compute(cur, lead_ids):
             if key not in by_min or ts < by_min[key]:
                 by_min[key] = ts
         times = sorted(by_min.values())
+        # Unique leads only: a lead with NO Typeform SFedWelr match is not a
+        # high-ticket opt-in, so it gets NO cycle (the old `close_fallback` path
+        # is removed). Combined with the date_first_opted_in universe filter,
+        # lead_cycles now IS exactly the unique leads list (Drake 2026-06-05).
         if times:
             cycles_by_lead[cid] = (sorted(times), "typeform")
-        else:
-            cycles_by_lead[cid] = ([lead_latest[cid]], "close_fallback")
 
     # 3. Matching maps for Calendly (utm global-unique; identity for in-scope leads).
     cur.execute("select close_id, utm_term from close_leads where utm_term is not null")
@@ -294,6 +302,8 @@ def _compute(cur, lead_ids):
     now = _now()
     cycle_rows, stage_rows = [], []
     for cid in ids:
+        if cid not in cycles_by_lead:
+            continue  # no Typeform match → not a unique lead → no cycle/stages
         opt_ins, source = cycles_by_lead[cid]
         for idx, opt_in_at in enumerate(opt_ins):
             cyc_end = opt_ins[idx + 1] if idx + 1 < len(opt_ins) else now + timedelta(days=3650)
@@ -576,9 +586,14 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
         summary["anomalies"] = _detect_anomalies(cur, cycle_rows)
         summary["lead_count"] = len({r[0] for r in cycle_rows})
 
-        touched = list({r[0] for r in cycle_rows}) or (list(lead_ids) if lead_ids else [])
-        if touched:
-            cur.execute("delete from lead_cycles where close_id = any(%s)", (touched,))  # cascades stages
+        # Delete-then-insert. On a FULL retag (lead_ids is None) wipe the whole
+        # table so leads that fell OUT of the universe (e.g. no longer a unique
+        # lead) don't keep stale cycles. On a scoped retag, delete exactly the
+        # passed leads (whether or not they re-tagged), same reason.
+        if lead_ids is None:
+            cur.execute("delete from lead_cycles")  # cascades stages
+        else:
+            cur.execute("delete from lead_cycles where close_id = any(%s)", (list(lead_ids),))  # cascades stages
         if cycle_rows:
             execute_values(cur,
                 "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at) values %s",
