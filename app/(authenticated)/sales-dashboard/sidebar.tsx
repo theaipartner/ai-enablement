@@ -16,13 +16,20 @@ const TOPNAV_HEIGHT = 64
 type NavItem = {
   href: string
   label: string
+  children?: { href: string; label: string }[]
 }
 
 const NAV: NavItem[] = [
   // Funnel = the stacked Total/Direct/Setter/Reactivation overview. Stage nodes
   // drill into the pre-filtered Leads roster; Ads + Landing Pages are reached
-  // from within the page, not the sidebar.
-  { href: '/sales-dashboard/funnel', label: 'Funnel' },
+  // from within the page, not the sidebar. Revival (the DC re-engagement
+  // campaign) is a dedicated sub-page — revival leads are excluded from every
+  // other funnel, so they get their own surface.
+  {
+    href: '/sales-dashboard/funnel',
+    label: 'Funnel',
+    children: [{ href: '/sales-dashboard/funnel/revival', label: 'Revival' }],
+  },
   // Leads = the roster of every lead opted-in in the window (new + re-opt-in),
   // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },
@@ -83,13 +90,23 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
       </div>
 
       {NAV.map((item) => (
-        <SidebarLink
-          key={item.href}
-          href={item.href}
-          label={item.label}
-          active={isActive(item.href)}
-          variant="overview"
-        />
+        <div key={item.href}>
+          <SidebarLink
+            href={item.href}
+            label={item.label}
+            active={isActive(item.href)}
+            variant="overview"
+          />
+          {item.children?.map((child) => (
+            <SidebarLink
+              key={child.href}
+              href={child.href}
+              label={child.label}
+              active={pathname === child.href}
+              variant="child"
+            />
+          ))}
+        </div>
       ))}
     </aside>
   )

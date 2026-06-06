@@ -1771,3 +1771,69 @@ drop spend; fix is a Meta-side URL-template fix (Zain).
 - **Adam** — add his identifiers to `DC_CLOSER_NAMES`.
 - **`getLeadCycleRows`' first query** is still unpaginated (1000-row-cap risk on a
   wide window) — paginate during clean-up.
+
+---
+
+# ⚡⚡⚡⚡⚡⚡⚡ REVIVAL FUNNEL — the DC re-engagement campaign (2026-06-06) ⚡⚡⚡⚡⚡⚡⚡
+
+**The most current block.** Revival leads were "excluded EVERYWHERE" (§ D above);
+they now have their own dedicated funnel sub-page. Everything below is live on
+`main`.
+
+## What it is
+The DC re-engagement SMS campaign auto-creates a Close lead (tagged with the
+`DC Revival Lead` custom field = `REVIVAL_CF`,
+`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P`) when it first texts a cold
+contact. **2,115 such leads** today. They're not real high-ticket opt-ins (no
+Typeform cycle), so they're dropped from the cohort / tagger / every other
+funnel. This sub-page is the **only** surface that counts them.
+
+## The funnel (Drake 2026-06-06)
+`all revival leads → responded → connected → booked → showed → closed`, + a cash
+row. **Monotonic backfill** upward (a close implies a show implies a book …), so
+every conversion % is 0–100. Live numbers at ship: **2,115 → 146 → 50 → 21
+(DC 17 / HT 3) → 10 → 4 closes · $1,200 cash**.
+
+- **Responded** = an inbound `close_sms`. **Connected** = a ≥90s `close_calls`
+  OR a triage/confirmation form that reached (any `call_status` except
+  unresponsive/handover). **Booked** = a triage `call_status` containing
+  "booking" (DC or HT — revival was DC-intended but 3 leads got routed to HT by
+  setter Connor; kept and split in the Booked bracket). **Showed / Closed** from
+  `airtable_full_closer_report` (DC closes only). **Cash** = **$300 per DC plan
+  unit** on the closes (one close had no plan recorded → $0, surfaced on the line).
+
+## NO tagger — reads raw signals
+Revival leads have no `lead_cycles` row, so this funnel does NOT use the tagger.
+It reads `close_leads` (revival CF, paged + JS-filtered like `isRevival`),
+`close_sms`, `close_calls`, `airtable_setter_triage_calls`,
+`airtable_full_closer_report` directly.
+
+## THE PER-LEAD START ANCHOR (the one subtle bit)
+Drake: "start = when created OR when the CF was added." But the CF was
+**bulk-applied 2026-06-04/05**, AFTER some leads had already booked (created
+06-03, booked 06-04) — so literal CF-add drops their bookings. And pre-existing
+leads (created back in Aug 2025) carry OLD pre-revival calls that must NOT count,
+while also having genuine revival calls in late May. The rule that satisfies
+both: **anchor = the LATER of (`date_created`, a campaign floor of 2026-05-24
+00:00 ET)**. Recent leads keep their created date; old leads floor to the
+campaign start, so only revival-era activity counts. A signal counts iff its
+timestamp ≥ the lead's anchor. (Floor constant `REVIVAL_FLOOR_ISO` in the module.)
+
+**All-time, no date window** — Drake: "do all revival leads, date created isn't
+important." The anchor handles the per-lead start; there's no end bound.
+
+## Files
+- `lib/db/funnel-revival.ts` — `getRevivalFunnel()` (the whole computation).
+- `components/sales/revival-funnel.tsx` — the render (coral accent `#d08770`).
+- `app/(authenticated)/sales-dashboard/funnel/revival/page.tsx` — the sub-page.
+- `app/(authenticated)/sales-dashboard/sidebar.tsx` — Revival child under Funnel
+  (NavItem gained an optional `children`).
+
+## Open / next
+- **Calendly bookings are NOT counted** in Booked (revival is SMS / instant-book;
+  the 3 HT books + 17 DC books all came through triage forms). Add if direct
+  Calendly revival bookings start appearing.
+- **No date window** — add a picker if Drake wants to scope revival activity to a
+  range later.
+- **HT outcomes** — if a revival lead ever HT-shows/closes, it's currently NOT in
+  Showed/Closed (those read DC closes only). Revisit if HT conversions happen.
