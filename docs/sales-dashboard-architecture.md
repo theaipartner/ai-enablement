@@ -46,17 +46,18 @@ Companion docs:
 > filter/window persistence (`PersistPageState`). It also documents the
 > migration-0066-applied-but-wasn't ops trap. Read it first.
 >
-> **🚨 MOST CURRENT (supersedes the above for data-accuracy work): § FUNNEL DATA
-> ACCURACY — TAGGER · REVIVAL · THE 1000-ROW CAP (2026-06-05) — the very last
-> block.** The 2026-06-05 session made the May-24-onward funnel numbers
-> trustworthy: it found + fixed the bug that made the funnel show 63 opt-ins
-> instead of ~331 (the PostgREST 1000-row cap silently truncating an
-> unpaginated `close_leads` read — a WIDER window returned FEWER leads), fixed
-> the tagger to read legacy/old-style closer forms (not just the New form),
-> excluded DC-revival leads everywhere (cohort AND tagger), and documents the
-> tagger (`shared/lead_tagging.py`) as the funnel's source of truth. **If you
-> are doing the data clean-up, read that block FIRST** — especially the
-> 1000-row-cap trap, which can lurk in any other unpaginated read.
+> **🚨 MOST CURRENT — read the VERY LAST block first: § UNIQUE-LEADS LOCK-IN ·
+> DC FUNNEL · CASH/ROAS (2026-06-05 → 06-06).** It supersedes the funnel/lead-
+> system text above. The lead system now runs off ONE definition — the **unique
+> leads list** (non-revival + Typeform match + `date_first_opted_in >= May 24`;
+> returning leads excluded) — and **`lead_cycles` IS that list** (the tagger
+> universe was narrowed; `close_fallback` removed). It also adds the
+> closer-routed **Digital College funnel** (migration 0076: `digital_college_at`/
+> `dc_booked_at`/`dc_showed_at`/`dc_close_origin`), a **Cash Collected + ROAS**
+> section (upfront + contract), and two HT stage-attribution fixes (confirm-on-
+> confirmation-form; Robby fully excluded from HT). The prior 2026-06-05 block
+> (§ FUNNEL DATA ACCURACY — the 1000-row-cap trap, revival exclusion, tagger as
+> source of truth) is still valid context; read it second.
 
 A fresh instance picks up here. This captures a long working session so you can
 continue cold. Read this whole section, then §0 (traps), then dive in.
@@ -1599,3 +1600,174 @@ breaks the integrity guard (shows ≤ connected ≤ books ≤ opt-ins).
 5. Watch for old-style forms in other surfaces — the tagger handles them now, but
    any surface reading `call_outcome` alone (without the legacy `Closed?`/`Showed?`
    fallback) will still miss them.
+
+---
+
+# ⚡⚡⚡⚡⚡⚡ UNIQUE-LEADS LOCK-IN · DC FUNNEL · CASH/ROAS (2026-06-05 → 06-06) ⚡⚡⚡⚡⚡⚡
+
+**The most current block. Supersedes earlier funnel/lead-system text where they
+conflict.** This session locked the lead system to a single definition (the
+"unique leads list"), made `lead_cycles` literally equal that list, fixed two HT
+stage-attribution bugs, and built Digital College as a first-class, tag-driven,
+closer-routed funnel + a Cash/ROAS section. Everything below is live on `main`.
+
+## A. THE UNIQUE LEADS LIST — the one definition everything runs off
+
+A **unique lead** = a person who:
+- is **non-revival** (`REVIVAL_CF` empty) and not soft-hidden (`excluded_at` null),
+- has a **Typeform SFedWelr match** (by email/phone) — the high-ticket opt-in gate,
+- **originally opted in on/after May 24** (`close_leads.date_first_opted_in >=
+  EFFECTIVE_DATE`). **Returning leads** (first opted in BEFORE May 24, re-opted
+  in after) are **excluded everywhere** in the funnel/list — Drake's call: they
+  make the data messy. They still exist on Talent/per-lead surfaces.
+
+Two surfaces, two counts:
+- **Lead list (roster / speed-to-lead / FMR)** = the **unique people** (~295).
+- **Funnel** = **opt-in events** = Typeform-sourced `lead_cycles` whose `opt_in_at`
+  is in the window (~300–318; a new lead who opts in twice in-window counts twice).
+
+`getSpeedToLeadCohort` (`funnel-appointment-setting.ts`) was **rewritten**:
+membership is now `close_leads` (`date_first_opted_in` in window, non-revival,
+excluded null) **∩** a `lead_cycles` row with `source='typeform'` in window. The
+old Close-status qualification (`QUALIFYING_INITIAL_STATUSES`) and the separate
+re-opt-in branch are **gone**; every cohort row is `optInType:'new'`. The
+all/unique **view toggle and the roster "Opt-in" badge column were removed**
+(nothing left to switch). `leads.ts` sets `optInType:'new'` unconditionally.
+
+**Tagger universe == the unique leads list (`shared/lead_tagging.py`).** Drake:
+"the tagging system should only apply to our unique lead list." So the universe
+query now requires **`date_first_opted_in >= EFFECTIVE_DATE`** (was
+`latest_opt_in_date`), the **`close_fallback` path was removed** (no Typeform
+match → no cycle at all), and a **full `--apply` retag wipes `lead_cycles`** before
+rebuilding (so leads that fall out of the universe don't keep stale rows). Result:
+`lead_cycles` IS the unique leads list — **296 leads / 301 cycles, 100% typeform,
+zero first-opt-before-May-24**. The funnel's read-time cohort intersection is now
+redundant/belt-and-suspenders. Non-unique leads (returning / no-Typeform / DC-only)
+still render their per-lead page (calls + forms) but show "No opt-in cycle yet".
+
+## B. OPT-IN COUNTING — Typeform is the event log, Close is identity
+
+- **Re-opt-ins are detected from Typeform** (multiple SFedWelr submissions matched
+  by email/phone, deduped to the minute). Close's `latest_opt_in_date` is a
+  last-write-wins **snapshot** with no history; `close_lead_status_changes` does
+  NOT capture re-opt-ins (re-opting doesn't flip status back to New Opt-in — 71
+  status-flips vs 318 opt-in events). So **only Typeform** can count events.
+- **New-vs-returning is from Close `date_first_opted_in`**, NOT the tagger's
+  `firstOptInAt` (which is floored at the May-24 horizon and can't see a lead's
+  true origin).
+- We evaluated using the **`Number of opt ins` Close custom field webhook**
+  (`cf_LKP7…`; a `lead.updated` fires with old/new in `previous_data` on a 2→3
+  bump — verified in `webhook_deliveries`) as a Close-native re-opt signal. Drake
+  and I chose **NOT** to use it: Close gives only snapshots, the counter is
+  funnel-agnostic (would pull other funnels' opt-ins in), and a real HT re-opt
+  already produces a Typeform submission. Typeform stays the single event source.
+- **Waterfall (May 24–Jun 5):** 1,465 created → −1,151 revival → 314 non-revival
+  → −tests/no-opt-date/no-typeform → ~290 created-in-window + ~21 re-opt-ins ⇒
+  ~311 distinct / ~318 events; locked to **unique new only** ⇒ ~295 people / ~300
+  events.
+
+## C. CONNECTED — verified definition
+
+`connected` = a **≥90s call** (any direction) **OR** a triage/confirmation form
+that *reached* (any status except `Unresponsive – Setter Handover`) **OR**
+showed/closed (monotonic back-fill). **A no-show closer form is NOT a connect**
+(e.g. a "Client Ghosted" EOC). Independently reconciled to the tagger to the lead
+(130 → 137 over the session, all live-dial drift, not a regression).
+
+## D. HT STAGE AUDIT FIXES (tagger)
+
+1. **HT booking on a confirmation form now counts as a confirm.** A Closer Triage
+   (confirmation) form with `call_status` `High Ticket booking` lights confirm+book
+   (was only `Confirmed Booking`). Jason Bright was being dropped.
+2. **Robby (DC closer) forms are FULLY excluded from HT show/close** — not just
+   his DC-closes. A Robby "Short-Term Follow Up" was leaking in as an HT show
+   (Tyler King, Hovannes Jarkezian). **Showed 13→11, confirms 28→27**; closed 2,
+   connected unchanged. This generalized into closer-identity routing (§F).
+
+## E. DIGITAL COLLEGE FUNNEL — first-class, closer-identity routed (migration 0076)
+
+**Closer identity routes everything.** A form's funnel is decided by **who the
+closer is**: **DC closers** (`DC_CLOSER_NAMES = ("robby",)`, +Adam later) → the DC
+funnel; **everyone else** (Aman = HT closer) → the HT funnel. An HT closer can dip
+into DC via a **downsell**; a DC closer never touches HT. **Sourced from the main
+closer EOC form** (`airtable_full_closer_report`), NOT the dedicated DC-sale form.
+
+**Migration 0076** added to `lead_cycles`: `digital_college_at`, `dc_booked_at`,
+`dc_showed_at`, `dc_close_origin` (`dc_closed_at` already existed). Determined in
+`shared/lead_tagging.py`:
+- `digital_college_at` = **earliest DC signal** (setter `Digital College booking`,
+  any DC-closer form, an HT-closer downsell). The marker for "when they went DC";
+  HT stages naturally stop there (DC-side forms route away from HT).
+- **DC showed = a DC-closer form is PRESENT** (Robby marks "Digital College Closed"
+  on everything, so the outcome is ignored — presence = showed).
+- **DC closed = a real PLAN is selected** (`dc_plans`, the "What plan did we get
+  them on?" field), origin `dc_closer`. Monotonic back-fill on the dc_closer path.
+- **Downsells** (HT closer dipping into DC): `dc_close_origin` =
+  `downsell_ht_meeting` (HT-closer EOC with a DC plan) or `downsell_confirmation`
+  (Closer Triage `call_status='Downsold'`). A downsell wins over `dc_closer` for
+  the origin; it sets `dc_closed_at` but NOT `dc_booked_at`/`dc_showed_at` (not in
+  the main DC funnel — shown on the downsell line, **credited to the HT closer**).
+  A downsell stays **HT-showed-but-not-HT-closed** (the meeting happened, the sale
+  was DC).
+
+**Numbers (May 24–Jun 5):** DC = **16 booked → 9 showed → 4 closed** (dc_closer:
+Jason Bright, Paul Greene, Shannon Thompson, Tyler King; plans Base44-Mo 3 /
+Base44-Yr 1 / Wix-Yr 3). Downsells: Chandler Wooten (HT-meeting, Base44-Yr);
+Brandon Francis is also an Aman downsell but has no `date_first_opted_in` so he's
+not a unique lead (Close data-entry gap). Confirmation downsells: the `Downsold`
+status is live on the form but unused so far.
+
+## F. FUNNEL PAGE UI
+
+- **DC funnel section** (`funnel-dc.ts` `getDcFunnel` + `components/sales/dc-funnel.tsx`)
+  replaces the retired all-time tally (`funnel-dc-sales.ts` + `dc-sales-tally.tsx`
+  deleted): main DC funnel Booked→Showed→Closed + plan breakdown + a downsell line.
+- **Cash Collected** — its own funnel-wide block (`funnel-cash.ts` `getCashCollected`
+  + `components/sales/cash-collected.tsx`), NOT part of the DC funnel. Two rows:
+  **Upfront** (`amount_paid_today`) and **Contract** (`contract_amount_to_send` —
+  the closers leave `total_contract_amount` empty, so key off `contract_amount_to_send`),
+  each HT / DC / total with **ROAS** (cash ÷ Closer-Funnel adspend). DC is a flat
+  **$300 per plan unit** (`DC_PLAN_PRICE_USD`), identical upfront/contract.
+  Verified: Upfront $4,900 HT + $2,100 DC = $7,000 (0.70×); Contract $17,680 HT +
+  $2,100 DC = $19,780 (1.97×).
+- **Styling:** conversion % and cost-per-unit are now the bright `--color-geg-text`
+  (were dim); the dials **bracket moved below the number** (was inline, un-centering
+  the opt-in count) in `funnel-stack.tsx`.
+
+## G. REACTIVATION FUNNEL — confirmed
+
+Reactivation box reads the **reactive phase** of `lead_cycle_stages`
+(`matchesType('reactivation')` = `reactivated_at` set; stages from `reactiveHits`).
+Verified May 24–Jun 5: **pool 188 → connected 8 → booked 4 → showed 0 → closed 0**
+(10 post-react dials in the bracket).
+
+## H. ADS / CORTANA (start of session)
+
+Backfilled Cortana per-campaign/per-ad data for **May 24–25** (were stale Google-
+Sheet fallback rows), so the **entire May-24-onward adspend window is firmly
+Cortana** and funnel-scoped to `Closer Funnel` campaigns. Account total == scoped
+total every day (single-funnel). One latent trap: a URL-encoded/truncated
+`Closer Funnel` campaign name won't match the token — $0 today, but it'd silently
+drop spend; fix is a Meta-side URL-template fix (Zain).
+
+## I. KEY FILES (this session)
+
+- **Tagger:** `shared/lead_tagging.py` — unique-leads universe, `DC_CLOSER_NAMES`/
+  `is_dc_closer`/`has_dc_plan`, DC funnel + downsell origins, confirm + Robby fixes.
+- **Cohort:** `lib/db/funnel-appointment-setting.ts` `getSpeedToLeadCohort` (rewrite).
+- **DC funnel:** `lib/db/funnel-dc.ts`, `components/sales/dc-funnel.tsx`.
+- **Cash/ROAS:** `lib/db/funnel-cash.ts`, `components/sales/cash-collected.tsx`.
+- **Roster/filter:** `leads.ts`, `leads-funnel.ts`, `leads/page.tsx`,
+  `leads-filter-bar.tsx`, `lead-roster.tsx` (toggle/badge removed).
+- **Funnel page:** `funnel/page.tsx`, `components/sales/funnel-stack.tsx`.
+- **Migration:** `supabase/migrations/0076_lead_cycles_dc_funnel.sql`.
+- **Docs:** `docs/schema/lead_cycles.md`, `docs/specs/dc-funnel-closer-routing.md`.
+
+## J. OPEN / DEFERRED
+
+- **Talent HT-closer "downsell closes" stat** (spec §6) — deferred while downsells
+  were 0; Chandler Wooten now makes it 1, so it's buildable when wanted.
+- **Confirmation downsell** (`Downsold`) interpretation — confirm once real ones land.
+- **Adam** — add his identifiers to `DC_CLOSER_NAMES`.
+- **`getLeadCycleRows`' first query** is still unpaginated (1000-row-cap risk on a
+  wide window) — paginate during clean-up.
