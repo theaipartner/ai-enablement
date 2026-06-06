@@ -91,11 +91,11 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
           {usd(f.cashUsd)}
         </span>
         <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>
-          · $300 per DC plan unit
+          · $300 per DC plan unit · closes need an explicit plan
         </span>
-        {f.closedNoPlan > 0 ? (
+        {f.markedNoPlan > 0 ? (
           <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', marginLeft: 'auto' }}>
-            {f.closedNoPlan} close{f.closedNoPlan === 1 ? '' : 's'} with no plan recorded → $0
+            {f.markedNoPlan} marked “DC Closed” w/o a plan → counted as showed, not closed
           </span>
         ) : null}
       </div>

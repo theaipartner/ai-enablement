@@ -1781,18 +1781,33 @@ they now have their own dedicated funnel sub-page. Everything below is live on
 `main`.
 
 ## What it is
-The DC re-engagement SMS campaign auto-creates a Close lead (tagged with the
-`DC Revival Lead` custom field = `REVIVAL_CF`,
-`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P`) when it first texts a cold
-contact. **2,115 such leads** today. They're not real high-ticket opt-ins (no
-Typeform cycle), so they're dropped from the cohort / tagger / every other
+The source is ~15k **pre-May-24 Typeform submissions**. As the re-engagement SMS
+texts them, each is either **autocreated** in Close (a fresh lead, date_created =
+the text date) or, if it already existed, the **existing Close lead gets tagged**
+— both carry the `DC Revival Lead` custom field (`REVIVAL_CF`,
+`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P`). **2,115 such leads** today
+(1,801 autocreated Jun 3/4/5, 314 pre-existing tagged). Anyone who opted in
+on/after May 24 is a new main-funnel lead, NOT revival. Revival leads have no
+Typeform opt-in cycle, so they're dropped from the cohort / tagger / every other
 funnel. This sub-page is the **only** surface that counts them.
 
 ## The funnel (Drake 2026-06-06)
 `all revival leads → responded → connected → booked → showed → closed`, + a cash
 row. **Monotonic backfill** upward (a close implies a show implies a book …), so
-every conversion % is 0–100. Live numbers at ship: **2,115 → 146 → 50 → 21
-(DC 17 / HT 3) → 10 → 4 closes · $1,200 cash**.
+every conversion % is 0–100. Live numbers at ship: **2,115 → 141 → 46 → 21
+(DC 17 / HT 3) → 10 → 3 closes · $1,200 cash**. The 3 DC closes (explicit plans):
+Joseph Sekely (Wix-Yr + Base-Mo, $600), Brandon Francis (Base-Mo, $300, an Aman
+downsell), Kyle Tatman (Base-Mo, $300). Bill Reich marked "DC Closed" with **no
+plan → counted as a SHOW, not a close** (Robby over-marks "DC Closed"; see the
+close rule below).
+
+## CLOSE RULE — explicit plans only (Robby over-marks "DC Closed")
+Drake 2026-06-06: Robby (the DC closer) habitually selects "Digital College
+Closed" on calls that didn't actually close. So the outcome alone is NOT trusted
+— a close counts **only when the plan field (`dc_plans`) is filled**. A "DC
+Closed" form with no plan is treated as a **show** (`showedFromCloser` catches
+it), not a close, and surfaced on the cash line as `markedNoPlan`. This mirrors
+the main DC funnel ("closed = a real plan selected; showed = form present").
 
 - **Responded** = an inbound `close_sms`. **Connected** = a ≥90s `close_calls`
   OR a triage/confirmation form that reached (any `call_status` except

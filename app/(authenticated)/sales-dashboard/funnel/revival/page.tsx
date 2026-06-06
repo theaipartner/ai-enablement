@@ -42,9 +42,10 @@ export default async function RevivalFunnelPage() {
         style={{ marginTop: 16, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
       >
         Connected = a ≥90s call or a triage/confirmation form that reached the lead · Booked = a DC or
-        HT booking · Showed / Closed from the closer report · Cash = $300 per Digital College plan unit.
-        Activity is counted from each lead&apos;s revival start (created date, floored at the campaign
-        launch) so pre-existing leads&apos; old activity isn&apos;t double-counted.
+        HT booking · Showed = a closer-report show · Closed = a DC close <b>with an explicit plan</b>
+        (a &ldquo;DC Closed&rdquo; form with no plan is counted as a show, not a close) · Cash = $300 per
+        Digital College plan unit. Activity is counted from each lead&apos;s revival start (created date,
+        floored at the Jun 3 blast launch) so pre-existing leads&apos; old activity isn&apos;t counted.
       </div>
     </div>
   )

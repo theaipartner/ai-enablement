@@ -21,20 +21,24 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // implies a book implies a connect implies a response).
 //
 // THE PER-LEAD START ANCHOR (Drake: "when they were created OR when the custom
-// field was added"). The CF was bulk-applied 2026-06-04/05, AFTER some leads
-// had already booked (created 06-03, booked 06-04), so literal CF-add is too
-// late. And pre-existing leads (created back in Aug 2025) carry OLD pre-revival
-// calls that must NOT count, while also having genuine revival calls in late
-// May. The rule that satisfies both: anchor = the LATER of (date_created,
-// REVIVAL_FLOOR). Recent leads keep their created date; old leads floor to the
-// campaign start, so only revival-era activity counts.
+// field was added"). The blast began Jun 3 (verified: outbound SMS jumps from a
+// handful of pre-campaign texts to 742 leads on 2026-06-03; every autocreated
+// revival lead was created Jun 3/4/5). Two lead shapes: (a) autocreated when
+// first texted → date_created ≈ the text date (Jun 3+); (b) a PRE-EXISTING Close
+// lead (created back in Aug 2025) that got tagged — its date_created is old and
+// it carries OLD pre-revival activity that must NOT count. The rule that handles
+// both: anchor = the LATER of (date_created, REVIVAL_FLOOR). Autocreated leads
+// keep their (recent) created date; pre-existing leads floor to the blast start,
+// so only revival-era activity counts. (Literal CF-add doesn't work as the
+// anchor: the CF was bulk-applied Jun 4/5, AFTER leads created+booked Jun 3/4.)
 
 const REVIVAL_CF = 'cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P'
 
-// Campaign floor — May 24 2026, 00:00 ET (EDT = UTC-4). The revival outreach
-// began in late May; nothing genuine predates this, and it strips pre-existing
-// leads' ancient (Aug-2025 / Feb-2026) activity. See the anchor note above.
-const REVIVAL_FLOOR_ISO = '2026-05-24T04:00:00Z'
+// Campaign blast floor — Jun 3 2026, 00:00 ET (EDT = UTC-4). The blast started
+// Jun 3; nothing genuine predates it. Flooring here strips pre-existing leads'
+// old activity AND the late-May pre-campaign call/SMS trickle (e.g. four Aug-2025
+// leads with ≥90s calls on 05-27/05-30 that are NOT revival outreach).
+const REVIVAL_FLOOR_ISO = '2026-06-03T04:00:00Z'
 
 // Every Digital College program (Base44 / Wix × Monthly / Yearly) is a flat
 // $300, so revival cash = $300 per plan unit closed (mirrors DC_PLAN_PRICE_USD).
@@ -48,9 +52,9 @@ export type RevivalFunnel = {
   bookedDc: number
   bookedHt: number
   showed: number
-  closed: number // DC closes
+  closed: number // DC closes — explicit plans only (Robby over-marks "DC Closed")
   cashUsd: number // $300 per plan unit on the closes
-  closedNoPlan: number // closes with no plan recorded (contribute $0 to cash)
+  markedNoPlan: number // "DC Closed" forms with no plan → counted as shows, not closes
 }
 
 function isRevival(cf: Record<string, unknown> | null | undefined): boolean {
@@ -74,21 +78,30 @@ function showedFromCloser(f: { form_type: string | null; call_outcome: string | 
   return (f.showed ?? '').toLowerCase() === 'yes'
 }
 
+// A close requires EXPLICIT plans. Robby (the DC closer) habitually marks
+// "Digital College Closed" on calls that didn't actually close, so the outcome
+// alone is unreliable (Drake 2026-06-06). Only count a close when the plan field
+// ("What plan did we get them on?", dc_plans) is filled. A "DC Closed" form with
+// no plan is treated as a SHOW (showedFromCloser already catches it), not a
+// close — surfaced separately as markedNoPlan so the habit is visible.
 function dcCloseUnits(f: {
   form_type: string | null
   call_outcome: string | null
   closed: string | null
   dc_plans: string[] | null
   payment_plan_type: string | null
-}): { isClose: boolean; units: number } {
-  const isNew = f.form_type === 'New'
-  const isClose = isNew
-    ? (f.call_outcome ?? '').toLowerCase().includes('digital college closed')
-    : (f.closed ?? '').toLowerCase() === 'yes' &&
-      ['base', 'wix', 'digital college'].some((x) => (f.payment_plan_type ?? '').toLowerCase().includes(x))
-  if (!isClose) return { isClose: false, units: 0 }
+}): { isClose: boolean; units: number; markedNoPlan: boolean } {
   const units = (f.dc_plans ?? []).filter((p) => (p ?? '').trim() !== '').length
-  return { isClose: true, units }
+  if (f.form_type === 'New') {
+    const marked = (f.call_outcome ?? '').toLowerCase().includes('digital college closed')
+    if (marked && units > 0) return { isClose: true, units, markedNoPlan: false }
+    return { isClose: false, units: 0, markedNoPlan: marked }
+  }
+  // Legacy form: closed=yes + a DC plan_type → a real close, one plan unit.
+  const legacyClose =
+    (f.closed ?? '').toLowerCase() === 'yes' &&
+    ['base', 'wix', 'digital college'].some((x) => (f.payment_plan_type ?? '').toLowerCase().includes(x))
+  return legacyClose ? { isClose: true, units: 1, markedNoPlan: false } : { isClose: false, units: 0, markedNoPlan: false }
 }
 
 export async function getRevivalFunnel(): Promise<RevivalFunnel> {
@@ -119,7 +132,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   }
   const ids = Array.from(anchor.keys())
   if (ids.length === 0) {
-    return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, cashUsd: 0, closedNoPlan: 0 }
+    return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, cashUsd: 0, markedNoPlan: 0 }
   }
   const after = (lid: string, ts: string | null | undefined): boolean => {
     const a = anchor.get(lid)
@@ -134,7 +147,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   const showed = new Set<string>()
   const closed = new Set<string>()
   let cashUsd = 0
-  let closedNoPlan = 0
+  let markedNoPlan = 0
 
   // 2. Pull each signal in id-chunks (every signal set is well under 1000 rows,
   // so a 200-id chunk never trips the cap).
@@ -202,8 +215,9 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
       const close = dcCloseUnits(f)
       if (close.isClose) {
         closed.add(f.lead_id)
-        if (close.units === 0) closedNoPlan += 1
         cashUsd += close.units * DC_PLAN_PRICE_USD
+      } else if (close.markedNoPlan) {
+        markedNoPlan += 1
       }
     }
   }
@@ -224,6 +238,6 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     showed: showed.size,
     closed: closed.size,
     cashUsd,
-    closedNoPlan,
+    markedNoPlan,
   }
 }
