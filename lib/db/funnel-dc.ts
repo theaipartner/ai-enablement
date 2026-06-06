@@ -127,3 +127,12 @@ export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
     downsellPlans,
   }
 }
+
+// Every Digital College program (Base44 / Wix × Monthly / Yearly) is a flat
+// $300, so DC cash = $300 per plan unit sold (Drake 2026-06-05).
+export const DC_PLAN_PRICE_USD = 300
+
+export function dcPlanUnits(p: DcPlanCounts): number {
+  return p.base44Monthly + p.base44Yearly + p.wixMonthly + p.wixYearly
+}
+

@@ -2,9 +2,11 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcFunnelSection } from '@/components/sales/dc-funnel'
+import { CashCollectedBar } from '@/components/sales/cash-collected'
 import { getLeadsForRange } from '@/lib/db/leads'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
+import { getCashCollected } from '@/lib/db/funnel-cash'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
@@ -40,6 +42,8 @@ export default async function SalesDashboardFunnelPage({
   const funnel = await getLeadsFunnel(rows, range)
   // Digital College funnel — tag-driven, unique leads only, same window as HT.
   const dcFunnel = await getDcFunnel(range)
+  // Cash collected — funnel-wide (HT + DC) summary with ROAS, its own section.
+  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd)
 
   const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
 
@@ -103,6 +107,8 @@ export default async function SalesDashboardFunnelPage({
       <FunnelStack funnel={funnel} range={range} />
 
       <DcFunnelSection dc={dcFunnel} />
+
+      <CashCollectedBar cash={cash} />
 
       <div
         className="geg-mono"
