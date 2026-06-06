@@ -230,17 +230,17 @@ function FunnelNode({
         title={pending ? 'Not wired yet' : undefined}
       >
         {pending ? '—' : usd ? compactUsd(value) : value.toLocaleString('en-US')}
-        {bracket ? (
-          <span className="geg-mono" style={{ fontSize: 10, fontWeight: 400, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginLeft: 4 }}>
-            ({bracket})
-          </span>
-        ) : null}
       </div>
+      {bracket ? (
+        <div className="geg-mono" style={{ fontSize: 10, fontWeight: 400, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginTop: 1 }}>
+          ({bracket})
+        </div>
+      ) : null}
       <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 2 }}>
         {caption}
       </div>
       {costPerUnit != null ? (
-        <div className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.02em', color: 'var(--color-geg-text-dim)', marginTop: 2 }}>
+        <div className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.02em', color: 'var(--color-geg-text)', marginTop: 2 }}>
           {compactUsd(costPerUnit)}/ea
         </div>
       ) : null}
@@ -261,7 +261,7 @@ function Chevron({ conversion }: { conversion?: number | null }) {
     <span className="geg-mono" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', color: 'var(--color-geg-text-faint)' }}>
       <span style={{ fontSize: 12 }}>›</span>
       {conversion != null ? (
-        <span style={{ fontSize: 11, letterSpacing: '0.02em', marginTop: 1, color: 'var(--color-geg-text-dim)' }}>{Math.round(conversion)}%</span>
+        <span style={{ fontSize: 11, letterSpacing: '0.02em', marginTop: 1, color: 'var(--color-geg-text)' }}>{Math.round(conversion)}%</span>
       ) : null}
     </span>
   )
