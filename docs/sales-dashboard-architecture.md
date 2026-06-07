@@ -291,10 +291,12 @@ The Funnel page's stage nodes are links to `/sales-dashboard/leads?type=<t>&stag
 the filter bar (`leads-filter-bar.tsx`) also sets them manually. Contract:
 
 - **`type`** (multi, comma-sep): `direct` | `setter` (a.k.a. opt-in) | `reactivation`.
-  **`direct` INCLUDES reactivation** — a reactivated lead is still originally a
-  direct booking (reactivation ⊂ direct), so clicking *Direct · Showed* surfaces
-  reactivated-showed leads too. `reactivation` is the post-handover subset;
-  `setter` is everyone who never booked the strat link. Empty = all (Total).
+  **`direct` = self-booked a strat link** (`tagBecameDirect`); **`setter`** =
+  everyone who never did. These two **partition** the cohort. **`reactivation`
+  (`tagReactivatedAt` set) cross-cuts both** — a reactivated lead is Direct or
+  Setter by its self-booking, and the Reactivation filter pulls it in either way,
+  reading the post-handover phase only. Empty = all (Total). (Pre-tag, `direct`
+  was said to *include* reactivation — no longer true; see § SOURCE OF TRUTH.)
 - **`stage`** (single): `connected` | `booked` | `confirmed` | `showed` | `closed`.
   **Cumulative — "latest stage reached", not current stage.** Selecting `showed`
   includes closes (they reached it). Because it's cumulative, multi-select makes
@@ -670,6 +672,20 @@ In rough order. Each is a separate commit.
 > (`lib/db/funnel-dc-sales.ts`) does. The `close_leads.reactivated_at` references
 > below predate the tag system — read them as "the legacy column," not "the
 > classifier the dashboard reads."
+>
+> **⚠️ Reactivation CROSS-CUTS direct/setter — it is NOT a subset of Direct
+> (Drake 2026-06-07).** Under the tag model `isDirect = tagBecameDirect` (did the
+> lead self-book a strategy call) and `isReact = tagReactivatedAt` are computed
+> **independently**: a lead is Direct *or* Setter by self-booking, and Reactivated
+> is a separate flag layered on top. So **Direct and Setter partition the cohort;
+> the Reactivation box overlaps both.** The tagger's reactive trigger is `cold` (a
+> >3-day contact gap with no active future booking, anchored from the opt-in — so
+> it fires for *any* lead, including a pure opt-in lead we never reached) OR
+> `partnership_rebook` (direct-only). This is BROADER than the legacy
+> `close_leads.reactivated_at` 3-trigger logic described in §2.1–2.4 below, which
+> is the legacy column, not what the funnel reads. **Ignore every "reactivation ⊂
+> direct" / "subset of Direct" / "direct INCLUDES reactivation" phrasing in the
+> dated sections of this doc — that was the pre-tag model.**
 
 ### 2.1 What "reactivated" means
 A **direct-booking lead** (one that booked an Ai Partner Strategy Call) that has
@@ -732,10 +748,17 @@ roster can't drift). The toggle (`view-toggle.tsx`, `?view=all|unique`) re-scope
 everything (re-opt-ins in/out).
 
 ### Segments
-- **Direct-booking lead** = `hasDirect` (ever booked a direct strat link AFTER
-  the latest opt-in) OR `reactivatedAt != null` (reactivation ⊂ direct).
+> **Tag-model correction (2026-06-07):** the funnel reads `isDirect =
+> tagBecameDirect` and `isReact = tagReactivatedAt` independently (see § SOURCE OF
+> TRUTH). Direct and Setter partition the cohort; Reactivation cross-cuts both.
+> The `hasDirect || reactivatedAt` form below is the live fallback for untagged
+> leads only.
+- **Direct-booking lead** = self-booked a strat link (`tagBecameDirect`; live
+  fallback `hasDirect` AFTER the latest opt-in, or `reactivatedAt != null`).
 - **Setter / "New opt-ins" lead** = everyone else (never booked a strat link).
-- **Reactivation lead** = `reactivatedAt != null` (a subset of Direct).
+- **Reactivation lead** = `tagReactivatedAt` set — **cross-cuts** Direct and
+  Setter (NOT a subset of Direct; an opt-in lead that goes cold is Setter +
+  Reactivation).
 
 ### Box stages (dials live in a BRACKET beside the lead amount, not a stage)
 - **Total** (neutral): adspend node → opt-ins (+dials bracket) → connected (1/lead)
@@ -744,8 +767,10 @@ everything (re-opt-ins in/out).
   +dials bracket) → connected → confirms → shows → closes. Each stage counted
   **ONCE per lead, cumulative**: Booked once (a reactive re-book never adds a
   second), Confirmed = confirmed‖showed‖closed, Showed = showed‖closed. A
-  reactivated lead's eventual show/close (even post-reactivation) DOES count here
-  (they are originally direct) — and ALSO appears in the Reactivation box as its
+  reactivated lead's eventual show/close (even post-reactivation) counts here
+  **only if the lead is `isDirect`** (it self-booked) — a cold opt-in lead that
+  reactivated is in the **Setter** box, not Direct. When the lead IS direct, its
+  show/close counts here AND also appears in the Reactivation box as its
   reactive-phase outcome (different views; each counts the lead once within
   itself — that is NOT "double counting" per Drake).
 - **Setter-led / New opt-ins** (yellow): pool (qual/unqual small) → dials (+bracket)
@@ -1015,8 +1040,11 @@ but `.env.local` is NOT auto-loaded into the python shell, so first
 
 Every funnel box count AND the /leads roster filter go through these, so **a
 funnel bar's number always equals the roster it opens when clicked**:
-- `isDirect(r)` = `hasDirect || reactivatedAt != null` (**reactivation ⊂ direct**).
-  `isReact` = `reactivatedAt != null`. `isSetter` = `!isDirect`.
+- `isDirect(r)` = `tagBecameDirect` (did the lead self-book a strat link); live
+  fallback `hasDirect || reactivatedAt != null`. `isReact` = `tagReactivatedAt`
+  (fallback `reactivatedAt != null`). `isSetter` = `!isDirect`. **Reactivation
+  cross-cuts — NOT ⊂ direct** (corrected 2026-06-07; see § SOURCE OF TRUTH).
+  Direct + Setter partition; Reactivation overlaps both.
 - `matchesType(r, type | null)` — `direct` / `reactivation` / `setter` / `null`(all).
 - `reachedStage(r, type | null, stage)` — **cumulative** "reached at least this
   stage", with the per-type connected defs from § A. `confirmed` is direct/total
@@ -1028,7 +1056,8 @@ funnel bar's number always equals the roster it opens when clicked**:
 
 - `?type=` comma-multi (`direct` / `setter` (a.k.a. opt-in) / `reactivation`);
   `?stage=` single (`connected`/`booked`/`confirmed`/`showed`/`closed`).
-- `direct` INCLUDES reactivation. `stage` is cumulative ("latest stage reached" —
+- `direct` and `setter` partition; `reactivation` cross-cuts both (NOT ⊂ direct —
+  corrected 2026-06-07). `stage` is cumulative ("latest stage reached" —
   picking `showed` includes closes). `confirmed` only shows in the bar when Direct
   is selected. Multi-stage makes no sense (cumulative), so it's single-select.
 - Funnel-page stage nodes are `<Link>`s to `/leads?type=&stage=&start=&end=`; the
@@ -1120,7 +1149,10 @@ pass" when clean, RED with specifics when not — always visible). Invariants:
   direct THEN reactive is one row, counted once per stage.)
 - **Monotonicity** per box (Total exempt on Books-vs-Connected, by design).
 - **Partition:** Direct.books + Setter.pool == Total.optIns.
-- **Reactivation ⊂ Direct:** reactivation pool ≤ direct books.
+- **Cycle/person identity:** opt-in cycles ≥ distinct leads (the gap = re-opt-ins).
+- (The old **"Reactivation ⊂ Direct"** invariant was **removed** — reactivation
+  now cross-cuts direct/setter, so the reactivation pool can exceed direct books;
+  see § SOURCE OF TRUTH.)
 A violation = a real bug (double-count / mis-bucket). Simple framing for Drake:
 "it adds up Direct + Setter and checks they equal total opt-ins."
 

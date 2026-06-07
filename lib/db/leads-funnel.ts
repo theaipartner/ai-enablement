@@ -16,10 +16,15 @@ import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 //   Reactivation  pool → dials → connected → books → shows → closes  (post-handover)
 //
 // Stage rules:
-//   - direct lead   = ever booked the strategy-call link (hasDirect), or tagged
-//                     reactivated (reactivation ⊂ direct).
-//   - setter lead   = everyone else.
-//   - reactivation  = reactivatedAt set.
+//   - direct lead   = self-booked the strategy-call link (tagBecameDirect; live
+//                     fallback hasDirect || reactivatedAt). Direct and setter
+//                     PARTITION the cohort (every cycle is exactly one).
+//   - setter lead   = everyone else (never self-booked).
+//   - reactivation  = tagReactivatedAt set (fallback reactivatedAt). CROSS-CUTS
+//                     direct/setter — an opt-in lead that goes cold reactivates
+//                     too, so it is NOT a subset of direct. The Reactivation box
+//                     overlaps both Direct and Setter and reads the post-handover
+//                     phase only.
 //   - connected     = 1 per lead, form-OR-call (a ≥90s dial, a setter triage
 //                     form, or a confirmed confirmation — r.connected); for
 //                     Reactivation it's that signal scoped post-handover
@@ -104,10 +109,12 @@ export function validateFunnel(f: LeadsFunnel, totalCycles: number, distinctLead
 // The funnel boxes below AND the /leads roster filter both go through these, so
 // a funnel bar's count always equals the roster it filters to when clicked.
 
-// Lead-type filter values. 'direct' INCLUDES reactivation (reactivation ⊂
-// direct — a reactivated lead is still originally a direct booking), matching
-// the Direct funnel box. 'reactivation' is the post-handover subset; 'setter'
-// (a.k.a. opt-in) is everyone who never booked the strat link.
+// Lead-type filter values. 'direct' = self-booked a strat link (tagBecameDirect);
+// 'setter' (a.k.a. opt-in) = everyone who never did — these two PARTITION the
+// cohort. 'reactivation' (tagReactivatedAt set) CROSS-CUTS both: a reactivated
+// lead is direct or setter by its self-booking, and the Reactivation box/filter
+// pulls it in either way, reading the post-handover phase only. (Pre-tag, 'direct'
+// was said to INCLUDE reactivation — no longer true under the tag model below.)
 export type LeadFilterType = 'direct' | 'setter' | 'reactivation'
 export type FunnelStage = 'connected' | 'booked' | 'confirmed' | 'showed' | 'closed'
 
