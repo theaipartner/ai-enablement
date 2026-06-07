@@ -490,11 +490,17 @@ function mergeSalesIdentity(
   })
 }
 
-// How far before a form's airtable_created_at to search for a
-// matching close_call. Captures the typical "fill the form within
-// 48h of the call" pattern. Past that, accept the form's claimed
-// event_date_time and tag as "no call to match" in the drill.
+// Form↔call matching window (Drake 2026-06-07). The match anchors on the
+// form's claimed call time (event_date_time): a call qualifies when it sits
+// within ±48h of event_date_time. The hard guard is creation-after-call —
+// the form is filled AFTER the call, so the matched call must precede the
+// form's airtable_created_at (a form can't describe a call that hasn't
+// happened yet). CREATION_SKEW_MS allows ~2min of Close↔Airtable clock slack.
+// When a form has no event_date_time, fall back to the legacy fill-time
+// lookback (calls in the 48h before airtable_created_at).
 const FORM_MATCH_LOOKBACK_HOURS = 48
+const FORM_MATCH_WINDOW_MS = FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000
+const CREATION_SKEW_MS = 2 * 60 * 1000
 
 export type FormMatchInput = {
   recordId: string
@@ -537,8 +543,14 @@ async function matchFormsToCalls(
     if (f.leadId) leadIds.add(f.leadId)
     const anchorMs = new Date(f.airtableCreatedAt).getTime()
     if (Number.isFinite(anchorMs)) {
-      minLookback = Math.min(minLookback, anchorMs - FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000)
-      maxAnchor = Math.max(maxAnchor, anchorMs)
+      // Earliest call we might match: 48h before the claimed event time
+      // (event-anchored path) or 48h before the form fill (fallback path).
+      const evtMs = f.eventDateTime ? new Date(f.eventDateTime).getTime() : NaN
+      const earliest = (Number.isFinite(evtMs) ? Math.min(anchorMs, evtMs) : anchorMs) - FORM_MATCH_WINDOW_MS
+      minLookback = Math.min(minLookback, earliest)
+      // Latest call we might match: the form's creation time (+ skew slack).
+      // A call after the form was created can't be the one it describes.
+      maxAnchor = Math.max(maxAnchor, anchorMs + CREATION_SKEW_MS)
     }
   }
   if (leadIds.size === 0 || !Number.isFinite(minLookback)) {
@@ -590,20 +602,33 @@ async function matchFormsToCalls(
     if (!f.leadId || !f.setterUserId) {
       return { ...f, effectiveDateIso: f.eventDateTime ?? f.airtableCreatedAt, matchedCallId: null, matchedCallActivityAt: null }
     }
-    const anchorMs = new Date(f.airtableCreatedAt).getTime()
-    const earliestMs = anchorMs - FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000
+    const createdMs = new Date(f.airtableCreatedAt).getTime()
+    const evtMs = f.eventDateTime ? new Date(f.eventDateTime).getTime() : NaN
     const candidates = (callsByLead.get(f.leadId) ?? []).filter((c) => {
       if (c.user_id !== f.setterUserId) return false
       const t = new Date(c.activity_at).getTime()
-      return t >= earliestMs && t <= anchorMs
+      // Hard guard: the form is filled AFTER the call, so the call must
+      // precede the form's creation (+skew). A call after the form was
+      // created can't be the one it describes.
+      if (t > createdMs + CREATION_SKEW_MS) return false
+      if (Number.isFinite(evtMs)) {
+        // Event-anchored: the call sits within ±48h of the claimed event time.
+        return Math.abs(t - evtMs) <= FORM_MATCH_WINDOW_MS
+      }
+      // Fallback (form has no event time): the legacy fill-time lookback.
+      return t >= createdMs - FORM_MATCH_WINDOW_MS
     })
     if (candidates.length === 0) {
       return { ...f, effectiveDateIso: f.eventDateTime ?? f.airtableCreatedAt, matchedCallId: null, matchedCallActivityAt: null }
     }
-    // Most recent wins (per Drake — multi-call leads accept the
-    // imperfection that two calls in the lookback could disagree
-    // on attribution).
-    candidates.sort((a, b) => (a.activity_at < b.activity_at ? 1 : -1))
+    // Prefer the call closest to the claimed event time (most accurate);
+    // with no event time, the most recent qualifying call wins.
+    if (Number.isFinite(evtMs)) {
+      candidates.sort((a, b) =>
+        Math.abs(new Date(a.activity_at).getTime() - evtMs) - Math.abs(new Date(b.activity_at).getTime() - evtMs))
+    } else {
+      candidates.sort((a, b) => (a.activity_at < b.activity_at ? 1 : -1))
+    }
     const best = candidates[0]
     return { ...f, effectiveDateIso: best.activity_at, matchedCallId: best.close_id, matchedCallActivityAt: best.activity_at }
   })
