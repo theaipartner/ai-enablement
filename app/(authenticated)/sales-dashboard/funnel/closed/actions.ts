@@ -41,5 +41,6 @@ export async function hideTestCloserBooking(eventUri: string): Promise<HideBooki
   if (error) return { ok: false, error: error.message }
 
   revalidatePath(CLOSED_PATH)
+  revalidatePath('/sales-dashboard/people')   // the per-closer drill lives here now
   return { ok: true }
 }

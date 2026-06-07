@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState, useTransition } from 'react'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { hideTestCloserBooking } from '../actions'
+import { hideTestLead } from '../../../leads/actions'
 import type {
   CloserScheduledAggregate,
   CloserScheduledDrillRow,
@@ -279,9 +280,9 @@ const DRILL_COLS = '1.3fr 1fr 0.7fr 1fr 0.6fr 0.9fr 0.7fr'
 
 function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledDrillRow[]; closerName: string; canDelete?: boolean }) {
   // Cancelled bookings (fell-through: canceled / no-showed with no rebooking) are
-  // shown by default but already excluded from calls/showed/closed. Toggle hides
-  // them so the drill reads as just the live/worked meetings.
-  const [hideCancelled, setHideCancelled] = useState(false)
+  // already excluded from calls/showed/closed. Hidden by default so the drill
+  // reads as just the live/worked meetings; the toggle shows them (Drake 2026-06-07).
+  const [hideCancelled, setHideCancelled] = useState(true)
   const cancelledCount = useMemo(() => calls.filter((c) => c.cancelled).length, [calls])
   const visible = useMemo(
     () => (hideCancelled ? calls.filter((c) => !c.cancelled) : calls),
@@ -361,16 +362,21 @@ function CloserDrill({ calls, closerName, canDelete }: { calls: CloserScheduledD
                 <NumStr value={c.upfront == null ? <MissingTag /> : compactUsd(c.upfront)} />
               </div>
             )
-            // Non-creators see the row exactly as before. The creator
-            // gets a fixed trailing gutter with a "hide test booking" ×
-            // (acts on the backing calendly_scheduled_events row). Form-only
-            // rows have no Calendly event to hide, so they skip the button.
-            if (!canDelete || c.formOnly) return <div key={c.eventUri}>{rowInner}</div>
+            // Non-creators see the row exactly as before. The creator gets a
+            // trailing gutter with a "hide" ×. A Calendly-backed row hides its
+            // event (calendly_scheduled_events.excluded_at). A form-only row
+            // (instant book, no Calendly event — e.g. a test close like Diesel)
+            // has no event to hide, so it soft-hides the LEAD instead
+            // (close_leads.excluded_at), which drops it from every sales view.
+            if (!canDelete) return <div key={c.eventUri}>{rowInner}</div>
+            const hideBtn = c.formOnly
+              ? (c.leadId ? <HideTestLeadButton leadId={c.leadId} /> : null)
+              : <HideTestBookingButton eventUri={c.eventUri} />
             return (
               <div key={c.eventUri} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{rowInner}</div>
                 <div style={{ width: 22, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-                  <HideTestBookingButton eventUri={c.eventUri} />
+                  {hideBtn}
                 </div>
               </div>
             )
@@ -404,6 +410,50 @@ function HideTestBookingButton({ eventUri }: { eventUri: string }) {
       disabled={pending}
       title="Hide this test booking (creator only)"
       aria-label="Hide this test booking"
+      className="geg-mono"
+      style={{
+        cursor: pending ? 'default' : 'pointer',
+        border: '1px solid var(--color-geg-border)',
+        background: 'var(--color-geg-bg-elev)',
+        color: 'var(--color-geg-text-faint)',
+        borderRadius: 4,
+        width: 18,
+        height: 18,
+        lineHeight: '14px',
+        fontSize: 12,
+        padding: 0,
+        opacity: pending ? 0.5 : 1,
+      }}
+    >
+      {pending ? '·' : '×'}
+    </button>
+  )
+}
+
+// Creator-only "hide test lead" × for a form-only meeting (no Calendly event
+// to hide). Soft-hides the LEAD (close_leads.excluded_at), so it drops from
+// every sales view — the right scope for a test lead like Diesel. Confirms
+// first; the action re-checks creator tier and revalidates.
+function HideTestLeadButton({ leadId }: { leadId: string }) {
+  const [pending, startTransition] = useTransition()
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm('Hide this as a test LEAD? It has no Calendly booking, so this soft-hides the whole lead — it will disappear from every sales view (leads, funnel, this drill). Recoverable in the database.')) {
+      return
+    }
+    startTransition(async () => {
+      const res = await hideTestLead(leadId)
+      if (!res.ok) window.alert(`Could not hide this lead: ${res.error}`)
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={pending}
+      title="Hide this test lead (creator only) — no Calendly booking, hides the whole lead"
+      aria-label="Hide this test lead"
       className="geg-mono"
       style={{
         cursor: pending ? 'default' : 'pointer',

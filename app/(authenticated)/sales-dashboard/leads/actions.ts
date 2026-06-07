@@ -42,5 +42,6 @@ export async function hideTestLead(closeId: string): Promise<HideLeadResult> {
   if (error) return { ok: false, error: error.message }
 
   revalidatePath(LEADS_PATH)
+  revalidatePath('/sales-dashboard/people')   // also drops form-only meetings from the per-closer drill
   return { ok: true }
 }
