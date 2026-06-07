@@ -720,6 +720,7 @@ export function PerRepCallActivityTable({
   aggregate,
   rows,
   selectedRep,
+  selectedFam,
   drill,
   canDelete,
 }: {
@@ -728,6 +729,9 @@ export function PerRepCallActivityTable({
   aggregate: CallActivityRepRow
   rows: CallActivityRepRow[]
   selectedRep: string | null
+  // Which table the selection targets; only the matching table expands. A
+  // dual-role rep is in both tables, so without this both opened at once.
+  selectedFam: 'setter' | 'closer' | null
   drill: CallActivityDrillRow[]
   canDelete?: boolean
 }) {
@@ -842,10 +846,10 @@ export function PerRepCallActivityTable({
         ) : (
           <ScrollBody maxHeight={520}>
             {sorted.map((r) => {
-              const isSelected = selectedRep === r.userId
+              const isSelected = selectedRep === r.userId && selectedFam === variant
               return (
                 <div key={r.userId ?? 'agg'}>
-                  <RepLinkPreservingParams userId={isSelected ? null : r.userId}>
+                  <RepLinkPreservingParams userId={isSelected ? null : r.userId} fam={variant}>
                     <div
                       style={{
                         display: 'grid',

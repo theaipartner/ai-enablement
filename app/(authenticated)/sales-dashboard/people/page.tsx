@@ -70,6 +70,7 @@ export default async function SalesPeoplePage({
     start?: string | string[]
     end?: string | string[]
     rep?: string | string[]
+    repfam?: string | string[]
     closer?: string | string[]
     dccloser?: string | string[]
   }
@@ -81,6 +82,11 @@ export default async function SalesPeoplePage({
 
   const selectedRepRaw = Array.isArray(searchParams?.rep) ? searchParams?.rep[0] : searchParams?.rep
   const selectedRep = typeof selectedRepRaw === 'string' && selectedRepRaw.startsWith('user_') ? selectedRepRaw : null
+  const selectedFamRaw = Array.isArray(searchParams?.repfam) ? searchParams?.repfam[0] : searchParams?.repfam
+  // Which Call Activity table the rep was clicked in — only that one expands.
+  // Default to 'setter' so an old ?rep link (no repfam) still opens a table.
+  const selectedFam: 'setter' | 'closer' | null =
+    selectedRep === null ? null : selectedFamRaw === 'closer' ? 'closer' : 'setter'
   const selectedCloserRaw = Array.isArray(searchParams?.closer) ? searchParams?.closer[0] : searchParams?.closer
   const selectedCloser = typeof selectedCloserRaw === 'string' && selectedCloserRaw.length > 0 ? selectedCloserRaw : null
   const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
@@ -104,6 +110,7 @@ export default async function SalesPeoplePage({
   if (start) baseParams.set('start', start)
   if (end) baseParams.set('end', end)
   if (selectedRep) baseParams.set('rep', selectedRep)
+  if (selectedRep && selectedFam) baseParams.set('repfam', selectedFam)
   // Carry the other table's selection so toggling a closer/DC-closer doesn't
   // collapse the other expanded drill.
   if (selectedCloser) baseParams.set('closer', selectedCloser)
@@ -137,6 +144,7 @@ export default async function SalesPeoplePage({
             closersAggregate={activity.closersAggregate}
             totalFormsInWindow={activity.totalFormsInWindow}
             selectedRep={selectedRep}
+            selectedFam={selectedFam}
             drill={repDrill}
             canDelete={canDelete}
           />
@@ -186,6 +194,7 @@ function CallActivityStacked({
   closersAggregate,
   totalFormsInWindow,
   selectedRep,
+  selectedFam,
   drill,
   canDelete,
 }: {
@@ -195,6 +204,7 @@ function CallActivityStacked({
   closersAggregate: CallActivityRepRow
   totalFormsInWindow: number
   selectedRep: string | null
+  selectedFam: 'setter' | 'closer' | null
   drill: CallActivityDrillRow[]
   canDelete?: boolean
 }) {
@@ -207,6 +217,7 @@ function CallActivityStacked({
           aggregate={settersAggregate}
           rows={setters}
           selectedRep={selectedRep}
+          selectedFam={selectedFam}
           drill={drill}
           canDelete={canDelete}
         />
@@ -216,6 +227,7 @@ function CallActivityStacked({
           aggregate={closersAggregate}
           rows={closers}
           selectedRep={selectedRep}
+          selectedFam={selectedFam}
           drill={drill}
           canDelete={canDelete}
         />
