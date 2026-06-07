@@ -139,10 +139,10 @@ export function DigitalCollegeTables({
         </div>
       ) : (
         sorted.map((c) => {
-          const isSelected = selectedCloser === c.closerName
+          const isSelected = selectedCloser === c.closerKey
           return (
-            <div key={c.closerName}>
-              <RowLink baseParams={baseParams} closerName={c.closerName} isSelected={isSelected}>
+            <div key={c.closerKey}>
+              <RowLink baseParams={baseParams} closerKey={c.closerKey} isSelected={isSelected}>
                 <div
                   style={{
                     display: 'grid', gridTemplateColumns: AGG_COLS, gap: 10, padding: '12px 12px', margin: '0 -12px',
@@ -173,13 +173,13 @@ export function DigitalCollegeTables({
 }
 
 function RowLink({
-  baseParams, closerName, isSelected, children,
+  baseParams, closerKey, isSelected, children,
 }: {
-  baseParams: string; closerName: string; isSelected: boolean; children: React.ReactNode
+  baseParams: string; closerKey: string; isSelected: boolean; children: React.ReactNode
 }) {
   const sp = new URLSearchParams(baseParams)
   if (isSelected) sp.delete('dccloser')
-  else sp.set('dccloser', closerName)
+  else sp.set('dccloser', closerKey)
   const qs = sp.toString()
   const href = qs ? `?${qs}` : '?'
   return (

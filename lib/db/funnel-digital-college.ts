@@ -4,48 +4,53 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
 
-// Funnel · Digital College (low-ticket) — Robby Bryant's per-rep view.
+// Funnel · Digital College (low-ticket) — the dedicated DC closers' per-rep view.
 //
-// The dedicated low-ticket closer (Robby) works the Digital College offer
-// end-to-end and files the dedicated DC sale form (airtable_digital_college_sales,
-// table tbljmzRoMoE5B26lt). Aman's downsell DC closes live on the Full
-// Closer Report (call_outcome = 'Digital College Closed') and are NOT in
-// this view — this is the dedicated low-ticket path only.
+// DC closers are now data-driven off team_members (sales_role = 'dc_closer'),
+// resolving like every other sales rep (Drake 2026-06-07): a row carries the
+// closer's close_user_id (dials), airtable_user_id (form attribution via the
+// closer report's closer_record_ids), and calendly_event_type_uri (their DC
+// sale link). Previously this module hardcoded a single closer (Robby) across
+// three constants and grouped by the raw closer-name string — which split one
+// person into two rows ("Robby" from forms vs "Robby Bryant" from Calendly/
+// dials). Grouping is now by close_user_id; full_name is display-only.
 //
-// FORM-FIRST (Drake 2026-05-31): Robby didn't always have a Calendly link,
-// so the form is the source of truth for meetings/shows/closes. His Calendly
-// events are ADDITIVE — when he has a booked event for a meeting we use it
-// (start time, booking record), and a booked event with NO matching form is
-// a meeting that hasn't been worked yet (a no-show until a form is entered).
+// Aman's downsell DC closes live on the Full Closer Report (call_outcome =
+// 'Digital College Closed') and are NOT in this view — Aman is a high-ticket
+// closer, not a dc_closer. This is the dedicated low-ticket path only.
+//
+// FORM-FIRST (Drake 2026-05-31): a DC closer didn't always have a Calendly
+// link, so the form is the source of truth for meetings/shows/closes. Calendly
+// events are ADDITIVE — when there's a booked event for a meeting we use it
+// (start time, booking record), and a booked event with NO matching form is a
+// meeting that hasn't been worked yet (a no-show until a form is entered).
 // Forms and links are unioned per lead.
 //
-// Outcome model on the DC form:
-//   - Closed? = Yes            → a DC close. `plans` (Base/Wix × Monthly/Yearly)
-//                                gives the per-product breakdown. "Base" = Base44.
-//   - Closed? = No, Follow Up? = Yes → showed, not closed (will follow up).
-//   - Closed? = No, Follow Up? = No  → DQ. (The form's Follow Up field was
-//                                built wrong by Zain; "No" actually means DQ.)
-// There is no no-show field on the form, so a filed form = showed.
+// Outcome model on the closer report (DC rows):
+//   - call_outcome 'Digital College Closed' → a DC close. `dc_plans`
+//                                (Base/Wix × Monthly/Yearly) gives the
+//                                per-product breakdown. "Base" = Base44.
+//   - call_outcome contains 'DQ'      → DQ (showed, disqualified).
+//   - otherwise                       → showed, not closed (follow up).
+// A filed form = showed (there is no no-show field).
 
-// Robby Bryant's Close CRM user id — dials are counted from his outbound
-// close_calls. The dedicated low-ticket closer (Drake 2026-05-31).
-export const ROBBY_CLOSE_USER_ID = 'user_rt4533Y5VcOsbso6UMYAUn8sCdtVaKYGYDnWYLvBW2l'
-
-// Robby's "Call with Robby" Calendly event type — his DC sales link. This is
-// his only event type in the mirror; there is no separate onboarding link to
-// exclude today. If an onboarding (fulfillment) event type appears later, add
-// it to DC_ONBOARDING_EVENT_TYPE_URIS so it's excluded from meetings.
-export const ROBBY_DC_EVENT_TYPE_URI =
-  'https://api.calendly.com/event_types/6f06c6ba-6ca2-48d2-ae17-a6c5c1ee75ec'
-const DC_ONBOARDING_EVENT_TYPE_URIS = new Set<string>([
-  // post-close onboarding event type(s) — fulfillment, not a sale. (none yet)
-])
-
-const ROBBY_DISPLAY_NAME = 'Robby Bryant'
+// Post-close onboarding (fulfillment) Calendly event types to exclude from
+// meetings, should any appear. Sale links live on team_members; this is the
+// shared exclusion set. (none yet)
+const DC_ONBOARDING_EVENT_TYPE_URIS = new Set<string>([])
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+// A DC closer resolved from team_members. closeUserId is the stable grouping
+// key everywhere in this module; fullName is display-only.
+type DcCloser = {
+  closeUserId: string
+  fullName: string
+  airtableUserId: string | null
+  eventTypeUri: string | null
+}
 
 // Per-meeting outcome. null = no form filed yet (a booked Calendly event with
 // no matching form → a no-show / un-worked meeting).
@@ -71,26 +76,27 @@ export type DcDrillRow = {
   wixMonthly: boolean
   wixYearly: boolean
   plans: string[]
-  // True when the lead had a Calendly event (Robby's link) for this meeting.
+  // True when the lead had a Calendly event (the closer's link) for this meeting.
   hasMeetingLink: boolean
 }
 
 export type DcAggregate = {
-  closerName: string
-  dials: number       // outbound close_calls by this closer in range (Robby only)
-  meetings: number    // distinct leads (forms ∪ Robby's Calendly events) in range
+  closerKey: string   // close_user_id — the stable selection/grouping key
+  closerName: string  // full_name — display only
+  dials: number       // outbound close_calls by this closer in range
+  meetings: number    // distinct leads (forms ∪ the closer's Calendly events) in range
   shows: number       // meetings with a filed form
   base44Monthly: number
   base44Yearly: number
   wixMonthly: number
   wixYearly: number
-  closes: number      // Closed? = Yes
+  closes: number      // call_outcome 'Digital College Closed'
 }
 
 export type DigitalCollegeResult = {
   closers: DcAggregate[]
   aggregate: DcAggregate
-  drillByCloser: Record<string, DcDrillRow[]>
+  drillByCloser: Record<string, DcDrillRow[]>  // keyed by closerKey (close_user_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +109,7 @@ type DcSaleRow = {
   lead_id: string | null
   prospect_name: string | null
   date_time_of_call: string | null
-  closer_names: string[] | null
+  closerKey: string         // resolved close_user_id of the DC closer
   setter_names: string[] | null
   closed: string | null
   plans: string[] | null
@@ -155,8 +161,9 @@ function dcLeadKey(leadId: string | null, name: string | null, fallback: string)
   return fallback
 }
 
-function emptyDcAggregate(name: string): DcAggregate {
+function emptyDcAggregate(closerKey: string, name: string): DcAggregate {
   return {
+    closerKey,
     closerName: name,
     dials: 0, meetings: 0, shows: 0,
     base44Monthly: 0, base44Yearly: 0, wixMonthly: 0, wixYearly: 0, closes: 0,
@@ -167,23 +174,54 @@ function emptyDcAggregate(name: string): DcAggregate {
 // Loaders
 // ---------------------------------------------------------------------------
 
-// Robby's DC meetings — now from the REGULAR closer EOC form (the dedicated DC
-// sale form is retired; Robby files the closer report like everyone else,
-// Drake 2026-06-02). His forms are identified by the closer (closer_names ~
-// Robby) — he's the DC closer, so every form he files is a DC call. Mapped into
-// the DcSaleRow shape so the rest of the assembly is unchanged: a filed form =
-// showed (same show logic), closed = call_outcome 'Digital College Closed',
-// plans = the form's dc_plans, follow-up/dq derived from the outcome. Widen the
-// read 14 days back for late fills, then client-filter to the range.
-async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
+// The DC closers, from team_members. Only rows with a close_user_id are usable
+// (it's the grouping key + dials key); rows missing it are skipped.
+async function loadDcClosers(): Promise<DcCloser[]> {
+  const sb = createAdminClient()
+  const { data, error } = await sb
+    .from('team_members' as never)
+    .select('full_name, close_user_id, airtable_user_id, calendly_event_type_uri')
+    .eq('sales_role', 'dc_closer')
+    .is('archived_at', null)
+  if (error) throw new Error(`team_members (dc_closer) read failed: ${error.message}`)
+  const rows = (data ?? []) as unknown as Array<{
+    full_name: string | null
+    close_user_id: string | null
+    airtable_user_id: string | null
+    calendly_event_type_uri: string | null
+  }>
+  return rows
+    .filter((r) => r.close_user_id)
+    .map((r) => ({
+      closeUserId: r.close_user_id as string,
+      fullName: (r.full_name ?? '').trim() || (r.close_user_id as string),
+      airtableUserId: r.airtable_user_id,
+      eventTypeUri: r.calendly_event_type_uri,
+    }))
+}
+
+// DC meetings from the regular closer EOC form. A form belongs to a DC closer
+// when its closer_record_ids includes that closer's airtable_user_id (the
+// authoritative join, mirroring funnel-appointment-setting / funnel-closing).
+// Mapped into DcSaleRow: filed form = showed, closed = call_outcome 'Digital
+// College Closed', plans = dc_plans, follow-up/dq derived from the outcome.
+// Widen the read 14 days back for late fills, then client-filter to the range.
+async function loadDcSales(range: DateRange, closers: DcCloser[]): Promise<DcSaleRow[]> {
   const sb = createAdminClient()
   const widenStartMs = new Date(range.startUtcIso).getTime() - 14 * 24 * 60 * 60 * 1000
   const widenStartIso = new Date(widenStartMs).toISOString()
 
+  // airtable rec-id → closer key. (close_user_id of the DC closer.)
+  const keyByAirtableId = new Map<string, string>()
+  for (const c of closers) {
+    if (c.airtableUserId) keyByAirtableId.set(c.airtableUserId, c.closeUserId)
+  }
+  if (keyByAirtableId.size === 0) return []
+
   type EocRow = {
     record_id: string; airtable_created_at: string | null; lead_id: string | null
     prospect_name: string | null; date_time_of_call: string | null
-    closer_names: string[] | null; setter_names: string[] | null
+    closer_record_ids: string[] | null; setter_names: string[] | null
     call_outcome: string | null; dc_plans: string[] | null
   }
   let raw: EocRow[] = []
@@ -193,7 +231,7 @@ async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
       .from('airtable_full_closer_report' as never)
       .select(
         'record_id, airtable_created_at, lead_id, prospect_name, date_time_of_call, ' +
-        'closer_names, setter_names, call_outcome, dc_plans',
+        'closer_record_ids, setter_names, call_outcome, dc_plans',
       )
       .eq('form_type', 'New')
       .gte('airtable_created_at', widenStartIso)
@@ -208,9 +246,12 @@ async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
   }
 
   return raw
-    // Robby's forms only (he's the DC closer). Tolerant of 'Robby' / 'Robby Bryant'.
-    .filter((r) => (r.closer_names ?? []).some((n) => (n ?? '').toLowerCase().includes('robby')))
-    .map((r): DcSaleRow => {
+    // Attribute each form to a DC closer by record-id membership.
+    .map((r): DcSaleRow | null => {
+      const closerKey = (r.closer_record_ids ?? [])
+        .map((id) => (id ? keyByAirtableId.get(id) : undefined))
+        .find((k): k is string => Boolean(k))
+      if (!closerKey) return null
       const co = (r.call_outcome ?? '').toLowerCase()
       return {
         record_id: r.record_id,
@@ -218,7 +259,7 @@ async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
         lead_id: r.lead_id,
         prospect_name: r.prospect_name,
         date_time_of_call: r.date_time_of_call,
-        closer_names: r.closer_names,
+        closerKey,
         setter_names: r.setter_names,
         closed: co.includes('digital college closed') ? 'Yes' : 'No',
         plans: r.dc_plans,
@@ -226,45 +267,56 @@ async function loadDcSales(range: DateRange): Promise<DcSaleRow[]> {
         follow_up: co.includes('dq') ? 'No' : 'Yes',
       }
     })
+    .filter((r): r is DcSaleRow => r != null)
     .filter((r) => {
       const ts = effectiveDcTs(r)
       return ts != null && ts >= range.startUtcIso && ts < range.endUtcIso
     })
 }
 
-type RobbyEvent = {
+type DcEvent = {
   uri: string
   startTime: string
   prospectName: string | null
   leadId: string | null
   canceled: boolean
+  closerKey: string  // resolved from the event_type_uri's owning DC closer
 }
 
-// Robby's DC-sales Calendly events whose slot falls in range (additive
-// meetings — used when a meeting has a link; orphans with no form = no-show).
-async function loadRobbyEvents(range: DateRange): Promise<RobbyEvent[]> {
+// DC-sales Calendly events (the closers' sale links) whose slot falls in range
+// (additive meetings — used when a meeting has a link; orphans with no form =
+// no-show).
+async function loadDcEvents(range: DateRange, closers: DcCloser[]): Promise<DcEvent[]> {
   const sb = createAdminClient()
+  // event_type_uri → closer key.
+  const keyByEventUri = new Map<string, string>()
+  for (const c of closers) {
+    if (c.eventTypeUri && !DC_ONBOARDING_EVENT_TYPE_URIS.has(c.eventTypeUri)) {
+      keyByEventUri.set(c.eventTypeUri, c.closeUserId)
+    }
+  }
+  if (keyByEventUri.size === 0) return []
+
   const { data: eventData, error: eventErr } = await sb
     .from('calendly_scheduled_events' as never)
     .select('uri, start_time, status, event_type_uri')
     .is('excluded_at', null)
-    .eq('event_type_uri', ROBBY_DC_EVENT_TYPE_URI)
+    .in('event_type_uri', Array.from(keyByEventUri.keys()))
     .gte('start_time', range.startUtcIso)
     .lt('start_time', range.endUtcIso)
     .order('start_time', { ascending: true })
     .range(0, 999)
   if (eventErr) throw new Error(`calendly_scheduled_events (DC) read failed: ${eventErr.message}`)
-  const events = (eventData ?? []) as unknown as Array<{
+  const inScope = (eventData ?? []) as unknown as Array<{
     uri: string
     start_time: string
     status: string | null
     event_type_uri: string | null
   }>
-  const inScope = events.filter((e) => !DC_ONBOARDING_EVENT_TYPE_URIS.has(e.event_type_uri ?? ''))
   if (inScope.length === 0) return []
 
   // Resolve each event's invitee for lead identity (lead_id via utm_term; email
-  // is the fallback below). Robby's link often has no utm_term, so without the
+  // is the fallback below). A DC link often has no utm_term, so without the
   // email fallback a form (keyed by lead_id) and its booking (keyed by name)
   // don't merge — the lead surfaces twice (Tasha Garza, Drake 2026-05-31).
   const leadResolver = await buildCalendlyLeadResolver(sb)
@@ -334,22 +386,30 @@ async function loadRobbyEvents(range: DateRange): Promise<RobbyEvent[]> {
       prospectName: inv?.name ?? null,
       leadId: inv?.leadId ?? null,
       canceled: e.status === 'canceled',
+      closerKey: keyByEventUri.get(e.event_type_uri ?? '') as string,
     }
   })
 }
 
-// Robby's outbound dials in range, from close_calls.
-async function loadDials(range: DateRange, userId: string): Promise<number> {
+// Outbound dials in range per DC closer, from close_calls. Returns a map of
+// close_user_id → count.
+async function loadDials(range: DateRange, closers: DcCloser[]): Promise<Map<string, number>> {
   const sb = createAdminClient()
-  const { count, error } = await sb
-    .from('close_calls' as never)
-    .select('close_id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('direction', 'outbound')
-    .gte('date_created', range.startUtcIso)
-    .lt('date_created', range.endUtcIso)
-  if (error) throw new Error(`close_calls (DC dials) count failed: ${error.message}`)
-  return count ?? 0
+  const out = new Map<string, number>()
+  await Promise.all(
+    closers.map(async (c) => {
+      const { count, error } = await sb
+        .from('close_calls' as never)
+        .select('close_id', { count: 'exact', head: true })
+        .eq('user_id', c.closeUserId)
+        .eq('direction', 'outbound')
+        .gte('date_created', range.startUtcIso)
+        .lt('date_created', range.endUtcIso)
+      if (error) throw new Error(`close_calls (DC dials) count failed: ${error.message}`)
+      out.set(c.closeUserId, count ?? 0)
+    }),
+  )
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -357,17 +417,24 @@ async function loadDials(range: DateRange, userId: string): Promise<number> {
 // ---------------------------------------------------------------------------
 
 export async function getDigitalCollegeActivity(range: DateRange): Promise<DigitalCollegeResult> {
-  const [sales, events, robbyDials] = await Promise.all([
-    loadDcSales(range),
-    loadRobbyEvents(range),
-    loadDials(range, ROBBY_CLOSE_USER_ID),
+  const closers = await loadDcClosers()
+  if (closers.length === 0) {
+    return { closers: [], aggregate: emptyDcAggregate('', 'All DC closers'), drillByCloser: {} }
+  }
+  const nameByKey = new Map(closers.map((c) => [c.closeUserId, c.fullName]))
+
+  const [sales, events, dialsByUser] = await Promise.all([
+    loadDcSales(range, closers),
+    loadDcEvents(range, closers),
+    loadDials(range, closers),
   ])
 
-  // Per-meeting rows keyed by lead. A form is the meeting (showed); a Robby
-  // Calendly event with no matching form is an un-worked booked meeting.
+  // Per-meeting rows keyed by lead. A form is the meeting (showed); a Calendly
+  // event with no matching form is an un-worked booked meeting. closerKey is
+  // carried from the form (authoritative) or the event's owning closer.
   type Meeting = {
     key: string
-    closerName: string
+    closerKey: string
     row: DcDrillRow
     hasForm: boolean
   }
@@ -384,7 +451,6 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     if (nm) formKeyByName.set(nm, key)
     const outcome = dcOutcome(r.closed, r.follow_up)
     const flags = planFlags(r.plans)
-    const closerName = (r.closer_names ?? []).find((n) => n && n.trim())?.trim() ?? ROBBY_DISPLAY_NAME
     const bookedBy = (r.setter_names ?? []).find((n) => n && n.trim())?.trim() ?? null
     // If two forms collapse to one lead, keep the most recent / strongest
     // (a close beats a follow-up). Simpler: last form wins by effective time.
@@ -396,7 +462,7 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     }
     meetings.set(key, {
       key,
-      closerName,
+      closerKey: r.closerKey,
       hasForm: true,
       row: {
         key,
@@ -417,9 +483,8 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     })
   }
 
-  // 2. Robby's Calendly events — fill in the meeting link where a form
-  //    exists, else add an un-worked (no-form) meeting. Canceled events that
-  //    have no form drop out (not a real meeting).
+  // 2. Calendly events — fill in the meeting link where a form exists, else add
+  //    an un-worked (no-form) meeting. Canceled events with no form drop out.
   for (const ev of events) {
     const key = dcLeadKey(ev.leadId, ev.prospectName, `evt:${ev.uri}`)
     // Direct key (lead_id/name) first, then a name match against the forms —
@@ -435,7 +500,7 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     if (ev.canceled) continue
     meetings.set(key, {
       key,
-      closerName: ROBBY_DISPLAY_NAME,
+      closerKey: ev.closerKey,
       hasForm: false,
       row: {
         key,
@@ -456,16 +521,20 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     })
   }
 
-  // 3. Aggregate per closer + build drill lists.
+  // 3. Aggregate per closer (by close_user_id) + build drill lists.
   const byCloser = new Map<string, DcAggregate>()
   const drillByCloser: Record<string, DcDrillRow[]> = {}
-  for (const m of Array.from(meetings.values())) {
-    let agg = byCloser.get(m.closerName)
+  const ensureAgg = (closerKey: string): DcAggregate => {
+    let agg = byCloser.get(closerKey)
     if (!agg) {
-      agg = emptyDcAggregate(m.closerName)
-      byCloser.set(m.closerName, agg)
-      drillByCloser[m.closerName] = []
+      agg = emptyDcAggregate(closerKey, nameByKey.get(closerKey) ?? closerKey)
+      byCloser.set(closerKey, agg)
+      drillByCloser[closerKey] = []
     }
+    return agg
+  }
+  for (const m of Array.from(meetings.values())) {
+    const agg = ensureAgg(m.closerKey)
     agg.meetings++
     if (m.hasForm) agg.shows++
     if (m.row.closed) {
@@ -475,26 +544,26 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
       if (m.row.wixMonthly) agg.wixMonthly++
       if (m.row.wixYearly) agg.wixYearly++
     }
-    drillByCloser[m.closerName].push(m.row)
+    drillByCloser[m.closerKey].push(m.row)
   }
 
-  // Dials attach to Robby (the only DC closer with a known Close user id).
-  const robbyAgg = byCloser.get(ROBBY_DISPLAY_NAME) ?? emptyDcAggregate(ROBBY_DISPLAY_NAME)
-  robbyAgg.dials = robbyDials
-  if (!byCloser.has(ROBBY_DISPLAY_NAME) && robbyDials > 0) {
-    byCloser.set(ROBBY_DISPLAY_NAME, robbyAgg)
-    drillByCloser[ROBBY_DISPLAY_NAME] = []
+  // Attach dials per closer; a closer with dials but no meetings still shows.
+  for (const c of closers) {
+    const dials = dialsByUser.get(c.closeUserId) ?? 0
+    if (dials === 0 && !byCloser.has(c.closeUserId)) continue
+    ensureAgg(c.closeUserId).dials = dials
   }
 
   // Sort drill rows most-recent first.
-  for (const name of Object.keys(drillByCloser)) {
-    drillByCloser[name].sort((a, b) =>
+  for (const key of Object.keys(drillByCloser)) {
+    drillByCloser[key].sort((a, b) =>
       (a.scheduledTime ?? '') < (b.scheduledTime ?? '') ? 1 : (a.scheduledTime ?? '') > (b.scheduledTime ?? '') ? -1 : 0,
     )
   }
 
-  const closers = Array.from(byCloser.values()).sort((a, b) => b.meetings - a.meetings)
-  const aggregate = closers.reduce<DcAggregate>((acc, c) => ({
+  const closersOut = Array.from(byCloser.values()).sort((a, b) => b.meetings - a.meetings)
+  const aggregate = closersOut.reduce<DcAggregate>((acc, c) => ({
+    closerKey: '',
     closerName: 'All DC closers',
     dials: acc.dials + c.dials,
     meetings: acc.meetings + c.meetings,
@@ -504,7 +573,7 @@ export async function getDigitalCollegeActivity(range: DateRange): Promise<Digit
     wixMonthly: acc.wixMonthly + c.wixMonthly,
     wixYearly: acc.wixYearly + c.wixYearly,
     closes: acc.closes + c.closes,
-  }), emptyDcAggregate('All DC closers'))
+  }), emptyDcAggregate('', 'All DC closers'))
 
-  return { closers, aggregate, drillByCloser }
+  return { closers: closersOut, aggregate, drillByCloser }
 }
