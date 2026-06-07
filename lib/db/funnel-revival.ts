@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { type DcPlanCounts, emptyPlans, addPlan, dcPlanUnits } from './funnel-dc'
 
 // Revival funnel — the DC re-engagement campaign (Drake 2026-06-06).
 //
@@ -53,6 +54,7 @@ export type RevivalFunnel = {
   bookedHt: number
   showed: number
   closed: number // DC closes — explicit plans only (Robby over-marks "DC Closed")
+  closedPlans: DcPlanCounts // Base44/Wix × Monthly/Yearly counts on the closes
   cashUsd: number // $300 per plan unit on the closes
   markedNoPlan: number // "DC Closed" forms with no plan → counted as shows, not closes
 }
@@ -132,7 +134,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   }
   const ids = Array.from(anchor.keys())
   if (ids.length === 0) {
-    return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, cashUsd: 0, markedNoPlan: 0 }
+    return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, closedPlans: emptyPlans(), cashUsd: 0, markedNoPlan: 0 }
   }
   const after = (lid: string, ts: string | null | undefined): boolean => {
     const a = anchor.get(lid)
@@ -146,7 +148,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   const bookedHt = new Set<string>()
   const showed = new Set<string>()
   const closed = new Set<string>()
-  let cashUsd = 0
+  const closedPlans = emptyPlans()
   let markedNoPlan = 0
 
   // 2. Pull each signal in id-chunks (every signal set is well under 1000 rows,
@@ -215,7 +217,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
       const close = dcCloseUnits(f)
       if (close.isClose) {
         closed.add(f.lead_id)
-        cashUsd += close.units * DC_PLAN_PRICE_USD
+        addPlan(closedPlans, f.dc_plans)
       } else if (close.markedNoPlan) {
         markedNoPlan += 1
       }
@@ -237,7 +239,8 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     bookedHt: bookedHt.size,
     showed: showed.size,
     closed: closed.size,
-    cashUsd,
+    closedPlans,
+    cashUsd: dcPlanUnits(closedPlans) * DC_PLAN_PRICE_USD,
     markedNoPlan,
   }
 }

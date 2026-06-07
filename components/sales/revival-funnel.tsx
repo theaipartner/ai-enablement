@@ -1,4 +1,26 @@
 import type { RevivalFunnel } from '@/lib/db/funnel-revival'
+import type { DcPlanCounts } from '@/lib/db/funnel-dc'
+
+const PLAN_COLS: { key: keyof DcPlanCounts; label: string }[] = [
+  { key: 'base44Monthly', label: 'Base44·Mo' },
+  { key: 'base44Yearly', label: 'Base44·Yr' },
+  { key: 'wixMonthly', label: 'Wix·Mo' },
+  { key: 'wixYearly', label: 'Wix·Yr' },
+]
+
+function PlanChip({ label, count }: { label: string; count: number }) {
+  const zero = count === 0
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.04em', color: zero ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-3)' }}>
+        {label}
+      </span>
+      <span className="geg-numeric-serif" style={{ fontSize: 13, color: zero ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text)' }}>
+        {count}
+      </span>
+    </span>
+  )
+}
 
 // Revival funnel — the DC re-engagement campaign, on its own sub-page under
 // Funnel. all revival leads → responded → connected → booked → showed → closed,
@@ -90,8 +112,13 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
         <span className="geg-numeric-serif" style={{ fontSize: 18, color: f.cashUsd > 0 ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)' }}>
           {usd(f.cashUsd)}
         </span>
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 14, paddingLeft: 6, borderLeft: '1px solid var(--color-geg-border)' }}>
+          {PLAN_COLS.map((c) => (
+            <PlanChip key={c.key} label={c.label} count={f.closedPlans[c.key]} />
+          ))}
+        </span>
         <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>
-          · $300 per DC plan unit · closes need an explicit plan
+          · $300 per DC plan unit
         </span>
         {f.markedNoPlan > 0 ? (
           <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', marginLeft: 'auto' }}>

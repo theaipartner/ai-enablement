@@ -34,13 +34,13 @@ export type DcFunnel = {
   downsellPlans: DcPlanCounts // plans on HT-meeting downsell closes
 }
 
-function emptyPlans(): DcPlanCounts {
+export function emptyPlans(): DcPlanCounts {
   return { base44Monthly: 0, base44Yearly: 0, wixMonthly: 0, wixYearly: 0 }
 }
 
 // Tolerant plan parse (mirrors funnel-digital-college.ts): Base44 if "base",
 // Wix if "wix"; monthly/yearly by "month" / "year"|"annual".
-function addPlan(counts: DcPlanCounts, plans: string[] | null) {
+export function addPlan(counts: DcPlanCounts, plans: string[] | null) {
   for (const raw of plans ?? []) {
     const p = (raw ?? '').toLowerCase()
     const isBase = p.includes('base')
