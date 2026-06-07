@@ -470,6 +470,7 @@ export type CloserScheduledDrillRow = {
 }
 
 export type CloserScheduledAggregate = {
+  closerKey: string    // stable selection/grouping key: close_user_id, or 'ghost'
   closerName: string
   calls: number        // live leads (one row per lead) hosted by this closer
   directCalls: number
@@ -787,6 +788,7 @@ type ValidEvent = {
   name: string
   startTime: string
   host: string | null
+  hostEmail: string | null
   status: string | null
   callType: CloserCallType
   invitee: { name: string | null; email: string | null; phones: string[]; noShow: boolean; leadId: string | null }
@@ -797,11 +799,69 @@ type ValidEvent = {
   dead: boolean
 }
 
-function emptyAggregate(name: string): CloserScheduledAggregate {
+function emptyAggregate(key: string, name: string): CloserScheduledAggregate {
   return {
+    closerKey: key,
     closerName: name,
     calls: 0, directCalls: 0, setterCalls: 0,
     showed: 0, noShows: 0, closed: 0, closedHt: 0, closedDc: 0, upfront: 0,
+  }
+}
+
+// The Ghost (overflow) calendar's stable grouping key. Distinct from any
+// close_user_id ('user_...'), so it never collides with a real closer.
+const GHOST_CLOSER_KEY = 'ghost'
+
+// Resolve a closer to a canonical identity via team_members (sales_role =
+// 'closer'). The Per-Closer section shows ONLY current HT closers + the Ghost
+// overflow calendar; everyone else (dc_closers like Robby/Adam Casserly, former
+// staff like Adam Riley, one-off non-closers like Joey/Nabeel, unattributed
+// forms) resolves to null and is dropped. Calendly rows resolve by the host's
+// email; instant-book form-only rows by the form's closer_record_ids — both
+// land on the same close_user_id, so a closer's calendar name ("Aman Ali") and
+// form name ("Aman") no longer split into two rows.
+type CloserIdentity = { key: string; name: string }
+async function buildCloserIdentityResolver(
+  sb: ReturnType<typeof createAdminClient>,
+): Promise<{
+  byHost: (email: string | null, hostName: string | null) => CloserIdentity | null
+  byFormRecordIds: (ids: string[] | null) => CloserIdentity | null
+}> {
+  const { data, error } = await sb
+    .from('team_members' as never)
+    .select('full_name, email, close_user_id, airtable_user_id, sales_role')
+    .eq('sales_role', 'closer')
+    .is('archived_at', null)
+  if (error) throw new Error(`team_members (closer) read failed: ${error.message}`)
+  const rows = (data ?? []) as unknown as Array<{
+    full_name: string | null
+    email: string | null
+    close_user_id: string | null
+    airtable_user_id: string | null
+  }>
+  const byEmail = new Map<string, CloserIdentity>()
+  const byAirtable = new Map<string, CloserIdentity>()
+  for (const r of rows) {
+    if (!r.close_user_id) continue
+    const id: CloserIdentity = { key: r.close_user_id, name: (r.full_name ?? '').trim() || r.close_user_id }
+    if (r.email) byEmail.set(r.email.toLowerCase().trim(), id)
+    if (r.airtable_user_id) byAirtable.set(r.airtable_user_id, id)
+  }
+  return {
+    byHost: (email, hostName) => {
+      const m = email ? byEmail.get(email.toLowerCase().trim()) : undefined
+      if (m) return m
+      // Ghost overflow calendar stays its own row (Drake 2026-05-29 / 06-07).
+      if (displayHost(hostName) === 'Ghost') return { key: GHOST_CLOSER_KEY, name: 'Ghost' }
+      return null
+    },
+    byFormRecordIds: (ids) => {
+      for (const rid of ids ?? []) {
+        const m = rid ? byAirtable.get(rid) : undefined
+        if (m) return m
+      }
+      return null
+    },
   }
 }
 
@@ -819,7 +879,7 @@ export async function getClosingScheduledList(
   const floorIso = `${CLOSING_FLOOR_ET}T00:00:00.000Z`
   const { data: eventData, error: eventErr } = await sb
     .from('calendly_scheduled_events' as never)
-    .select('uri, name, start_time, host_user_name, status, event_type_uri')
+    .select('uri, name, start_time, host_user_name, host_user_email, status, event_type_uri')
     .is('excluded_at', null)   // creator-hidden test bookings drop out of the closer drill + aggregates
     .gte('start_time', floorIso)
     .order('start_time', { ascending: true })
@@ -830,6 +890,7 @@ export async function getClosingScheduledList(
     name: string
     start_time: string
     host_user_name: string | null
+    host_user_email: string | null
     status: string | null
     event_type_uri: string | null
   }>
@@ -841,7 +902,7 @@ export async function getClosingScheduledList(
     .filter((x): x is { e: typeof rawEvents[number]; callType: CloserCallType } => x.callType !== null)
 
   if (typed.length === 0) {
-    return { closers: [], aggregate: emptyAggregate('All closers'), drillByCloser: {} }
+    return { closers: [], aggregate: emptyAggregate('', 'All closers'), drillByCloser: {} }
   }
 
   // 2. Invitees for those events (identity for lead-keying + form /
@@ -929,6 +990,9 @@ export async function getClosingScheduledList(
   // 2c. Setter id→name resolver — the new closer form carries Setter Name as
   //     record-ids only, so resolve them to display names for "Booked by".
   const setterNameResolver = await buildSetterNameResolver(sb)
+  // 2d. Closer identity resolver — canonicalizes closers to team_members
+  //     (sales_role='closer') + the Ghost calendar; everyone else is dropped.
+  const closerIdentity = await buildCloserIdentityResolver(sb)
 
   // 3. Closer forms covering the event window (±48h on either side for
   //    matching). Pull as a single windowed read; small table.
@@ -941,7 +1005,7 @@ export async function getClosingScheduledList(
     .select(
       'record_id, lead_id, prospect_name, prospect_email, date_time_of_call, showed, closed, ' +
       'amount_paid_today_currency, amount_paid_today_number, deposit_amount, ' +
-      'payment_plan_type, closer_names, setter_names, setter_record_ids, ' +
+      'payment_plan_type, closer_names, closer_record_ids, setter_names, setter_record_ids, ' +
       'form_type, call_outcome, airtable_created_at',
     )
     .gte('date_time_of_call', widenStartIso)
@@ -960,6 +1024,7 @@ export async function getClosingScheduledList(
     deposit_amount: number | string | null
     payment_plan_type: string | null
     closer_names: string[] | null
+    closer_record_ids: string[] | null
     setter_names: string[] | null
     setter_record_ids: string[] | null
     form_type: string | null
@@ -1061,6 +1126,7 @@ export async function getClosingScheduledList(
       name: e.name,
       startTime: e.start_time,
       host: e.host_user_name,
+      hostEmail: e.host_user_email,
       status: e.status,
       callType,
       invitee,
@@ -1077,12 +1143,12 @@ export async function getClosingScheduledList(
   //    range. Aggregates count live (non-cancelled) leads only.
   const closerMap = new Map<string, CloserScheduledAggregate>()
   const drillByCloser: Record<string, CloserScheduledDrillRow[]> = {}
-  function bumpAgg(name: string): CloserScheduledAggregate {
-    let agg = closerMap.get(name)
+  function bumpAgg(id: CloserIdentity): CloserScheduledAggregate {
+    let agg = closerMap.get(id.key)
     if (!agg) {
-      agg = emptyAggregate(name)
-      closerMap.set(name, agg)
-      drillByCloser[name] = []
+      agg = emptyAggregate(id.key, id.name)
+      closerMap.set(id.key, agg)
+      drillByCloser[id.key] = []
     }
     return agg
   }
@@ -1105,8 +1171,11 @@ export async function getClosingScheduledList(
     const liveInRange = inRangeEvs.filter((e) => !e.dead)
     const rep = latest(liveInRange.length ? liveInRange : inRangeEvs)
 
-    const host = displayHost(rep.host)
-    const agg = bumpAgg(host)
+    // Attribute to the host's canonical closer identity. Non-closers (former
+    // staff, dc_closers, unknown hosts that aren't Ghost) drop out entirely.
+    const closer = closerIdentity.byHost(rep.hostEmail, rep.host)
+    if (!closer) continue
+    const agg = bumpAgg(closer)
     const invitee = rep.invitee
 
     // Outcomes only for live leads — a cancelled lead has no closer outcome.
@@ -1159,7 +1228,7 @@ export async function getClosingScheduledList(
       if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
     }
 
-    drillByCloser[host].push({
+    drillByCloser[closer.key].push({
       eventUri: rep.uri,
       leadId: invitee.leadId,
       prospectName: invitee.name,
@@ -1235,8 +1304,11 @@ export async function getClosingScheduledList(
       (f.setter_record_ids ?? []).some((s) => s && s.trim()) ||
       (f.setter_names ?? []).some((n) => n && n.trim() && n.trim().toLowerCase() !== 'no setter')
     const callType: CloserCallType = hasSetter ? 'setter' : 'direct'
-    const host = displayHost((f.closer_names ?? []).find((n) => n && n.trim())?.trim() ?? null)
-    const agg = bumpAgg(host)
+    // Attribute the instant-book to its form's canonical closer. Non-closers
+    // (Robby/Adam Casserly = dc_closer, one-off non-closers, unattributed) drop.
+    const closer = closerIdentity.byFormRecordIds(f.closer_record_ids)
+    if (!closer) continue
+    const agg = bumpAgg(closer)
     const paid = toNum(f.amount_paid_today_number) ?? toNum(f.amount_paid_today_currency)
     const upfront = d.closed === 'deposit' ? (toNum(f.deposit_amount) ?? paid) : paid
     const bookedBy = callType === 'setter' ? (setterNameResolver(f.setter_record_ids) ?? null) : null
@@ -1251,7 +1323,7 @@ export async function getClosingScheduledList(
       if (d.closeType === 'dc') agg.closedDc++
     }
     if (upfront !== null && Number.isFinite(upfront)) agg.upfront += upfront
-    drillByCloser[host].push({
+    drillByCloser[closer.key].push({
       eventUri: `form:${f.record_id}`,
       leadId: f.lead_id,
       prospectName: f.prospect_name,
@@ -1278,6 +1350,7 @@ export async function getClosingScheduledList(
   // 7. Closer list sorted by calls desc; aggregate "All closers" sums.
   const closers = Array.from(closerMap.values()).sort((a, b) => b.calls - a.calls)
   const aggregate = closers.reduce<CloserScheduledAggregate>((acc, c) => ({
+    closerKey: '',
     closerName: 'All closers',
     calls: acc.calls + c.calls,
     directCalls: acc.directCalls + c.directCalls,
@@ -1288,7 +1361,7 @@ export async function getClosingScheduledList(
     closedHt: acc.closedHt + c.closedHt,
     closedDc: acc.closedDc + c.closedDc,
     upfront: acc.upfront + c.upfront,
-  }), emptyAggregate('All closers'))
+  }), emptyAggregate('', 'All closers'))
 
   return { closers, aggregate, drillByCloser }
 }

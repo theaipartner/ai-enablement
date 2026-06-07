@@ -200,10 +200,10 @@ export function CloserScheduledTables({
         </div>
       ) : (
         sorted.map((c) => {
-          const isSelected = selectedCloser === c.closerName
+          const isSelected = selectedCloser === c.closerKey
           return (
-            <div key={c.closerName}>
-              <RowLink baseParams={baseParams} closerName={c.closerName} isSelected={isSelected}>
+            <div key={c.closerKey}>
+              <RowLink baseParams={baseParams} closerKey={c.closerKey} isSelected={isSelected}>
                 <div
                   style={{
                     display: 'grid',
@@ -243,16 +243,16 @@ export function CloserScheduledTables({
 }
 
 function RowLink({
-  baseParams, closerName, isSelected, children,
+  baseParams, closerKey, isSelected, children,
 }: {
   baseParams: string
-  closerName: string
+  closerKey: string
   isSelected: boolean
   children: React.ReactNode
 }) {
   const sp = new URLSearchParams(baseParams)
   if (isSelected) sp.delete('closer')
-  else sp.set('closer', closerName)
+  else sp.set('closer', closerKey)
   const qs = sp.toString()
   const href = qs ? `?${qs}` : '?'
   return (
