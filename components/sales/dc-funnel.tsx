@@ -52,8 +52,13 @@ function PlanLine({ label, plans }: { label: string; plans: DcPlanCounts }) {
         {label}
       </div>
       {PLAN_COLS.map((c) => (
-        <div key={c.key} className="geg-numeric-serif" style={{ textAlign: 'center', fontSize: 13, color: plans[c.key] === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-dim)' }}>
-          {plans[c.key]}
+        <div key={c.key} style={{ textAlign: 'center' }}>
+          <div className="geg-numeric-serif" style={{ fontSize: 13, color: plans[c.key] === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-dim)' }}>
+            {plans[c.key]}
+          </div>
+          <div className="geg-mono" style={{ fontSize: 8, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 1 }}>
+            {c.label}
+          </div>
         </div>
       ))}
     </div>
