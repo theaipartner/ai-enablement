@@ -19,6 +19,10 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 | `is_active` | `boolean` | Default `true`. Cheap filter; `archived_at` is the durable signal |
 | `is_csm` | `boolean` | Added in 0022. Not null, default `false`. Marks a team_member as eligible for `primary_csm` assignments. Surfaces in dashboard Primary CSM dropdowns (filter dropdown on `/clients`, swap dialog on `/clients/[id]` — both filter `is_csm = true`). Default `false` so non-CSM team_members (engineering, ops, sales) are excluded; flipping to `true` is an explicit choice. Orthogonal to the free-text `role` column — Scott Wilson and Nabeel Junaid carry `role='leadership'` but `is_csm=true` because they actively own clients. The Scott Chasing sentinel carries `is_csm=true` so it appears in the dropdowns alongside the four real CSMs |
 | `metadata` | `jsonb` | Extensible blob for attributes we haven't promoted to columns. Known keys: `seeded_at`/`seed_source` (manual-seed provenance), `sentinel` (true for system identities like Gregory Bot + Scott Chasing — see § Sentinel rows), `personal_emails` (array of non-AIP email addresses a team member uses for internal meetings — treated as internal by the Teams Meeting Tracker's external-attendee filter, see § Personal emails) |
+| `close_user_id` | `text` | Added in 0052. Close's `user_XXX...` id. Partial-unique among non-archived rows. The canonical join key from Close mirrors (`close_calls.user_id`, lead owners) to an agency person. See § Sales identity |
+| `airtable_user_id` | `text` | Added in 0052. The sales Airtable base's per-team-member record id (a `rec*` into an internal Team Members table, NOT Airtable's built-in `usr*` accounts). Partial-unique. The authoritative join from form `setter_record_ids` / `closer_record_ids` to an agency person. See § Sales identity |
+| `sales_role` | `text` | Added in 0052, extended in 0077. `setter` / `closer` / `dc_closer` / `other` or NULL (the majority who aren't sales). CHECK-pinned. Separate concern from `role` (job function) and `access_tier` (permissions). `dc_closer` marks a dedicated Digital College (low-ticket) closer — kept distinct from `closer` so DC closers stay out of the regular setter/closer call-activity tables and drive the People page's own DC section. See § Sales identity |
+| `calendly_event_type_uri` | `text` | Added in 0077. A sales rep's Calendly **event-type** URI (the `https://api.calendly.com/event_types/...` value `calendly_scheduled_events.event_type_uri` holds — NOT the human `calendly.com/...` booking link). Used today by the DC view to pull a `dc_closer`'s meetings; nullable for everyone else. See § Sales identity |
 | `created_at` | `timestamptz` | Default `now()` |
 | `updated_at` | `timestamptz` | Default `now()`, bumped by trigger on update |
 | `archived_at` | `timestamptz` | Soft delete; null = current |
@@ -57,6 +61,16 @@ Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib
 Auth-side identity is `team_members.email == supabase auth user.email`, looked up via the admin (service-role) client. Email match is case-insensitive (`ilike`).
 
 No UI for managing tiers in V1 — changes happen via SQL or future migration. Settings page is a separate spec.
+
+## Sales identity
+
+`close_user_id`, `airtable_user_id`, and `sales_role` (migration 0052) plus `calendly_event_type_uri` (migration 0077) let the sales-dashboard resolve a rep across Close, Airtable, and Calendly from this one table instead of hardcoded maps. The pattern, used by `lib/db/funnel-appointment-setting.ts`, `funnel-closing.ts`, and `funnel-digital-college.ts`:
+
+- **Forms → person:** Airtable closer/setter report rows carry `closer_record_ids` / `setter_record_ids` (`rec*`); resolve them to a `close_user_id` via `airtable_user_id`, then group/attribute by `close_user_id` and display `full_name`.
+- **Dials → person:** `close_calls.user_id == close_user_id`.
+- **Calendly meetings → person:** `calendly_scheduled_events.event_type_uri == calendly_event_type_uri`.
+
+`sales_role` partitions the per-rep views: `setter` and `closer` feed the regular call-activity tables; `dc_closer` is excluded from those and instead feeds the People page's Digital College section. The DC view (`funnel-digital-college.ts`) selects `WHERE sales_role = 'dc_closer' AND archived_at IS NULL` and renders one row per closer keyed by `close_user_id` — so a closer whose forms store a short name ("Robby") and whose Calendly/dials path uses a fuller name ("Robby Bryant") no longer splits into two rows.
 
 ## Personal emails
 
