@@ -264,7 +264,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
 // distribution. No 24h clip: a ">24h" tail bucket keeps the slow follow-ups
 // visible rather than silently dropped.
 
-export type RevivalSpeedBucket = { label: string; count: number }
+export type RevivalSpeedBucket = { label: string; count: number; connected: number }
 
 export type RevivalCalled = {
   responded: number
@@ -296,7 +296,7 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     called: 0,
     connected: 0,
     notCalled: 0,
-    speed: SPEED_BUCKETS.map((b) => ({ label: b.label, count: 0 })),
+    speed: SPEED_BUCKETS.map((b) => ({ label: b.label, count: 0, connected: 0 })),
     speedN: 0,
     speedMedianMin: null,
   }
@@ -347,8 +347,10 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     }
   }
 
-  // Speed-to-dial distribution (minutes from first reply → first dial).
+  // Speed-to-dial distribution (minutes from first reply → first dial), each
+  // bucket split into connected (≥90s dial reached them) vs not.
   const counts: number[] = new Array(SPEED_BUCKETS.length).fill(0)
+  const connectedCounts: number[] = new Array(SPEED_BUCKETS.length).fill(0)
   const deltas: number[] = []
   called.forEach((lid) => {
     const reply = firstResp.get(lid)
@@ -358,7 +360,9 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     if (min < 0) return
     deltas.push(min)
     const idx = SPEED_BUCKETS.findIndex((b) => min < b.maxMin)
-    counts[idx >= 0 ? idx : SPEED_BUCKETS.length - 1] += 1
+    const bi = idx >= 0 ? idx : SPEED_BUCKETS.length - 1
+    counts[bi] += 1
+    if (connected.has(lid)) connectedCounts[bi] += 1
   })
   deltas.sort((a, b) => a - b)
   const median = deltas.length
@@ -372,7 +376,7 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     called: called.size,
     connected: connected.size,
     notCalled: firstResp.size - called.size,
-    speed: SPEED_BUCKETS.map((b, i) => ({ label: b.label, count: counts[i] })),
+    speed: SPEED_BUCKETS.map((b, i) => ({ label: b.label, count: counts[i], connected: connectedCounts[i] })),
     speedN: deltas.length,
     speedMedianMin: median == null ? null : Math.round(median),
   }

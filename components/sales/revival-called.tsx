@@ -5,8 +5,8 @@ import type { RevivalCalled } from '@/lib/db/funnel-revival'
 // connected, plus a speed-to-dial distribution (reply → first dial). All
 // event-based (no reply-text classification), see lib/db/funnel-revival.ts.
 
-const ACCENT = '#d08770' // coral — matches the revival funnel
-const SLOW = 'var(--color-geg-text-3)' // muted — the "dialed late" tail
+const ACCENT = '#d08770' // coral — connected
+const MUTED = 'var(--color-geg-text-3)' // not connected
 
 function pct(n: number, d: number): string {
   if (d === 0) return '—'
@@ -47,9 +47,11 @@ function fmtMedian(min: number | null): string {
   return h < 10 ? `${h.toFixed(1)}h` : `${Math.round(h)}h`
 }
 
-// Speed-to-dial distribution — pure SVG count bars, one per time bucket. Fast
-// buckets (dialed within 30m) read in accent; the slower tail fades to muted so
-// "where they land" is legible at a glance.
+// Speed-to-dial distribution — one stacked bar per time bucket. Bar height = how
+// many called leads were first dialed in that window; each bar is split into
+// connected (≥90s dial reached them, coral) over not-connected (muted), with the
+// connect % printed inside. No speed-tier coloring — x position already encodes
+// speed, so color is free to carry the connect outcome.
 function SpeedChart({ speed, speedN, median }: { speed: RevivalCalled['speed']; speedN: number; median: number | null }) {
   const PAD_X = 30
   const PAD_TOP = 24
@@ -61,33 +63,47 @@ function SpeedChart({ speed, speedN, median }: { speed: RevivalCalled['speed']; 
   const n = speed.length
   const gap = 16
   const barW = (CHART_W - PAD_X * 2 - gap * (n - 1)) / n
-  // The first three buckets are "<30m" — the fast-follow-up window.
-  const FAST_CUTOFF = 3
+  const baseline = CHART_H - PAD_BOTTOM
+  const h = (v: number) => usableH * (v / max)
 
   return (
     <div>
       <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} width="100%" style={{ maxWidth: CHART_W, display: 'block', margin: '0 auto' }}>
-        {/* Baseline */}
-        <line x1={PAD_X} x2={CHART_W - PAD_X} y1={CHART_H - PAD_BOTTOM} y2={CHART_H - PAD_BOTTOM} stroke="var(--color-geg-border)" strokeWidth="1" />
+        <line x1={PAD_X} x2={CHART_W - PAD_X} y1={baseline} y2={baseline} stroke="var(--color-geg-border)" strokeWidth="1" />
         {speed.map((b, i) => {
           const x = PAD_X + i * (barW + gap)
-          const barH = usableH * (b.count / max)
-          const yTop = CHART_H - PAD_BOTTOM - barH
-          const color = i < FAST_CUTOFF ? ACCENT : SLOW
+          const notConn = b.count - b.connected
+          const connH = h(b.connected)
+          const notConnH = h(notConn)
+          const connY = baseline - connH
+          const notConnY = connY - notConnH
+          const barTop = baseline - h(b.count)
+          const rate = b.count > 0 ? Math.round((b.connected / b.count) * 100) : null
           return (
             <g key={b.label}>
-              <rect x={x} y={yTop} width={barW} height={barH} fill={color} opacity={i < FAST_CUTOFF ? 1 : 0.6} rx="2" />
-              {/* count label */}
-              <text x={x + barW / 2} y={yTop - 6} textAnchor="middle" className="geg-numeric-serif" style={{ fontSize: 13, fill: b.count === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text)' }}>
+              {/* not-connected segment (top, muted) */}
+              {notConn > 0 ? <rect x={x} y={notConnY} width={barW} height={notConnH} fill={MUTED} opacity={0.55} rx="2" /> : null}
+              {/* connected segment (bottom, coral) */}
+              {b.connected > 0 ? <rect x={x} y={connY} width={barW} height={connH} fill={ACCENT} rx="2" /> : null}
+              {/* connect % inside the bar */}
+              {rate !== null ? (
+                <text
+                  x={x + barW / 2}
+                  y={connH >= 18 ? connY + connH / 2 + 4 : baseline - 6}
+                  textAnchor="middle"
+                  className="geg-mono"
+                  style={{ fontSize: 10, fontWeight: 600, fill: connH >= 18 ? '#fff' : 'var(--color-geg-text-2)' }}
+                >
+                  {rate}%
+                </text>
+              ) : null}
+              {/* total count above the bar */}
+              <text x={x + barW / 2} y={barTop - 6} textAnchor="middle" className="geg-numeric-serif" style={{ fontSize: 13, fill: b.count === 0 ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text)' }}>
                 {b.count}
               </text>
               {/* bucket label */}
-              <text x={x + barW / 2} y={CHART_H - PAD_BOTTOM + 18} textAnchor="middle" className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.04em', fill: 'var(--color-geg-text-2)' }}>
+              <text x={x + barW / 2} y={baseline + 18} textAnchor="middle" className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.04em', fill: 'var(--color-geg-text-2)' }}>
                 {b.label}
-              </text>
-              {/* share-of-called */}
-              <text x={x + barW / 2} y={CHART_H - PAD_BOTTOM + 31} textAnchor="middle" className="geg-mono" style={{ fontSize: 8.5, fill: 'var(--color-geg-text-faint)' }}>
-                {speedN > 0 ? `${Math.round((b.count / speedN) * 100)}%` : '—'}
               </text>
             </g>
           )
@@ -96,11 +112,11 @@ function SpeedChart({ speed, speedN, median }: { speed: RevivalCalled['speed']; 
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, marginTop: 12 }}>
         <div style={{ display: 'flex', gap: 18, alignItems: 'center' }}>
-          <Swatch color={ACCENT} label="Dialed within 30m" />
-          <Swatch color={SLOW} label="Dialed later" opacity={0.6} />
+          <Swatch color={ACCENT} label="Connected (≥90s)" />
+          <Swatch color={MUTED} label="Not connected" opacity={0.55} />
         </div>
         <div className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)' }}>
-          {speedN} dialed · median {fmtMedian(median)} reply → first dial
+          {speedN} dialed · median {fmtMedian(median)} reply → first dial · % = connect rate (small n per bucket)
         </div>
       </div>
     </div>
