@@ -1,7 +1,8 @@
 import { HeaderBand } from '@/components/gregory/header-band'
 import { RevivalCalledSection } from '@/components/sales/revival-called'
 import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
-import { getRevivalCalled, getRevivalFunnel } from '@/lib/db/funnel-revival'
+import { RevivalTimeOfDaySection } from '@/components/sales/revival-time-of-day'
+import { getRevivalCalled, getRevivalFunnel, getRevivalTimeOfDay } from '@/lib/db/funnel-revival'
 import { PersonPill } from '../../header-pills'
 
 // Sales Dashboard — Revival (a sub-page under Funnel).
@@ -17,7 +18,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 export default async function RevivalFunnelPage() {
-  const [funnel, called] = await Promise.all([getRevivalFunnel(), getRevivalCalled()])
+  const [funnel, called, timeOfDay] = await Promise.all([getRevivalFunnel(), getRevivalCalled(), getRevivalTimeOfDay()])
 
   return (
     <div>
@@ -47,6 +48,17 @@ export default async function RevivalFunnelPage() {
         Of the leads we outbound-dialed after their reply, how fast we got to them and whether the dial
         connected. <b>Speed to dial</b> = first reply → first outbound call; bars stack connected (coral)
         over not-connected, with the connect % inside. Small n per bucket — read the trend, not single bars.
+      </div>
+
+      <RevivalTimeOfDaySection buckets={timeOfDay.buckets} />
+
+      <div
+        className="geg-mono"
+        style={{ marginTop: 14, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
+      >
+        When leads <b>reply</b> vs when we <b>dial</b> vs when we <b>connect</b>, by 2-hour ET window —
+        wall-clock, no business-hours adjustment. Reply volume that lands outside the dialing window is the
+        coverage gap to staff for. Connects are timed by the call (never the form).
       </div>
 
       <div

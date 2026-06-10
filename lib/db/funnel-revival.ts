@@ -426,3 +426,94 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     speedMedianMin: median == null ? null : Math.round(median),
   }
 }
+
+// ---- Time-of-day: replies vs dials vs connects, in 2-hour ET buckets ----
+//
+// Wall-clock by design (Drake 2026-06-10): no business-hours fairness adjustment
+// — the point is to SEE the gap (replies landing when nobody's dialing) and staff
+// for it. replies = inbound SMS events; dials = outbound call events; connects =
+// each revival-connected lead counted once at its CONNECTING CALL's time (if the
+// form and the call disagree on time, the call wins — connects are timed by the
+// call, never the Airtable form).
+
+export type RevivalHourBucket = { label: string; replies: number; dials: number; connects: number }
+
+const TOD_LABELS = ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', '10p']
+
+// One reusable ET formatter — handles DST correctly (campaign spans EDT).
+const ET_HOUR_FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false })
+function etHourFromIso(iso: string): number {
+  const n = parseInt(ET_HOUR_FMT.format(new Date(iso)), 10)
+  return n === 24 ? 0 : n // some envs render midnight as 24
+}
+
+export async function getRevivalTimeOfDay(): Promise<{ buckets: RevivalHourBucket[] }> {
+  const sb = createAdminClient()
+  const anchor = await getRevivalAnchors(sb)
+  const ids = Array.from(anchor.keys())
+  const buckets: RevivalHourBucket[] = TOD_LABELS.map((label) => ({ label, replies: 0, dials: 0, connects: 0 }))
+  if (ids.length === 0) return { buckets }
+  const after = (lid: string, ts: string | null | undefined): boolean => {
+    const a = anchor.get(lid)
+    return ts != null && a != null && ts >= a
+  }
+  const bucketOf = (iso: string) => Math.floor(etHourFromIso(iso) / 2)
+
+  const anyCall = new Set<string>()
+  const call90 = new Set<string>()
+  const formReached = new Set<string>()
+  const earliestCall = new Map<string, string>()
+  const earliestCall90 = new Map<string, string>()
+
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+
+    const { data: sms, error: e1 } = await sb
+      .from('close_sms' as never)
+      .select('lead_id, activity_at')
+      .in('lead_id', chunk)
+      .eq('direction', 'inbound')
+    if (e1) throw new Error(`close_sms read failed: ${e1.message}`)
+    for (const r of (sms ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null }>) {
+      if (r.lead_id && r.activity_at && after(r.lead_id, r.activity_at)) buckets[bucketOf(r.activity_at)].replies += 1
+    }
+
+    const { data: calls, error: e2 } = await sb
+      .from('close_calls' as never)
+      .select('lead_id, activity_at, duration, direction')
+      .in('lead_id', chunk)
+    if (e2) throw new Error(`close_calls read failed: ${e2.message}`)
+    for (const r of (calls ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null; duration: number | null; direction: string | null }>) {
+      if (!r.lead_id || r.activity_at == null || !after(r.lead_id, r.activity_at)) continue
+      anyCall.add(r.lead_id)
+      const ec = earliestCall.get(r.lead_id)
+      if (ec == null || r.activity_at < ec) earliestCall.set(r.lead_id, r.activity_at)
+      if ((r.duration ?? 0) >= 90) {
+        call90.add(r.lead_id)
+        const e9 = earliestCall90.get(r.lead_id)
+        if (e9 == null || r.activity_at < e9) earliestCall90.set(r.lead_id, r.activity_at)
+      }
+      if (r.direction === 'outbound') buckets[bucketOf(r.activity_at)].dials += 1
+    }
+
+    const { data: tri, error: e3 } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('lead_id, call_status, airtable_created_at')
+      .in('lead_id', chunk)
+      .is('excluded_at', null)
+    if (e3) throw new Error(`triage read failed: ${e3.message}`)
+    for (const r of (tri ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null; airtable_created_at: string | null }>) {
+      if (r.lead_id && after(r.lead_id, r.airtable_created_at) && reaches(r.call_status)) formReached.add(r.lead_id)
+    }
+  }
+
+  // Connects timed by the CALL: the ≥90s call if there is one, else the earliest
+  // call backing the form. Every revival-connected lead has a call by definition.
+  const connected = revivalConnected(call90, formReached, anyCall)
+  connected.forEach((lid) => {
+    const t = earliestCall90.get(lid) ?? earliestCall.get(lid)
+    if (t != null) buckets[bucketOf(t)].connects += 1
+  })
+
+  return { buckets }
+}
