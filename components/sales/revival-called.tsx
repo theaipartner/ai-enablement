@@ -8,38 +8,6 @@ import type { RevivalCalled } from '@/lib/db/funnel-revival'
 const ACCENT = '#d08770' // coral — connected
 const MUTED = 'var(--color-geg-text-3)' // not connected
 
-function pct(n: number, d: number): string {
-  if (d === 0) return '—'
-  return Math.round((n / d) * 100) + '%'
-}
-
-function Stage({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
-  return (
-    <div style={{ flex: 1, textAlign: 'center', padding: '14px 6px' }}>
-      <div
-        className="geg-numeric-serif"
-        style={{ fontSize: 26, lineHeight: 1, color: value === 0 ? 'var(--color-geg-text-faint)' : accent ? ACCENT : 'var(--color-geg-text)' }}
-      >
-        {value.toLocaleString('en-US')}
-      </div>
-      <div className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginTop: 5 }}>
-        {label}
-      </div>
-    </div>
-  )
-}
-
-function Conv({ from, to }: { from: number; to: number }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 44 }}>
-      <div className="geg-mono" style={{ color: 'var(--color-geg-text-faint)', fontSize: 13 }}>→</div>
-      <div className="geg-mono" style={{ fontSize: 9.5, color: 'var(--color-geg-text)', marginTop: 2 }}>
-        {pct(to, from)}
-      </div>
-    </div>
-  )
-}
-
 function fmtMedian(min: number | null): string {
   if (min == null) return '—'
   if (min < 60) return `${min}m`
@@ -142,10 +110,10 @@ export function RevivalCalledSection({ called }: { called: RevivalCalled }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--color-geg-bg-elev)', borderBottom: '1px solid var(--color-geg-border)' }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT }} />
         <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)' }}>
-          Called
+          Speed to dial
         </span>
         <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
-          · setter follow-up on replies
+          · reply → first outbound call
         </span>
         {c.notCalled > 0 ? (
           <span className="geg-mono" style={{ fontSize: 9.5, letterSpacing: '0.04em', color: 'var(--color-geg-text-3)', marginLeft: 'auto' }}>
@@ -154,20 +122,8 @@ export function RevivalCalledSection({ called }: { called: RevivalCalled }) {
         ) : null}
       </div>
 
-      {/* responded → called → connected */}
-      <div style={{ display: 'flex', alignItems: 'stretch', padding: '4px 10px' }}>
-        <Stage label="Responded" value={c.responded} />
-        <Conv from={c.responded} to={c.called} />
-        <Stage label="Called" value={c.called} accent />
-        <Conv from={c.called} to={c.connected} />
-        <Stage label="Connected" value={c.connected} />
-      </div>
-
       {/* speed-to-dial distribution */}
-      <div style={{ padding: '14px 14px 16px', borderTop: '1px solid var(--color-geg-border)', background: 'var(--color-geg-bg)' }}>
-        <div className="geg-mono" style={{ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 12 }}>
-          Speed to dial · reply → first call
-        </div>
+      <div style={{ padding: '16px 14px', background: 'var(--color-geg-bg)' }}>
         <SpeedChart speed={c.speed} speedN={c.speedN} median={c.speedMedianMin} />
       </div>
     </div>

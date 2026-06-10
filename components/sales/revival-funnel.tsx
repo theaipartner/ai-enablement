@@ -94,7 +94,9 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
         <Stage label="Revival leads" value={f.leads} accent />
         <Conv from={f.leads} to={f.responded} />
         <Stage label="Responded" value={f.responded} />
-        <Conv from={f.responded} to={f.connected} />
+        <Conv from={f.responded} to={f.called} />
+        <Stage label="Called" value={f.called} />
+        <Conv from={f.called} to={f.connected} />
         <Stage label="Connected" value={f.connected} />
         <Conv from={f.connected} to={f.booked} />
         <Stage label="Booked" value={f.booked} bracket={bookedBracket} />

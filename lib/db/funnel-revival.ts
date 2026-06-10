@@ -48,6 +48,7 @@ const DC_PLAN_PRICE_USD = 300
 export type RevivalFunnel = {
   leads: number // all revival-tagged leads (non-excluded)
   responded: number
+  called: number // >=1 call (in/out, any length) since the anchor
   connected: number
   booked: number
   bookedDc: number
@@ -106,6 +107,19 @@ function dcCloseUnits(f: {
   return legacyClose ? { isClose: true, units: 1, markedNoPlan: false } : { isClose: false, units: 0, markedNoPlan: false }
 }
 
+// Revival "connected": a real conversation happened — either a >=90s call (in
+// or outbound), OR a form that reached them backed by a call of any length. A
+// form with NO call (a text-DQ, e.g. the lead replied "No"/"Stop" and the setter
+// DQ'd without dialing) is NOT a connect. `anyCall` is the same set used for the
+// "Called" stage, so connected ⊆ called by construction.
+function revivalConnected(call90: Set<string>, formReached: Set<string>, anyCall: Set<string>): Set<string> {
+  const c = new Set(call90)
+  formReached.forEach((id) => {
+    if (anyCall.has(id)) c.add(id)
+  })
+  return c
+}
+
 // Per-lead revival start anchor (later of date_created, REVIVAL_FLOOR). close_leads
 // is ~7.6k rows; page through and JS-filter the CF (mirrors isRevival usage in
 // funnel-appointment-setting.ts). Guard the 1000-row PostgREST cap. Shared by the
@@ -141,7 +155,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   const anchor = await getRevivalAnchors(sb)
   const ids = Array.from(anchor.keys())
   if (ids.length === 0) {
-    return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, closedPlans: emptyPlans(), cashUsd: 0, markedNoPlan: 0 }
+    return { leads: 0, responded: 0, called: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, closedPlans: emptyPlans(), cashUsd: 0, markedNoPlan: 0 }
   }
   const after = (lid: string, ts: string | null | undefined): boolean => {
     const a = anchor.get(lid)
@@ -149,7 +163,9 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   }
 
   const responded = new Set<string>()
-  const connected = new Set<string>()
+  const anyCall = new Set<string>() // any call (in/out, any length) → "Called"
+  const call90 = new Set<string>() // a >=90s call (either direction)
+  const formReached = new Set<string>() // a triage form that reached the lead
   const booked = new Set<string>()
   const bookedDc = new Set<string>()
   const bookedHt = new Set<string>()
@@ -174,18 +190,20 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
       if (r.lead_id && after(r.lead_id, r.activity_at)) responded.add(r.lead_id)
     }
 
-    // Connected = a >=90s call since the anchor.
+    // Called = ANY call (in/out, any length) since the anchor; call90 = a >=90s call.
     const { data: calls, error: callErr } = await sb
       .from('close_calls' as never)
-      .select('lead_id, activity_at')
+      .select('lead_id, activity_at, duration')
       .in('lead_id', chunk)
-      .gte('duration', 90)
     if (callErr) throw new Error(`close_calls read failed: ${callErr.message}`)
-    for (const r of (calls ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null }>) {
-      if (r.lead_id && after(r.lead_id, r.activity_at)) connected.add(r.lead_id)
+    for (const r of (calls ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null; duration: number | null }>) {
+      if (!r.lead_id || !after(r.lead_id, r.activity_at)) continue
+      anyCall.add(r.lead_id)
+      if ((r.duration ?? 0) >= 90) call90.add(r.lead_id)
     }
 
-    // Triage/confirmation forms → connected (reached) + booked (DC/HT booking).
+    // Triage/confirmation forms → form-reached (→ connected only with a call) +
+    // booked (DC/HT booking).
     const { data: triage, error: trErr } = await sb
       .from('airtable_setter_triage_calls' as never)
       .select('lead_id, call_status, airtable_created_at')
@@ -195,7 +213,7 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     for (const r of (triage ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null; airtable_created_at: string | null }>) {
       if (!r.lead_id || !after(r.lead_id, r.airtable_created_at)) continue
       const s = (r.call_status ?? '').toLowerCase()
-      if (reaches(r.call_status)) connected.add(r.lead_id)
+      if (reaches(r.call_status)) formReached.add(r.lead_id)
       if (s.includes('booking')) {
         booked.add(r.lead_id)
         if (s.includes('digital college booking')) bookedDc.add(r.lead_id)
@@ -231,15 +249,20 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     }
   }
 
-  // 3. Monotonic backfill upward — a later stage implies every earlier one.
+  // 3. Connected = (a form AND a call of any length) OR a >=90s call.
+  const connected = revivalConnected(call90, formReached, anyCall)
+
+  // 4. Monotonic backfill upward — a later stage implies every earlier one.
   closed.forEach((id) => showed.add(id))
   showed.forEach((id) => booked.add(id))
   booked.forEach((id) => connected.add(id))
-  connected.forEach((id) => responded.add(id))
+  connected.forEach((id) => anyCall.add(id))
+  anyCall.forEach((id) => responded.add(id))
 
   return {
     leads: ids.length,
     responded: responded.size,
+    called: anyCall.size,
     connected: connected.size,
     booked: booked.size,
     bookedDc: bookedDc.size,
@@ -252,17 +275,15 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
   }
 }
 
-// ---- Called sub-funnel: responded → called → connected, + speed-to-dial ----
+// ---- Speed-to-dial distribution (the Called section's chart) ----
 //
-// "Called" gates on the setter's actual action — an outbound dial placed AFTER
-// the lead's first inbound reply — NOT on us classifying the reply text, so the
-// data stays purely factual (the setter already decided who was worth calling).
-//   responded = lead sent an inbound SMS (since their anchor)
-//   called    = >=1 outbound dial AFTER that first reply
-//   connected = a >=90s outbound dial after that first reply (subset of called)
-// Speed-to-dial = minutes from first reply → first dial, bucketed into a
-// distribution. No 24h clip: a ">24h" tail bucket keeps the slow follow-ups
-// visible rather than silently dropped.
+// Population = leads we OUTBOUND-dialed after their first inbound reply (speed
+// "to dial" only makes sense for our own outbound call). Each lead is bucketed
+// by minutes from first reply → first outbound dial, and split by whether the
+// lead is "revival connected" (the SAME definition as the main funnel:
+// revivalConnected(call90, formReached, anyCall) — a >=90s call either direction,
+// OR a form backed by a call). No 24h clip: a ">24h" tail bucket keeps the slow
+// follow-ups visible rather than silently dropped.
 
 export type RevivalSpeedBucket = { label: string; count: number; connected: number }
 
@@ -324,35 +345,59 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
     }
   }
 
-  // Pass 2: outbound dials AFTER the first reply → called / connected / first-dial time.
-  const called = new Set<string>()
-  const connected = new Set<string>()
+  // Pass 2: calls. (a) outbound-dial-after-reply = the speed-graph population +
+  // first-dial time; (b) anyCall / call90 (either direction) for the connected def.
+  const dialedAfterReply = new Set<string>()
   const firstDial = new Map<string, string>()
+  const anyCall = new Set<string>()
+  const call90 = new Set<string>()
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200)
     const { data, error } = await sb
       .from('close_calls' as never)
-      .select('lead_id, activity_at, duration')
+      .select('lead_id, activity_at, duration, direction')
       .in('lead_id', chunk)
-      .eq('direction', 'outbound')
     if (error) throw new Error(`close_calls read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null; duration: number | null }>) {
-      if (!r.lead_id || r.activity_at == null) continue
-      const reply = firstResp.get(r.lead_id)
-      if (reply == null || r.activity_at < reply) continue
-      called.add(r.lead_id)
-      const cur = firstDial.get(r.lead_id)
-      if (cur == null || r.activity_at < cur) firstDial.set(r.lead_id, r.activity_at)
-      if ((r.duration ?? 0) >= 90) connected.add(r.lead_id)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null; duration: number | null; direction: string | null }>) {
+      if (!r.lead_id || r.activity_at == null || !after(r.lead_id, r.activity_at)) continue
+      anyCall.add(r.lead_id)
+      if ((r.duration ?? 0) >= 90) call90.add(r.lead_id)
+      if (r.direction === 'outbound') {
+        const reply = firstResp.get(r.lead_id)
+        if (reply != null && r.activity_at >= reply) {
+          dialedAfterReply.add(r.lead_id)
+          const cur = firstDial.get(r.lead_id)
+          if (cur == null || r.activity_at < cur) firstDial.set(r.lead_id, r.activity_at)
+        }
+      }
     }
   }
 
-  // Speed-to-dial distribution (minutes from first reply → first dial), each
-  // bucket split into connected (≥90s dial reached them) vs not.
+  // Pass 3: triage forms that reached the lead → formReached.
+  const formReached = new Set<string>()
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('airtable_setter_triage_calls' as never)
+      .select('lead_id, call_status, airtable_created_at')
+      .in('lead_id', chunk)
+      .is('excluded_at', null)
+    if (error) throw new Error(`triage read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; call_status: string | null; airtable_created_at: string | null }>) {
+      if (!r.lead_id || !after(r.lead_id, r.airtable_created_at)) continue
+      if (reaches(r.call_status)) formReached.add(r.lead_id)
+    }
+  }
+
+  // Revival "connected" — identical definition to the main funnel.
+  const connected = revivalConnected(call90, formReached, anyCall)
+
+  // Speed-to-dial distribution (minutes from first reply → first outbound dial),
+  // each bucket split into connected (revival-connected) vs not.
   const counts: number[] = new Array(SPEED_BUCKETS.length).fill(0)
   const connectedCounts: number[] = new Array(SPEED_BUCKETS.length).fill(0)
   const deltas: number[] = []
-  called.forEach((lid) => {
+  dialedAfterReply.forEach((lid) => {
     const reply = firstResp.get(lid)
     const dial = firstDial.get(lid)
     if (reply == null || dial == null) return
@@ -373,9 +418,9 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
 
   return {
     responded: firstResp.size,
-    called: called.size,
+    called: dialedAfterReply.size,
     connected: connected.size,
-    notCalled: firstResp.size - called.size,
+    notCalled: firstResp.size - dialedAfterReply.size, // replied, never outbound-dialed back
     speed: SPEED_BUCKETS.map((b, i) => ({ label: b.label, count: counts[i], connected: connectedCounts[i] })),
     speedN: deltas.length,
     speedMedianMin: median == null ? null : Math.round(median),

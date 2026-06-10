@@ -44,20 +44,21 @@ export default async function RevivalFunnelPage() {
         className="geg-mono"
         style={{ marginTop: 14, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
       >
-        <b>Called</b> = the setter placed an outbound dial <i>after</i> the lead&apos;s first reply (their own
-        call decision — no reply-text guessing) · <b>Connected</b> here = a ≥90s dial after the reply ·
-        <b>Speed to dial</b> = first reply → first dial; the &gt;30m buckets fade to flag slow follow-up.
+        Of the leads we outbound-dialed after their reply, how fast we got to them and whether the dial
+        connected. <b>Speed to dial</b> = first reply → first outbound call; bars stack connected (coral)
+        over not-connected, with the connect % inside. Small n per bucket — read the trend, not single bars.
       </div>
 
       <div
         className="geg-mono"
         style={{ marginTop: 16, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
       >
-        Connected = a ≥90s call or a triage/confirmation form that reached the lead · Booked = a DC or
-        HT booking · Showed = a closer-report show · Closed = a DC close <b>with an explicit plan</b>
-        (a &ldquo;DC Closed&rdquo; form with no plan is counted as a show, not a close) · Cash = $300 per
-        Digital College plan unit. Activity is counted from each lead&apos;s revival start (created date,
-        floored at the Jun 3 blast launch) so pre-existing leads&apos; old activity isn&apos;t counted.
+        Called = ≥1 call (inbound or outbound, any length) · Connected = a <b>call</b> backed by a form{' '}
+        <b>or</b> a call ≥90s (so a text-DQ with no call is not a connect) · Booked = a DC or HT booking ·
+        Showed = a closer-report show · Closed = a DC close <b>with an explicit plan</b> (a &ldquo;DC
+        Closed&rdquo; form with no plan is counted as a show, not a close) · Cash = $300 per Digital College
+        plan unit. Activity is counted from each lead&apos;s revival start (created date, floored at the
+        Jun 3 blast launch) so pre-existing leads&apos; old activity isn&apos;t counted.
       </div>
     </div>
   )
