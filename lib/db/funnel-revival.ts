@@ -106,12 +106,11 @@ function dcCloseUnits(f: {
   return legacyClose ? { isClose: true, units: 1, markedNoPlan: false } : { isClose: false, units: 0, markedNoPlan: false }
 }
 
-export async function getRevivalFunnel(): Promise<RevivalFunnel> {
-  const sb = createAdminClient()
-
-  // 1. All revival-tagged, non-excluded leads + their start anchor. close_leads
-  // is ~7.6k rows; page through and JS-filter the CF (mirrors isRevival usage
-  // in funnel-appointment-setting.ts). Guard the 1000-row PostgREST cap.
+// Per-lead revival start anchor (later of date_created, REVIVAL_FLOOR). close_leads
+// is ~7.6k rows; page through and JS-filter the CF (mirrors isRevival usage in
+// funnel-appointment-setting.ts). Guard the 1000-row PostgREST cap. Shared by the
+// main funnel and the Called sub-funnel so both anchor identically.
+async function getRevivalAnchors(sb: ReturnType<typeof createAdminClient>): Promise<Map<string, string>> {
   const anchor = new Map<string, string>() // close_id → revival-start ISO
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb
@@ -132,6 +131,14 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     }
     if (rows.length < 1000) break
   }
+  return anchor
+}
+
+export async function getRevivalFunnel(): Promise<RevivalFunnel> {
+  const sb = createAdminClient()
+
+  // 1. All revival-tagged, non-excluded leads + their start anchor.
+  const anchor = await getRevivalAnchors(sb)
   const ids = Array.from(anchor.keys())
   if (ids.length === 0) {
     return { leads: 0, responded: 0, connected: 0, booked: 0, bookedDc: 0, bookedHt: 0, showed: 0, closed: 0, closedPlans: emptyPlans(), cashUsd: 0, markedNoPlan: 0 }
@@ -242,5 +249,131 @@ export async function getRevivalFunnel(): Promise<RevivalFunnel> {
     closedPlans,
     cashUsd: dcPlanUnits(closedPlans) * DC_PLAN_PRICE_USD,
     markedNoPlan,
+  }
+}
+
+// ---- Called sub-funnel: responded → called → connected, + speed-to-dial ----
+//
+// "Called" gates on the setter's actual action — an outbound dial placed AFTER
+// the lead's first inbound reply — NOT on us classifying the reply text, so the
+// data stays purely factual (the setter already decided who was worth calling).
+//   responded = lead sent an inbound SMS (since their anchor)
+//   called    = >=1 outbound dial AFTER that first reply
+//   connected = a >=90s outbound dial after that first reply (subset of called)
+// Speed-to-dial = minutes from first reply → first dial, bucketed into a
+// distribution. No 24h clip: a ">24h" tail bucket keeps the slow follow-ups
+// visible rather than silently dropped.
+
+export type RevivalSpeedBucket = { label: string; count: number }
+
+export type RevivalCalled = {
+  responded: number
+  called: number
+  connected: number
+  notCalled: number // responded but never dialed back
+  speed: RevivalSpeedBucket[]
+  speedN: number // leads in the speed distribution (= called with a measurable gap)
+  speedMedianMin: number | null
+}
+
+const SPEED_BUCKETS: { label: string; maxMin: number }[] = [
+  { label: '<5m', maxMin: 5 },
+  { label: '5–15m', maxMin: 15 },
+  { label: '15–30m', maxMin: 30 },
+  { label: '30–60m', maxMin: 60 },
+  { label: '1–2h', maxMin: 120 },
+  { label: '2–6h', maxMin: 360 },
+  { label: '6–24h', maxMin: 1440 },
+  { label: '>24h', maxMin: Infinity },
+]
+
+export async function getRevivalCalled(): Promise<RevivalCalled> {
+  const sb = createAdminClient()
+  const anchor = await getRevivalAnchors(sb)
+  const ids = Array.from(anchor.keys())
+  const empty: RevivalCalled = {
+    responded: 0,
+    called: 0,
+    connected: 0,
+    notCalled: 0,
+    speed: SPEED_BUCKETS.map((b) => ({ label: b.label, count: 0 })),
+    speedN: 0,
+    speedMedianMin: null,
+  }
+  if (ids.length === 0) return empty
+
+  const after = (lid: string, ts: string | null | undefined): boolean => {
+    const a = anchor.get(lid)
+    return ts != null && a != null && ts >= a
+  }
+
+  // Pass 1: earliest inbound reply per lead (since anchor).
+  const firstResp = new Map<string, string>()
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('close_sms' as never)
+      .select('lead_id, activity_at')
+      .in('lead_id', chunk)
+      .eq('direction', 'inbound')
+    if (error) throw new Error(`close_sms read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null }>) {
+      if (!r.lead_id || r.activity_at == null || !after(r.lead_id, r.activity_at)) continue
+      const cur = firstResp.get(r.lead_id)
+      if (cur == null || r.activity_at < cur) firstResp.set(r.lead_id, r.activity_at)
+    }
+  }
+
+  // Pass 2: outbound dials AFTER the first reply → called / connected / first-dial time.
+  const called = new Set<string>()
+  const connected = new Set<string>()
+  const firstDial = new Map<string, string>()
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await sb
+      .from('close_calls' as never)
+      .select('lead_id, activity_at, duration')
+      .in('lead_id', chunk)
+      .eq('direction', 'outbound')
+    if (error) throw new Error(`close_calls read failed: ${error.message}`)
+    for (const r of (data ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null; duration: number | null }>) {
+      if (!r.lead_id || r.activity_at == null) continue
+      const reply = firstResp.get(r.lead_id)
+      if (reply == null || r.activity_at < reply) continue
+      called.add(r.lead_id)
+      const cur = firstDial.get(r.lead_id)
+      if (cur == null || r.activity_at < cur) firstDial.set(r.lead_id, r.activity_at)
+      if ((r.duration ?? 0) >= 90) connected.add(r.lead_id)
+    }
+  }
+
+  // Speed-to-dial distribution (minutes from first reply → first dial).
+  const counts: number[] = new Array(SPEED_BUCKETS.length).fill(0)
+  const deltas: number[] = []
+  called.forEach((lid) => {
+    const reply = firstResp.get(lid)
+    const dial = firstDial.get(lid)
+    if (reply == null || dial == null) return
+    const min = (Date.parse(dial) - Date.parse(reply)) / 60000
+    if (min < 0) return
+    deltas.push(min)
+    const idx = SPEED_BUCKETS.findIndex((b) => min < b.maxMin)
+    counts[idx >= 0 ? idx : SPEED_BUCKETS.length - 1] += 1
+  })
+  deltas.sort((a, b) => a - b)
+  const median = deltas.length
+    ? deltas.length % 2
+      ? deltas[(deltas.length - 1) / 2]
+      : (deltas[deltas.length / 2 - 1] + deltas[deltas.length / 2]) / 2
+    : null
+
+  return {
+    responded: firstResp.size,
+    called: called.size,
+    connected: connected.size,
+    notCalled: firstResp.size - called.size,
+    speed: SPEED_BUCKETS.map((b, i) => ({ label: b.label, count: counts[i] })),
+    speedN: deltas.length,
+    speedMedianMin: median == null ? null : Math.round(median),
   }
 }

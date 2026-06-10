@@ -1,6 +1,7 @@
 import { HeaderBand } from '@/components/gregory/header-band'
+import { RevivalCalledSection } from '@/components/sales/revival-called'
 import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
-import { getRevivalFunnel } from '@/lib/db/funnel-revival'
+import { getRevivalCalled, getRevivalFunnel } from '@/lib/db/funnel-revival'
 import { PersonPill } from '../../header-pills'
 
 // Sales Dashboard — Revival (a sub-page under Funnel).
@@ -16,7 +17,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 export default async function RevivalFunnelPage() {
-  const funnel = await getRevivalFunnel()
+  const [funnel, called] = await Promise.all([getRevivalFunnel(), getRevivalCalled()])
 
   return (
     <div>
@@ -36,6 +37,17 @@ export default async function RevivalFunnelPage() {
       </div>
 
       <RevivalFunnelSection funnel={funnel} />
+
+      <RevivalCalledSection called={called} />
+
+      <div
+        className="geg-mono"
+        style={{ marginTop: 14, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
+      >
+        <b>Called</b> = the setter placed an outbound dial <i>after</i> the lead&apos;s first reply (their own
+        call decision — no reply-text guessing) · <b>Connected</b> here = a ≥90s dial after the reply ·
+        <b>Speed to dial</b> = first reply → first dial; the &gt;30m buckets fade to flag slow follow-up.
+      </div>
 
       <div
         className="geg-mono"
