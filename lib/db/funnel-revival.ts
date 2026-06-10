@@ -431,10 +431,13 @@ export async function getRevivalCalled(): Promise<RevivalCalled> {
 //
 // Wall-clock by design (Drake 2026-06-10): no business-hours fairness adjustment
 // — the point is to SEE the gap (replies landing when nobody's dialing) and staff
-// for it. replies = inbound SMS events; dials = outbound call events; connects =
-// each revival-connected lead counted once at its CONNECTING CALL's time (if the
-// form and the call disagree on time, the call wins — connects are timed by the
-// call, never the Airtable form).
+// for it. All three series are DISTINCT LEADS counted once at their FIRST event,
+// so the totals line up with the funnel (replies≈responded, dials≈called,
+// connects≈connected) instead of inflating on multi-message conversations:
+//   replies  = each lead at its first inbound SMS
+//   dials    = each lead at its first outbound call
+//   connects = each lead at its CONNECTING CALL (if the form and call disagree on
+//              time, the call wins — connects are timed by the call, never the form)
 
 export type RevivalHourBucket = { label: string; replies: number; dials: number; connects: number }
 
@@ -464,6 +467,8 @@ export async function getRevivalTimeOfDay(): Promise<{ buckets: RevivalHourBucke
   const formReached = new Set<string>()
   const earliestCall = new Map<string, string>()
   const earliestCall90 = new Map<string, string>()
+  const firstReply = new Map<string, string>() // earliest inbound SMS per lead
+  const firstDial = new Map<string, string>() // earliest outbound call per lead
 
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200)
@@ -475,7 +480,9 @@ export async function getRevivalTimeOfDay(): Promise<{ buckets: RevivalHourBucke
       .eq('direction', 'inbound')
     if (e1) throw new Error(`close_sms read failed: ${e1.message}`)
     for (const r of (sms ?? []) as unknown as Array<{ lead_id: string | null; activity_at: string | null }>) {
-      if (r.lead_id && r.activity_at && after(r.lead_id, r.activity_at)) buckets[bucketOf(r.activity_at)].replies += 1
+      if (!r.lead_id || r.activity_at == null || !after(r.lead_id, r.activity_at)) continue
+      const cur = firstReply.get(r.lead_id)
+      if (cur == null || r.activity_at < cur) firstReply.set(r.lead_id, r.activity_at)
     }
 
     const { data: calls, error: e2 } = await sb
@@ -493,7 +500,10 @@ export async function getRevivalTimeOfDay(): Promise<{ buckets: RevivalHourBucke
         const e9 = earliestCall90.get(r.lead_id)
         if (e9 == null || r.activity_at < e9) earliestCall90.set(r.lead_id, r.activity_at)
       }
-      if (r.direction === 'outbound') buckets[bucketOf(r.activity_at)].dials += 1
+      if (r.direction === 'outbound') {
+        const cur = firstDial.get(r.lead_id)
+        if (cur == null || r.activity_at < cur) firstDial.set(r.lead_id, r.activity_at)
+      }
     }
 
     const { data: tri, error: e3 } = await sb
@@ -506,6 +516,16 @@ export async function getRevivalTimeOfDay(): Promise<{ buckets: RevivalHourBucke
       if (r.lead_id && after(r.lead_id, r.airtable_created_at) && reaches(r.call_status)) formReached.add(r.lead_id)
     }
   }
+
+  // One bucket increment per lead, at its first event — totals align with the
+  // funnel (replies≈responded, dials≈called) instead of inflating on multi-message
+  // conversations.
+  firstReply.forEach((t) => {
+    buckets[bucketOf(t)].replies += 1
+  })
+  firstDial.forEach((t) => {
+    buckets[bucketOf(t)].dials += 1
+  })
 
   // Connects timed by the CALL: the ≥90s call if there is one, else the earliest
   // call backing the form. Every revival-connected lead has a call by definition.
