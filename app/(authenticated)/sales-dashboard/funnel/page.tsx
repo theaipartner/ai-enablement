@@ -35,13 +35,23 @@ export default async function SalesDashboardFunnelPage({
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
 
-  // Same cohort spine as the Leads roster, so the funnel and the rosters it
-  // links to can't drift.
-  const cohort = await getSpeedToLeadCohort(range)
-  const rows = await getLeadsForRange(range, cohort)
-  const funnel = await getLeadsFunnel(rows, range)
-  // Digital College funnel — tag-driven, unique leads only, same window as HT.
-  const dcFunnel = await getDcFunnel(range)
+  // The funnel's three steps form ONE dependency chain (cohort → roster →
+  // funnel boxes); the Digital College funnel is independent of that chain. Run
+  // the chain and the DC funnel CONCURRENTLY so the page waits on the slower of
+  // the two, not their sum. Cash needs both (the HT funnel's adspend + the DC
+  // funnel), so it follows. Same functions, args, and results as the prior
+  // sequential version — pure latency reduction, no aggregation-math change.
+  const [funnel, dcFunnel] = await Promise.all([
+    (async () => {
+      // Same cohort spine as the Leads roster, so the funnel and the rosters it
+      // links to can't drift.
+      const cohort = await getSpeedToLeadCohort(range)
+      const rows = await getLeadsForRange(range, cohort)
+      return getLeadsFunnel(rows, range)
+    })(),
+    // Digital College funnel — tag-driven, unique leads only, same window as HT.
+    getDcFunnel(range),
+  ])
   // Cash collected — funnel-wide (HT + DC) summary with ROAS, its own section.
   const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd)
 
