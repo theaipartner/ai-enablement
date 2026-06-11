@@ -1,3 +1,9 @@
+> ⚠️ **SUPERSEDED (2026-06-11).** This 1,886-line doc is the old accreted
+> palimpsest. The current, de-duplicated sales documentation lives in **`docs/sales/`**
+> (start at `docs/sales/README.md`). This file is kept only to mine still-true detail
+> and will be deleted once that's confirmed done. Do **not** add to it; do **not** treat
+> its stacked "MOST CURRENT" blocks as authoritative.
+
 # Sales Dashboard — Architecture & Code Map
 
 **Purpose.** A navigation map of the sales-dashboard surface for any new Claude
