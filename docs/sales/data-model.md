@@ -145,8 +145,9 @@ This is the list the upcoming table audit works from.
 | `close_lead_status_changes` | status transition stream | tagger (legacy qualification) |
 | `close_opportunities` | workflow markers ($1 placeholders, **not** money) | coarse signal, mostly unused |
 | `close_custom_field_definitions` | `cf_*` id → name reference | reference |
-| `lead_cycles` | **the unique leads list** — type + stage timestamps + DC columns | funnel, roster, per-lead, DC funnel, Cash |
-| `lead_tags` | tag rows behind the tagger | lead typing |
+| `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |
+| `lead_cycle_stages` | per-stage timestamps within a cycle (the funnel ladder) | funnel stage attribution, per-lead journey |
+| `lead_tag_runs` | audit log of every tagger run (~69k rows) | tagger diagnostics, lead-tag-log page |
 | `calendly_scheduled_events` | event mirror (filter by `name`) | closer drill, booking funnels, call typing |
 | `calendly_invitees` | invitee mirror — `no_show`, `rescheduled`, `utm_term`, email | lead matching, reschedule counts |
 | `calendly_event_types` | event-type reference (mostly not joined — retired URIs) | reference |
@@ -155,12 +156,15 @@ This is the list the upcoming table audit works from.
 | `airtable_digital_college_sales` | Robby's dedicated DC form | DC drilldown (Talent), per-lead DC |
 | `typeform_responses` | opt-in event log (`SFedWelr`) | tagger universe, opt-in counting |
 | `typeform_forms` | form/question reference | reference |
+| `typeform_form_insights_snapshots` | periodic Typeform analytics snapshots | typeform insights cron |
 | `meta_ad_daily` | account-level daily Meta spend (Cortana-fed) | Ads page, adspend fallback |
 | `cortana_ad_daily` | per-ad daily attribution | Ads page |
 | `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS |
-| `clarity_metrics_daily` | landing-page / TYP metrics | Landing Pages page |
+| `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |
+| `setter_call_reviews` | AI reviews of setter calls (Deepgram → LLM) | Talent, per-lead lifecycle |
+| `setter_call_transcripts` | setter-call transcripts (Deepgram) | setter call reviewer, per-lead |
 
 ### Shared (sales reads, but fulfillment also uses)
 
@@ -168,6 +172,9 @@ This is the list the upcoming table audit works from.
 |-------|------|
 | `calls` | Fathom call records — sales uses `call_category='client'` rows for meeting-duration metrics; CSM uses it too |
 | `team_members` | rep identities + access tiers — gates the dashboard, used elsewhere |
+| `call_classification_history` | classification log for `calls` rows |
+| `webhook_deliveries` | shared webhook-delivery audit log (~121k rows; all ingestion endpoints) |
+| `oauth_tokens` | shared OAuth token store (Google, etc.) |
 
 ### Fulfillment / CSM / agent infra — **not sales**
 
@@ -176,10 +183,24 @@ This is the list the upcoming table audit works from.
 `client_upsells`, `calendar_events`, `call_action_items`, `call_participants`,
 `nps_submissions`, `agent_feedback`, `agent_runs`, `alerts`, `escalations`,
 `pending_digest_items`, `pending_ella_responses`, `slack_channels`, `slack_messages`,
-`document_chunks`, `documents`, `oauth_tokens`, `director_tasks`,
+`document_chunks`, `documents`, `director_tasks`,
 `monthly_subscriptions`, `cost_extras`.
 
 > These are candidates for the eventual `sales` Postgres schema move and for the
 > "what can we delete" audit — but that audit is a later pass. This manifest is the
 > starting inventory.
+>
+> **Verified against the live cloud DB 2026-06-11 — 56 public base tables, all
+> accounted for.** Corrections from the first draft: there is **no `lead_tags` table**
+> (that name was the tagger *code* at `lib/db/lead-tags.ts`); the lead model is three
+> tables — `lead_cycles` + `lead_cycle_stages` + `lead_tag_runs`. Five sales tables were
+> missing from the first draft and are now listed: `lead_cycle_stages`, `lead_tag_runs`,
+> `typeform_form_insights_snapshots`, `setter_call_reviews`, `setter_call_transcripts`.
+> Seven tables have **no `docs/schema/` file** yet: `lead_cycle_stages`, `lead_tag_runs`,
+> `typeform_form_insights_snapshots`, `setter_call_reviews`, `setter_call_transcripts`,
+> `call_classification_history`, `webhook_deliveries`.
+>
+> **Fathom for sales closing calls is NOT ingested yet** — wanted, absent. The only
+> sales call-recording path today is the Deepgram **setter** pipeline (`setter_call_*`).
+> The `calls` table is Fathom *client/CSM* calls, not closer calls.
 </content>
