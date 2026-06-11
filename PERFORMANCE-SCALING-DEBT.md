@@ -28,6 +28,58 @@ summary rows instead of shipping tens of thousands of raw rows to Node.
   `.in(lead_id)` against the existing indexes. **Provably identical output**
   (drops exactly the rows JS already skipped), so no diff was needed.
 
+### ✅ Also done (2026-06-02) — not previously recorded here
+
+- **lead_cycles N+1 killed** (`473af73`) — `getLeadCycleRows` used to loop over
+  every in-window lead issuing 2 queries each (`lead_cycles` + `lead_cycle_stages`,
+  `.eq close_id`) — ~1+N×2 sequential round-trips, and ran **twice** on `/funnel`.
+  Now `getLeadCyclesByIds`: two chunked `IN` queries (200 ids/chunk, cycles+stages
+  in parallel), grouped in memory, and the whole thing wrapped in **React `cache()`**
+  so the funnel page's two callers share one computation per request. Measured
+  against cloud (280-lead window): **560 round-trips → 4, 93.2s → 1.28s (72×)**,
+  byte-identical output. This was the single biggest win to date.
+- **Hot indexes** (`2c2199d`, migration `0070_sales_hot_indexes.sql`) — added
+  `close_calls (direction, activity_at)` + `close_sms (direction, activity_at)`.
+  The connection/FMR scans filtered `(direction, activity_at)` but every existing
+  index was keyed on `date_created`, so the planner fell back to full seq scans
+  (`close_calls` 1.3s reading 16.7k rows to return 119). Now index range-scans.
+- **access-tier memoized** (`53c36d3`) — `getCurrentUserAccessTier` wrapped in
+  React `cache()`; removes 2–3 serial `auth.getUser()` + `team_members` round-trips
+  per request from nested layouts.
+- **maxDuration 60s** (`f7b9be4`) — heavy SSR pages get 60s headroom so a cold
+  start aggregates instead of 500-ing. A band-aid, not a fix — the work below is
+  what stops needing it.
+
+---
+
+## 🔎 Verification snapshot (2026-06-10) — what's confirmed STILL slow
+
+Verified against current code (not docs). The above fixes are real, but the
+structural bottlenecks remain:
+
+- **No SQL aggregation exists for the sales funnel.** `grep '.rpc('` across
+  `lib/db` returns only clients/calls/merge/fulfillment RPCs — nothing for the
+  funnel. `getSpeedToLeadCohort` still ships raw `close_calls` rows and buckets
+  them in JS. Item 1 below is genuinely unstarted.
+- **Funnel page awaits are fully sequential** (`funnel/page.tsx:40-46`):
+  `getSpeedToLeadCohort → getLeadsForRange → getLeadsFunnel → getDcFunnel →
+  getCashCollected`. `getDcFunnel` is independent of the cohort chain but waits
+  behind it. See new item 0.
+- **Unbounded resolvers are NOT deduped** — only `getLeadCycleRows` got React
+  `cache()`. `buildCalendlyLeadResolver`, `buildSetterNameResolver`,
+  `buildBookedByResolver` are still rebuilt per call with **no date bound**, so on
+  one funnel render `airtable_full_closer_report` is scanned all-time ~3× and
+  `close_leads` (via the calendly resolver) is scanned all-time again. See item 6.
+
+**Caching posture (Drake 2026-06-10):** cross-request `unstable_cache` is
+**deprioritized** — the dashboard is meant to be played with across date ranges,
+and every date change misses the cache, so it can't be the speed strategy. The
+goal is **fast on every fresh render without a cross-request cache.** That points
+at: SQL aggregation (item 1/2), parallelization (item 0), per-request dedup via
+React `cache()` (item 6 — same tool as the lead_cycles fix, and date-change-safe
+because it only dedupes within one render), and date-bounding the resolver scans
+(item 6). `unstable_cache` stays available as a later add-on, not the foundation.
+
 ---
 
 ## 🔧 Remaining fixes (not yet done) — priority order
@@ -35,6 +87,16 @@ summary rows instead of shipping tens of thousands of raw rows to Node.
 Each "math-rewrite" item below changes *where/how* a number is computed, so it
 **MUST** go through **build-alongside-and-diff** (see § Methodology). The
 filter-pushdown style (provably identical) does not.
+
+### 0. Parallelize the funnel page's section fetches (trivial, no math change)
+`app/(authenticated)/sales-dashboard/funnel/page.tsx:40-46` awaits its five
+section loaders one after another. Only `getCashCollected` has real upstream
+deps (`dcFunnel` + `funnel.adspendUsd`); the cohort chain and `getDcFunnel` are
+independent. Restructure so independent loaders run in `Promise.all` (the People
+page already does this — copy that shape). Pure latency reduction, date-range
+independent, zero aggregation-math change → does NOT need build-alongside-diff.
+Compounds with every item below: parallelism shrinks wall-clock to the slowest
+single query, SQL aggregation shrinks that slowest query.
 
 ### 1. `getSpeedToLeadCohort` — aggregate calls in SQL (biggest win)
 `lib/db/funnel-appointment-setting.ts`. Today it transfers the cohort's raw
@@ -77,6 +139,24 @@ post-reactivation dials/connected) in the **same** SQL pass to drop a separate
 `calendly_invitees` to classify each lead's booking path. Cheap today (~158
 rows) but unbounded as bookings accumulate. Eventually index/filter or
 precompute a lead → bookingType mapping.
+
+### 6. Dedupe + date-bound the unbounded resolvers (no math change; date-safe)
+`buildCalendlyLeadResolver` (`calendly-lead-match.ts`), `buildSetterNameResolver`
++ `buildBookedByResolver` (`funnel-closing.ts`) each scan a whole table
+**all-time, with no date filter**, and are rebuilt independently per caller — so
+one funnel/people render re-scans `airtable_full_closer_report` ~3× and
+`close_leads` again via the calendly resolver. Two provably-identical fixes, both
+**date-change-safe** (they don't cache across requests):
+- **Per-request dedup:** wrap each resolver in React `cache()` — the exact tool
+  already used for `getLeadCycleRows`. Collapses the 3× rescans to 1× within a
+  render; a new date range re-renders and dedupes again (no stale data).
+- **Date-bound the scans:** the resolvers only need rows touching the window
+  (plus the form-match grace), not all history. Add the window predicate so they
+  scale with the chosen range, not total table size. (Provably identical only if
+  the predicate provably can't drop a row the lookup would have used — verify the
+  id→name / utm→lead maps still cover every referenced key; otherwise diff it.)
+This is distinct from item 5 (which is about the volume of calendly rows pulled);
+item 6 is about the *number of times* the same table is rescanned per render.
 
 ---
 
