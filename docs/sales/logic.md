@@ -181,6 +181,38 @@ reproduce `leads.ts`'s New-form cap exactly, NOT "fix" it.** When dials are mate
 reconcile both sides to one close definition (the tagger's) as a deliberate, visible
 change.
 
+## Known — per-ad opt-in sum < total opt-ins (all ads)
+
+Selecting "All ads" shows a higher opt-in count than the **sum** of the individual ads.
+This is **expected, not a bug**: ~1–2% of unique leads have no `ad_id` (organic / direct
+— no Meta ad), so they're in the all-ads total but belong to *no* ad bucket. So
+`sum(per-ad opt-ins) = total − (no-ad leads)`. If we ever want them to reconcile, add an
+explicit "Organic / no ad" bucket to the ad filter. (Verified 2026-06-11: 362 of ~365
+in-window leads carry an ad; the rest are organic.)
+
+## Known perf — remaining slowness after SQL aggregation (logged 2026-06-12)
+
+Navigating funnel → leads / talent still lags ~2s, plus a ~1s "filter/time-window
+catching up" after the page appears. Likely causes, in priority order:
+
+1. **`getLeadsForRange` (the roster) is still a JS scan over ~7 tables** (`close_leads`,
+   `calendly_*`, `airtable_*`, `close_calls`, `lead_cycles`) — and it's called by **both**
+   the funnel page (for the ad-filter options + the rowIds/distinctLeads the funnel
+   function needs) and the leads page. This is the biggest remaining bottleneck: Section 1
+   sped up the funnel *counting*, but the page still loads this roster every navigation.
+   **Next SQL-aggregation target:** have the roster read from the tags (it already
+   overrides most fields with tag values — drop the live re-derivation from raw tables).
+2. **Talent (`/people`) per-rep metrics** (`getCallActivityMetrics` etc.) still JS-scan.
+3. **`PersistPageState` double-fetch:** the page renders with the URL's window, then
+   restores the saved window from localStorage on the client → a second navigation/fetch
+   (the "time window catching up"). Could restore before first paint, or skip the
+   re-fetch when the URL window already matches the saved one.
+4. **`force-dynamic` + no caching** — every navigation re-fetches server-side; no reuse
+   between visits.
+
+None investigated deeply yet — captured for the next perf pass. The roster (#1) is the
+clear first target and the natural Section-3 of the SQL-aggregation arc.
+
 ## Cohort vs activity — the mental model
 
 The funnel is an **opt-in-cohort** funnel: a close this week for a lead who opted in

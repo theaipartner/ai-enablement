@@ -68,6 +68,25 @@ often refining mid-stream — and we work directly and iteratively:
 - Commit trailer: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - **Migrations are the one careful, Drake-gated path** — see `ingestion.md` § Ops traps.
 
+## Performance — SQL aggregation is the baseline
+
+**Going forward, dashboard aggregation runs in Postgres, not JavaScript.** The pattern:
+the **tagger** materializes per-lead/per-cycle facts into the tag tables (`lead_cycles`
+/ `lead_cycle_stages`) at write-time; the dashboard reads them via **SQL functions**
+(read-time) or direct column reads — instead of pulling thousands of raw rows into the
+page and crunching them in JS. New aggregation should follow this: don't add a JS scan
+over `close_*` / `airtable_*` when a function over the materialized tables will do. See
+`docs/sales-sql-aggregation-plan.md` for the migration arc.
+
+**Done:** funnel box counts (`sales_funnel_counts`, migration 0079); speed-to-lead + FMR
+(per-cycle facts materialized in `lead_cycles` via 0080, read by `getSpeedToLeadCohort` /
+`getFmrSignals`; aggregated by `sales_speed_fmr`, 0081). Each preserves the prior numbers
+exactly — verified per-lead + cell-by-cell against the JS before cut-over.
+
+**Still JS (the remaining slowness — see [[logic]] § Known perf):** the roster
+(`getLeadsForRange`, called by BOTH the funnel and leads pages), and the Talent per-rep
+metrics.
+
 ## Legacy docs being folded in (do not treat as current)
 
 These predate this folder and are being consolidated here. Read them only to mine
