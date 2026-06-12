@@ -186,20 +186,20 @@ def _compute(cur, lead_ids):
     # no cycle). So lead_cycles == the unique leads list; everything reads from it.
     if scoped:
         cur.execute(
-            "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
+            "select close_id, display_name, contacts, latest_opt_in_date, ad_id, ad_name, campaign_id from close_leads "
             "where close_id = any(%s) and date_first_opted_in >= %s and excluded_at is null "
             "and coalesce(custom_fields_raw->>%s, '') = ''",
             (list(lead_ids), EFFECTIVE_DATE, REVIVAL_CF),
         )
     else:
         cur.execute(
-            "select close_id, display_name, contacts, latest_opt_in_date from close_leads "
+            "select close_id, display_name, contacts, latest_opt_in_date, ad_id, ad_name, campaign_id from close_leads "
             "where date_first_opted_in >= %s and excluded_at is null "
             "and coalesce(custom_fields_raw->>%s, '') = ''",
             (EFFECTIVE_DATE, REVIVAL_CF),
         )
-    lead_emails, lead_phones, lead_name, lead_latest = {}, {}, {}, {}
-    for cid, dname, contacts, latest in cur.fetchall():
+    lead_emails, lead_phones, lead_name, lead_latest, lead_ad = {}, {}, {}, {}, {}
+    for cid, dname, contacts, latest, ad_id, ad_name, campaign_id in cur.fetchall():
         emails, phones = set(), set()
         for c in contacts or []:
             for e in c.get("emails") or []:
@@ -214,6 +214,7 @@ def _compute(cur, lead_ids):
         if dname:
             lead_name[cid] = norm(dname)
         lead_latest[cid] = latest
+        lead_ad[cid] = (ad_id, ad_name, campaign_id)
     ids = list(lead_emails.keys())
     if not ids:
         return [], []
@@ -518,7 +519,8 @@ def _compute(cur, lead_ids):
                 if ct == "ht":
                     ph[p]["close"].append(t)
 
-            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin))
+            row_ad_id, row_ad_name, row_campaign_id = lead_ad.get(cid, (None, None, None))
+            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin, row_ad_id, row_ad_name, row_campaign_id))
 
             for p in ("primary", "reactive"):
                 if reactive_at is None and p == "reactive":
@@ -661,9 +663,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
             cur.execute("delete from lead_cycles where close_id = any(%s)", (list(lead_ids),))  # cascades stages
         if cycle_rows:
             execute_values(cur,
-                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin) values %s",
+                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin, ad_id, ad_name, campaign_id) values %s",
                 cycle_rows,
-                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s)")
+                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s)")
         if stage_rows:
             execute_values(cur,
                 "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
