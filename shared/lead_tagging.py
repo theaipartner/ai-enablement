@@ -322,6 +322,22 @@ def _compute(cur, lead_ids):
     for lid, cl, fu, ev, filed in fetch("airtable_digital_college_sales", "closed, follow_up, date_time_of_call, airtable_created_at", "and excluded_at is null"):
         dc[lid].append((norm(cl), norm(fu), ev, filed))
 
+    # Speed-to-lead + FMR raw signals (materialized per cycle below). ALL outbound
+    # calls (not just >=90s) for first-call / intensity / connect facts, and inbound
+    # SMS by activity_at for the FMR signal. Kept SEPARATE from calls90/sms_in (which
+    # the stage logic uses) so existing tags are untouched.
+    out_calls = defaultdict(list)
+    for lid, at, dur, uid in fetch(
+        "close_calls", "activity_at, duration, user_id",
+        "and direction='outbound' and activity_at is not null",
+    ):
+        out_calls[lid].append((at, dur, uid))
+    for lid in out_calls:
+        out_calls[lid].sort(key=lambda x: x[0])
+    sms_in_act = defaultdict(list)
+    for lid, at in fetch("close_sms", "activity_at", "and direction='inbound' and activity_at is not null"):
+        sms_in_act[lid].append(at)
+
     # 5. Compute tags + stages per cycle (the verified logic).
     now = _now()
     cycle_rows, stage_rows = [], []
@@ -520,7 +536,27 @@ def _compute(cur, lead_ids):
                     ph[p]["close"].append(t)
 
             row_ad_id, row_ad_name, row_campaign_id = lead_ad.get(cid, (None, None, None))
-            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin, row_ad_id, row_ad_name, row_campaign_id))
+            # Speed-to-lead + FMR facts for this cycle, anchored at opt_in_at (counted
+            # to now — matches the page's per-person computation; intensity being
+            # cumulative-forward, not per-cycle-bounded, is preserved here and a later
+            # change). Verified per-lead in Phase 1.
+            cyc_calls = [c for c in out_calls.get(cid, []) if c[0] >= opt_in_at]
+            conn_calls = [c for c in cyc_calls if (c[1] or 0) >= CONNECTED_SEC]
+            fcall = cyc_calls[0] if cyc_calls else None
+            scall = cyc_calls[1] if len(cyc_calls) > 1 else None
+            first_call_at = fcall[0] if fcall else None
+            intensity = len(cyc_calls)
+            any_conn = len(conn_calls) > 0
+            first_two = bool((fcall and (fcall[1] or 0) >= CONNECTED_SEC)
+                             or (scall and (scall[1] or 0) >= CONNECTED_SEC))
+            caller_uid = fcall[2] if fcall else None
+            tot_conn_dur = sum((c[1] or 0) for c in conn_calls)
+            conn_cnt = len(conn_calls)
+            earliest_connect = conn_calls[0][0] if conn_calls else None
+            cyc_inbound = [a for a in sms_in_act.get(cid, []) if a >= opt_in_at]
+            earliest_inbound = min(cyc_inbound) if cyc_inbound else None
+
+            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin, row_ad_id, row_ad_name, row_campaign_id, first_call_at, intensity, any_conn, first_two, caller_uid, tot_conn_dur, conn_cnt, earliest_inbound, earliest_connect))
 
             for p in ("primary", "reactive"):
                 if reactive_at is None and p == "reactive":
@@ -663,9 +699,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
             cur.execute("delete from lead_cycles where close_id = any(%s)", (list(lead_ids),))  # cascades stages
         if cycle_rows:
             execute_values(cur,
-                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin, ad_id, ad_name, campaign_id) values %s",
+                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin, ad_id, ad_name, campaign_id, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count, earliest_inbound_at, earliest_connect_at) values %s",
                 cycle_rows,
-                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s)")
+                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz)")
         if stage_rows:
             execute_values(cur,
                 "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
