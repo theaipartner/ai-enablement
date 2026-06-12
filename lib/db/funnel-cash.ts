@@ -30,6 +30,9 @@ export async function getCashCollected(
   range: DateRange,
   dc: DcFunnel,
   adspendUsd: number | null,
+  // When set (per-ad view), restrict HT cash to these leads and drop DC — DC is
+  // the separate Robby low-ticket campaign, not attributed to an HT ad.
+  adLeadIds?: string[] | null,
 ): Promise<CashCollected> {
   const sb = createAdminClient()
 
@@ -42,7 +45,11 @@ export async function getCashCollected(
     .gte('opt_in_at', range.startUtcIso)
     .lt('opt_in_at', range.endUtcIso)
   if (error) throw new Error(`HT-closed read failed: ${error.message}`)
-  const htLeads = Array.from(new Set(((closedRows ?? []) as unknown as Array<{ close_id: string }>).map((r) => r.close_id)))
+  let htLeads = Array.from(new Set(((closedRows ?? []) as unknown as Array<{ close_id: string }>).map((r) => r.close_id)))
+  if (adLeadIds) {
+    const allow = new Set(adLeadIds)
+    htLeads = htLeads.filter((id) => allow.has(id))
+  }
 
   let htUpfrontUsd = 0
   let htContractUsd = 0
@@ -63,8 +70,9 @@ export async function getCashCollected(
     }
   }
 
-  // DC is a flat $300 per program, so upfront and contract are the same.
-  const dcUsd = (dcPlanUnits(dc.closedPlans) + dcPlanUnits(dc.downsellPlans)) * DC_PLAN_PRICE_USD
+  // DC is a flat $300 per program, so upfront and contract are the same. In the
+  // per-ad view DC is excluded (it's the separate Robby campaign, not HT-ad cash).
+  const dcUsd = adLeadIds ? 0 : (dcPlanUnits(dc.closedPlans) + dcPlanUnits(dc.downsellPlans)) * DC_PLAN_PRICE_USD
   const upfrontTotalUsd = htUpfrontUsd + dcUsd
   const contractTotalUsd = htContractUsd + dcUsd
   const roas = (total: number) => (adspendUsd != null && adspendUsd > 0 ? total / adspendUsd : null)

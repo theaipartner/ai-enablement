@@ -54,9 +54,11 @@ export default async function SalesDashboardFunnelPage({
   ])
   const adOptions = buildAdOptions(allRows)
   const rows = ad ? allRows.filter((r) => r.adId === ad) : allRows
-  const funnel = await getLeadsFunnel(rows, range, { adFiltered: !!ad })
-  // Cash collected — funnel-wide (HT + DC) summary with ROAS, its own section.
-  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd)
+  const adName = ad ? (adOptions.find((o) => o.adId === ad)?.adName ?? ad) : null
+  const funnel = await getLeadsFunnel(rows, range, { adId: ad })
+  // Cash collected. When an ad is selected, scope HT cash to its leads so ROAS
+  // reads against the ad's own spend; otherwise the funnel-wide HT + DC summary.
+  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd, ad ? rows.map((r) => r.leadId) : null)
 
   const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
 
@@ -120,9 +122,9 @@ export default async function SalesDashboardFunnelPage({
 
       <FunnelStack funnel={funnel} range={range} ad={ad} />
 
-      <DcFunnelSection dc={dcFunnel} />
+      {ad ? null : <DcFunnelSection dc={dcFunnel} />}
 
-      <CashCollectedBar cash={cash} />
+      <CashCollectedBar cash={cash} adLabel={adName ?? undefined} />
 
       <div
         className="geg-mono"
@@ -145,7 +147,14 @@ function buildAdOptions(rows: LeadRow[]): AdOption[] {
     if (e) e.count += 1
     else m.set(r.adId, { adName: r.adName ?? r.adId, count: 1 })
   }
-  return Array.from(m.entries())
+  const opts = Array.from(m.entries())
     .map(([adId, v]) => ({ adId, adName: v.adName, count: v.count }))
     .sort((a, b) => b.count - a.count)
+  // Meta reuses creative names across distinct ads — disambiguate any collisions
+  // with a short ad-id suffix so the dropdown rows are tellable apart.
+  const nameCounts = new Map<string, number>()
+  for (const o of opts) nameCounts.set(o.adName, (nameCounts.get(o.adName) ?? 0) + 1)
+  return opts.map((o) =>
+    (nameCounts.get(o.adName) ?? 0) > 1 ? { ...o, adName: `${o.adName} · …${o.adId.slice(-4)}` } : o,
+  )
 }

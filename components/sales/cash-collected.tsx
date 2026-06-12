@@ -41,13 +41,18 @@ function Row({ label, ht, dc, total, roas }: { label: string; ht: number; dc: nu
 // Cash collected — its own funnel-wide summary at the bottom of the funnel page.
 // Upfront (amount paid today) and full contract value, each split HT / DC /
 // total with ROAS. Not part of the DC funnel. See lib/db/funnel-cash.ts.
-export function CashCollectedBar({ cash }: { cash: CashCollected }) {
+export function CashCollectedBar({ cash, adLabel }: { cash: CashCollected; adLabel?: string }) {
   return (
     <div style={{ marginTop: 20, border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '10px 14px', background: 'var(--color-geg-bg-elev)' }}>
         <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)' }}>
           Cash collected
         </span>
+        {adLabel ? (
+          <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginLeft: 8 }}>
+            · {adLabel} · HT only (DC is a separate campaign)
+          </span>
+        ) : null}
         {cash.adspendUsd != null ? (
           <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', marginLeft: 8 }}>
             · {usd(cash.adspendUsd)} adspend

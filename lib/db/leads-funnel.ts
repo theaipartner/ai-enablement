@@ -266,7 +266,7 @@ async function scanDialWindows(
 export async function getLeadsFunnel(
   rows: LeadRow[],
   range: DateRange,
-  opts?: { adFiltered?: boolean },
+  opts?: { adId?: string | null },
 ): Promise<LeadsFunnel> {
   // Count PER CYCLE from the persistent tags (a re-opt double-counts). Scope to
   // the leads the page passed (respects the view filter); the dials bracket +
@@ -307,11 +307,31 @@ export async function getLeadsFunnel(
     return n
   }
 
-  // Account-level adspend / clicks are meaningless against a single-ad funnel, so
-  // skip them when filtered (per-ad spend + ROAS is the planned fast-follow).
   let adspendUsd: number | null = null
   let uniqueLinkClicks: number | null = null
-  if (!opts?.adFiltered) {
+  if (opts?.adId) {
+    // Per-ad view: THIS ad's own spend + unique clicks over the window (from
+    // cortana_ad_daily by Meta ad id), so the Adspend node and every cost-per-X
+    // read correctly for the selected ad — not the account-wide total.
+    try {
+      const sb = createAdminClient()
+      const { data, error } = await sb
+        .from('cortana_ad_daily' as never)
+        .select('spent, unique_clicks')
+        .eq('platform_entity_id', opts.adId)
+        .gte('day', range.startEtDate)
+        .lte('day', range.endEtDate)
+      if (error) throw new Error(error.message)
+      const adRows = (data ?? []) as unknown as Array<{ spent: number | string | null; unique_clicks: number | string | null }>
+      if (adRows.length > 0) {
+        adspendUsd = adRows.reduce((a, r) => a + (Number(r.spent ?? 0) || 0), 0)
+        uniqueLinkClicks = adRows.reduce((a, r) => a + (Number(r.unique_clicks ?? 0) || 0), 0)
+      }
+    } catch {
+      adspendUsd = null
+      uniqueLinkClicks = null
+    }
+  } else {
     try {
       const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
       adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
