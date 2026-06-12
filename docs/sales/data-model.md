@@ -130,6 +130,22 @@ HT / DC / total:
 
 ---
 
+## Lead → ad attribution (verified 2026-06-11)
+
+Every unique lead carries its source ad **natively from Close** — no heuristic
+matching needed. On the unique-lead cohort, `close_leads.ad_id` / `ad_name` /
+`campaign_id` / `adset_id` / `utm_campaign` are **~99% populated** (356/359), and
+`ad_id` joins to `cortana_ad_daily.platform_entity_id` (the Meta ad id) with **100%
+coverage** — every lead's `ad_id` exists in Cortana. So the funnel is sliceable down to
+the individual ad/creative, with spend + ROAS per ad.
+
+- **Join path:** `lead_cycles.close_id` → `close_leads.ad_id` →
+  `cortana_ad_daily.platform_entity_id`.
+- The ~1–2% with no `ad_id` are organic/direct. `utm_source` is empty (0%) — use
+  `ad_name` / `campaign_id` instead.
+- ⚠️ Don't confuse with the **~20%** figure in `logic.md` — that's a *different* join
+  (Calendly bookings ↔ leads via `utm_term`), not lead→ad. Lead→ad is ~99%.
+
 ## Table manifest
 
 Which database tables are sales. (Per-column detail lives in `docs/schema/<table>.md`.)
