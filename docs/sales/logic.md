@@ -167,6 +167,20 @@ math.
 
 ---
 
+## Known inconsistency — dial close-cap (logged 2026-06-12, fix deferred)
+
+`leads.ts` caps a lead's dials at its **New-form** close time (`closeTimeIso`, from
+`airtable_full_closer_report` `form_type='New'` HT/DC closes + DC sales, `afterOptIn`).
+This **diverges from the tagger's close definition** (`lead_cycle_stages.closed_at`,
+which counts *all* closer forms incl. old-format and applies the Robby exclusion). So a
+lead that closed via an **old-format** form (e.g. `jkfU9G`, closed 2026-05-29) is **not**
+capped by `leads.ts` and its post-close fulfillment dials are counted; conversely
+`leads.ts` may cap leads the funnel doesn't count as closed. Net effect is single-digit
+dials. **Decision (Drake, 2026-06-12): preserve — the SQL-aggregation rework must
+reproduce `leads.ts`'s New-form cap exactly, NOT "fix" it.** When dials are materialized,
+reconcile both sides to one close definition (the tagger's) as a deliberate, visible
+change.
+
 ## Cohort vs activity — the mental model
 
 The funnel is an **opt-in-cohort** funnel: a close this week for a lead who opted in
