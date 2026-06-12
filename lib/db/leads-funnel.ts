@@ -268,6 +268,72 @@ export async function getLeadsFunnel(
   range: DateRange,
   opts?: { adId?: string | null },
 ): Promise<LeadsFunnel> {
+  // Adspend / clicks — used by BOTH paths. Per-ad view shows the selected ad's
+  // own spend (from cortana_ad_daily); otherwise the account-level adspend.
+  let adspendUsd: number | null = null
+  let uniqueLinkClicks: number | null = null
+  if (opts?.adId) {
+    try {
+      const sb = createAdminClient()
+      const { data, error } = await sb
+        .from('cortana_ad_daily' as never)
+        .select('spent, unique_clicks')
+        .eq('platform_entity_id', opts.adId)
+        .gte('day', range.startEtDate)
+        .lte('day', range.endEtDate)
+      if (error) throw new Error(error.message)
+      const adRows = (data ?? []) as unknown as Array<{ spent: number | string | null; unique_clicks: number | string | null }>
+      if (adRows.length > 0) {
+        adspendUsd = adRows.reduce((a, r) => a + (Number(r.spent ?? 0) || 0), 0)
+        uniqueLinkClicks = adRows.reduce((a, r) => a + (Number(r.unique_clicks ?? 0) || 0), 0)
+      }
+    } catch {
+      adspendUsd = null
+      uniqueLinkClicks = null
+    }
+  } else {
+    try {
+      const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
+      adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
+      uniqueLinkClicks = ads.find((m) => m.id === 'unique-clicks')?.value ?? null
+    } catch {
+      adspendUsd = null
+      uniqueLinkClicks = null
+    }
+  }
+
+  // SQL-aggregation path (DEFAULT): box counts come from the sales_funnel_counts
+  // Postgres function (migration 0079), verified cell-for-cell against the JS
+  // below. Set SALES_FUNNEL_USE_JS=1 to force the JS fallback; any RPC error also
+  // falls through to JS, so the page can never show nothing.
+  if (process.env.SALES_FUNNEL_USE_JS !== '1') {
+    try {
+      const sb = createAdminClient()
+      const { data, error } = await sb.rpc('sales_funnel_counts' as never, {
+        p_start: range.startUtcIso,
+        p_end: range.endUtcIso,
+        p_ad: opts?.adId ?? null,
+      } as never)
+      if (error) throw new Error(error.message)
+      const f = data as unknown as { total: TotalBox; direct: DirectBox; setter: PoolFunnelBox; reactivation: PoolFunnelBox }
+      const funnel: LeadsFunnel = {
+        adspendUsd,
+        uniqueLinkClicks,
+        total: f.total,
+        direct: f.direct,
+        setter: f.setter,
+        reactivation: f.reactivation,
+        warnings: [],
+      }
+      // distinctLeads = rows (one per person, already view/ad-filtered by the page).
+      funnel.warnings = validateFunnel(funnel, f.total.optIns, rows.length)
+      return funnel
+    } catch {
+      // Any RPC failure → fall through to the proven JS path (never blank).
+    }
+  }
+
+  // ---- JS fallback path ----
   // Count PER CYCLE from the persistent tags (a re-opt double-counts). Scope to
   // the leads the page passed (respects the view filter); the dials bracket +
   // the integrity identity use the per-PERSON rows. HT-only: closes are HT
@@ -305,41 +371,6 @@ export async function getLeadsFunnel(
       n += post ? (w?.postReactDials ?? 0) : (w?.dialsBeforeClose ?? 0)
     }
     return n
-  }
-
-  let adspendUsd: number | null = null
-  let uniqueLinkClicks: number | null = null
-  if (opts?.adId) {
-    // Per-ad view: THIS ad's own spend + unique clicks over the window (from
-    // cortana_ad_daily by Meta ad id), so the Adspend node and every cost-per-X
-    // read correctly for the selected ad — not the account-wide total.
-    try {
-      const sb = createAdminClient()
-      const { data, error } = await sb
-        .from('cortana_ad_daily' as never)
-        .select('spent, unique_clicks')
-        .eq('platform_entity_id', opts.adId)
-        .gte('day', range.startEtDate)
-        .lte('day', range.endEtDate)
-      if (error) throw new Error(error.message)
-      const adRows = (data ?? []) as unknown as Array<{ spent: number | string | null; unique_clicks: number | string | null }>
-      if (adRows.length > 0) {
-        adspendUsd = adRows.reduce((a, r) => a + (Number(r.spent ?? 0) || 0), 0)
-        uniqueLinkClicks = adRows.reduce((a, r) => a + (Number(r.unique_clicks ?? 0) || 0), 0)
-      }
-    } catch {
-      adspendUsd = null
-      uniqueLinkClicks = null
-    }
-  } else {
-    try {
-      const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
-      adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
-      uniqueLinkClicks = ads.find((m) => m.id === 'unique-clicks')?.value ?? null
-    } catch {
-      adspendUsd = null
-      uniqueLinkClicks = null
-    }
   }
 
   const total: TotalBox = {
