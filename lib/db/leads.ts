@@ -110,6 +110,9 @@ export type LeadRow = SpeedToLeadCohortRow & {
   tagReactivatedAt: string | null
   tagPrimaryHits: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
   tagReactiveHits: { connected: boolean; booked: boolean; confirmed: boolean; showed: boolean; closed: boolean } | null
+  // Source ad (denormalized from close_leads) — drives the per-ad funnel filter.
+  adId: string | null
+  adName: string | null
 }
 
 // A ≥90s outbound dial is a "connected" call (the FMR_DIAL_CONNECTED_SEC
@@ -268,11 +271,12 @@ export async function getLeadsForRange(
   const leadNames = new Map<string, string>()
   const leadQualified = new Map<string, Qualification>()
   const leadReactivatedAt = new Map<string, string>()
+  const leadAd = new Map<string, { adId: string | null; adName: string | null }>()
   for (let i = 0; i < leadIds.length; i += 100) {
     const chunk = leadIds.slice(i, i + 100)
     const { data, error } = await sb
       .from('close_leads' as never)
-      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at')
+      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, ad_id, ad_name')
       .in('close_id', chunk)
     if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
@@ -281,6 +285,8 @@ export async function getLeadsForRange(
       contacts: unknown
       marketing_qualified: string | null
       reactivated_at: string | null
+      ad_id: string | null
+      ad_name: string | null
     }>) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
@@ -295,6 +301,7 @@ export async function getLeadsForRange(
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
       leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
       if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
+      leadAd.set(r.close_id, { adId: r.ad_id, adName: r.ad_name })
     }
   }
 
@@ -662,6 +669,8 @@ export async function getLeadsForRange(
       tagReactivatedAt: tag ? tag.reactivatedAt : null,
       tagPrimaryHits: tag ? tag.primaryHits : null,
       tagReactiveHits: tag ? tag.reactiveHits : null,
+      adId: leadAd.get(r.leadId)?.adId ?? null,
+      adName: leadAd.get(r.leadId)?.adName ?? null,
     }
   })
 }

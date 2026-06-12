@@ -62,6 +62,7 @@ export default async function SalesDashboardLeadsPage({
   // reachedStage predicate, so a clicked bar opens exactly its leads.
   const types = parseTypes(searchParams?.type)
   const stage = parseStage(searchParams?.stage)
+  const adFilter = (Array.isArray(searchParams?.ad) ? searchParams?.ad[0] : searchParams?.ad)?.trim() || null
 
   // Fetch the cohort ONCE (the heavy scan) + access + the cached FMR signals in
   // parallel, then reuse the cohort for the roster (getLeadsForRange), the speed
@@ -72,7 +73,12 @@ export default async function SalesDashboardLeadsPage({
     getCurrentUserAccessTier(),
     getFmrSignals(range),
   ])
-  const allRows = await getLeadsForRange(range, speedCohort)
+  const allRowsUnscoped = await getLeadsForRange(range, speedCohort)
+  // Ad filter (carried from the Funnel page's ad-scoped stage links) narrows the
+  // whole page — roster, speed boxes, and FMR — to that ad's leads, so it stays
+  // consistent with the funnel box that was clicked.
+  const allRows = adFilter ? allRowsUnscoped.filter((r) => r.adId === adFilter) : allRowsUnscoped
+  const adName = adFilter ? (allRows[0]?.adName ?? adFilter) : null
   const canDelete = access?.tier === 'creator'
 
   // The cohort is already unique NEW opt-ins (May 24 onward) — returning leads
@@ -98,10 +104,20 @@ export default async function SalesDashboardLeadsPage({
   // click carries it as `ret`, letting the per-lead "Back to leads" return to
   // the exact same view. Generic over every param except `q` and `ret`.
   const backQuery = buildLeadsQuery(searchParams)
+  // Clear-ad link = the current query minus the ad param (and q/ret).
+  const clearAdHref = (() => {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(searchParams ?? {})) {
+      if (k === 'q' || k === 'ret' || k === 'ad' || v == null) continue
+      for (const val of Array.isArray(v) ? v : [v]) p.append(k, val)
+    }
+    const qs = p.toString()
+    return `/sales-dashboard/leads${qs ? `?${qs}` : ''}`
+  })()
 
   return (
     <div>
-      <PersistPageState window filters={['type', 'stage']} />
+      <PersistPageState window filters={['type', 'stage', 'ad']} />
       <HeaderBand
         eyebrow="SALES · LEADS"
         title="Leads."
@@ -117,6 +133,17 @@ export default async function SalesDashboardLeadsPage({
 
       <div style={{ marginTop: 20 }}>
         <LeadsFilterBar types={types} stage={stage} />
+        {adFilter ? (
+          <div
+            className="geg-mono"
+            style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11, letterSpacing: '0.04em', color: 'var(--color-geg-text-2)', border: '1px solid var(--color-geg-border)', borderRadius: 6, padding: '5px 10px', background: 'var(--color-geg-bg-elev)' }}
+          >
+            <span>Ad · {adName}</span>
+            <Link href={clearAdHref} style={{ color: 'var(--color-geg-text-faint)', textDecoration: 'none' }} aria-label="Clear ad filter">
+              ✕
+            </Link>
+          </div>
+        ) : null}
       </div>
 
       <div style={{ marginTop: 26 }}>

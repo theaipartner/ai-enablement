@@ -263,7 +263,11 @@ async function scanDialWindows(
   return out
 }
 
-export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise<LeadsFunnel> {
+export async function getLeadsFunnel(
+  rows: LeadRow[],
+  range: DateRange,
+  opts?: { adFiltered?: boolean },
+): Promise<LeadsFunnel> {
   // Count PER CYCLE from the persistent tags (a re-opt double-counts). Scope to
   // the leads the page passed (respects the view filter); the dials bracket +
   // the integrity identity use the per-PERSON rows. HT-only: closes are HT
@@ -303,15 +307,19 @@ export async function getLeadsFunnel(rows: LeadRow[], range: DateRange): Promise
     return n
   }
 
+  // Account-level adspend / clicks are meaningless against a single-ad funnel, so
+  // skip them when filtered (per-ad spend + ROAS is the planned fast-follow).
   let adspendUsd: number | null = null
   let uniqueLinkClicks: number | null = null
-  try {
-    const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
-    adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
-    uniqueLinkClicks = ads.find((m) => m.id === 'unique-clicks')?.value ?? null
-  } catch {
-    adspendUsd = null
-    uniqueLinkClicks = null
+  if (!opts?.adFiltered) {
+    try {
+      const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
+      adspendUsd = ads.find((m) => m.id === 'adspend')?.value ?? null
+      uniqueLinkClicks = ads.find((m) => m.id === 'unique-clicks')?.value ?? null
+    } catch {
+      adspendUsd = null
+      uniqueLinkClicks = null
+    }
   }
 
   const total: TotalBox = {
