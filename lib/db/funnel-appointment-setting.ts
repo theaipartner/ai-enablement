@@ -177,6 +177,36 @@ export type FmrSignals = {
 async function getFmrSignalsUncached(range: DateRange): Promise<FmrSignals> {
   const sb = createAdminClient()
 
+  // SQL-aggregation path (DEFAULT): the materialized per-cycle FMR signals
+  // (migration 0080) off each lead's earliest in-window typeform cycle, instead of
+  // scanning close_sms + close_calls. Verified equal to the scan (Phase 1, 0
+  // mismatches). buildFmrBlocks gates >= opt-in (already satisfied by the
+  // materialization) and applies the 24h check.
+  if (process.env.SALES_SPEED_USE_SCAN !== '1') {
+    const rows = await fetchAllPaged<{ close_id: string; opt_in_at: string; earliest_inbound_at: string | null; earliest_connect_at: string | null }>(
+      (f, t) => sb
+        .from('lead_cycles' as never)
+        .select('close_id, opt_in_at, earliest_inbound_at, earliest_connect_at')
+        .eq('source', 'typeform')
+        .gte('opt_in_at', range.startUtcIso)
+        .lt('opt_in_at', range.endUtcIso)
+        .range(f, t),
+      'lead_cycles fmr signals',
+    )
+    const earliest = new Map<string, { opt: string; inb: string | null; con: string | null }>()
+    for (const r of rows) {
+      const prev = earliest.get(r.close_id)
+      if (!prev || r.opt_in_at < prev.opt) earliest.set(r.close_id, { opt: r.opt_in_at, inb: r.earliest_inbound_at, con: r.earliest_connect_at })
+    }
+    const inb: Array<[string, string]> = []
+    const con: Array<[string, string]> = []
+    earliest.forEach((v, cid) => {
+      if (v.inb) inb.push([cid, v.inb])
+      if (v.con) con.push([cid, v.con])
+    })
+    return { inbound: inb, connect: con }
+  }
+
   // Earliest inbound SMS per lead (>= window start).
   const inbound = new Map<string, string>()
   for (let from = 0; ; from += 1000) {
@@ -1318,7 +1348,7 @@ export async function getSpeedToLeadCohort(
   const connectedCallCountByLead = new Map<string, number>()
   const dialCountByLead = new Map<string, number>()
   const nameByUser = new Map<string, string>()
-  {
+  if (process.env.SALES_SPEED_USE_SCAN === '1') {
     // DB-side filter to the cohort lead set (was: scan ALL outbound calls since
     // the window start, discard non-cohort in JS). Chunked `.in(lead_id)` over
     // the close_calls(lead_id, date_created) index — same calls processed, just
@@ -1374,6 +1404,50 @@ export async function getSpeedToLeadCohort(
         }
         if (rows.length < 1000) break
         from += 1000
+      }
+    }
+  } else {
+    // SQL-aggregation path (DEFAULT): read the tagger-materialized per-cycle facts
+    // (migration 0080) off each cohort person's earliest in-window cycle instead of
+    // scanning close_calls. Verified equal to the scan per-lead (Phase 3 Guard B).
+    // The first-call duration is encoded 90/null purely so the UNCHANGED row
+    // construction's firstConnected check reflects first_two_dials_connected.
+    const cohortIds = Array.from(qualifyingMap.keys())
+    const optInByLead = new Map(qualifyingLeads.map((l) => [l.close_id, l.optInAt]))
+    for (let i = 0; i < cohortIds.length; i += 200) {
+      const chunk = cohortIds.slice(i, i + 200)
+      const { data, error } = await sb
+        .from('lead_cycles' as never)
+        .select('close_id, opt_in_at, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count')
+        .in('close_id', chunk)
+      if (error) throw new Error(`lead_cycles speed facts read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{
+        close_id: string; opt_in_at: string; first_call_at: string | null; intensity: number | null
+        any_call_connected: boolean | null; first_two_dials_connected: boolean | null
+        caller_user_id: string | null; total_connected_duration_sec: number | null; connected_call_count: number | null
+      }>) {
+        // Only the cohort person's anchor (earliest in-window) cycle.
+        if (r.opt_in_at !== optInByLead.get(r.close_id)) continue
+        if (r.first_call_at) firstCallByLead.set(r.close_id, { userId: r.caller_user_id, activity_at: r.first_call_at, duration: r.first_two_dials_connected ? 90 : null })
+        if (r.any_call_connected) leadsWithAnyConnect.add(r.close_id)
+        dialCountByLead.set(r.close_id, r.intensity ?? 0)
+        connectedDurationByLead.set(r.close_id, r.total_connected_duration_sec ?? 0)
+        connectedCallCountByLead.set(r.close_id, r.connected_call_count ?? 0)
+      }
+    }
+    // Caller display names — a light lookup for just the cohort's callers (a
+    // handful of reps), not a full call scan.
+    const callerIds = Array.from(new Set(Array.from(firstCallByLead.values()).map((c) => c.userId).filter((u): u is string => !!u)))
+    for (let i = 0; i < callerIds.length; i += 100) {
+      const chunk = callerIds.slice(i, i + 100)
+      const { data, error } = await sb
+        .from('close_calls' as never)
+        .select('user_id, raw_payload')
+        .in('user_id', chunk)
+        .limit(1000)
+      if (error) throw new Error(`caller name lookup failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{ user_id: string | null; raw_payload: { user_name?: string } | null }>) {
+        if (r.user_id && r.raw_payload?.user_name && !nameByUser.has(r.user_id)) nameByUser.set(r.user_id, r.raw_payload.user_name)
       }
     }
   }
