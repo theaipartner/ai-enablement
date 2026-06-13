@@ -10,7 +10,7 @@ import { getLeadsForRangeLive, getLeadsForRangeTags, type LeadRow } from '@/lib/
 // verification). Runs V1 (live derivation) and V2 (tag-sourced) over the SAME
 // cohort + window and reports a field-by-field diff.
 //
-//   GET /api/_diag/roster-diff?start=YYYY-MM-DD&end=YYYY-MM-DD
+//   GET /api/diag/roster-diff?start=YYYY-MM-DD&end=YYYY-MM-DD
 //   Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>
 //
 // PASS criteria: `consumedFieldDiffs` is empty (the fields the funnel/roster/
