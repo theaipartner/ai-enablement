@@ -1692,7 +1692,10 @@ export type CallActivityDrillRow = {
   family: 'setter' | 'closer' | null
 }
 
-export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
+// V1 (legacy full close_calls scan) — kept behind SALES_REP_ACTIVITY_USE_JS=1 and
+// used by the diff harness. The volume scan + JS session-grouping here are what
+// getCallActivityMetricsRpc replaces with the sales_rep_call_activity aggregate.
+export async function getCallActivityMetricsLive(arg: Window | DateRange): Promise<CallActivityResult> {
   const range = resolveRange(arg)
   const sb = createAdminClient()
 
@@ -2083,6 +2086,259 @@ export async function getCallActivityMetrics(arg: Window | DateRange): Promise<C
     closersAggregate: aggregateCallActivity(closers),
     totalFormsInWindow: totalForms,
   }
+}
+
+// V2 (DEFAULT) — the per-rep call VOLUME comes from the sales_rep_call_activity
+// SQL aggregate (migration 0082) instead of paginating every call into Node and
+// JS-grouping sessions. The form outcomes, the form<->call matching, the family
+// attribution, formOnly, `missing`, the DC-close credit, and the connected
+// composition (familySessions + familyFormOnly = >=90s-OR-form) are UNCHANGED —
+// reproduced here exactly, reading the RPC's per-rep volume/sessions. Matched
+// sessions are derived from the matched call's (uid, lead) — equivalent to the
+// JS sessionKey under SESSION_GAP_MS = Infinity (one session per user+lead).
+export async function getCallActivityMetricsRpc(arg: Window | DateRange): Promise<CallActivityResult> {
+  const range = resolveRange(arg)
+  const sb = createAdminClient()
+
+  const salesId = await loadSalesIdentity(sb)
+
+  const volumeByUser = new Map<string, { calls: number; over90s: number }>()
+  const sessionCountByUser = new Map<string, number>()
+  const nameByUser = new Map<string, string>()
+  const userIdByName = new Map<string, string>()
+  const closerUsers = new Set<string>()
+  const setterUsers = new Set<string>()
+
+  // Owner index + the volume RPC run concurrently.
+  const [ownerRes, rpcRes] = await Promise.all([
+    sb
+      .from('close_leads' as never)
+      .select('closer_owner_id, setter_owner_id')
+      .or('closer_owner_id.not.is.null,setter_owner_id.not.is.null')
+      .range(0, 19999),
+    sb.rpc('sales_rep_call_activity' as never, { p_since: range.startUtcIso, p_until: range.endUtcIso } as never),
+  ])
+  if (ownerRes.error) throw new Error(`close_leads owner read failed: ${ownerRes.error.message}`)
+  for (const r of (ownerRes.data ?? []) as unknown as Array<{ closer_owner_id: string | null; setter_owner_id: string | null }>) {
+    if (r.closer_owner_id) closerUsers.add(r.closer_owner_id)
+    if (r.setter_owner_id) setterUsers.add(r.setter_owner_id)
+  }
+  if (rpcRes.error) throw new Error(`sales_rep_call_activity read failed: ${rpcRes.error.message}`)
+  for (const r of (rpcRes.data ?? []) as unknown as Array<{
+    user_id: string; total_calls: number; total_over90s: number; total_sessions: number; name_hint: string | null
+  }>) {
+    volumeByUser.set(r.user_id, { calls: Number(r.total_calls), over90s: Number(r.total_over90s) })
+    sessionCountByUser.set(r.user_id, Number(r.total_sessions))
+    if (r.name_hint && !nameByUser.has(r.user_id)) {
+      nameByUser.set(r.user_id, r.name_hint)
+      userIdByName.set(r.name_hint, r.user_id)
+    }
+  }
+
+  mergeSalesIdentity(userIdByName, nameByUser, closerUsers, setterUsers, salesId)
+
+  // ----- Form outcomes (identical to Live) -----
+  type Outcomes = {
+    htBookings: number; dcBookings: number; followUps: number
+    confirmedBooks: number; confirmedNewTime: number; downsellsOnCall: number; dqs: number
+  }
+  const newOutcomes = (): Outcomes => ({
+    htBookings: 0, dcBookings: 0, followUps: 0, confirmedBooks: 0, confirmedNewTime: 0, downsellsOnCall: 0, dqs: 0,
+  })
+  const setterOutcomesByUser = new Map<string, Outcomes>()
+  const closerOutcomesByUser = new Map<string, Outcomes>()
+  const matchedSessionsCloserByUser = new Map<string, Set<string>>()
+  const matchedSessionsSetterByUser = new Map<string, Set<string>>()
+  const formOnlyCloserByUser = new Map<string, number>()
+  const formOnlySetterByUser = new Map<string, number>()
+  let totalForms = 0
+  {
+    type FormRow = {
+      record_id: string; lead_id: string | null; form_type: string | null; call_status: string | null
+      setter_names: string[] | null; setter_record_ids: string[] | null; event_date_time: string | null; airtable_created_at: string
+    }
+    const allRows: FormRow[] = []
+    const formWindowStartIso = range.startUtcIso
+    const formWindowEndIso = new Date(new Date(range.endUtcIso).getTime() + FORM_MATCH_LOOKBACK_HOURS * 3600 * 1000).toISOString()
+    let from = 0
+    for (;;) {
+      const { data: page, error } = await sb
+        .from('airtable_setter_triage_calls' as never)
+        .select('record_id, lead_id, form_type, call_status, setter_names, setter_record_ids, event_date_time, airtable_created_at')
+        .is('excluded_at', null)
+        .gte('airtable_created_at', formWindowStartIso)
+        .lt('airtable_created_at', formWindowEndIso)
+        .range(from, from + 999)
+      if (error) throw new Error(`airtable_setter_triage_calls read failed: ${error.message}`)
+      const rows = (page ?? []) as unknown as FormRow[]
+      if (rows.length === 0) break
+      allRows.push(...rows)
+      if (rows.length < 1000) break
+      from += 1000
+    }
+
+    const matchInputs: FormMatchInput[] = allRows.map((r) => ({
+      recordId: r.record_id,
+      leadId: r.lead_id,
+      setterUserId: resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName),
+      airtableCreatedAt: r.airtable_created_at,
+      eventDateTime: r.event_date_time,
+    }))
+    const matched = await matchFormsToCalls(sb, matchInputs)
+    const matchByRecord = new Map(matched.map((m) => [m.recordId, m]))
+
+    // Filter to forms whose effective_date falls in the range.
+    const inRangeRows: FormRow[] = []
+    for (const r of allRows) {
+      const m = matchByRecord.get(r.record_id)
+      if (!m) continue
+      if (m.effectiveDateIso < range.startUtcIso) continue
+      if (m.effectiveDateIso >= range.endUtcIso) continue
+      inRangeRows.push(r)
+    }
+    totalForms = inRangeRows.length
+
+    // Latest form per lead wins (revised outcome later in the day).
+    const latestByLead = new Map<string, FormRow>()
+    for (const r of inRangeRows) {
+      if (!r.lead_id) continue
+      const existing = latestByLead.get(r.lead_id)
+      if (!existing || r.airtable_created_at > existing.airtable_created_at) latestByLead.set(r.lead_id, r)
+    }
+    latestByLead.forEach((r) => {
+      const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+      if (!uid) return
+      const ft = (r.form_type ?? '').toLowerCase()
+      const isCloserForm = ft.includes('closer')
+      const isSetterForm = ft.includes('setter')
+      if (!isCloserForm && !isSetterForm) return
+      const bucket = classifyCallStatus(r.call_status)
+      if (bucket === 'unclassified') return
+      const target = isCloserForm ? closerOutcomesByUser : setterOutcomesByUser
+      if (!target.has(uid)) target.set(uid, newOutcomes())
+      target.get(uid)![bucket]++
+      const m = matchByRecord.get(r.record_id)
+      // Matched session = the matched call's (uid, lead). Equivalent to the JS
+      // sessionKey under gap=Infinity; only the set SIZE is used downstream.
+      if (m?.matchedCallId && r.lead_id) {
+        const fam = isCloserForm ? matchedSessionsCloserByUser : matchedSessionsSetterByUser
+        if (!fam.has(uid)) fam.set(uid, new Set())
+        fam.get(uid)!.add(`${uid}::${r.lead_id}`)
+      }
+    })
+
+    // Form-only count per rep — raw (no lead-dedupe), forms whose call wasn't a
+    // >90s close_call. Bumps Connected past the >90s sessions.
+    for (const r of inRangeRows) {
+      const m = matchByRecord.get(r.record_id)
+      if (m?.matchedCallId) continue
+      const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+      if (!uid) continue
+      const ft = (r.form_type ?? '').toLowerCase()
+      if (ft.includes('closer')) formOnlyCloserByUser.set(uid, (formOnlyCloserByUser.get(uid) ?? 0) + 1)
+      else if (ft.includes('setter')) formOnlySetterByUser.set(uid, (formOnlySetterByUser.get(uid) ?? 0) + 1)
+    }
+  }
+
+  // DC-close credit per booking setter (identical to Live) — both DC-close paths.
+  const dcClosesBySetterUser = new Map<string, number>()
+  {
+    const counted = new Set<string>()
+    const credit = (uid: string | null, leadId: string | null, effIso: string | null) => {
+      if (!uid) return
+      if (!effIso || effIso < range.startUtcIso || effIso >= range.endUtcIso) return
+      const key = `${uid}::${leadId ?? ''}`
+      if (leadId && counted.has(key)) return
+      if (leadId) counted.add(key)
+      dcClosesBySetterUser.set(uid, (dcClosesBySetterUser.get(uid) ?? 0) + 1)
+    }
+    {
+      const { data, error } = await sb
+        .from('airtable_digital_college_sales' as never)
+        .select('lead_id, closed, setter_record_ids, setter_names, date_time_of_call, airtable_created_at')
+        .is('excluded_at', null)
+      if (error) throw new Error(`digital_college_sales (setter credit) read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{
+        lead_id: string | null; closed: string | null; setter_record_ids: string[] | null; setter_names: string[] | null
+        date_time_of_call: string | null; airtable_created_at: string | null
+      }>) {
+        if ((r.closed ?? '').trim().toLowerCase() !== 'yes') continue
+        const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+        credit(uid, r.lead_id, r.date_time_of_call ?? r.airtable_created_at)
+      }
+    }
+    {
+      const { data, error } = await sb
+        .from('airtable_full_closer_report' as never)
+        .select('lead_id, call_outcome, setter_record_ids, setter_names, date_time_of_call, airtable_created_at')
+        .eq('form_type', 'New')
+      if (error) throw new Error(`closer_report (DC setter credit) read failed: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<{
+        lead_id: string | null; call_outcome: string | null; setter_record_ids: string[] | null; setter_names: string[] | null
+        date_time_of_call: string | null; airtable_created_at: string | null
+      }>) {
+        if (!(r.call_outcome ?? '').toLowerCase().includes('digital college closed')) continue
+        const uid = resolveFormSetterUserId(r.setter_record_ids, r.setter_names, salesId, userIdByName)
+        credit(uid, r.lead_id, r.date_time_of_call ?? r.airtable_created_at)
+      }
+    }
+  }
+
+  // Compose per-rep rows (identical to Live).
+  const setters: CallActivityRepRow[] = []
+  const closers: CallActivityRepRow[] = []
+  const buildRow = (userId: string, o: Outcomes, family: 'setter' | 'closer'): CallActivityRepRow => {
+    const v = volumeByUser.get(userId) ?? { calls: 0, over90s: 0 }
+    const totalSessions = sessionCountByUser.get(userId) ?? 0
+    const closerMatched = matchedSessionsCloserByUser.get(userId)?.size ?? 0
+    const setterMatched = matchedSessionsSetterByUser.get(userId)?.size ?? 0
+    const familySessions = family === 'closer' ? closerMatched : Math.max(0, totalSessions - closerMatched)
+    const familyMatched = family === 'closer' ? closerMatched : setterMatched
+    const familyFormOnly = (family === 'closer' ? formOnlyCloserByUser : formOnlySetterByUser).get(userId) ?? 0
+    return {
+      userId,
+      name: nameByUser.get(userId) ?? null,
+      totalCalls: v.calls,
+      totalOver90s: v.over90s,
+      totalConnected: familySessions + familyFormOnly,
+      htBookings: o.htBookings,
+      dcBookings: o.dcBookings,
+      dcCloses: family === 'setter' ? (dcClosesBySetterUser.get(userId) ?? 0) : 0,
+      followUps: o.followUps,
+      confirmedBooks: o.confirmedBooks,
+      confirmedNewTime: o.confirmedNewTime,
+      downsellsOnCall: o.downsellsOnCall,
+      dqs: o.dqs,
+      missing: Math.max(0, familySessions - familyMatched),
+    }
+  }
+  const setterUserIds = new Set<string>(setterOutcomesByUser.keys())
+  const closerUserIds = new Set<string>(closerOutcomesByUser.keys())
+  for (const userId of Array.from(volumeByUser.keys())) {
+    if (setterUserIds.has(userId) || closerUserIds.has(userId)) continue
+    const role = resolveRole(userId, closerUsers, setterUsers)
+    if (role === 'setter') setterUserIds.add(userId)
+    else if (role === 'closer') closerUserIds.add(userId)
+  }
+  setterUserIds.forEach((uid) => setters.push(buildRow(uid, setterOutcomesByUser.get(uid) ?? newOutcomes(), 'setter')))
+  closerUserIds.forEach((uid) => closers.push(buildRow(uid, closerOutcomesByUser.get(uid) ?? newOutcomes(), 'closer')))
+  setters.sort((a, b) => b.totalCalls - a.totalCalls)
+  closers.sort((a, b) => b.totalCalls - a.totalCalls)
+
+  return {
+    setters,
+    closers,
+    settersAggregate: aggregateCallActivity(setters),
+    closersAggregate: aggregateCallActivity(closers),
+    totalFormsInWindow: totalForms,
+  }
+}
+
+// Public entry — defaults to the RPC-backed V2; SALES_REP_ACTIVITY_USE_JS=1 forces
+// the legacy full-scan path (fallback during bake-in; used by the diff harness).
+export async function getCallActivityMetrics(arg: Window | DateRange): Promise<CallActivityResult> {
+  if (process.env.SALES_REP_ACTIVITY_USE_JS === '1') return getCallActivityMetricsLive(arg)
+  return getCallActivityMetricsRpc(arg)
 }
 
 function aggregateCallActivity(rows: CallActivityRepRow[]): CallActivityRepRow {
