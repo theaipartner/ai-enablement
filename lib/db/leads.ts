@@ -9,6 +9,7 @@ import {
 } from './funnel-appointment-setting'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm, type CalendlyLeadResolver } from './calendly-lead-match'
+import { fetchChunked } from './query-parallel'
 
 // Leads list + funnel (the /sales-dashboard/leads page). Built on the
 // SAME cohort as the appointment-setting lead list (getSpeedToLeadCohort
@@ -177,25 +178,28 @@ async function collectTimedSignals(
   const byName = new Map<string, (string | null)[]>()
   const createdByUri = new Map(events.map((e) => [e.uri, e.createdAt]))
   const uris = events.map((e) => e.uri)
-  for (let i = 0; i < uris.length; i += 100) {
-    const chunk = uris.slice(i, i + 100)
-    const { data, error } = await sb
+  // event_uri partitioned across chunks; the per-key time arrays are consumed by
+  // length/`.some()` checks (order-irrelevant), and chunk/row order is preserved.
+  const invitees = await fetchChunked<{
+    email: string | null
+    name: string | null
+    raw_payload: { tracking?: { utm_term?: string | null } | null } | null
+    event_uri: string
+  }>(
+    uris,
+    (chunk) => sb
       .from('calendly_invitees' as never)
       .select('email, name, raw_payload, event_uri')
-      .in('event_uri', chunk)
-    if (error) throw new Error(`leads: calendly invitees read failed: ${error.message}`)
-    for (const inv of (data ?? []) as unknown as Array<{
-      email: string | null
-      name: string | null
-      raw_payload: { tracking?: { utm_term?: string | null } | null } | null
-      event_uri: string
-    }>) {
-      const t = createdByUri.get(inv.event_uri) ?? null
-      const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
-      if (lid) pushTime(byLeadId, lid, t)
-      pushTime(byEmail, norm(inv.email), t)
-      pushTime(byName, norm(inv.name), t)
-    }
+      .in('event_uri', chunk) as never,
+    'leads: calendly invitees read failed',
+    100,
+  )
+  for (const inv of invitees) {
+    const t = createdByUri.get(inv.event_uri) ?? null
+    const lid = leadResolver(inviteeUtmTerm(inv.raw_payload))
+    if (lid) pushTime(byLeadId, lid, t)
+    pushTime(byEmail, norm(inv.email), t)
+    pushTime(byName, norm(inv.name), t)
   }
   return { byLeadId, byEmail, byName }
 }
@@ -272,14 +276,11 @@ export async function getLeadsForRange(
   const leadQualified = new Map<string, Qualification>()
   const leadReactivatedAt = new Map<string, string>()
   const leadAd = new Map<string, { adId: string | null; adName: string | null }>()
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, ad_id, ad_name')
-      .in('close_id', chunk)
-    if (error) throw new Error(`leads: close_leads read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  // Block 1 fetched concurrently with the Calendly signals + lead-cycle tags
+  // below; awaited (identityReady) before the form blocks, which need
+  // leadReactivatedAt.
+  const identityReady = (async () => {
+    const data = await fetchChunked<{
       close_id: string
       display_name: string | null
       contacts: unknown
@@ -287,7 +288,15 @@ export async function getLeadsForRange(
       reactivated_at: string | null
       ad_id: string | null
       ad_name: string | null
-    }>) {
+    }>(
+      leadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, ad_id, ad_name')
+        .in('close_id', chunk) as never,
+      'leads: close_leads read failed',
+    )
+    for (const r of data) {
       const emails = new Set<string>()
       if (Array.isArray(r.contacts)) {
         for (const c of r.contacts as Array<{ emails?: Array<{ email?: string }> }>) {
@@ -303,7 +312,7 @@ export async function getLeadsForRange(
       if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
       leadAd.set(r.close_id, { adId: r.ad_id, adName: r.ad_name })
     }
-  }
+  })()
 
   // optInAt per lead — anchors the lifecycle window for DQ scoping (a DQ before
   // the latest opt-in belongs to a prior journey and shouldn't count).
@@ -323,9 +332,32 @@ export async function getLeadsForRange(
   //    The DIRECT test is time-gated to the lead's latest opt-in (a strat call
   //    booked before a re-opt-in shouldn't classify the current journey —
   //    Drake 2026-05-31); PARTNERSHIP stays ever-based.
-  const leadResolver = await buildCalendlyLeadResolver(sb)
-  const directSig = await collectTimedSignals(sb, leadResolver, await fetchEvents(sb, 'direct'))
-  const partnershipSig = await collectTimedSignals(sb, leadResolver, await fetchEvents(sb, 'partnership'))
+  // Started concurrently with Block 1 + the tag fetch; awaited just before
+  // assembly. The two link families (direct / partnership) are independent, so
+  // their event + invitee reads run in parallel.
+  const calendlyReady = (async () => {
+    const leadResolver = await buildCalendlyLeadResolver(sb)
+    const [directEvents, partnershipEvents] = await Promise.all([
+      fetchEvents(sb, 'direct'),
+      fetchEvents(sb, 'partnership'),
+    ])
+    const [directSig, partnershipSig] = await Promise.all([
+      collectTimedSignals(sb, leadResolver, directEvents),
+      collectTimedSignals(sb, leadResolver, partnershipEvents),
+    ])
+    return { directSig, partnershipSig }
+  })()
+
+  // Lead-cycle tags — the display-field source of truth in assembly. Independent
+  // of everything above, so it streams concurrently too.
+  const cyclesReady = (async () => {
+    const { getLeadCycleRows, collapseToLatest } = await import('./lead-tags')
+    return new Map(collapseToLatest(await getLeadCycleRows(range)).map((t) => [t.closeId, t]))
+  })()
+
+  // The form blocks below read leadReactivatedAt (Block 1), so identity must be
+  // ready first. Calendly + tags keep running in the background meanwhile.
+  await identityReady
 
   // 4. Confirmed direct bookings — the confirmation call's form (the
   //    Closer Triage Form, a confirmation call that's almost always Aman),
@@ -356,16 +388,22 @@ export async function getLeadsForRange(
   // the post-handover subset, for the reactive-phase connect signal.
   const setterTriagedIds = new Set<string>()
   const postReactTriagedIds = new Set<string>()
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('airtable_setter_triage_calls' as never)
-      .select('lead_id, form_type, call_status, airtable_created_at')
-      .in('lead_id', chunk)
-    if (error) throw new Error(`leads: triage forms read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  // Blocks 4 / 5 / 5b / 6 are mutually independent (each reads leadIds/reactIds
+  // and writes its own Sets/Maps; the few shared targets — dqLeadIds,
+  // showed/closed, closeTime, closeType — merge order-independently). They run
+  // concurrently as immediately-started promises, awaited before assembly.
+  const triageP = (async () => {
+    const data = await fetchChunked<{
       lead_id: string | null; form_type: string | null; call_status: string | null; airtable_created_at: string | null
-    }>) {
+    }>(
+      leadIds,
+      (chunk) => sb
+        .from('airtable_setter_triage_calls' as never)
+        .select('lead_id, form_type, call_status, airtable_created_at')
+        .in('lead_id', chunk) as never,
+      'leads: triage forms read failed',
+    )
+    for (const r of data) {
       if (!r.lead_id) continue
       // Re-opting in resets a lead's stats (Drake 2026-05-31): a form from a
       // prior journey (before the latest opt-in) doesn't count.
@@ -395,7 +433,7 @@ export async function getLeadsForRange(
         if (cs.includes('booking')) setterBookedIds.add(r.lead_id)
       }
     }
-  }
+  })()
 
   // 5. Showed / Closed — the closer EOC form (form_type=New), matched to the
   //    lead by lead_id, derived from Call Outcome (same mapping as the closer
@@ -416,17 +454,19 @@ export async function getLeadsForRange(
     if (closeTypeByLead.get(leadId) === 'ht') return // ht wins, never downgrade
     closeTypeByLead.set(leadId, t)
   }
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('airtable_full_closer_report' as never)
-      .select('lead_id, call_outcome, date_time_of_call, airtable_created_at')
-      .eq('form_type', 'New')
-      .in('lead_id', chunk)
-    if (error) throw new Error(`leads: closer form read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  const closerP = (async () => {
+    const data = await fetchChunked<{
       lead_id: string | null; call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null
-    }>) {
+    }>(
+      leadIds,
+      (chunk) => sb
+        .from('airtable_full_closer_report' as never)
+        .select('lead_id, call_outcome, date_time_of_call, airtable_created_at')
+        .eq('form_type', 'New')
+        .in('lead_id', chunk) as never,
+      'leads: closer form read failed',
+    )
+    for (const r of data) {
       if (!r.lead_id) continue
       // Reset on re-opt-in: skip closer forms from a prior journey.
       if (!afterOptIn(r.lead_id, r.airtable_created_at)) continue
@@ -452,7 +492,7 @@ export async function getLeadsForRange(
         }
       }
     }
-  }
+  })()
 
   // 5b. Digital College sales (Robby's dedicated low-ticket form). A filed
   //     form = showed (no no-show field); Closed?=Yes = a DC close; Follow Up?
@@ -460,19 +500,21 @@ export async function getLeadsForRange(
   //     funnel-digital-college.ts). Monotonic: a DC show ⇒ booked+connected and
   //     a DC close ⇒ showed+booked+connected, enforced downstream by
   //     reachedStage's cumulative back-fill once showed/closed are set here.
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('airtable_digital_college_sales' as never)
-      .select('lead_id, closed, follow_up, prospect_name, plans, date_time_of_call, airtable_created_at')
-      .is('excluded_at', null)
-      .in('lead_id', chunk)
-    if (error) throw new Error(`leads: digital college sales read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  const dcP = (async () => {
+    const data = await fetchChunked<{
       lead_id: string | null; closed: string | null; follow_up: string | null
       prospect_name: string | null; plans: string[] | null
       date_time_of_call: string | null; airtable_created_at: string | null
-    }>) {
+    }>(
+      leadIds,
+      (chunk) => sb
+        .from('airtable_digital_college_sales' as never)
+        .select('lead_id, closed, follow_up, prospect_name, plans, date_time_of_call, airtable_created_at')
+        .is('excluded_at', null)
+        .in('lead_id', chunk) as never,
+      'leads: digital college sales read failed',
+    )
+    for (const r of data) {
       if (!r.lead_id) continue
       const stamp = r.date_time_of_call ?? r.airtable_created_at
       // Reset on re-opt-in: a DC form from a prior journey doesn't count.
@@ -498,7 +540,7 @@ export async function getLeadsForRange(
         }
       }
     }
-  }
+  })()
 
   // 6. Post-reactivation connected — for the roster Status of reactivated leads
   //    (their Status reflects the reactive phase, not carried-over direct
@@ -506,8 +548,10 @@ export async function getLeadsForRange(
   //    reactivated cohort leads only (few), so it's a cheap targeted scan.
   const postReactConnectedIds = new Set<string>()
   const reactIds = Array.from(leadReactivatedAt.keys())
-  for (let i = 0; i < reactIds.length; i += 100) {
-    const chunk = reactIds.slice(i, i + 100)
+  const postReactP = (async () => {
+    const reactChunks: string[][] = []
+    for (let i = 0; i < reactIds.length; i += 100) reactChunks.push(reactIds.slice(i, i + 100))
+    await Promise.all(reactChunks.map(async (chunk) => {
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb
         .from('close_calls' as never)
@@ -527,7 +571,10 @@ export async function getLeadsForRange(
       }
       if (calls.length < 1000) break
     }
-  }
+    }))
+  })()
+
+  await Promise.all([triageP, closerP, dcP, postReactP])
 
   // 7. Assemble — classify each lead by which booking links it has ever had.
   // Phase 5: the persistent tags are the source of truth for the roster's
@@ -535,10 +582,11 @@ export async function getLeadsForRange(
   // opted-in date), one row per person = the latest cycle. We still compute the
   // legacy live values below (kept for now / fallback when a lead has no cycle)
   // but override them with the tag values when present.
-  const { getLeadCycleRows, collapseToLatest } = await import('./lead-tags')
-  const tagByLead = new Map(
-    collapseToLatest(await getLeadCycleRows(range)).map((t) => [t.closeId, t]),
-  )
+  // Calendly signals + lead-cycle tags were fetched concurrently with the
+  // identity + form blocks above; collect them now (they had that whole time to
+  // finish, so this rarely blocks).
+  const { directSig, partnershipSig } = await calendlyReady
+  const tagByLead = await cyclesReady
   return rows.map((r) => {
     const emails = leadEmails.get(r.leadId) ?? []
     const name = leadNames.get(r.leadId) ?? ''
