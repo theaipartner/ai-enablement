@@ -1,5 +1,6 @@
 {
   "framework": "nextjs",
+  "regions": ["cle1"],
   "functions": {
     "api/slack_events.py": {
       "runtime": "@vercel/python@4.3.1",
