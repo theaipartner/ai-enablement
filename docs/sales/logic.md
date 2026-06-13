@@ -167,19 +167,17 @@ math.
 
 ---
 
-## Known inconsistency — dial close-cap (logged 2026-06-12, fix deferred)
+## Dial close-cap — reconciled to the tagger's definition (2026-06-12)
 
-`leads.ts` caps a lead's dials at its **New-form** close time (`closeTimeIso`, from
-`airtable_full_closer_report` `form_type='New'` HT/DC closes + DC sales, `afterOptIn`).
-This **diverges from the tagger's close definition** (`lead_cycle_stages.closed_at`,
-which counts *all* closer forms incl. old-format and applies the Robby exclusion). So a
-lead that closed via an **old-format** form (e.g. `jkfU9G`, closed 2026-05-29) is **not**
-capped by `leads.ts` and its post-close fulfillment dials are counted; conversely
-`leads.ts` may cap leads the funnel doesn't count as closed. Net effect is single-digit
-dials. **Decision (Drake, 2026-06-12): preserve — the SQL-aggregation rework must
-reproduce `leads.ts`'s New-form cap exactly, NOT "fix" it.** When dials are materialized,
-reconcile both sides to one close definition (the tagger's) as a deliberate, visible
-change.
+The roster's dial cap (`closeTimeIso`) now comes from the **tag** — `lead_cycle_stages.closed_at`
+(HT) folded with `lead_cycles.dc_closed_at` (DC), in `getLeadCycleRows` (`lib/db/lead-tags.ts`).
+This replaced the legacy `leads.ts` New-form-only cap, which both missed old-format HT closes
+(leaking their post-close fulfillment dials) **and** capped at Robby's no-plan "Digital College
+Closed" over-marks (which aren't real closes). The tag's definition counts *all* closer forms
+incl. old-format, requires a real DC plan, and applies the Robby exclusion — so it caps the
+old-format closes and stops capping the over-marks. Net single-digit dial shift, in the
+accurate direction. (`closeTimeIso` only feeds the funnel's non-default JS dial-scan path; the
+default `sales_funnel_counts` SQL computes its own cap.)
 
 ## Known — per-ad opt-in sum < total opt-ins (all ads)
 
@@ -190,28 +188,30 @@ This is **expected, not a bug**: ~1–2% of unique leads have no `ad_id` (organi
 explicit "Organic / no ad" bucket to the ad filter. (Verified 2026-06-11: 362 of ~365
 in-window leads carry an ad; the rest are organic.)
 
-## Known perf — remaining slowness after SQL aggregation (logged 2026-06-12)
+## Perf — what's been done, and what's left (updated 2026-06-12)
 
-Navigating funnel → leads / talent still lags ~2s, plus a ~1s "filter/time-window
-catching up" after the page appears. Likely causes, in priority order:
+**Done:**
+- **All sales data-layer reads parallelized** — the per-lead chunked `.in()` loops and the
+  independent table fetches across the roster, cohort spine, closer drill, cash, DC, and
+  per-lead detail now fan out concurrently (`lib/db/query-parallel.ts` `fetchChunked` /
+  `fetchChunkedPaged`), instead of awaiting one chunk/table at a time. Pagination loops stay
+  sequential (termination depends on the prior page count).
+- **`PersistPageState` double-fetch killed** — the date window now persists to a server-readable
+  cookie (`sd_win`, `lib/db/sales-window-cookie.ts` `resolveSalesWindow`), so the first server
+  render of a bare navigation already uses the saved window. No client re-navigation (the "~1s
+  filter/time-window catching up").
+- **Roster reads from tags** — `getLeadsForRange` defaults to `getLeadsForRangeTags`
+  (`lib/db/leads.ts`): the cohort spine (already tag-materialized) + `collapseToLatest(getLeadCycleRows)`
+  + ONE 1:1 `close_leads` read (qualified / ad / reactivated_at), instead of full Calendly scans,
+  the three Airtable form reads, and a post-react `close_calls` scan. Verified byte-identical on every
+  consumed field (display + filter + pages) across 4 windows; non-consumed diffs were V1 over-marks the
+  funnel already excluded. Legacy live path kept behind `SALES_ROSTER_USE_JS=1` for bake-in.
 
-1. **`getLeadsForRange` (the roster) is still a JS scan over ~7 tables** (`close_leads`,
-   `calendly_*`, `airtable_*`, `close_calls`, `lead_cycles`) — and it's called by **both**
-   the funnel page (for the ad-filter options + the rowIds/distinctLeads the funnel
-   function needs) and the leads page. This is the biggest remaining bottleneck: Section 1
-   sped up the funnel *counting*, but the page still loads this roster every navigation.
-   **Next SQL-aggregation target:** have the roster read from the tags (it already
-   overrides most fields with tag values — drop the live re-derivation from raw tables).
-2. **Talent (`/people`) per-rep metrics** (`getCallActivityMetrics` etc.) still JS-scan.
-3. **`PersistPageState` double-fetch:** the page renders with the URL's window, then
-   restores the saved window from localStorage on the client → a second navigation/fetch
-   (the "time window catching up"). Could restore before first paint, or skip the
-   re-fetch when the URL window already matches the saved one.
-4. **`force-dynamic` + no caching** — every navigation re-fetches server-side; no reuse
-   between visits.
-
-None investigated deeply yet — captured for the next perf pass. The roster (#1) is the
-clear first target and the natural Section-3 of the SQL-aggregation arc.
+**Left:**
+- **Talent (`/people`) per-rep metrics** (`getCallActivityMetrics` etc.) — still a JS scan; its
+  volume-scan↔form-scan interleave wasn't restructured (parallelized chunk loops only).
+- **`force-dynamic` + no caching** — every navigation re-fetches server-side. The tag layer makes
+  each fresh render fast natively, so this is low priority.
 
 ## Cohort vs activity — the mental model
 
