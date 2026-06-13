@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import type { LeadRow } from './leads'
 import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
+import { fetchChunkedPaged } from './query-parallel'
 
 // Leads-page funnel stack (Drake 2026-05-31). Four stacked boxes computed over
 // the SAME cohort the roster shows (rows are passed in already view-filtered, so
@@ -227,37 +228,37 @@ async function scanDialWindows(
   const sb = createAdminClient()
   const ids = leads.map((l) => l.leadId)
 
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100)
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb
-        .from('close_calls' as never)
-        .select('lead_id, activity_at, duration, direction')
-        .in('lead_id', chunk)
-        .eq('direction', 'outbound')
-        .range(from, from + 999)
-      if (error) throw new Error(`leads-funnel: close_calls read failed: ${error.message}`)
-      const calls = (data ?? []) as unknown as Array<{
-        lead_id: string | null; activity_at: string; duration: number | null; direction: string | null
-      }>
-      for (const c of calls) {
-        if (!c.lead_id) continue
-        const w = out.get(c.lead_id)
-        if (!w) continue
-        // Reset on re-opt-in: only count dials at/after the lead's latest
-        // opt-in, so a prior journey's dials don't show on the current one.
-        const optInIso = optInById.get(c.lead_id) ?? null
-        if (optInIso && c.activity_at < optInIso) continue
-        const closeIso = closeById.get(c.lead_id) ?? null
-        // Cap at close: a dial after the lead's close is fulfillment, not sales.
-        if (closeIso && c.activity_at > closeIso) continue
-        w.dialsBeforeClose += 1
-        const reactIso = reactById.get(c.lead_id) ?? null
-        if (reactIso && c.activity_at > reactIso) {
-          w.postReactDials += 1
-        }
-      }
-      if (calls.length < 1000) break
+  // lead_id partitioned across chunks (each lead's bucket is touched by one
+  // chunk only), and the counts are sums — so chunks run concurrently while each
+  // chunk's pages stay sequential. Result is identical to the serial scan.
+  const calls = await fetchChunkedPaged<{
+    lead_id: string | null; activity_at: string; duration: number | null; direction: string | null
+  }>(
+    ids,
+    (chunk, from, to) => sb
+      .from('close_calls' as never)
+      .select('lead_id, activity_at, duration, direction')
+      .in('lead_id', chunk)
+      .eq('direction', 'outbound')
+      .range(from, to) as never,
+    'leads-funnel: close_calls read failed',
+    100,
+  )
+  for (const c of calls) {
+    if (!c.lead_id) continue
+    const w = out.get(c.lead_id)
+    if (!w) continue
+    // Reset on re-opt-in: only count dials at/after the lead's latest
+    // opt-in, so a prior journey's dials don't show on the current one.
+    const optInIso = optInById.get(c.lead_id) ?? null
+    if (optInIso && c.activity_at < optInIso) continue
+    const closeIso = closeById.get(c.lead_id) ?? null
+    // Cap at close: a dial after the lead's close is fulfillment, not sales.
+    if (closeIso && c.activity_at > closeIso) continue
+    w.dialsBeforeClose += 1
+    const reactIso = reactById.get(c.lead_id) ?? null
+    if (reactIso && c.activity_at > reactIso) {
+      w.postReactDials += 1
     }
   }
   return out

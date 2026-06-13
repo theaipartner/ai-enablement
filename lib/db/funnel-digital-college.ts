@@ -3,6 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
+import { fetchChunked } from './query-parallel'
 
 // Funnel · Digital College (low-ticket) — the dedicated DC closers' per-rep view.
 //
@@ -322,19 +323,23 @@ async function loadDcEvents(range: DateRange, closers: DcCloser[]): Promise<DcEv
   const leadResolver = await buildCalendlyLeadResolver(sb)
   const byEvent = new Map<string, { name: string | null; email: string | null; leadId: string | null }>()
   const uris = inScope.map((e) => e.uri)
-  for (let i = 0; i < uris.length; i += 200) {
-    const chunk = uris.slice(i, i + 200)
-    const { data, error } = await sb
-      .from('calendly_invitees' as never)
-      .select('event_uri, name, email, raw_payload')
-      .in('event_uri', chunk)
-    if (error) throw new Error(`calendly_invitees (DC) read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  {
+    // event_uri partitioned across chunks; first-wins per event preserved.
+    const rows = await fetchChunked<{
       event_uri: string
       name: string | null
       email: string | null
       raw_payload: { tracking?: { utm_term?: string | null } | null } | null
-    }>) {
+    }>(
+      uris,
+      (chunk) => sb
+        .from('calendly_invitees' as never)
+        .select('event_uri, name, email, raw_payload')
+        .in('event_uri', chunk) as never,
+      'calendly_invitees (DC) read failed',
+      200,
+    )
+    for (const r of rows) {
       if (byEvent.has(r.event_uri)) continue
       byEvent.set(r.event_uri, {
         name: r.name,

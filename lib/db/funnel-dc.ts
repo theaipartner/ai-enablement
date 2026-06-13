@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
+import { fetchChunked } from './query-parallel'
 
 // Digital College funnel — tag-driven, unique leads only. Reads the DC fields
 // written by the tagger (shared/lead_tagging.py) onto lead_cycles. lead_cycles
@@ -96,24 +97,27 @@ export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
   // closed cohort leads only.
   const planLeadIds = Array.from(new Set(Array.from(closedCloser).concat(Array.from(downsellMeeting))))
   if (planLeadIds.length > 0) {
-    for (let i = 0; i < planLeadIds.length; i += 100) {
-      const chunk = planLeadIds.slice(i, i + 100)
-      const { data, error: perr } = await sb
+    // Chunks fetched concurrently; plan counts accumulate per row, so order
+    // doesn't matter (lead_id is also partitioned across chunks).
+    const rows = await fetchChunked<{
+      lead_id: string | null
+      dc_plans: string[] | null
+      closer_names: string[] | null
+    }>(
+      planLeadIds,
+      (chunk) => sb
         .from('airtable_full_closer_report' as never)
         .select('lead_id, dc_plans, closer_names')
         .in('lead_id', chunk)
-        .not('dc_plans', 'is', null)
-      if (perr) throw new Error(`closer dc_plans read failed: ${perr.message}`)
-      for (const f of (data ?? []) as unknown as Array<{
-        lead_id: string | null
-        dc_plans: string[] | null
-        closer_names: string[] | null
-      }>) {
-        if (!f.lead_id) continue
-        const isCloser = (f.closer_names ?? []).some((n) => (n ?? '').toLowerCase().includes(DC_CLOSER_TOKEN))
-        if (isCloser && closedCloser.has(f.lead_id)) addPlan(closedPlans, f.dc_plans)
-        else if (!isCloser && downsellMeeting.has(f.lead_id)) addPlan(downsellPlans, f.dc_plans)
-      }
+        .not('dc_plans', 'is', null) as never,
+      'closer dc_plans read failed',
+      100,
+    )
+    for (const f of rows) {
+      if (!f.lead_id) continue
+      const isCloser = (f.closer_names ?? []).some((n) => (n ?? '').toLowerCase().includes(DC_CLOSER_TOKEN))
+      if (isCloser && closedCloser.has(f.lead_id)) addPlan(closedPlans, f.dc_plans)
+      else if (!isCloser && downsellMeeting.has(f.lead_id)) addPlan(downsellPlans, f.dc_plans)
     }
   }
 

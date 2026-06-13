@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
+import { fetchChunked } from './query-parallel'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
 //
@@ -119,14 +120,18 @@ async function loadCalendlyBookings(range: DateRange): Promise<CalendlyBookingAc
   // docs/schema/calendly_scheduled_events.md.
   const eventUris = Array.from(new Set(invitees.map((i) => i.event_uri)))
   const eventByUri = new Map<string, EventRow>()
-  for (let i = 0; i < eventUris.length; i += 100) {
-    const chunk = eventUris.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('calendly_scheduled_events' as never)
-      .select('uri, event_type_uri, name, excluded_at')
-      .in('uri', chunk)
-    if (error) throw new Error(`calendly_scheduled_events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as EventRow[]) eventByUri.set(e.uri, e)
+  {
+    // uri partitioned across chunks → unique keys, order-independent.
+    const events = await fetchChunked<EventRow>(
+      eventUris,
+      (chunk) => sb
+        .from('calendly_scheduled_events' as never)
+        .select('uri, event_type_uri, name, excluded_at')
+        .in('uri', chunk) as never,
+      'calendly_scheduled_events read failed',
+      100,
+    )
+    for (const e of events) eventByUri.set(e.uri, e)
   }
 
   const isValidBooking = (uri: string) => {
@@ -225,14 +230,18 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
   // so a name-only filter let test closes inflate the Cash totals.
   const leadIds = Array.from(new Set(inRange.map((r) => r.lead_id).filter((x): x is string => !!x)))
   const hiddenOrTest = new Set<string>()
-  for (let i = 0; i < leadIds.length; i += 200) {
-    const chunk = leadIds.slice(i, i + 200)
-    const { data, error } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, excluded_at')
-      .in('close_id', chunk)
-    if (error) throw new Error(`close_leads (closer-report filter) read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null; excluded_at: string | null }>) {
+  {
+    // close_id partitioned across chunks → Set membership is order-independent.
+    const rows = await fetchChunked<{ close_id: string; display_name: string | null; excluded_at: string | null }>(
+      leadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, excluded_at')
+        .in('close_id', chunk) as never,
+      'close_leads (closer-report filter) read failed',
+      200,
+    )
+    for (const r of rows) {
       if (r.excluded_at != null || (r.display_name ?? '').trim().toLowerCase() === 'test') hiddenOrTest.add(r.close_id)
     }
   }
@@ -593,30 +602,39 @@ async function buildSetterNameResolver(
       if (ids[i] && names[i] && !idToName.has(ids[i])) idToName.set(ids[i], names[i])
     }
   }
-  // Closer forms — closer + setter pairs.
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await sb
-      .from('airtable_full_closer_report' as never)
-      .select('closer_record_ids, closer_names, setter_record_ids, setter_names')
-      .range(from, from + 999)
-    if (error) throw new Error(`setter-name resolver (closer) read failed: ${error.message}`)
-    const rows = (data ?? []) as unknown as Array<{
-      closer_record_ids: string[] | null; closer_names: string[] | null
-      setter_record_ids: string[] | null; setter_names: string[] | null
-    }>
-    for (const r of rows) { learn(r.closer_record_ids, r.closer_names); learn(r.setter_record_ids, r.setter_names) }
-    if (rows.length < 1000) break
+  // Fetch closer (paginated) + triage (single read) CONCURRENTLY, but PROCESS
+  // closer pairs before triage pairs — idToName is first-wins, so the original
+  // closer-then-triage order must be preserved exactly.
+  type CloserRow = {
+    closer_record_ids: string[] | null; closer_names: string[] | null
+    setter_record_ids: string[] | null; setter_names: string[] | null
   }
-  // Triage forms — setter pairs (covers setters who never close).
-  {
-    const { data, error } = await sb
+  const [closerRows, triageRes] = await Promise.all([
+    (async () => {
+      const out: CloserRow[] = []
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await sb
+          .from('airtable_full_closer_report' as never)
+          .select('closer_record_ids, closer_names, setter_record_ids, setter_names')
+          .range(from, from + 999)
+        if (error) throw new Error(`setter-name resolver (closer) read failed: ${error.message}`)
+        const rows = (data ?? []) as unknown as CloserRow[]
+        out.push(...rows)
+        if (rows.length < 1000) break
+      }
+      return out
+    })(),
+    sb
       .from('airtable_setter_triage_calls' as never)
       .select('setter_record_ids, setter_names')
-      .range(0, 4999)
-    if (error) throw new Error(`setter-name resolver (triage) read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ setter_record_ids: string[] | null; setter_names: string[] | null }>) {
-      learn(r.setter_record_ids, r.setter_names)
-    }
+      .range(0, 4999),
+  ])
+  // Closer first (preserves first-wins).
+  for (const r of closerRows) { learn(r.closer_record_ids, r.closer_names); learn(r.setter_record_ids, r.setter_names) }
+  // Triage forms — setter pairs (covers setters who never close).
+  if (triageRes.error) throw new Error(`setter-name resolver (triage) read failed: ${triageRes.error.message}`)
+  for (const r of (triageRes.data ?? []) as unknown as Array<{ setter_record_ids: string[] | null; setter_names: string[] | null }>) {
+    learn(r.setter_record_ids, r.setter_names)
   }
   return (ids) => {
     if (!ids || ids.length === 0) return null
@@ -692,22 +710,22 @@ async function buildBookedByResolver(
     new Set(triage.map((t) => t.lead_id).filter((x): x is string => !!x)),
   )
   const leadKeys = new Map<string, { emails: string[]; phones: string[]; name: string | null }>()
-  for (let i = 0; i < leadIds.length; i += 200) {
-    const chunk = leadIds.slice(i, i + 200)
-    const { data, error } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, contacts')
-      .in('close_id', chunk)
-    if (error) throw new Error(`close_leads (booked-by) read failed: ${error.message}`)
+  {
     type ContactsBlob = Array<{
       emails?: Array<{ email?: string | null }>
       phones?: Array<{ phone?: string | null }>
     }>
-    for (const r of (data ?? []) as unknown as Array<{
-      close_id: string
-      display_name: string | null
-      contacts: ContactsBlob | null
-    }>) {
+    // close_id partitioned across chunks → unique keys, order-independent.
+    const rows = await fetchChunked<{ close_id: string; display_name: string | null; contacts: ContactsBlob | null }>(
+      leadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, contacts')
+        .in('close_id', chunk) as never,
+      'close_leads (booked-by) read failed',
+      200,
+    )
+    for (const r of rows) {
       const emails: string[] = []
       const phones: string[] = []
       for (const c of r.contacts ?? []) {
@@ -911,14 +929,10 @@ export async function getClosingScheduledList(
   const leadResolver = await buildCalendlyLeadResolver(sb)
   const eventUris = typed.map((t) => t.e.uri)
   const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[]; noShow: boolean; leadId: string | null }>()
-  for (let i = 0; i < eventUris.length; i += 200) {
-    const chunk = eventUris.slice(i, i + 200)
-    const { data, error } = await sb
-      .from('calendly_invitees' as never)
-      .select('event_uri, name, email, no_show, raw_payload')
-      .in('event_uri', chunk)
-    if (error) throw new Error(`calendly_invitees read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{
+  {
+    // event_uri partitioned across chunks; first-wins per event is preserved
+    // (each event's rows land in one chunk, and chunk/row order is unchanged).
+    const rows = await fetchChunked<{
       event_uri: string
       name: string | null
       email: string | null
@@ -928,7 +942,16 @@ export async function getClosingScheduledList(
         questions_and_answers?: Array<{ question?: string | null; answer?: string | null }>
         tracking?: { utm_term?: string | null } | null
       } | null
-    }>) {
+    }>(
+      eventUris,
+      (chunk) => sb
+        .from('calendly_invitees' as never)
+        .select('event_uri, name, email, no_show, raw_payload')
+        .in('event_uri', chunk) as never,
+      'calendly_invitees read failed',
+      200,
+    )
+    for (const r of rows) {
       if (!inviteeByEvent.has(r.event_uri)) {
         const rawPhones: string[] = []
         const trn = r.raw_payload?.text_reminder_number
@@ -985,14 +1008,17 @@ export async function getClosingScheduledList(
     })
   }
 
-  // 2b. Booked-by resolver (setter attribution for the representative row).
-  const bookedByResolver = await buildBookedByResolver(sb)
-  // 2c. Setter id→name resolver — the new closer form carries Setter Name as
-  //     record-ids only, so resolve them to display names for "Booked by".
-  const setterNameResolver = await buildSetterNameResolver(sb)
-  // 2d. Closer identity resolver — canonicalizes closers to team_members
-  //     (sales_role='closer') + the Ghost calendar; everyone else is dropped.
-  const closerIdentity = await buildCloserIdentityResolver(sb)
+  // 2b/2c/2d. Three independent resolvers — fetched concurrently:
+  //   - Booked-by (setter attribution for the representative row).
+  //   - Setter id→name (the new closer form carries Setter Name as record-ids
+  //     only, so resolve them to display names for "Booked by").
+  //   - Closer identity (canonicalizes closers to team_members
+  //     (sales_role='closer') + the Ghost calendar; everyone else is dropped).
+  const [bookedByResolver, setterNameResolver, closerIdentity] = await Promise.all([
+    buildBookedByResolver(sb),
+    buildSetterNameResolver(sb),
+    buildCloserIdentityResolver(sb),
+  ])
 
   // 3. Closer forms covering the event window (±48h on either side for
   //    matching). Pull as a single windowed read; small table.
@@ -1284,14 +1310,18 @@ export async function getClosingScheduledList(
   const candidateLeadIds = Array.from(
     new Set(formOnlyCandidates.map((f) => f.lead_id).filter((x): x is string => !!x)),
   )
-  for (let i = 0; i < candidateLeadIds.length; i += 200) {
-    const chunk = candidateLeadIds.slice(i, i + 200)
-    const { data, error } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, excluded_at')
-      .in('close_id', chunk)
-    if (error) throw new Error(`close_leads (form-only filter) read failed: ${error.message}`)
-    for (const r of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null; excluded_at: string | null }>) {
+  {
+    // close_id partitioned across chunks → Set membership is order-independent.
+    const rows = await fetchChunked<{ close_id: string; display_name: string | null; excluded_at: string | null }>(
+      candidateLeadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, excluded_at')
+        .in('close_id', chunk) as never,
+      'close_leads (form-only filter) read failed',
+      200,
+    )
+    for (const r of rows) {
       if (r.excluded_at != null || (r.display_name ?? '').trim().toLowerCase() === 'test') hiddenOrTest.add(r.close_id)
     }
   }

@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
+import { fetchChunked } from './query-parallel'
 import { type DcFunnel, dcPlanUnits, DC_PLAN_PRICE_USD } from './funnel-dc'
 
 // Cash collected — a funnel-wide summary (HT + DC + total) with ROAS, for the
@@ -53,18 +54,22 @@ export async function getCashCollected(
 
   let htUpfrontUsd = 0
   let htContractUsd = 0
-  for (let i = 0; i < htLeads.length; i += 100) {
-    const chunk = htLeads.slice(i, i + 100)
-    const { data, error: perr } = await sb
-      .from('airtable_full_closer_report' as never)
-      .select('lead_id, amount_paid_today_number, amount_paid_today_currency, contract_amount_to_send')
-      .in('lead_id', chunk)
-    if (perr) throw new Error(`HT cash read failed: ${perr.message}`)
-    for (const f of (data ?? []) as unknown as Array<{
+  {
+    // Chunks fetched concurrently; the totals are a sum, so order doesn't matter.
+    const rows = await fetchChunked<{
       amount_paid_today_number: number | string | null
       amount_paid_today_currency: number | string | null
       contract_amount_to_send: number | string | null
-    }>) {
+    }>(
+      htLeads,
+      (chunk) => sb
+        .from('airtable_full_closer_report' as never)
+        .select('lead_id, amount_paid_today_number, amount_paid_today_currency, contract_amount_to_send')
+        .in('lead_id', chunk) as never,
+      'HT cash read failed',
+      100,
+    )
+    for (const f of rows) {
       htUpfrontUsd += num(f.amount_paid_today_number ?? f.amount_paid_today_currency)
       htContractUsd += num(f.contract_amount_to_send)
     }
