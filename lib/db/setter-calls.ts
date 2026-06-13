@@ -109,69 +109,73 @@ export async function listSetterCalls(
   const rows = (trxRows ?? []) as unknown as TrxRowRaw[]
   if (rows.length === 0) return []
 
-  // 2. Resolve setter (close_calls.user_id → team_members.close_user_id).
+  // 2-4. Resolve setter, prospect, and review summary — three independent
+  //       lookups keyed off the transcript rows. Run concurrently.
   const userIds = Array.from(
     new Set(rows.map((r) => r.close_calls?.user_id).filter((v): v is string => !!v)),
   )
-  const userMap = new Map<string, { full_name: string; sales_role: string | null }>()
-  if (userIds.length > 0) {
-    const { data: tm } = await supabase
-      .from('team_members' as never)
-      .select('close_user_id, full_name, sales_role')
-      .in('close_user_id' as never, userIds)
-    for (const t of (tm ?? []) as unknown as Array<{
-      close_user_id: string
-      full_name: string
-      sales_role: string | null
-    }>) {
-      userMap.set(t.close_user_id, { full_name: t.full_name, sales_role: t.sales_role })
-    }
-  }
-
-  // 3. Resolve prospect (close_calls.lead_id → close_leads.display_name).
   const leadIds = Array.from(
     new Set(rows.map((r) => r.close_calls?.lead_id).filter((v): v is string => !!v)),
   )
-  const leadMap = new Map<string, string>()
-  if (leadIds.length > 0) {
-    const { data: ld } = await supabase
-      .from('close_leads' as never)
-      .select('close_id, display_name')
-      .in('close_id' as never, leadIds)
-    for (const l of (ld ?? []) as unknown as Array<{
-      close_id: string
-      display_name: string | null
-    }>) {
-      if (l.display_name) leadMap.set(l.close_id, l.display_name)
-    }
-  }
-
-  // 4. Resolve review summary fields (one query, IN over transcript IDs).
-  //    Null entries are expected during the window where transcription
-  //    has landed but the Sonnet review hasn't — list page renders
-  //    "Pending" in those cells.
   const transcriptIds = rows.map((r) => r.close_call_id)
+  const userMap = new Map<string, { full_name: string; sales_role: string | null }>()
+  const leadMap = new Map<string, string>()
   const reviewMap = new Map<string, SetterCallReviewSummary>()
-  if (transcriptIds.length > 0) {
-    const { data: reviews } = await supabase
-      .from('setter_call_reviews' as never)
-      .select('close_call_id, lead_score, should_be_dqd, booked, sentiment')
-      .in('close_call_id' as never, transcriptIds)
-    for (const r of (reviews ?? []) as unknown as Array<{
-      close_call_id: string
-      lead_score: number
-      should_be_dqd: boolean
-      booked: boolean
-      sentiment: string
-    }>) {
-      reviewMap.set(r.close_call_id, {
-        lead_score: r.lead_score,
-        should_be_dqd: r.should_be_dqd,
-        booked: r.booked,
-        sentiment: r.sentiment,
-      })
-    }
-  }
+  await Promise.all([
+    // 2. Setter (close_calls.user_id → team_members.close_user_id).
+    (async () => {
+      if (userIds.length === 0) return
+      const { data: tm } = await supabase
+        .from('team_members' as never)
+        .select('close_user_id, full_name, sales_role')
+        .in('close_user_id' as never, userIds)
+      for (const t of (tm ?? []) as unknown as Array<{
+        close_user_id: string
+        full_name: string
+        sales_role: string | null
+      }>) {
+        userMap.set(t.close_user_id, { full_name: t.full_name, sales_role: t.sales_role })
+      }
+    })(),
+    // 3. Prospect (close_calls.lead_id → close_leads.display_name).
+    (async () => {
+      if (leadIds.length === 0) return
+      const { data: ld } = await supabase
+        .from('close_leads' as never)
+        .select('close_id, display_name')
+        .in('close_id' as never, leadIds)
+      for (const l of (ld ?? []) as unknown as Array<{
+        close_id: string
+        display_name: string | null
+      }>) {
+        if (l.display_name) leadMap.set(l.close_id, l.display_name)
+      }
+    })(),
+    // 4. Review summary (one query, IN over transcript IDs). Null entries are
+    //    expected where transcription landed but the Sonnet review hasn't —
+    //    the list renders "Pending" in those cells.
+    (async () => {
+      if (transcriptIds.length === 0) return
+      const { data: reviews } = await supabase
+        .from('setter_call_reviews' as never)
+        .select('close_call_id, lead_score, should_be_dqd, booked, sentiment')
+        .in('close_call_id' as never, transcriptIds)
+      for (const r of (reviews ?? []) as unknown as Array<{
+        close_call_id: string
+        lead_score: number
+        should_be_dqd: boolean
+        booked: boolean
+        sentiment: string
+      }>) {
+        reviewMap.set(r.close_call_id, {
+          lead_score: r.lead_score,
+          should_be_dqd: r.should_be_dqd,
+          booked: r.booked,
+          sentiment: r.sentiment,
+        })
+      }
+    })(),
+  ])
 
   // Apply setter filter (JS-side — the close_calls.user_id lives one
   // join away from the transcript row, so PostgREST can't filter on it
@@ -313,32 +317,50 @@ export async function getSetterCallById(
   const userId = row.close_calls?.user_id ?? null
   const leadId = row.close_calls?.lead_id ?? null
 
+  // Setter, prospect, and review row — three independent single-row lookups,
+  // fetched concurrently.
+  const [tmRes, ldRes, reviewRes] = await Promise.all([
+    userId
+      ? supabase
+          .from('team_members' as never)
+          .select('full_name, sales_role')
+          .eq('close_user_id' as never, userId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    leadId
+      ? supabase
+          .from('close_leads' as never)
+          .select('display_name')
+          .eq('close_id' as never, leadId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabase
+      .from('setter_call_reviews' as never)
+      .select(`
+        sentiment, lead_score, lead_score_reason,
+        should_be_dqd, dq_reason, booked, no_book_reason,
+        setter_strengths, setter_weaknesses, lead_attributes,
+        setter_words, prospect_words, talk_ratio_setter,
+        model, prompt_version, reviewed_at
+      `)
+      .eq('close_call_id' as never, closeCallId)
+      .maybeSingle(),
+  ])
+
   let setter_name: string | null = null
   let setter_role: string | null = null
-  if (userId) {
-    const { data: tm } = await supabase
-      .from('team_members' as never)
-      .select('full_name, sales_role')
-      .eq('close_user_id' as never, userId)
-      .maybeSingle()
-    if (tm) {
-      const t = tm as unknown as { full_name: string; sales_role: string | null }
-      setter_name = t.full_name
-      setter_role = t.sales_role
-    }
+  if (tmRes.data) {
+    const t = tmRes.data as unknown as { full_name: string; sales_role: string | null }
+    setter_name = t.full_name
+    setter_role = t.sales_role
   }
 
   let prospect_name: string | null = null
-  if (leadId) {
-    const { data: ld } = await supabase
-      .from('close_leads' as never)
-      .select('display_name')
-      .eq('close_id' as never, leadId)
-      .maybeSingle()
-    if (ld) {
-      prospect_name = (ld as unknown as { display_name: string | null }).display_name
-    }
+  if (ldRes.data) {
+    prospect_name = (ldRes.data as unknown as { display_name: string | null }).display_name
   }
+
+  const reviewRow = reviewRes.data
 
   const recording_expires_at =
     (row.close_calls?.raw_payload?.recording_expires_at as string | undefined) ?? null
@@ -346,19 +368,6 @@ export async function getSetterCallById(
   // Close's web app URL for the call (the recording_url we store, but
   // pointing at app.close.com which is what humans use to play audio).
   const close_app_url = `https://app.close.com/lead/${leadId ?? ''}/`
-
-  // 5. Pull the review row, if any.
-  const { data: reviewRow } = await supabase
-    .from('setter_call_reviews' as never)
-    .select(`
-      sentiment, lead_score, lead_score_reason,
-      should_be_dqd, dq_reason, booked, no_book_reason,
-      setter_strengths, setter_weaknesses, lead_attributes,
-      setter_words, prospect_words, talk_ratio_setter,
-      model, prompt_version, reviewed_at
-    `)
-    .eq('close_call_id' as never, closeCallId)
-    .maybeSingle()
 
   const full_review = reviewRow
     ? (reviewRow as unknown as SetterCallReviewFull)

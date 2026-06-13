@@ -5,6 +5,7 @@ import type { SetterCallReviewFull } from './setter-calls'
 import type { BookingType } from './leads'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { getLeadCycles, deriveType, type CycleStages } from './lead-tags'
+import { fetchChunked } from './query-parallel'
 
 // Per-lead detail (the /sales-dashboard/leads/[close_id] page). Pulls one
 // Close lead's identity + opt-in facts, its FULL call history (both
@@ -250,29 +251,36 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // 3. Which calls have a transcript, and their reviews.
   const transcriptSet = new Set<string>()
   const reviewByCall = new Map<string, SetterCallReviewFull>()
-  for (let i = 0; i < callIds.length; i += 100) {
-    const chunk = callIds.slice(i, i + 100)
-    const [{ data: trx, error: trxErr }, { data: rev, error: revErr }] = await Promise.all([
-      sb
-        .from('setter_call_transcripts' as never)
-        .select('close_call_id')
-        .in('close_call_id' as never, chunk),
-      sb
-        .from('setter_call_reviews' as never)
-        .select(
-          'close_call_id, sentiment, lead_score, lead_score_reason, should_be_dqd, ' +
-            'dq_reason, booked, no_book_reason, setter_strengths, setter_weaknesses, ' +
-            'lead_attributes, setter_words, prospect_words, talk_ratio_setter, ' +
-            'model, prompt_version, reviewed_at',
-        )
-        .in('close_call_id' as never, chunk),
+  {
+    // Both reads chunk over the same partitioned callIds (unique keys), so the
+    // chunks run concurrently and the two queries run alongside each other.
+    const [trxRows, revRows] = await Promise.all([
+      fetchChunked<{ close_call_id: string }>(
+        callIds,
+        (chunk) => sb
+          .from('setter_call_transcripts' as never)
+          .select('close_call_id')
+          .in('close_call_id' as never, chunk) as never,
+        'lead-detail: transcripts read failed',
+        100,
+      ),
+      fetchChunked<{ close_call_id: string } & SetterCallReviewFull>(
+        callIds,
+        (chunk) => sb
+          .from('setter_call_reviews' as never)
+          .select(
+            'close_call_id, sentiment, lead_score, lead_score_reason, should_be_dqd, ' +
+              'dq_reason, booked, no_book_reason, setter_strengths, setter_weaknesses, ' +
+              'lead_attributes, setter_words, prospect_words, talk_ratio_setter, ' +
+              'model, prompt_version, reviewed_at',
+          )
+          .in('close_call_id' as never, chunk) as never,
+        'lead-detail: reviews read failed',
+        100,
+      ),
     ])
-    if (trxErr) throw new Error(`lead-detail: transcripts read failed: ${trxErr.message}`)
-    if (revErr) throw new Error(`lead-detail: reviews read failed: ${revErr.message}`)
-    for (const t of (trx ?? []) as unknown as Array<{ close_call_id: string }>) {
-      transcriptSet.add(t.close_call_id)
-    }
-    for (const r of (rev ?? []) as unknown as Array<{ close_call_id: string } & SetterCallReviewFull>) {
+    for (const t of trxRows) transcriptSet.add(t.close_call_id)
+    for (const r of revRows) {
       const { close_call_id, ...review } = r
       reviewByCall.set(close_call_id, review)
     }
@@ -284,16 +292,18 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     new Set(callRows.map((c) => c.user_id).filter((u): u is string => !!u)),
   )
   const nameByUser = new Map<string, string>()
-  for (let i = 0; i < userIds.length; i += 100) {
-    const chunk = userIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('team_members' as never)
-      .select('close_user_id, full_name')
-      .in('close_user_id' as never, chunk)
-    if (error) throw new Error(`lead-detail: team_members read failed: ${error.message}`)
-    for (const m of (data ?? []) as unknown as Array<{ close_user_id: string; full_name: string }>) {
-      nameByUser.set(m.close_user_id, m.full_name)
-    }
+  {
+    // close_user_id partitioned across chunks → unique keys, order-independent.
+    const members = await fetchChunked<{ close_user_id: string; full_name: string }>(
+      userIds,
+      (chunk) => sb
+        .from('team_members' as never)
+        .select('close_user_id, full_name')
+        .in('close_user_id' as never, chunk) as never,
+      'lead-detail: team_members read failed',
+      100,
+    )
+    for (const m of members) nameByUser.set(m.close_user_id, m.full_name)
   }
   const resolveSetter = (c: CallRaw): string | null => {
     if (c.user_id && nameByUser.has(c.user_id)) return nameByUser.get(c.user_id) ?? null
@@ -373,14 +383,19 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // bookedSince logic (leads.ts), not the meeting start_time.
   const partnershipCreatedTimes: string[] = []
   const bookings: Array<{ at: string; link: 'direct' | 'setter' | 'sync' | 'other'; name: string }> = []
-  for (let i = 0; i < eventUris.length; i += 100) {
-    const chunk = eventUris.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('calendly_scheduled_events' as never)
-      .select('uri, name, event_type_uri, start_time, event_created_at')
-      .in('uri', chunk)
-    if (error) throw new Error(`lead-detail: events read failed: ${error.message}`)
-    for (const e of (data ?? []) as unknown as Array<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null; event_created_at: string | null }>) {
+  {
+    // uri partitioned across chunks; fetchChunked preserves chunk + row order,
+    // so the boolean OR / counter / push-order results are identical.
+    const events = await fetchChunked<{ uri: string; name: string; event_type_uri: string | null; start_time: string | null; event_created_at: string | null }>(
+      eventUris,
+      (chunk) => sb
+        .from('calendly_scheduled_events' as never)
+        .select('uri, name, event_type_uri, start_time, event_created_at')
+        .in('uri', chunk) as never,
+      'lead-detail: events read failed',
+      100,
+    )
+    for (const e of events) {
       const nm = norm(e.name)
       let link: 'direct' | 'setter' | 'sync' | 'other' = 'other'
       // Booking type resets on re-opt-in: only bookings created at/after the
@@ -446,11 +461,28 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // in the current journey shows even if its event time slightly predates the
   // latest opt-in (Israel Lopez: DQ filed 19:13, event 18:12, opt-in 19:00).
   const formEvents: Array<{ at: string; winAt: string | null; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null }> = []
-  {
-    const { data, error } = await sb
+  // The three form sources are fetched CONCURRENTLY here, then processed in their
+  // original order (triage → closer → dc) in the blocks below — preserving the
+  // order-dependent shared writes (formEvents push order, considerClose's
+  // first-dc-wins, ht-wins).
+  const [triageRes, closerRes, dcRes] = await Promise.all([
+    sb
       .from('airtable_setter_triage_calls' as never)
       .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names, airtable_created_at')
-      .eq('lead_id', closeId)
+      .eq('lead_id', closeId),
+    sb
+      .from('airtable_full_closer_report' as never)
+      .select('call_outcome, date_time_of_call, airtable_created_at, closer_names')
+      .eq('form_type', 'New')
+      .eq('lead_id', closeId),
+    sb
+      .from('airtable_digital_college_sales' as never)
+      .select('closed, follow_up, plans, closer_names, date_time_of_call, airtable_created_at')
+      .is('excluded_at', null)
+      .eq('lead_id', closeId),
+  ])
+  {
+    const { data, error } = triageRes
     if (error) throw new Error(`lead-detail: triage forms read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as Array<{
       call_status: string | null; form_type: string | null
@@ -490,11 +522,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   }
   {
     type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null; closer_names: string[] | null }
-    const { data, error } = await sb
-      .from('airtable_full_closer_report' as never)
-      .select('call_outcome, date_time_of_call, airtable_created_at, closer_names')
-      .eq('form_type', 'New')
-      .eq('lead_id', closeId)
+    const { data, error } = closerRes
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
     for (const r of forms) {
@@ -551,11 +579,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       closed: string | null; follow_up: string | null; plans: string[] | null
       closer_names: string[] | null; date_time_of_call: string | null; airtable_created_at: string | null
     }
-    const { data, error } = await sb
-      .from('airtable_digital_college_sales' as never)
-      .select('closed, follow_up, plans, closer_names, date_time_of_call, airtable_created_at')
-      .is('excluded_at', null)
-      .eq('lead_id', closeId)
+    const { data, error } = dcRes
     if (error) throw new Error(`lead-detail: digital college sales read failed: ${error.message}`)
     for (const r of (data ?? []) as unknown as DcForm[]) {
       const isBlank = !r.closed && (r.plans ?? []).length === 0
