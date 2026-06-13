@@ -526,6 +526,19 @@
   animation: geg-pulse 2s ease-in-out infinite;
 }
 
+/* Skeleton shimmer for route loading.tsx fallbacks — instant nav feedback
+   while the server component streams. Opacity-only (no scale). */
+@keyframes geg-skeleton {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.85; }
+}
+.geg-skeleton {
+  background: var(--color-geg-bg-elev);
+  border: 1px solid var(--color-geg-border);
+  border-radius: 6px;
+  animation: geg-skeleton 1.4s ease-in-out infinite;
+}
+
 /* Pill recolor — Gregory's existing pills hardcode Tailwind's emerald/
    amber/rose/sky/zinc palette via class lists. Theme-scoped overrides
    flip them to opacity-tinted dark editorial palette without modifying
