@@ -298,7 +298,11 @@ export const getLeadCycleRows = cache(async (range: DateRange): Promise<LeadCycl
         statusWord: statusWord(c), latestStageWord: latestStageWord(c),
         closeType: c.primary?.closeType || c.reactive?.closeType || null,
         closeTimeIso: (() => {
-          const t = [c.primary?.closedAt, c.reactive?.closedAt].filter((x): x is string => !!x)
+          // HT close (stage closed_at) OR DC close (dc_closed_at) — the dial cap
+          // covers BOTH offers, mirroring leads.ts's HT-or-DC closeTime. The
+          // tagger's closed_at is HT-only, so dcClosedAt must be folded in or DC
+          // closes would lose their cap.
+          const t = [c.primary?.closedAt, c.reactive?.closedAt, c.dcClosedAt].filter((x): x is string => !!x)
           return t.length ? t.slice().sort()[0] : null
         })(),
         dcClosed: !!c.dcClosedAt,
