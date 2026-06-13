@@ -207,11 +207,23 @@ in-window leads carry an ad; the rest are organic.)
   consumed field (display + filter + pages) across 4 windows; non-consumed diffs were V1 over-marks the
   funnel already excluded. Legacy live path kept behind `SALES_ROSTER_USE_JS=1` for bake-in.
 
+- **Talent (`/people`) per-rep call activity from SQL** — `getCallActivityMetrics` defaults to
+  `getCallActivityMetricsRpc`: the per-rep volume (calls / over90s / distinct-≥90s sessions / name)
+  comes from `sales_rep_call_activity` (migration 0082, a `GROUP BY user_id` aggregate) instead of
+  paginating every call into Node + JS session-grouping. The form outcomes, matching, family
+  attribution, `missing`, DC-credit, and the connected composition (≥90s-OR-form) are unchanged.
+  Verified byte-identical on every field across setters/closers/aggregates over 4 windows. Legacy
+  full-scan kept behind `SALES_REP_ACTIVITY_USE_JS=1`.
+
 **Left:**
-- **Talent (`/people`) per-rep metrics** (`getCallActivityMetrics` etc.) — still a JS scan; its
-  volume-scan↔form-scan interleave wasn't restructured (parallelized chunk loops only).
-- **`force-dynamic` + no caching** — every navigation re-fetches server-side. The tag layer makes
+- **Talent form-outcome columns** still read the Airtable forms in JS (the gnarly rep-attribution
+  part), and the closer/DC drilldowns read Calendly detail — both smaller than the call-volume scan
+  that moved to SQL. The DC-close-credit step does two unwindowed full-table form reads (cheap to
+  window-scope later).
+- **`force-dynamic` + no caching** — every navigation re-fetches server-side. The tag/SQL layers make
   each fresh render fast natively, so this is low priority.
+- **`getAppointmentSettingMetrics`** is dead code (its route was removed) — a cleanup candidate; note
+  its `duration>0` connected proxy is *not* the live definition (live = ≥90s-OR-form).
 
 ## Cohort vs activity — the mental model
 
