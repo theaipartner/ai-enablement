@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
+import { fetchChunked, fetchChunkedPaged } from './query-parallel'
 
 // Funnel · Appointment Setting stage — Tier 1 (timing/effort) live
 // from Close system-recorded calls/SMS; Tier 2 (outcome splits) live
@@ -597,29 +598,22 @@ async function matchFormsToCalls(
   // Paginate; lead_ids.size is bounded by the form set so practical
   // sizes stay well under PostgREST's lead-id chunk limit.
   type CallRow = { close_id: string; lead_id: string; user_id: string; activity_at: string; duration: number | null }
-  const calls: CallRow[] = []
+  // lead_id partitioned across chunks; results are grouped by lead and sorted
+  // explicitly below, so chunk/page order doesn't affect the outcome.
   const leadIdArr = Array.from(leadIds)
-  const CHUNK = 100
-  for (let i = 0; i < leadIdArr.length; i += CHUNK) {
-    const chunk = leadIdArr.slice(i, i + CHUNK)
-    let from = 0
-    for (;;) {
-      const { data, error } = await sb
-        .from('close_calls' as never)
-        .select('close_id, lead_id, user_id, activity_at, duration')
-        .in('lead_id', chunk)
-        .gt('duration', 90)
-        .gte('activity_at', new Date(minLookback).toISOString())
-        .lte('activity_at', new Date(maxAnchor).toISOString())
-        .range(from, from + 999)
-      if (error) throw new Error(`close_calls (form match) read failed: ${error.message}`)
-      const rows = (data ?? []) as unknown as CallRow[]
-      if (rows.length === 0) break
-      calls.push(...rows)
-      if (rows.length < 1000) break
-      from += 1000
-    }
-  }
+  const calls = await fetchChunkedPaged<CallRow>(
+    leadIdArr,
+    (chunk, from, to) => sb
+      .from('close_calls' as never)
+      .select('close_id, lead_id, user_id, activity_at, duration')
+      .in('lead_id', chunk)
+      .gt('duration', 90)
+      .gte('activity_at', new Date(minLookback).toISOString())
+      .lte('activity_at', new Date(maxAnchor).toISOString())
+      .range(from, to) as never,
+    'close_calls (form match) read failed',
+    100,
+  )
 
   // Group calls by lead_id for fast per-form filtering.
   const callsByLead = new Map<string, CallRow[]>()
@@ -1269,40 +1263,42 @@ export async function getSpeedToLeadCohort(
 
   // (a) Typeform opt-in cycles in the window → earliest opt-in timestamp per
   // lead (the speed-to-lead anchor). Paginated against the 1000-row cap.
-  const tfCycles = await fetchAllPaged<{ close_id: string; opt_in_at: string }>(
-    (f, t) => sb
-      .from('lead_cycles' as never)
-      .select('close_id, opt_in_at')
-      .eq('source', 'typeform')
-      .gte('opt_in_at', range.startUtcIso)
-      .lt('opt_in_at', range.endUtcIso)
-      .range(f, t),
-    'lead_cycles typeform',
-  )
+  // (b) close_leads whose FIRST-EVER opt-in falls in the ET window, not
+  // soft-hidden. `date_first_opted_in` is a bare `date` → ET calendar compare.
+  // (a) and (b) are independent reads — fetch concurrently, then assemble.
+  const [tfCycles, candidates] = await Promise.all([
+    fetchAllPaged<{ close_id: string; opt_in_at: string }>(
+      (f, t) => sb
+        .from('lead_cycles' as never)
+        .select('close_id, opt_in_at')
+        .eq('source', 'typeform')
+        .gte('opt_in_at', range.startUtcIso)
+        .lt('opt_in_at', range.endUtcIso)
+        .range(f, t),
+      'lead_cycles typeform',
+    ),
+    fetchAllPaged<{
+      close_id: string
+      display_name: string | null
+      date_created: string
+      status_id: string | null
+      custom_fields_raw: Record<string, unknown> | null
+    }>(
+      (f, t) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name, date_created, status_id, custom_fields_raw')
+        .is('excluded_at', null)
+        .gte('date_first_opted_in', range.startEtDate)
+        .lte('date_first_opted_in', range.endEtDate)
+        .range(f, t),
+      'close_leads first-opt-in-window',
+    ),
+  ])
   const firstTfOptIn = new Map<string, string>()
   for (const r of tfCycles) {
     const prev = firstTfOptIn.get(r.close_id)
     if (!prev || r.opt_in_at < prev) firstTfOptIn.set(r.close_id, r.opt_in_at)
   }
-
-  // (b) close_leads whose FIRST-EVER opt-in falls in the ET window, not
-  // soft-hidden. `date_first_opted_in` is a bare `date` → ET calendar compare.
-  const candidates = await fetchAllPaged<{
-    close_id: string
-    display_name: string | null
-    date_created: string
-    status_id: string | null
-    custom_fields_raw: Record<string, unknown> | null
-  }>(
-    (f, t) => sb
-      .from('close_leads' as never)
-      .select('close_id, display_name, date_created, status_id, custom_fields_raw')
-      .is('excluded_at', null)
-      .gte('date_first_opted_in', range.startEtDate)
-      .lte('date_first_opted_in', range.endEtDate)
-      .range(f, t),
-    'close_leads first-opt-in-window',
-  )
 
   const cohortLeads: CohortLead[] = []
   for (const l of candidates) {
@@ -1414,18 +1410,23 @@ export async function getSpeedToLeadCohort(
     // construction's firstConnected check reflects first_two_dials_connected.
     const cohortIds = Array.from(qualifyingMap.keys())
     const optInByLead = new Map(qualifyingLeads.map((l) => [l.close_id, l.optInAt]))
-    for (let i = 0; i < cohortIds.length; i += 200) {
-      const chunk = cohortIds.slice(i, i + 200)
-      const { data, error } = await sb
-        .from('lead_cycles' as never)
-        .select('close_id, opt_in_at, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count')
-        .in('close_id', chunk)
-      if (error) throw new Error(`lead_cycles speed facts read failed: ${error.message}`)
-      for (const r of (data ?? []) as unknown as Array<{
+    {
+      // Chunks fetched concurrently; close_id is partitioned across chunks, so
+      // the per-lead writes below are order-independent.
+      const data = await fetchChunked<{
         close_id: string; opt_in_at: string; first_call_at: string | null; intensity: number | null
         any_call_connected: boolean | null; first_two_dials_connected: boolean | null
         caller_user_id: string | null; total_connected_duration_sec: number | null; connected_call_count: number | null
-      }>) {
+      }>(
+        cohortIds,
+        (chunk) => sb
+          .from('lead_cycles' as never)
+          .select('close_id, opt_in_at, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count')
+          .in('close_id', chunk) as never,
+        'lead_cycles speed facts read failed',
+        200,
+      )
+      for (const r of data) {
         // Only the cohort person's anchor (earliest in-window) cycle.
         if (r.opt_in_at !== optInByLead.get(r.close_id)) continue
         if (r.first_call_at) firstCallByLead.set(r.close_id, { userId: r.caller_user_id, activity_at: r.first_call_at, duration: r.first_two_dials_connected ? 90 : null })
@@ -1436,17 +1437,21 @@ export async function getSpeedToLeadCohort(
       }
     }
     // Caller display names — a light lookup for just the cohort's callers (a
-    // handful of reps), not a full call scan.
+    // handful of reps), not a full call scan. user_id is partitioned across
+    // chunks; nameByUser first-wins is preserved (chunk order kept).
     const callerIds = Array.from(new Set(Array.from(firstCallByLead.values()).map((c) => c.userId).filter((u): u is string => !!u)))
-    for (let i = 0; i < callerIds.length; i += 100) {
-      const chunk = callerIds.slice(i, i + 100)
-      const { data, error } = await sb
-        .from('close_calls' as never)
-        .select('user_id, raw_payload')
-        .in('user_id', chunk)
-        .limit(1000)
-      if (error) throw new Error(`caller name lookup failed: ${error.message}`)
-      for (const r of (data ?? []) as unknown as Array<{ user_id: string | null; raw_payload: { user_name?: string } | null }>) {
+    {
+      const data = await fetchChunked<{ user_id: string | null; raw_payload: { user_name?: string } | null }>(
+        callerIds,
+        (chunk) => sb
+          .from('close_calls' as never)
+          .select('user_id, raw_payload')
+          .in('user_id', chunk)
+          .limit(1000) as never,
+        'caller name lookup failed',
+        100,
+      )
+      for (const r of data) {
         if (r.user_id && r.raw_payload?.user_name && !nameByUser.has(r.user_id)) nameByUser.set(r.user_id, r.raw_payload.user_name)
       }
     }
@@ -1458,18 +1463,21 @@ export async function getSpeedToLeadCohort(
   const prospectFromForm = new Map<string, string>()
   {
     const leadIds = Array.from(qualifyingMap.keys())
-    for (let i = 0; i < leadIds.length; i += 100) {
-      const chunk = leadIds.slice(i, i + 100)
-      const { data, error } = await sb
+    // lead_id partitioned across chunks; per-lead first-wins is preserved since
+    // chunk order (and each chunk's row order) is unchanged.
+    const data = await fetchChunked<{ lead_id: string; prospect_name: string | null }>(
+      leadIds,
+      (chunk) => sb
         .from('airtable_setter_triage_calls' as never)
         .select('lead_id, prospect_name')
         .in('lead_id', chunk)
-        .not('prospect_name', 'is', null)
-      if (error) throw new Error(`airtable prospect lookup failed: ${error.message}`)
-      for (const r of (data ?? []) as unknown as Array<{ lead_id: string; prospect_name: string | null }>) {
-        if (r.lead_id && r.prospect_name && !prospectFromForm.has(r.lead_id)) {
-          prospectFromForm.set(r.lead_id, r.prospect_name)
-        }
+        .not('prospect_name', 'is', null) as never,
+      'airtable prospect lookup failed',
+      100,
+    )
+    for (const r of data) {
+      if (r.lead_id && r.prospect_name && !prospectFromForm.has(r.lead_id)) {
+        prospectFromForm.set(r.lead_id, r.prospect_name)
       }
     }
   }
@@ -2168,18 +2176,20 @@ export async function getCallActivityForUser(
   // Distinct lead ids from calls for prospect-name + outcome lookups.
   const callLeadIds = Array.from(new Set(calls.map((c) => c.leadId)))
 
-  // Lead display names for call-derived rows.
+  // Lead display names for call-derived rows. close_id partitioned across
+  // chunks → unique keys, order-independent.
   const leadName = new Map<string, string | null>()
-  for (let i = 0; i < callLeadIds.length; i += 100) {
-    const chunk = callLeadIds.slice(i, i + 100)
-    const { data, error } = await sb
-      .from('close_leads' as never)
-      .select('close_id, display_name')
-      .in('close_id', chunk)
-    if (error) throw new Error(`close_leads (drill) read failed: ${error.message}`)
-    for (const l of (data ?? []) as unknown as Array<{ close_id: string; display_name: string | null }>) {
-      leadName.set(l.close_id, l.display_name)
-    }
+  {
+    const data = await fetchChunked<{ close_id: string; display_name: string | null }>(
+      callLeadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, display_name')
+        .in('close_id', chunk) as never,
+      'close_leads (drill) read failed',
+      100,
+    )
+    for (const l of data) leadName.set(l.close_id, l.display_name)
   }
 
   // Pull this rep's airtable_user_id AND sales_role from team_members.
@@ -2528,14 +2538,18 @@ export async function getAppointmentSettingMetrics(arg: Window | DateRange): Pro
   // batches of 100 ids to keep PostgREST URI length safe.
   const leadIds = Array.from(new Set(callRows.map((c) => c.lead_id)))
   const ownerByLead = new Map<string, { closer: string | null; setter: string | null }>()
-  for (let i = 0; i < leadIds.length; i += 100) {
-    const chunk = leadIds.slice(i, i + 100)
-    const { data: leads, error: leadsErr } = await sb
-      .from('close_leads' as never)
-      .select('close_id, closer_owner_id, setter_owner_id')
-      .in('close_id', chunk)
-    if (leadsErr) throw new Error(`close_leads read failed: ${leadsErr.message}`)
-    for (const l of (leads ?? []) as unknown as Array<{ close_id: string; closer_owner_id: string | null; setter_owner_id: string | null }>) {
+  {
+    // close_id partitioned across chunks → unique keys, order-independent.
+    const leads = await fetchChunked<{ close_id: string; closer_owner_id: string | null; setter_owner_id: string | null }>(
+      leadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, closer_owner_id, setter_owner_id')
+        .in('close_id', chunk) as never,
+      'close_leads read failed',
+      100,
+    )
+    for (const l of leads) {
       ownerByLead.set(l.close_id, { closer: l.closer_owner_id, setter: l.setter_owner_id })
     }
   }
