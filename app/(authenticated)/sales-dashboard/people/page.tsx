@@ -18,10 +18,10 @@ import {
   type DcDrillRow,
 } from '@/lib/db/funnel-digital-college'
 import {
-  parseEtDateString,
   todayEtDate,
   dateRangeFromExplicit,
 } from '@/lib/db/funnel-window'
+import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { PerRepCallActivityTable } from '../funnel/appointment-setting/_components/sortable-tables'
@@ -75,8 +75,7 @@ export default async function SalesPeoplePage({
     dccloser?: string | string[]
   }
 }) {
-  const start = parseEtDateString(searchParams?.start)
-  const end = parseEtDateString(searchParams?.end)
+  const { start, end } = resolveSalesWindow(searchParams)
   const range = resolvePeopleRange(start, end)
   const todayEt = todayEtDate()
 

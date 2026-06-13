@@ -7,20 +7,24 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 // sidebar clicks (bare hrefs), reloads, and the back-link chains that drop
 // params (Drake 2026-05-31). Two scopes:
 //
-//   - WINDOW (start/end): GLOBAL — one key shared across the whole site, so the
-//     date range you set on one page carries to every other windowed page.
-//   - FILTERS: PER PAGE — keyed by pathname, so each page restores its own
-//     filter selections (leads type/stage, people drill, landing vsl, …).
+//   - WINDOW (start/end): GLOBAL — written to a server-readable COOKIE
+//     (sd_win), so the first server render of any bare navigation already uses
+//     the saved window (resolveSalesWindow, lib/db/sales-window-cookie.ts). No
+//     client re-navigation: the window restore that used to fire a second full
+//     render on every bare navigation is gone.
+//   - FILTERS: PER PAGE — keyed by pathname in localStorage, restored client-
+//     side (leads type/stage/ad, landing vsl, …). These still re-navigate when
+//     a saved filter needs re-applying on a bare URL.
 //
 // Mechanism: the URL stays the source of truth (deep links, funnel drill-through,
-// and shared links all keep working). This component only RESTORES from storage
-// when a page lands with a bare URL, and PERSISTS whatever the URL currently
-// carries on every change. Explicit URL params always win over stored state.
+// and shared links all keep working). Explicit URL params always win.
 //
 // Mount once per page with the keys that page owns:
 //   <PersistPageState window filters={['view', 'type', 'stage']} />
 
-const WIN_KEY = 'sd:win'
+const WIN_COOKIE = 'sd_win'
+// ~180 days; refreshed on every window change.
+const WIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 180
 const filtersKeyFor = (path: string) => `sd:filters:${path}`
 
 export function PersistPageState({
@@ -38,28 +42,13 @@ export function PersistPageState({
   const didRestore = useRef(false)
   const filtersJoined = filters.join(',')
 
-  // Restore once on mount, only for state the URL doesn't already carry.
+  // Restore once on mount — FILTERS ONLY. The window is resolved server-side
+  // from the sd_win cookie, so it never needs a client re-navigation here.
   useEffect(() => {
     if (didRestore.current) return
     didRestore.current = true
     const sp = new URLSearchParams(params.toString())
     let changed = false
-
-    if (persistWindow && !sp.has('start') && !sp.has('end')) {
-      try {
-        const raw = localStorage.getItem(WIN_KEY)
-        if (raw) {
-          const w = JSON.parse(raw) as { start?: string; end?: string }
-          if (w?.start && w?.end) {
-            sp.set('start', w.start)
-            sp.set('end', w.end)
-            changed = true
-          }
-        }
-      } catch {
-        /* storage unavailable / malformed — skip restore */
-      }
-    }
 
     // Only restore filters when the URL carries NONE of them — if the user (or a
     // drill-through link) set any filter explicitly, that intent wins entirely.
@@ -90,10 +79,12 @@ export function PersistPageState({
   useEffect(() => {
     const sp = new URLSearchParams(params.toString())
     if (persistWindow && sp.has('start') && sp.has('end')) {
-      try {
-        localStorage.setItem(WIN_KEY, JSON.stringify({ start: sp.get('start'), end: sp.get('end') }))
-      } catch {
-        /* skip */
+      // Window → server-readable cookie, so the next bare navigation renders the
+      // saved window on the first server pass (no client re-navigation).
+      const start = sp.get('start')
+      const end = sp.get('end')
+      if (start && end) {
+        document.cookie = `${WIN_COOKIE}=${start}~${end}; path=/; max-age=${WIN_COOKIE_MAX_AGE}; SameSite=Lax`
       }
     }
     const keys = filtersJoined ? filtersJoined.split(',') : []

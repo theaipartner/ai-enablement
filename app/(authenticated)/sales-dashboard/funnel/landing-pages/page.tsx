@@ -27,6 +27,7 @@ import {
   todayEtDate,
   daysInRange,
 } from '@/lib/db/funnel-window'
+import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from './date-range-picker'
 import { PersistPageState } from '@/components/sales/persist-page-state'
@@ -55,7 +56,8 @@ export default async function FunnelLandingPagesPage({
     vsl?: string | string[]
   }
 }) {
-  const range = resolveDateRange(searchParams)
+  const win = resolveSalesWindow(searchParams)
+  const range = resolveDateRange({ start: win.start ?? undefined, end: win.end ?? undefined })
   const vslHashedId = parseVslId(searchParams?.vsl)
 
   // LP visits = Meta unique link clicks (Drake 2026-05-27 — keeps

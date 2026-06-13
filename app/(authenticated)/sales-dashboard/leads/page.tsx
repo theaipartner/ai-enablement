@@ -4,7 +4,8 @@ import { getLeadsForRange, type Qualification } from '@/lib/db/leads'
 import { matchesLeadFilter, matchesType, reachedStage, type LeadFilterType, type FunnelStage } from '@/lib/db/leads-funnel'
 import { getFmrSignals, buildFmrBlocks, getSpeedToLeadCohort, summarizeCohortRows } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
-import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
+import { todayEtDate } from '@/lib/db/funnel-window'
+import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { searchLeads, type LeadSearchResult } from '@/lib/db/lead-search'
 import { FmrTimeBlockChart } from '@/components/sales/fmr-time-block-chart'
@@ -53,8 +54,7 @@ export default async function SalesDashboardLeadsPage({
     )
   }
 
-  const start = parseEtDateString(searchParams?.start)
-  const end = parseEtDateString(searchParams?.end)
+  const { start, end } = resolveSalesWindow(searchParams)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
   // Lead-type (multi) + stage (single, cumulative) filters — set by the Funnel

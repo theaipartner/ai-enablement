@@ -20,6 +20,7 @@ import {
   parseEtDateString,
   todayEtDate,
 } from '@/lib/db/funnel-window'
+import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { PersonPill } from '../../header-pills'
 import { DateRangePicker } from '../landing-pages/date-range-picker'
 import { PersistPageState } from '@/components/sales/persist-page-state'
@@ -45,7 +46,8 @@ export default async function FunnelAdsPage({
     end?: string | string[]
   }
 }) {
-  const picker = resolvePickerRange(searchParams)
+  const win = resolveSalesWindow(searchParams)
+  const picker = resolvePickerRange({ start: win.start ?? undefined, end: win.end ?? undefined })
   const dataRange = clampAdsRange(picker.startEtDate, picker.endEtDate)
   const todayEt = todayEtDate()
 

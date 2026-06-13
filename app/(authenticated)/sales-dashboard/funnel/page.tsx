@@ -9,7 +9,8 @@ import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getCashCollected } from '@/lib/db/funnel-cash'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
-import { parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
+import { todayEtDate } from '@/lib/db/funnel-window'
+import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from './landing-pages/date-range-picker'
 import { PersistPageState } from '@/components/sales/persist-page-state'
@@ -31,8 +32,7 @@ export default async function SalesDashboardFunnelPage({
 }: {
   searchParams?: { start?: string | string[]; end?: string | string[]; ad?: string | string[] }
 }) {
-  const start = parseEtDateString(searchParams?.start)
-  const end = parseEtDateString(searchParams?.end)
+  const { start, end } = resolveSalesWindow(searchParams)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
   const ad = (Array.isArray(searchParams?.ad) ? searchParams?.ad[0] : searchParams?.ad)?.trim() || null
