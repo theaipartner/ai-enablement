@@ -62,6 +62,12 @@ export type LeadCycleRow = {
   statusWord: string
   latestStageWord: string
   closeType: 'ht' | 'dc' | null
+  // Close MEETING time (lead_cycle_stages.closed_at = the closer form's
+  // date_time_of_call) across phases, earliest. Caps the roster/funnel dial
+  // count at the close. null = not closed. Uses the tagger's complete close
+  // definition (all closer forms incl. old-format), so it caps old-format closes
+  // the legacy New-form-only cap missed.
+  closeTimeIso: string | null
   // Digital College close (excluded from the HT stages) — for the per-box DC line.
   dcClosed: boolean
   // Funnel/filter primitives — the per-phase stage hits + membership flags, so
@@ -291,6 +297,10 @@ export const getLeadCycleRows = cache(async (range: DateRange): Promise<LeadCycl
         leadType, connected: isConnected(c),
         statusWord: statusWord(c), latestStageWord: latestStageWord(c),
         closeType: c.primary?.closeType || c.reactive?.closeType || null,
+        closeTimeIso: (() => {
+          const t = [c.primary?.closedAt, c.reactive?.closedAt].filter((x): x is string => !!x)
+          return t.length ? t.slice().sort()[0] : null
+        })(),
         dcClosed: !!c.dcClosedAt,
         becameDirect: !!c.becameDirectAt,
         reactivatedAt: c.reactivatedAt,

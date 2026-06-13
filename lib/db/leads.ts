@@ -254,7 +254,13 @@ function outcomeCloseType(callOutcome: string | null): 'ht' | 'dc' | null {
   return null
 }
 
-export async function getLeadsForRange(
+// V1 (legacy live derivation) — kept behind SALES_ROSTER_USE_JS=1 and used by
+// the diff harness. The enrichment here (Calendly scans + the 3 Airtable form
+// reads + post-react calls) re-derives per-lead funnel signals that the tagger
+// already materialized; getLeadsForRangeTags reads those tags instead. Every
+// field this computes is either tag-overridden in assembly or consumed only by
+// the dead (cohort leads always have a cycle) reachedStage live fallback.
+export async function getLeadsForRangeLive(
   range: DateRange,
   // Optional pre-fetched cohort — the leads page already fetches it for the
   // speed-to-lead boxes, so passing it in avoids a duplicate full cohort scan
@@ -721,6 +727,126 @@ export async function getLeadsForRange(
       adName: leadAd.get(r.leadId)?.adName ?? null,
     }
   })
+}
+
+// V2 (tag-sourced, DEFAULT) — the roster reads the materialized tags the funnel
+// already trusts, instead of re-deriving funnel signals from raw Calendly /
+// Airtable / close_calls. Inputs: the cohort spine (already tag-materialized,
+// migration 0080) + collapseToLatest(getLeadCycleRows) (already fetched/cached by
+// the funnel page) + ONE 1:1 close_leads read for the only non-tag fields
+// (qualified / ad / reactivated_at). Deletes the Calendly full-table scans, the
+// three form reads, the post-react scan, and all the matching helpers.
+//
+// Integrity: every CONSUMED roster field already came from the tag (display:
+// leadType/statusWord/latestStageWord/connectedEffective; filter:
+// tagPrimaryHits/tagReactiveHits/tagBecameDirect/tagReactivatedAt) or from the
+// same close_leads columns (qualified/ad), so V2 reproduces them exactly. The
+// former-live fields (confirmed/showed/closed/hasDirect/…) are sourced from the
+// tag here for type-completeness — they're consumed only by the dead reachedStage
+// fallback (cohort leads always have a cycle). closeTimeIso comes from the tag's
+// closed_at (the deliberate dial-cap convergence; see lead-tags.ts).
+export async function getLeadsForRangeTags(
+  range: DateRange,
+  cohort?: SpeedToLeadCohortResult,
+): Promise<LeadRow[]> {
+  const c = cohort ?? (await getSpeedToLeadCohort(range))
+  const rows = c.rows
+  if (rows.length === 0) return []
+
+  const sb = createAdminClient()
+  const leadIds = rows.map((r) => r.leadId)
+
+  // The only fields not on the tag — a 1:1 close_leads read (chunked, parallel).
+  const attrByLead = new Map<string, { qualified: Qualification; adId: string | null; adName: string | null; reactivatedAt: string | null }>()
+  {
+    const data = await fetchChunked<{
+      close_id: string; marketing_qualified: string | null; ad_id: string | null; ad_name: string | null; reactivated_at: string | null
+    }>(
+      leadIds,
+      (chunk) => sb
+        .from('close_leads' as never)
+        .select('close_id, marketing_qualified, ad_id, ad_name, reactivated_at')
+        .in('close_id', chunk) as never,
+      'leads (tags): close_leads read failed',
+    )
+    for (const r of data) {
+      attrByLead.set(r.close_id, {
+        qualified: qualFromMarketingQualified(r.marketing_qualified),
+        adId: r.ad_id,
+        adName: r.ad_name,
+        reactivatedAt: r.reactivated_at,
+      })
+    }
+  }
+
+  const { getLeadCycleRows, collapseToLatest } = await import('./lead-tags')
+  const tagByLead = new Map(collapseToLatest(await getLeadCycleRows(range)).map((t) => [t.closeId, t]))
+
+  return rows.map((r) => {
+    const tag = tagByLead.get(r.leadId)
+    const attr = attrByLead.get(r.leadId)
+    const P = tag?.primaryHits ?? null
+    const R = tag?.reactiveHits ?? null
+
+    // Funnel signals — straight from the tag (max across phases for the
+    // primary/total lineage; reactive subset for the react* fields).
+    const closed = !!(P?.closed || R?.closed)
+    const showed = !!(P?.showed || R?.showed)
+    const confirmed = !!(P?.confirmed || R?.confirmed)
+    const closeType = tag?.closeType ?? null
+    const connected = !!tag?.connected
+    const hasDirect = !!tag?.becameDirect
+    // Setter/partnership booking ≈ a booked hit on a non-direct lead. Feeds only
+    // the dead reachedStage fallback, so it's for type-completeness.
+    const hasPartnership = !!((P?.booked || R?.booked) && !tag?.becameDirect)
+    const reactConnected = !!R?.connected
+    const reactBooked = !!R?.booked
+    const reactShowed = !!R?.showed
+    const reactClosed = !!R?.closed
+    const bookingType: BookingType =
+      hasDirect && hasPartnership ? 'reactivation' : hasDirect ? 'direct' : hasPartnership ? 'setter' : null
+
+    return {
+      ...r,
+      qualified: attr?.qualified ?? 'unknown',
+      bookingType,
+      confirmed,
+      showed,
+      closed,
+      closeType,
+      hasDirect,
+      hasPartnership,
+      reactivatedAt: attr?.reactivatedAt ?? null,
+      closeTimeIso: tag?.closeTimeIso ?? null,
+      connected,
+      connectedEffective: tag ? tag.connected : connected,
+      reactConnected,
+      reactBooked,
+      reactShowed,
+      reactClosed,
+      leadType: tag ? tag.leadType : 'optin',
+      statusWord: tag ? tag.statusWord : '—',
+      latestStageWord: tag ? tag.latestStageWord : 'Opted in',
+      optInType: 'new',
+      optInAt: tag ? tag.latestOptInAt : r.optInAt,
+      tagBecameDirect: tag ? tag.becameDirect : false,
+      tagReactivatedAt: tag ? tag.reactivatedAt : null,
+      tagPrimaryHits: tag ? tag.primaryHits : null,
+      tagReactiveHits: tag ? tag.reactiveHits : null,
+      adId: attr?.adId ?? null,
+      adName: attr?.adName ?? null,
+    }
+  })
+}
+
+// Public entry — defaults to the tag-sourced V2; SALES_ROSTER_USE_JS=1 forces the
+// legacy live derivation (fallback during bake-in; used by the diff harness).
+export async function getLeadsForRange(
+  range: DateRange,
+  cohort?: SpeedToLeadCohortResult,
+): Promise<LeadRow[]> {
+  if (process.env.SALES_ROSTER_USE_JS === '1') return getLeadsForRangeLive(range, cohort)
+  return getLeadsForRangeTags(range, cohort)
 }
 
 // Qualified from the Close lead's `marketing_qualified` flag (the team's
