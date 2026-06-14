@@ -1,0 +1,18 @@
+-- 0083_lead_cycles_qualified.sql
+-- Per-cycle qualification, sourced from the Typeform SFedWelr INVESTMENT answer
+-- (field ref 5138f17b-…, "how much are you willing to invest"), replacing the
+-- funnel's reliance on close_leads.marketing_qualified. The Close flag goes stale
+-- on re-opt-ins — especially cross-email — so a lead that re-qualifies on a new
+-- submission isn't reflected (e.g. Ronald Riccardi: May-25 "Under $2,000" → No,
+-- Jun-10 "$2,000 and $5,000" → qualified, but Close still reads No).
+--
+-- Written by the tagger (shared/lead_tagging.py) per opt-in cycle from THAT
+-- cycle's own submission:
+--   true  = willing to invest >= $2,000 (answer is not "Under $2,000")
+--   false = "Under $2,000"
+--   null  = no / unparseable investment answer (treated as 'unknown', as today)
+--
+-- Additive nullable column — no existing column or row is modified. Populated by
+-- a full `--apply` retag after the tagger change lands; sales_funnel_counts is
+-- NOT switched to read it (migration 0084) until that backfill is done.
+alter table lead_cycles add column if not exists qualified boolean;
