@@ -48,6 +48,18 @@ from psycopg2.extras import Json, execute_values
 
 EFFECTIVE_DATE = "2026-05-24"
 OPT_IN_FORM = "SFedWelr"
+# Typeform SFedWelr "how much are you willing to invest" choice field. Drives
+# per-cycle qualification (>= $2,000 = qualified), replacing the stale
+# close_leads.marketing_qualified flag.
+INVEST_FIELD_REF = "5138f17b-eb31-4d36-bacb-88a8c83326ed"
+
+
+def qual_from_investment(inv):
+    """Typeform investment answer -> qualified flag. None when no/blank answer
+    (treated as 'unknown'); 'Under $2,000' -> False; anything else -> True."""
+    if not inv or not str(inv).strip():
+        return None
+    return "under" not in str(inv).lower()
 # "DC Revival Lead" Close custom field. The re-engagement SMS auto-creates these
 # leads in Close as New Opt-ins; the dashboard excludes them everywhere (the
 # funnel cohort already filters them in getSpeedToLeadCohort). Exclude them from
@@ -223,31 +235,36 @@ def _compute(cur, lead_ids):
     cur.execute(
         """select submitted_at,
              lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
-             (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1)
+             (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1),
+             (select a->'choice'->>'label' from jsonb_array_elements(answers) a where a->'field'->>'ref' = %s limit 1)
            from typeform_responses where form_id = %s and submitted_at >= %s""",
-        (OPT_IN_FORM, EFFECTIVE_DATE),
+        (INVEST_FIELD_REF, OPT_IN_FORM, EFFECTIVE_DATE),
     )
     tf_by_email, tf_by_phone = defaultdict(list), defaultdict(list)
-    for submitted_at, email, phone in cur.fetchall():
+    for submitted_at, email, phone, investment in cur.fetchall():
         if email:
-            tf_by_email[email].append(submitted_at)
+            tf_by_email[email].append((submitted_at, investment))
         d = digits10(phone)
         if d:
-            tf_by_phone[d].append(submitted_at)
+            tf_by_phone[d].append((submitted_at, investment))
 
     cycles_by_lead = {}
+    cycle_qual = {}  # (cid, opt_in_at) -> qualified bool/None, from THAT cycle's submission
     for cid in ids:
         subs = []
         for e in lead_emails[cid]:
             subs += tf_by_email.get(e, [])
         for p in lead_phones[cid]:
             subs += tf_by_phone.get(p, [])
-        by_min = {}
-        for ts in subs:
+        by_min = {}  # minute -> (submitted_at, investment), earliest in the minute wins
+        for ts, inv in subs:
             key = ts.replace(second=0, microsecond=0)
-            if key not in by_min or ts < by_min[key]:
-                by_min[key] = ts
-        times = sorted(by_min.values())
+            if key not in by_min or ts < by_min[key][0]:
+                by_min[key] = (ts, inv)
+        pairs = sorted(by_min.values())  # by submitted_at
+        times = [ts for ts, _ in pairs]
+        for ts, inv in pairs:
+            cycle_qual[(cid, ts)] = qual_from_investment(inv)
         # Unique leads only: a lead with NO Typeform SFedWelr match is not a
         # high-ticket opt-in, so it gets NO cycle (the old `close_fallback` path
         # is removed). Combined with the date_first_opted_in universe filter,
@@ -556,7 +573,8 @@ def _compute(cur, lead_ids):
             cyc_inbound = [a for a in sms_in_act.get(cid, []) if a >= opt_in_at]
             earliest_inbound = min(cyc_inbound) if cyc_inbound else None
 
-            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin, row_ad_id, row_ad_name, row_campaign_id, first_call_at, intensity, any_conn, first_two, caller_uid, tot_conn_dur, conn_cnt, earliest_inbound, earliest_connect))
+            qualified = cycle_qual.get((cid, opt_in_at))
+            cycle_rows.append((cid, opt_in_at, idx + 1, source, became_direct, reactive_at, reactive_source, dq_at, dq_source, dc_close_at, digital_college_at, dc_book_at, dc_show_at, dc_close_origin, row_ad_id, row_ad_name, row_campaign_id, first_call_at, intensity, any_conn, first_two, caller_uid, tot_conn_dur, conn_cnt, earliest_inbound, earliest_connect, qualified))
 
             for p in ("primary", "reactive"):
                 if reactive_at is None and p == "reactive":
@@ -699,9 +717,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
             cur.execute("delete from lead_cycles where close_id = any(%s)", (list(lead_ids),))  # cascades stages
         if cycle_rows:
             execute_values(cur,
-                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin, ad_id, ad_name, campaign_id, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count, earliest_inbound_at, earliest_connect_at) values %s",
+                "insert into lead_cycles (close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at, digital_college_at, dc_booked_at, dc_showed_at, dc_close_origin, ad_id, ad_name, campaign_id, first_call_at, intensity, any_call_connected, first_two_dials_connected, caller_user_id, total_connected_duration_sec, connected_call_count, earliest_inbound_at, earliest_connect_at, qualified) values %s",
                 cycle_rows,
-                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz)")
+                template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz,%s)")
         if stage_rows:
             execute_values(cur,
                 "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
