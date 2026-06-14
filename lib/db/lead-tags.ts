@@ -35,6 +35,7 @@ export type LeadCycle = {
   optInAt: string
   optInSeq: number
   source: string
+  qualified: boolean | null
   becameDirectAt: string | null
   reactivatedAt: string | null
   reactiveSource: string | null
@@ -68,6 +69,9 @@ export type LeadCycleRow = {
   // definition (all closer forms incl. old-format), so it caps old-format closes
   // the legacy New-form-only cap missed.
   closeTimeIso: string | null
+  // Per-cycle qualification from the Typeform investment answer (>= $2k). The
+  // roster's qualified column reads this (not close_leads.marketing_qualified).
+  qualified: boolean | null
   // Digital College close (excluded from the HT stages) — for the per-box DC line.
   dcClosed: boolean
   // Funnel/filter primitives — the per-phase stage hits + membership flags, so
@@ -166,14 +170,14 @@ function isConnected(c: LeadCycle): boolean {
 }
 
 const CYCLE_COLS =
-  'close_id, opt_in_at, opt_in_seq, source, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at'
+  'close_id, opt_in_at, opt_in_seq, source, qualified, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at'
 const STAGE_COLS =
   'close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type'
 // IN-list chunk size. Keeps the PostgREST GET URL well under length limits
 // (~200 close_ids ≈ 5 KB) while collapsing the old per-lead round-trips.
 const ID_CHUNK = 200
 
-type RawCycle = Record<string, string | number | null>
+type RawCycle = Record<string, string | number | boolean | null>
 type RawStage = Record<string, string | null>
 
 // Pure mapper: cycle rows + that lead's stage rows -> LeadCycle[]. The stage
@@ -191,6 +195,7 @@ function buildCycles(cycleRows: RawCycle[], stageRows: RawStage[]): LeadCycle[] 
     optInAt: c.opt_in_at as string,
     optInSeq: c.opt_in_seq as number,
     source: c.source as string,
+    qualified: (c.qualified as boolean | null) ?? null,
     becameDirectAt: (c.became_direct_at as string) ?? null,
     reactivatedAt: (c.reactive_at as string) ?? null,
     reactiveSource: (c.reactive_source as string) ?? null,
@@ -297,6 +302,7 @@ export const getLeadCycleRows = cache(async (range: DateRange): Promise<LeadCycl
         leadType, connected: isConnected(c),
         statusWord: statusWord(c), latestStageWord: latestStageWord(c),
         closeType: c.primary?.closeType || c.reactive?.closeType || null,
+        qualified: c.qualified,
         closeTimeIso: (() => {
           // HT close (stage closed_at) OR DC close (dc_closed_at) — the dial cap
           // covers BOTH offers, mirroring leads.ts's HT-or-DC closeTime. The

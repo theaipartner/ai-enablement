@@ -757,21 +757,21 @@ export async function getLeadsForRangeTags(
   const leadIds = rows.map((r) => r.leadId)
 
   // The only fields not on the tag — a 1:1 close_leads read (chunked, parallel).
-  const attrByLead = new Map<string, { qualified: Qualification; adId: string | null; adName: string | null; reactivatedAt: string | null }>()
+  // (qualified now comes from the tag — the Typeform investment answer per cycle.)
+  const attrByLead = new Map<string, { adId: string | null; adName: string | null; reactivatedAt: string | null }>()
   {
     const data = await fetchChunked<{
-      close_id: string; marketing_qualified: string | null; ad_id: string | null; ad_name: string | null; reactivated_at: string | null
+      close_id: string; ad_id: string | null; ad_name: string | null; reactivated_at: string | null
     }>(
       leadIds,
       (chunk) => sb
         .from('close_leads' as never)
-        .select('close_id, marketing_qualified, ad_id, ad_name, reactivated_at')
+        .select('close_id, ad_id, ad_name, reactivated_at')
         .in('close_id', chunk) as never,
       'leads (tags): close_leads read failed',
     )
     for (const r of data) {
       attrByLead.set(r.close_id, {
-        qualified: qualFromMarketingQualified(r.marketing_qualified),
         adId: r.ad_id,
         adName: r.ad_name,
         reactivatedAt: r.reactivated_at,
@@ -808,7 +808,8 @@ export async function getLeadsForRangeTags(
 
     return {
       ...r,
-      qualified: attr?.qualified ?? 'unknown',
+      // Typeform-sourced qualification from the tag (true/false/null per cycle).
+      qualified: tag?.qualified === true ? 'qualified' : tag?.qualified === false ? 'non-qualified' : 'unknown',
       bookingType,
       confirmed,
       showed,
