@@ -16,6 +16,10 @@ export type AdsetNode = { adsetId: string; count: number; ads: AdNode[] }
 export type CampaignNode = { campaignId: string; campaignName: string; count: number; adsets: AdsetNode[] }
 export type AdHierarchy = { campaigns: CampaignNode[]; adsetsAll: AdsetNode[]; adsAll: AdNode[] }
 
+// Narrow fixed-width trigger (Drake 2026-06-15): the closed select clips its
+// label, but the OPEN option list still shows full text — so the header row
+// stays compact and never forces a horizontal scroll. Leaves room for more
+// filter dropdowns (landing pages) on the wrapping filter row.
 const selectStyle = {
   fontSize: 11,
   letterSpacing: '0.04em',
@@ -24,7 +28,7 @@ const selectStyle = {
   border: '1px solid var(--color-geg-border)',
   borderRadius: 6,
   padding: '6px 10px',
-  maxWidth: 220,
+  width: 140,
 } as const
 
 export function AdCascadeFilter({

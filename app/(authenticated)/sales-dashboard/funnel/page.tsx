@@ -75,32 +75,32 @@ export default async function SalesDashboardFunnelPage({
   return (
     <div>
       <PersistPageState window filters={['campaign', 'adset', 'ad']} />
-      <HeaderBand
-        eyebrow="SALES · FUNNEL"
-        title="Funnel."
-        actions={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Link
-              href={lpHref}
-              className="geg-mono"
-              style={{
-                fontSize: 11,
-                letterSpacing: '0.06em',
-                color: 'var(--color-geg-text-2)',
-                textDecoration: 'none',
-                border: '1px solid var(--color-geg-border)',
-                borderRadius: 6,
-                padding: '6px 12px',
-                background: 'var(--color-geg-bg-elev)',
-              }}
-            >
-              Landing pages →
-            </Link>
-            <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
-            <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
-          </div>
-        }
-      />
+      <HeaderBand eyebrow="SALES · FUNNEL" title="Funnel." />
+
+      {/* Filter row — its own wrapping row below the title so the controls never
+          force a horizontal scroll, and there's room for more dropdowns later
+          (Drake 2026-06-15). flexWrap lets them drop to a second line. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 16 }}>
+        <Link
+          href={lpHref}
+          className="geg-mono"
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.06em',
+            color: 'var(--color-geg-text-2)',
+            textDecoration: 'none',
+            border: '1px solid var(--color-geg-border)',
+            borderRadius: 6,
+            padding: '6px 12px',
+            background: 'var(--color-geg-bg-elev)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Landing pages →
+        </Link>
+        <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
+        <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
+      </div>
 
       <FunnelStack funnel={funnel} cash={cash} range={range} ad={ad} campaign={campaign} adset={adset} />
 
