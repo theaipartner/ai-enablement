@@ -56,9 +56,9 @@ export function addPlan(counts: DcPlanCounts, plans: string[] | null) {
 }
 
 // DC (low-ticket) closer name tokens. MUST stay in sync with
-// shared/lead_tagging.py DC_CLOSER_NAMES. Robby is inactive but kept so his
-// historical DC forms route correctly; Bradley + Josh added 2026-06-15.
-const DC_CLOSER_TOKENS = ['robby', 'bradley', 'josh']
+// shared/lead_tagging.py DC_CLOSER_NAMES. Active DC closers: Adam, Bradley, Josh.
+// Robby is inactive but kept so his historical DC forms route correctly.
+const DC_CLOSER_TOKENS = ['robby', 'bradley', 'josh', 'adam']
 
 export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
   const sb = createAdminClient()

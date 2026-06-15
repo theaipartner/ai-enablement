@@ -79,11 +79,13 @@ COLD = timedelta(days=3)
 # which funnel its outcome feeds. DC closers (low-ticket) are the named
 # exception; everyone else is an HT closer. An HT closer can dip into DC via a
 # downsell; a DC closer never touches HT.
-# DC (low-ticket) closer name tokens. Robby is INACTIVE but stays here so his ~50
-# historical DC forms remain classified as DC (dropping him would leak his
-# non-close forms into the HT funnel). Bradley + Josh added 2026-06-15 (the new DC
-# closers). MUST stay in sync with lib/db/funnel-dc.ts DC_CLOSER_TOKENS.
-DC_CLOSER_NAMES = ("robby", "bradley", "josh")
+# DC (low-ticket) closer name tokens. Current active DC closers: Adam, Bradley,
+# Josh. Robby is INACTIVE but stays here so his ~50 historical DC forms remain
+# classified as DC (dropping him would leak his non-close forms into the HT
+# funnel). Everyone NOT listed is an HT closer by default (Aman + Cobe are the
+# current HT closers; Jan/Seth/Joey/etc. are former HT closers kept HT for their
+# historical closes). MUST stay in sync with lib/db/funnel-dc.ts DC_CLOSER_TOKENS.
+DC_CLOSER_NAMES = ("robby", "bradley", "josh", "adam")
 
 
 def is_dc_closer(names):
