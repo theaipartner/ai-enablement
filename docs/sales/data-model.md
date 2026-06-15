@@ -130,19 +130,50 @@ HT / DC / total:
 
 ---
 
-## Lead → ad attribution (verified 2026-06-11)
+## Lead → ad attribution + the Campaign → Ad Set → Ad cascade (updated 2026-06-15)
 
-Every unique lead carries its source ad **natively from Close** — no heuristic
-matching needed. On the unique-lead cohort, `close_leads.ad_id` / `ad_name` /
-`campaign_id` / `adset_id` / `utm_campaign` are **~99% populated** (356/359), and
-`ad_id` joins to `cortana_ad_daily.platform_entity_id` (the Meta ad id) with **100%
-coverage** — every lead's `ad_id` exists in Cortana. So the funnel is sliceable down to
-the individual ad/creative, with spend + ROAS per ad.
+Every unique lead carries its full ad hierarchy **natively from Close** — `close_leads`
+holds `campaign_id`, `adset_id`, `ad_id` (+ `ad_name`, `utm_campaign`), **~99% populated**
+on the cohort (all three present on 439/439 in the Jun 1–14 check). The three IDs form a
+**clean tree** — each ad belongs to exactly one ad set, each ad set to one campaign — so the
+funnel is sliceable at any level. `ad_id` joins `cortana_ad_daily.platform_entity_id` (the
+Meta ad id) at 100%; `lead_cycles` also carries `ad_id`/`ad_name`/`campaign_id` (migration
+0078) as a copy of the lead's single Close attribution.
 
-- **Join path:** `lead_cycles.close_id` → `close_leads.ad_id` →
-  `cortana_ad_daily.platform_entity_id`.
-- The ~1–2% with no `ad_id` are organic/direct. `utm_source` is empty (0%) — use
-  `ad_name` / `campaign_id` instead.
+### The cascade filter
+
+The Funnel page's ad filter (`components/sales/ad-cascade-filter.tsx`) is **three dependent
+dropdowns — Campaign → Ad Set → Ad**. Choosing a campaign narrows the ad-set list to that
+campaign's ad sets; choosing an ad set narrows the ad list. The **deepest** selection scopes
+the whole funnel (box counts + the rosters the stages link to). `sales_funnel_counts`
+filters by `cl.campaign_id` / `cl.adset_id` / `lc.ad_id` (migration 0085 added
+`p_campaign`/`p_adset` — close_leads is already joined in the `cyc` CTE, so no new columns).
+`LeadRow` carries `campaignId`/`campaignName`/`adsetId`; `buildAdHierarchy` (funnel page)
+builds the tree from the rows. Funnel stage links + the leads roster carry the cascade
+through, so a drill keeps the selection.
+
+| Level | Filter key | Name source | Spend / ROAS source |
+|-------|-----------|-------------|---------------------|
+| Campaign | `campaign_id` | `utm_campaign` (+ `cortana_campaign_daily.entity_name`) | `cortana_campaign_daily.spent` |
+| Ad Set | `adset_id` | **none** — UI shows the numeric id | **none** |
+| Ad | `ad_id` | `ad_name` (+ `cortana_ad_daily.entity_name`) | `cortana_ad_daily.spent` |
+
+⚠️ **The ad-set gap:** there is **no Cortana ad-set feed** (only per-campaign and per-ad
+daily tables), so ad sets have **neither a name nor spend** — the dropdown shows the id and
+the ROAS line reads "—" when an ad set is the active filter. The fix is a **Cortana ad-set
+export** (Zain), mirrored like the ad/campaign feeds; then the cascade is fully named with
+ad-set ROAS. No Meta API access exists either (everything is via the Cortana → Sheet path).
+
+### Coverage / "unattributed"
+
+The ~1% of cohort leads with no `ad_id` are **not all organic**: some carry the per-lead
+`aaid_` token + the "Closer Funnel" marker (a real paid click) but Meta's ad-id URL macro
+didn't populate, so `ad_id`/`adset_id`/`campaign_id` are blank in Close **and** in the
+Typeform hidden fields — not recoverable from our data (the `aaid` is per-lead, doesn't map
+to an ad). These drop out of the cascade. The per-ad-sum-vs-total gap on the funnel is
+mostly the **cycles-vs-people** unit difference (the box counts opt-in *events*, the dropdown
+counts *people*), not these unattributed leads.
+
 - ⚠️ Don't confuse with the **~20%** figure in `logic.md` — that's a *different* join
   (Calendly bookings ↔ leads via `utm_term`), not lead→ad. Lead→ad is ~99%.
 
@@ -174,8 +205,9 @@ This is the list the upcoming table audit works from.
 | `typeform_forms` | form/question reference | reference |
 | `typeform_form_insights_snapshots` | periodic Typeform analytics snapshots | typeform insights cron |
 | `meta_ad_daily` | account-level daily Meta spend (Cortana-fed) | Ads page, adspend fallback |
-| `cortana_ad_daily` | per-ad daily attribution | Ads page |
-| `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS |
+| `cortana_ad_daily` | per-ad daily attribution + spend | Ads page, funnel cascade (per-ad ROAS) |
+| `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
+| **(no ad-set table)** | — | the cascade's Ad Set level has no name/spend; needs a Cortana ad-set feed |
 | `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |
