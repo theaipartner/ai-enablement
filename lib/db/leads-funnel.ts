@@ -267,19 +267,26 @@ async function scanDialWindows(
 export async function getLeadsFunnel(
   rows: LeadRow[],
   range: DateRange,
-  opts?: { adId?: string | null },
+  opts?: { adId?: string | null; campaignId?: string | null; adsetId?: string | null },
 ): Promise<LeadsFunnel> {
-  // Adspend / clicks — used by BOTH paths. Per-ad view shows the selected ad's
-  // own spend (from cortana_ad_daily); otherwise the account-level adspend.
+  // Adspend / clicks — used by BOTH paths. Per-ad and per-campaign views show
+  // that entity's own spend (cortana_ad_daily / cortana_campaign_daily); ad-set
+  // has no Cortana feed, so its spend/ROAS is null; otherwise the account total.
   let adspendUsd: number | null = null
   let uniqueLinkClicks: number | null = null
-  if (opts?.adId) {
+  // ad → per-ad table; campaign → per-campaign table; both keyed by platform_entity_id.
+  const spendEntity = opts?.adId
+    ? { table: 'cortana_ad_daily', id: opts.adId }
+    : opts?.campaignId
+      ? { table: 'cortana_campaign_daily', id: opts.campaignId }
+      : null
+  if (spendEntity) {
     try {
       const sb = createAdminClient()
       const { data, error } = await sb
-        .from('cortana_ad_daily' as never)
+        .from(spendEntity.table as never)
         .select('spent, unique_clicks')
-        .eq('platform_entity_id', opts.adId)
+        .eq('platform_entity_id', spendEntity.id)
         .gte('day', range.startEtDate)
         .lte('day', range.endEtDate)
       if (error) throw new Error(error.message)
@@ -292,6 +299,10 @@ export async function getLeadsFunnel(
       adspendUsd = null
       uniqueLinkClicks = null
     }
+  } else if (opts?.adsetId) {
+    // Ad-set has no Cortana spend feed — leave spend/ROAS null (shows "—").
+    adspendUsd = null
+    uniqueLinkClicks = null
   } else {
     try {
       const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))
@@ -314,6 +325,8 @@ export async function getLeadsFunnel(
         p_start: range.startUtcIso,
         p_end: range.endUtcIso,
         p_ad: opts?.adId ?? null,
+        p_campaign: opts?.campaignId ?? null,
+        p_adset: opts?.adsetId ?? null,
       } as never)
       if (error) throw new Error(error.message)
       const f = data as unknown as { total: TotalBox; direct: DirectBox; setter: PoolFunnelBox; reactivation: PoolFunnelBox }

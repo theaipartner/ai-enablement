@@ -11,13 +11,17 @@ import type { LeadsFunnel, LeadFilterType, FunnelStage } from '@/lib/db/leads-fu
 
 type Range = { startEtDate: string; endEtDate: string }
 
-function leadsHref(range: Range, type: LeadFilterType | null, stage: FunnelStage | null, ad?: string | null): string {
+type AdFilter = { ad?: string | null; campaign?: string | null; adset?: string | null }
+
+function leadsHref(range: Range, type: LeadFilterType | null, stage: FunnelStage | null, filter?: AdFilter): string {
   const p = new URLSearchParams()
   p.set('start', range.startEtDate)
   p.set('end', range.endEtDate)
   if (type) p.set('type', type)
   if (stage) p.set('stage', stage)
-  if (ad) p.set('ad', ad)
+  if (filter?.campaign) p.set('campaign', filter.campaign)
+  if (filter?.adset) p.set('adset', filter.adset)
+  if (filter?.ad) p.set('ad', filter.ad)
   return `/sales-dashboard/leads?${p.toString()}`
 }
 
@@ -29,8 +33,9 @@ function adsHref(range: Range): string {
 // Dials live in a bracket beside each funnel's lead amount (not a stage), so the
 // funnel reads strictly top-down. Coats: Direct green, Setter-led ("new
 // opt-ins") yellow, Reactivation pale blue, Total neutral.
-export function FunnelStack({ funnel, range, ad }: { funnel: LeadsFunnel; range: Range; ad?: string | null }) {
+export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: LeadsFunnel; range: Range; ad?: string | null; campaign?: string | null; adset?: string | null }) {
   const { total: t, direct: d, setter: s, reactivation: re } = funnel
+  const filter: AdFilter = { ad, campaign, adset }
   const dials = (n: number) => `${n.toLocaleString('en-US')} dials`
   // Closes node bracket. The funnel is HT-only (DC is excluded from the tags),
   // so dc is always 0 today — the bracket only appears if/when a DC branch
@@ -44,7 +49,7 @@ export function FunnelStack({ funnel, range, ad }: { funnel: LeadsFunnel; range:
         tone="neutral"
         type={null}
         range={range}
-        ad={ad}
+        filter={filter}
         dcCloses={t.dcCloses}
         adspend={funnel.adspendUsd}
         adspendHref={adsHref(range)}
@@ -64,7 +69,7 @@ export function FunnelStack({ funnel, range, ad }: { funnel: LeadsFunnel; range:
         tone="pos"
         type="direct"
         range={range}
-        ad={ad}
+        filter={filter}
         dcCloses={d.dcCloses}
         costBase={funnel.adspendUsd}
         stages={[
@@ -81,7 +86,7 @@ export function FunnelStack({ funnel, range, ad }: { funnel: LeadsFunnel; range:
         tone="warn"
         type="setter"
         range={range}
-        ad={ad}
+        filter={filter}
         dcCloses={s.dcCloses}
         costBase={funnel.adspendUsd}
         poolSplit={{ qualified: s.qualified, unqualified: s.unqualified }}
@@ -98,7 +103,7 @@ export function FunnelStack({ funnel, range, ad }: { funnel: LeadsFunnel; range:
         tone="blue"
         type="reactivation"
         range={range}
-        ad={ad}
+        filter={filter}
         dcCloses={re.dcCloses}
         costBase={funnel.adspendUsd}
         stages={[
@@ -131,7 +136,7 @@ function StackedFunnelBox({
   tone = 'neutral',
   type,
   range,
-  ad,
+  filter,
   adspend,
   adspendHref,
   clicks,
@@ -144,7 +149,7 @@ function StackedFunnelBox({
   tone?: FunnelTone
   type: LeadFilterType | null
   range: Range
-  ad?: string | null
+  filter?: AdFilter
   adspend?: number | null
   adspendHref?: string
   clicks?: number | null
@@ -160,7 +165,7 @@ function StackedFunnelBox({
   if (adspend !== undefined) nodes.push({ value: adspend ?? null, caption: 'Adspend', usd: true, href: adspendHref })
   if (clicks !== undefined) nodes.push({ value: clicks ?? null, caption: 'Link clicks' })
   for (const s of stages) {
-    nodes.push({ value: s.value, caption: s.caption, accent: s.accent, bracket: s.bracket, stage: s.stage, href: leadsHref(range, type, s.stage ?? null, ad) })
+    nodes.push({ value: s.value, caption: s.caption, accent: s.accent, bracket: s.bracket, stage: s.stage, href: leadsHref(range, type, s.stage ?? null, filter) })
   }
 
   const costPer = (n: FNode): number | null =>

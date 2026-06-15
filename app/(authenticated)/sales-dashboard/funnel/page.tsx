@@ -4,6 +4,7 @@ import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcFunnelSection } from '@/components/sales/dc-funnel'
 import { CashCollectedBar } from '@/components/sales/cash-collected'
 import { getLeadsForRange, type LeadRow } from '@/lib/db/leads'
+import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '@/components/sales/ad-cascade-filter'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getCashCollected } from '@/lib/db/funnel-cash'
@@ -14,7 +15,6 @@ import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { PersonPill } from '../header-pills'
 import { DateRangePicker } from './landing-pages/date-range-picker'
 import { PersistPageState } from '@/components/sales/persist-page-state'
-import { AdFilter, type AdOption } from '@/components/sales/ad-filter'
 
 // Sales Dashboard — Funnel (the top-of-funnel overview).
 //
@@ -30,12 +30,15 @@ export const maxDuration = 60
 export default async function SalesDashboardFunnelPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[]; ad?: string | string[] }
+  searchParams?: { start?: string | string[]; end?: string | string[]; ad?: string | string[]; campaign?: string | string[]; adset?: string | string[] }
 }) {
   const { start, end } = resolveSalesWindow(searchParams)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
   const todayEt = todayEtDate()
-  const ad = (Array.isArray(searchParams?.ad) ? searchParams?.ad[0] : searchParams?.ad)?.trim() || null
+  const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)?.trim() || null
+  const campaign = param(searchParams?.campaign)
+  const adset = param(searchParams?.adset)
+  const ad = param(searchParams?.ad)
 
   // Cohort → roster rows fetched CONCURRENTLY with the Digital College funnel
   // (independent). The ad filter then narrows the rows in-memory and the HT
@@ -52,19 +55,35 @@ export default async function SalesDashboardFunnelPage({
     // Digital College funnel — tag-driven, unique leads only, same window as HT.
     getDcFunnel(range),
   ])
-  const adOptions = buildAdOptions(allRows)
-  const rows = ad ? allRows.filter((r) => r.adId === ad) : allRows
-  const adName = ad ? (adOptions.find((o) => o.adId === ad)?.adName ?? ad) : null
-  const funnel = await getLeadsFunnel(rows, range, { adId: ad })
-  // Cash collected. When an ad is selected, scope HT cash to its leads so ROAS
-  // reads against the ad's own spend; otherwise the funnel-wide HT + DC summary.
-  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd, ad ? rows.map((r) => r.leadId) : null)
+  const hierarchy = buildAdHierarchy(allRows)
+  // Deepest active filter wins (ad > ad set > campaign); rows + funnel scope to it.
+  const rows = ad
+    ? allRows.filter((r) => r.adId === ad)
+    : adset
+      ? allRows.filter((r) => r.adsetId === adset)
+      : campaign
+        ? allRows.filter((r) => r.campaignId === campaign)
+        : allRows
+  const filterOpts = ad ? { adId: ad } : adset ? { adsetId: adset } : campaign ? { campaignId: campaign } : {}
+  const filterActive = !!(ad || adset || campaign)
+  // Label for the cash bar: ad/campaign names, ad-set shows the id (no name).
+  const filterLabel = ad
+    ? (rows[0]?.adName ?? ad)
+    : adset
+      ? `Ad set ${adset}`
+      : campaign
+        ? (rows[0]?.campaignName ?? campaign)
+        : null
+  const funnel = await getLeadsFunnel(rows, range, filterOpts)
+  // Cash collected. When a filter is active, scope HT cash to its leads so ROAS
+  // reads against that entity's own spend; otherwise the funnel-wide HT + DC.
+  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd, filterActive ? rows.map((r) => r.leadId) : null)
 
   const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
 
   return (
     <div>
-      <PersistPageState window filters={['ad']} />
+      <PersistPageState window filters={['campaign', 'adset', 'ad']} />
       <HeaderBand
         eyebrow="SALES · FUNNEL"
         title="Funnel."
@@ -86,7 +105,7 @@ export default async function SalesDashboardFunnelPage({
             >
               Landing pages →
             </Link>
-            <AdFilter options={adOptions} selected={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
+            <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
             <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
             <PersonPill label="EST · Nabeel" />
           </div>
@@ -120,11 +139,11 @@ export default async function SalesDashboardFunnelPage({
         )
       })()}
 
-      <FunnelStack funnel={funnel} range={range} ad={ad} />
+      <FunnelStack funnel={funnel} range={range} ad={ad} campaign={campaign} adset={adset} />
 
-      {ad ? null : <DcFunnelSection dc={dcFunnel} />}
+      {filterActive ? null : <DcFunnelSection dc={dcFunnel} />}
 
-      <CashCollectedBar cash={cash} adLabel={adName ?? undefined} />
+      <CashCollectedBar cash={cash} adLabel={filterLabel ?? undefined} />
 
       <div
         className="geg-mono"
@@ -136,25 +155,56 @@ export default async function SalesDashboardFunnelPage({
   )
 }
 
-// Distinct source ads across the cohort's rows, with per-ad lead counts, for the
-// funnel's ad filter dropdown. Sorted by volume (most leads first); leads with no
-// ad_id (organic/direct) are omitted.
-function buildAdOptions(rows: LeadRow[]): AdOption[] {
-  const m = new Map<string, { adName: string; count: number }>()
+// Campaign → Ad Set → Ad hierarchy across the cohort's rows, with per-node lead
+// counts, for the cascade filter. Each level sorted by volume; leads with no
+// ad_id (organic/direct) are omitted. Ad names collide (Meta reuses creative
+// names) → disambiguate with a short ad-id suffix.
+function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
+  type C = { campaignName: string; count: number; adsets: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }> }
+  const camps = new Map<string, C>()
+  const adsetsAll = new Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }>()
+  const adsAll = new Map<string, { adName: string; count: number }>()
   for (const r of rows) {
     if (!r.adId) continue
-    const e = m.get(r.adId)
-    if (e) e.count += 1
-    else m.set(r.adId, { adName: r.adName ?? r.adId, count: 1 })
+    const cId = r.campaignId ?? '—'
+    const aId = r.adsetId ?? '—'
+    const c = camps.get(cId) ?? { campaignName: r.campaignName ?? cId, count: 0, adsets: new Map() }
+    c.count += 1
+    const aset = c.adsets.get(aId) ?? { count: 0, ads: new Map() }
+    aset.count += 1
+    const ad = aset.ads.get(r.adId) ?? { adName: r.adName ?? r.adId, count: 0 }
+    ad.count += 1
+    aset.ads.set(r.adId, ad)
+    c.adsets.set(aId, aset)
+    camps.set(cId, c)
+    // Flat fallbacks (used when no parent is selected).
+    const fa = adsetsAll.get(aId) ?? { count: 0, ads: new Map() }
+    fa.count += 1
+    const faAd = fa.ads.get(r.adId) ?? { adName: r.adName ?? r.adId, count: 0 }
+    faAd.count += 1
+    fa.ads.set(r.adId, faAd)
+    adsetsAll.set(aId, fa)
+    const ga = adsAll.get(r.adId) ?? { adName: r.adName ?? r.adId, count: 0 }
+    ga.count += 1
+    adsAll.set(r.adId, ga)
   }
-  const opts = Array.from(m.entries())
-    .map(([adId, v]) => ({ adId, adName: v.adName, count: v.count }))
-    .sort((a, b) => b.count - a.count)
-  // Meta reuses creative names across distinct ads — disambiguate any collisions
-  // with a short ad-id suffix so the dropdown rows are tellable apart.
-  const nameCounts = new Map<string, number>()
-  for (const o of opts) nameCounts.set(o.adName, (nameCounts.get(o.adName) ?? 0) + 1)
-  return opts.map((o) =>
-    (nameCounts.get(o.adName) ?? 0) > 1 ? { ...o, adName: `${o.adName} · …${o.adId.slice(-4)}` } : o,
-  )
+  const dedupeAds = (ads: Map<string, { adName: string; count: number }>): AdNode[] => {
+    const list = Array.from(ads.entries()).map(([adId, v]) => ({ adId, adName: v.adName, count: v.count }))
+    const names = new Map<string, number>()
+    for (const a of list) names.set(a.adName, (names.get(a.adName) ?? 0) + 1)
+    return list
+      .map((a) => ((names.get(a.adName) ?? 0) > 1 ? { ...a, adName: `${a.adName} · …${a.adId.slice(-4)}` } : a))
+      .sort((x, y) => y.count - x.count)
+  }
+  const adsetNodes = (m: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }>): AdsetNode[] =>
+    Array.from(m.entries())
+      .map(([adsetId, v]) => ({ adsetId, count: v.count, ads: dedupeAds(v.ads) }))
+      .sort((x, y) => y.count - x.count)
+  return {
+    campaigns: Array.from(camps.entries())
+      .map(([campaignId, v]) => ({ campaignId, campaignName: v.campaignName, count: v.count, adsets: adsetNodes(v.adsets) }))
+      .sort((x, y) => y.count - x.count),
+    adsetsAll: adsetNodes(adsetsAll),
+    adsAll: dedupeAds(adsAll),
+  }
 }

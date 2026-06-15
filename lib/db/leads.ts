@@ -114,6 +114,12 @@ export type LeadRow = SpeedToLeadCohortRow & {
   // Source ad (denormalized from close_leads) — drives the per-ad funnel filter.
   adId: string | null
   adName: string | null
+  // Ad attribution hierarchy for the Campaign → Ad Set → Ad cascade filter, from
+  // close_leads. campaignName = utm_campaign (the readable name); ad set has no
+  // name source (no Cortana ad-set feed) so the UI shows adsetId.
+  campaignId: string | null
+  campaignName: string | null
+  adsetId: string | null
 }
 
 // A ≥90s outbound dial is a "connected" call (the FMR_DIAL_CONNECTED_SEC
@@ -281,7 +287,7 @@ export async function getLeadsForRangeLive(
   const leadNames = new Map<string, string>()
   const leadQualified = new Map<string, Qualification>()
   const leadReactivatedAt = new Map<string, string>()
-  const leadAd = new Map<string, { adId: string | null; adName: string | null }>()
+  const leadAd = new Map<string, { adId: string | null; adName: string | null; campaignId: string | null; campaignName: string | null; adsetId: string | null }>()
   // Block 1 fetched concurrently with the Calendly signals + lead-cycle tags
   // below; awaited (identityReady) before the form blocks, which need
   // leadReactivatedAt.
@@ -294,11 +300,14 @@ export async function getLeadsForRangeLive(
       reactivated_at: string | null
       ad_id: string | null
       ad_name: string | null
+      campaign_id: string | null
+      utm_campaign: string | null
+      adset_id: string | null
     }>(
       leadIds,
       (chunk) => sb
         .from('close_leads' as never)
-        .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, ad_id, ad_name')
+        .select('close_id, display_name, contacts, marketing_qualified, reactivated_at, ad_id, ad_name, campaign_id, utm_campaign, adset_id')
         .in('close_id', chunk) as never,
       'leads: close_leads read failed',
     )
@@ -316,7 +325,7 @@ export async function getLeadsForRangeLive(
       if (r.display_name) leadNames.set(r.close_id, norm(r.display_name))
       leadQualified.set(r.close_id, qualFromMarketingQualified(r.marketing_qualified))
       if (r.reactivated_at) leadReactivatedAt.set(r.close_id, r.reactivated_at)
-      leadAd.set(r.close_id, { adId: r.ad_id, adName: r.ad_name })
+      leadAd.set(r.close_id, { adId: r.ad_id, adName: r.ad_name, campaignId: r.campaign_id, campaignName: r.utm_campaign, adsetId: r.adset_id })
     }
   })()
 
@@ -725,6 +734,9 @@ export async function getLeadsForRangeLive(
       tagReactiveHits: tag ? tag.reactiveHits : null,
       adId: leadAd.get(r.leadId)?.adId ?? null,
       adName: leadAd.get(r.leadId)?.adName ?? null,
+      campaignId: leadAd.get(r.leadId)?.campaignId ?? null,
+      campaignName: leadAd.get(r.leadId)?.campaignName ?? null,
+      adsetId: leadAd.get(r.leadId)?.adsetId ?? null,
     }
   })
 }
@@ -758,15 +770,16 @@ export async function getLeadsForRangeTags(
 
   // The only fields not on the tag — a 1:1 close_leads read (chunked, parallel).
   // (qualified now comes from the tag — the Typeform investment answer per cycle.)
-  const attrByLead = new Map<string, { adId: string | null; adName: string | null; reactivatedAt: string | null }>()
+  const attrByLead = new Map<string, { adId: string | null; adName: string | null; reactivatedAt: string | null; campaignId: string | null; campaignName: string | null; adsetId: string | null }>()
   {
     const data = await fetchChunked<{
       close_id: string; ad_id: string | null; ad_name: string | null; reactivated_at: string | null
+      campaign_id: string | null; utm_campaign: string | null; adset_id: string | null
     }>(
       leadIds,
       (chunk) => sb
         .from('close_leads' as never)
-        .select('close_id, ad_id, ad_name, reactivated_at')
+        .select('close_id, ad_id, ad_name, reactivated_at, campaign_id, utm_campaign, adset_id')
         .in('close_id', chunk) as never,
       'leads (tags): close_leads read failed',
     )
@@ -775,6 +788,9 @@ export async function getLeadsForRangeTags(
         adId: r.ad_id,
         adName: r.ad_name,
         reactivatedAt: r.reactivated_at,
+        campaignId: r.campaign_id,
+        campaignName: r.utm_campaign,
+        adsetId: r.adset_id,
       })
     }
   }
@@ -836,6 +852,9 @@ export async function getLeadsForRangeTags(
       tagReactiveHits: tag ? tag.reactiveHits : null,
       adId: attr?.adId ?? null,
       adName: attr?.adName ?? null,
+      campaignId: attr?.campaignId ?? null,
+      campaignName: attr?.campaignName ?? null,
+      adsetId: attr?.adsetId ?? null,
     }
   })
 }
