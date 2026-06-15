@@ -2,12 +2,11 @@ import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcFunnelSection } from '@/components/sales/dc-funnel'
-import { CashCollectedBar } from '@/components/sales/cash-collected'
 import { getLeadsForRange, type LeadRow } from '@/lib/db/leads'
 import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '@/components/sales/ad-cascade-filter'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
-import { getCashCollected } from '@/lib/db/funnel-cash'
+import { getFunnelCash } from '@/lib/db/funnel-cash'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { todayEtDate } from '@/lib/db/funnel-window'
@@ -66,18 +65,11 @@ export default async function SalesDashboardFunnelPage({
         : allRows
   const filterOpts = ad ? { adId: ad } : adset ? { adsetId: adset } : campaign ? { campaignId: campaign } : {}
   const filterActive = !!(ad || adset || campaign)
-  // Label for the cash bar: ad/campaign names, ad-set shows the id (no name).
-  const filterLabel = ad
-    ? (rows[0]?.adName ?? ad)
-    : adset
-      ? `Ad set ${adset}`
-      : campaign
-        ? (rows[0]?.campaignName ?? campaign)
-        : null
   const funnel = await getLeadsFunnel(rows, range, filterOpts)
-  // Cash collected. When a filter is active, scope HT cash to its leads so ROAS
-  // reads against that entity's own spend; otherwise the funnel-wide HT + DC.
-  const cash = await getCashCollected(range, dcFunnel, funnel.adspendUsd, filterActive ? rows.map((r) => r.leadId) : null)
+  // Per-funnel cash collected. `rows` is already view/ad-filtered, so HT cash
+  // scopes to the active entity for free; under a filter DC is excluded (separate
+  // campaign). ROAS renders on the Total box only (window adspend → whole cohort).
+  const cash = await getFunnelCash(range, rows, funnel.adspendUsd, { excludeDc: filterActive })
 
   const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
 
@@ -139,11 +131,9 @@ export default async function SalesDashboardFunnelPage({
         )
       })()}
 
-      <FunnelStack funnel={funnel} range={range} ad={ad} campaign={campaign} adset={adset} />
+      <FunnelStack funnel={funnel} cash={cash} range={range} ad={ad} campaign={campaign} adset={adset} />
 
       {filterActive ? null : <DcFunnelSection dc={dcFunnel} />}
-
-      <CashCollectedBar cash={cash} adLabel={filterLabel ?? undefined} />
 
       <div
         className="geg-mono"

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import type { LeadsFunnel, LeadFilterType, FunnelStage } from '@/lib/db/leads-funnel'
+import type { FunnelCash, CashCollected } from '@/lib/db/funnel-cash'
 
 // Stacked funnel — Total on top, then Direct / Setter-led / Reactivation, each a
 // full-width horizontal funnel. Lives on the Funnel (Pulse) page; every stage
@@ -33,7 +34,7 @@ function adsHref(range: Range): string {
 // Dials live in a bracket beside each funnel's lead amount (not a stage), so the
 // funnel reads strictly top-down. Coats: Direct green, Setter-led ("new
 // opt-ins") yellow, Reactivation pale blue, Total neutral.
-export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: LeadsFunnel; range: Range; ad?: string | null; campaign?: string | null; adset?: string | null }) {
+export function FunnelStack({ funnel, cash, range, ad, campaign, adset }: { funnel: LeadsFunnel; cash: FunnelCash; range: Range; ad?: string | null; campaign?: string | null; adset?: string | null }) {
   const { total: t, direct: d, setter: s, reactivation: re } = funnel
   const filter: AdFilter = { ad, campaign, adset }
   const dials = (n: number) => `${n.toLocaleString('en-US')} dials`
@@ -51,6 +52,8 @@ export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: Le
         range={range}
         filter={filter}
         dcCloses={t.dcCloses}
+        cash={cash.total}
+        showRoas
         adspend={funnel.adspendUsd}
         adspendHref={adsHref(range)}
         clicks={funnel.uniqueLinkClicks}
@@ -71,6 +74,7 @@ export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: Le
         range={range}
         filter={filter}
         dcCloses={d.dcCloses}
+        cash={cash.direct}
         costBase={funnel.adspendUsd}
         stages={[
           { value: d.qualifiedOptIns, caption: 'Qual. opt-ins' },
@@ -88,6 +92,7 @@ export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: Le
         range={range}
         filter={filter}
         dcCloses={s.dcCloses}
+        cash={cash.setter}
         costBase={funnel.adspendUsd}
         poolSplit={{ qualified: s.qualified, unqualified: s.unqualified }}
         stages={[
@@ -105,6 +110,7 @@ export function FunnelStack({ funnel, range, ad, campaign, adset }: { funnel: Le
         range={range}
         filter={filter}
         dcCloses={re.dcCloses}
+        cash={cash.reactivation}
         costBase={funnel.adspendUsd}
         stages={[
           { value: re.pool, caption: 'Pool', accent: true, bracket: dials(re.dials) },
@@ -143,6 +149,8 @@ function StackedFunnelBox({
   costBase,
   poolSplit,
   dcCloses,
+  cash,
+  showRoas,
   stages,
 }: {
   label: string
@@ -156,6 +164,8 @@ function StackedFunnelBox({
   costBase?: number | null
   poolSplit?: { qualified: number; unqualified: number }
   dcCloses?: number
+  cash?: CashCollected
+  showRoas?: boolean
   stages: StageDef[]
 }) {
   // Ordered node list: adspend (if present) → unique link clicks (if present) →
@@ -203,7 +213,59 @@ function StackedFunnelBox({
           ⌐ Digital College · {dcCloses.toLocaleString('en-US')} closed
         </div>
       ) : null}
+      {cash ? <CashStrip cash={cash} showRoas={showRoas} /> : null}
     </div>
+  )
+}
+
+// Cash-collected strip at the foot of a funnel box — the cash that funnel's
+// closes produced, split HT / DC / Total (upfront = money actually collected).
+// ROAS (and the adspend it divides by) only renders on the Total box: window
+// adspend acquires the whole new-lead cohort, so a per-sub-funnel ROAS would
+// divide the same spend repeatedly. Cohort-scoped by construction (Drake 2026-06-15).
+function CashStrip({ cash, showRoas }: { cash: CashCollected; showRoas?: boolean }) {
+  const usd = (n: number) => '$' + Math.round(n).toLocaleString('en-US')
+  const roasStr = (r: number | null) => (r != null ? r.toFixed(2) + '×' : '—')
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'baseline',
+        gap: 16,
+        marginTop: 10,
+        paddingTop: 10,
+        borderTop: '1px solid var(--color-geg-border)',
+      }}
+    >
+      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
+        Cash collected
+      </span>
+      <CashItem label="HT" value={usd(cash.htUpfrontUsd)} />
+      <CashItem label="DC" value={usd(cash.dcUsd)} />
+      <CashItem label="Total" value={usd(cash.upfrontTotalUsd)} strong />
+      {showRoas ? <CashItem label="ROAS" value={roasStr(cash.upfrontRoas)} strong accent /> : null}
+      {showRoas && cash.adspendUsd != null ? (
+        <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
+          · {usd(cash.adspendUsd)} adspend
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function CashItem({ label, value, strong, accent }: { label: string; value: string; strong?: boolean; accent?: boolean }) {
+  const zero = value === '$0' || value === '—'
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>{label}</span>
+      <span
+        className="geg-numeric-serif"
+        style={{ fontSize: strong ? 15 : 13, color: zero ? 'var(--color-geg-text-faint)' : accent ? 'var(--color-geg-accent)' : strong ? 'var(--color-geg-text)' : 'var(--color-geg-text-dim)' }}
+      >
+        {value}
+      </span>
+    </span>
   )
 }
 
