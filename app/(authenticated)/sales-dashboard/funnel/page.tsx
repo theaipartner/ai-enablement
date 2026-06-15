@@ -11,7 +11,6 @@ import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { todayEtDate } from '@/lib/db/funnel-window'
 import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
-import { PersonPill } from '../header-pills'
 import { DateRangePicker } from './landing-pages/date-range-picker'
 import { PersistPageState } from '@/components/sales/persist-page-state'
 
@@ -99,37 +98,9 @@ export default async function SalesDashboardFunnelPage({
             </Link>
             <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
             <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
-            <PersonPill label="EST · Nabeel" />
           </div>
         }
       />
-
-      {(() => {
-        const clean = funnel.warnings.length === 0
-        const color = clean ? 'var(--color-geg-pos)' : 'var(--color-geg-neg)'
-        return (
-          <div
-            style={{
-              marginTop: 14,
-              padding: '12px 16px',
-              border: `1px solid ${color}`,
-              borderRadius: 8,
-              background: `color-mix(in srgb, ${color} 8%, transparent)`,
-            }}
-          >
-            <div className="geg-mono" style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color, marginBottom: clean ? 0 : 6 }}>
-              {clean
-                ? '✓ Funnel integrity · all checks pass'
-                : `⚠ Funnel integrity — ${funnel.warnings.length} issue${funnel.warnings.length === 1 ? '' : 's'}`}
-            </div>
-            {funnel.warnings.map((msg, i) => (
-              <div key={i} className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-2)', lineHeight: 1.6 }}>
-                · {msg}
-              </div>
-            ))}
-          </div>
-        )
-      })()}
 
       <FunnelStack funnel={funnel} cash={cash} range={range} ad={ad} campaign={campaign} adset={adset} />
 
