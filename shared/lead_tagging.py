@@ -79,7 +79,11 @@ COLD = timedelta(days=3)
 # which funnel its outcome feeds. DC closers (low-ticket) are the named
 # exception; everyone else is an HT closer. An HT closer can dip into DC via a
 # downsell; a DC closer never touches HT.
-DC_CLOSER_NAMES = ("robby",)  # add "adam" when his identifiers land
+# DC (low-ticket) closer name tokens. Robby is INACTIVE but stays here so his ~50
+# historical DC forms remain classified as DC (dropping him would leak his
+# non-close forms into the HT funnel). Bradley + Josh added 2026-06-15 (the new DC
+# closers). MUST stay in sync with lib/db/funnel-dc.ts DC_CLOSER_TOKENS.
+DC_CLOSER_NAMES = ("robby", "bradley", "josh")
 
 
 def is_dc_closer(names):
@@ -528,15 +532,16 @@ def _compute(cur, lead_ids):
                 t = ev or filed
                 if not in_cycle(t):
                     continue
-                # Robby is the Digital College (low-ticket) closer, NOT an HT
-                # closer. Any closer form he submitted means the lead went to the
-                # DC track — they didn't show for / were handed off from the HT
-                # call — so NONE of his forms count toward HT show/close (Drake
-                # 2026-06-05). Previously only his DC-CLOSE forms were excluded,
-                # so a Robby "Short-Term Follow Up" leaked in as an HT show
-                # (Tyler King, Hovannes Jarkezian). DQ + the DC close tally are
-                # computed in the earlier loop and are unaffected.
-                if any("robby" in norm(n) for n in (cnames or [])):
+                # A DC (low-ticket) closer is NOT an HT closer. Any form a DC
+                # closer submitted means the lead went to the DC track — they
+                # didn't show for / were handed off from the HT call — so NONE of
+                # their forms count toward HT show/close (Drake 2026-06-05).
+                # Previously only DC-CLOSE forms were excluded, so a DC closer's
+                # "Short-Term Follow Up" leaked in as an HT show (Tyler King,
+                # Hovannes Jarkezian). Generalized from the literal "robby" to the
+                # full DC_CLOSER_NAMES list 2026-06-15 (Bradley/Josh). DQ + the DC
+                # close tally are computed in the earlier loop and are unaffected.
+                if is_dc_closer(cnames):
                     continue
                 p = phase_of(ev, filed)
                 showed_b, ct, _is_dq = closer_form_outcome(ft, co, sh, cl, pl)

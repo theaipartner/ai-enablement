@@ -55,7 +55,10 @@ export function addPlan(counts: DcPlanCounts, plans: string[] | null) {
   }
 }
 
-const DC_CLOSER_TOKEN = 'robby' // + future DC closers
+// DC (low-ticket) closer name tokens. MUST stay in sync with
+// shared/lead_tagging.py DC_CLOSER_NAMES. Robby is inactive but kept so his
+// historical DC forms route correctly; Bradley + Josh added 2026-06-15.
+const DC_CLOSER_TOKENS = ['robby', 'bradley', 'josh']
 
 export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
   const sb = createAdminClient()
@@ -115,7 +118,10 @@ export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
     )
     for (const f of rows) {
       if (!f.lead_id) continue
-      const isCloser = (f.closer_names ?? []).some((n) => (n ?? '').toLowerCase().includes(DC_CLOSER_TOKEN))
+      const isCloser = (f.closer_names ?? []).some((n) => {
+        const ln = (n ?? '').toLowerCase()
+        return DC_CLOSER_TOKENS.some((t) => ln.includes(t))
+      })
       if (isCloser && closedCloser.has(f.lead_id)) addPlan(closedPlans, f.dc_plans)
       else if (!isCloser && downsellMeeting.has(f.lead_id)) addPlan(downsellPlans, f.dc_plans)
     }
