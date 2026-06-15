@@ -202,10 +202,12 @@ in-window leads carry an ad; the rest are organic.)
   filter/time-window catching up").
 - **Roster reads from tags** — `getLeadsForRange` defaults to `getLeadsForRangeTags`
   (`lib/db/leads.ts`): the cohort spine (already tag-materialized) + `collapseToLatest(getLeadCycleRows)`
-  + ONE 1:1 `close_leads` read (qualified / ad / reactivated_at), instead of full Calendly scans,
-  the three Airtable form reads, and a post-react `close_calls` scan. Verified byte-identical on every
-  consumed field (display + filter + pages) across 4 windows; non-consumed diffs were V1 over-marks the
-  funnel already excluded. Legacy live path kept behind `SALES_ROSTER_USE_JS=1` for bake-in.
+  + ONE 1:1 `close_leads` read (ad / reactivated_at), instead of full Calendly scans,
+  the three Airtable form reads, and a post-react `close_calls` scan. (Qualified now comes from
+  `lead_cycles.qualified` — Typeform-sourced — not close_leads; see data-model.md § Qualified.)
+  Verified byte-identical on every consumed field (display + filter + pages) across 4 windows;
+  non-consumed diffs were V1 over-marks the funnel already excluded. Legacy live path kept behind
+  `SALES_ROSTER_USE_JS=1` for bake-in.
 
 - **Talent (`/people`) per-rep call activity from SQL** — `getCallActivityMetrics` defaults to
   `getCallActivityMetricsRpc`: the per-rep volume (calls / over90s / distinct-≥90s sessions / name)

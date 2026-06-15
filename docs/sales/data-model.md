@@ -74,6 +74,25 @@ old "reactivation ⊂ direct" framing — that invariant is gone. When the tag a
 legacy `reactivated_at` column disagree, **the tag wins** (the column is a legacy
 backfill + the fallback for leads with no `lead_cycles` row only).
 
+### Qualified — from Typeform, per cycle (2026-06-15)
+
+Qualification comes from the **Typeform SFedWelr investment answer** ("how much are you
+willing to invest", field `5138f17b…`): **≥ $2,000 = qualified**, "Under $2,000" =
+unqualified, no answer = unknown. The tagger materializes it **per opt-in cycle** onto
+`lead_cycles.qualified` (migration 0083) from *that cycle's* submission — so a lead that
+re-opts-in with a different answer re-qualifies correctly (e.g. Ronald Riccardi: May-25
+"Under $2,000" → false, Jun-10 "$2,000 and $5,000" → true).
+
+This **replaced `close_leads.marketing_qualified`**, which went stale on re-opt-ins —
+especially cross-email (Close wouldn't refresh the flag). `sales_funnel_counts` and the
+roster's qualified column both read `lead_cycles.qualified` (migrations 0084 + the roster
+read). The Close column is no longer used for funnel qualification.
+
+**Direct box's first node = TOTAL qualified opt-ins** (every qualified lead in the window,
+direct + setter), not qualified-who-booked — so Booked is a true subset (Jun 1–14: 89
+qualified → 61 booked). The Setter box's qualified/unqualified split and the Reactivation
+box's read the same `lead_cycles.qualified`.
+
 ---
 
 ## High Ticket vs Digital College
