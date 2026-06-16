@@ -67,27 +67,53 @@ meeting-duration metrics.
 ### Setter-calls sweep
 `setter_calls_sweep_cron` (`*/15`) — keeps setter call activity current.
 
-### Engagement pinger (missing-form notifier)
-Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a phone
-call. Logic + lifecycle: [`logic.md`](./logic.md) § Engagements. Three writers:
+### Engagement pinger (missing-form notifier) — ⏸ PAUSED (2026-06-16)
+
+> **STATUS: PAUSED.** The `*/5` cron schedule was removed from `vercel.json` (commit
+> `0b0f4de`) after the first live fire (10am ET 2026-06-16) surfaced issues still being
+> worked through — so **no pings go out**. Engagement **tracking is still live** (the
+> Close- and Airtable-webhook hooks are untouched): engagements keep opening / growing /
+> closing in real time; only overdue-flip + Slack pinging are off.
+>
+> **To resume:** re-add `{ "path": "/api/engagement_ping_cron", "schedule": "*/5 * * * *" }`
+> to the `crons` array in `vercel.json`, **and reset `ENGAGEMENT_PING_FLOOR` to the resume
+> moment** (so it doesn't fire a backlog burst for everything that went overdue while
+> paused), then push. The function, its `functions`-block config, and all env vars are
+> left in place — resume is just those two changes.
+
+Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a phone call.
+Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/engagements.md`
+(migration 0086). Three writers:
 - **Open/grow** — fail-soft hook in `api/close_events.py` (every ≥90s outbound call).
 - **Final** — fail-soft hook in `api/airtable_events.py` (a landed triage form closes
   its oldest open engagement, guarded against re-using an already-linked form).
-- **Overdue + ping** — `api/engagement_ping_cron.py` (`*/5`, `CRON_SECRET`-auth). Flips
-  overdue every tick; pings only inside **10am–10pm ET** (gate in code, DST-safe).
+- **Overdue + ping** — `api/engagement_ping_cron.py` (`*/5` when scheduled, `CRON_SECRET`-auth).
+  Flips overdue every tick; pings only inside **10am–10pm ET** (gate in code, DST-safe).
 
-**Env (Vercel):** `SALES_FORM_NOTIFY_SLACK_CHANNEL` (the channel — **unset = kill switch**,
-cron drops to dry-run, engagements still track, nobody is messaged), `ENGAGEMENT_PING_FLOOR`
-(go-live timestamp — only engagements overdue at/after it are pinged; keeps backfilled rows
-silent), `SETTER_TRIAGE_FORM_URL` / `CLOSER_TRIAGE_FORM_URL` (the form-fill links — Airtable
-form-page URLs, not the table id; both forms share table `tblaoMsiE3FSkHjQt`). Reuses
-`SLACK_BOT_TOKEN` (Ella) — she must be **in the channel**. A rep is pingable only with a
-`team_members.slack_user_id`.
+**Env (Vercel):** `SALES_FORM_NOTIFY_SLACK_CHANNEL` (the channel — currently `C0BBQAE7BA4`),
+`ENGAGEMENT_PING_FLOOR` (go-live timestamp — only engagements overdue at/after it are pinged;
+keeps backfilled rows silent), `SETTER_TRIAGE_FORM_URL` / `CLOSER_TRIAGE_FORM_URL` (the
+form-fill links — Airtable form-PAGE URLs `…/pag…/form`, not the table id; both forms write
+the same table `tblaoMsiE3FSkHjQt`). Reuses `SLACK_BOT_TOKEN` (Ella) — she must be **in the
+channel**. A rep is pingable only with a `team_members.slack_user_id` (and `close_user_id`
+for the call→rep match).
+
+**Two kill switches** (both need a redeploy to take effect): (a) **remove the cron line**
+from `vercel.json` — the current pause; stops the cron entirely (overdue-flip + pings). (b)
+**unset `SALES_FORM_NOTIFY_SLACK_CHANNEL`** — cron keeps running and flipping overdue, but
+posts nothing (dry-run). Env-var changes do **not** affect the running deployment until the
+next deploy.
+
+**⚠ Deploy gotcha — the 250 MB function cap.** Every Python function in `vercel.json`'s
+`functions` block carries `"excludeFiles": "{.next,node_modules}/**"`. Without it, Vercel's
+tracer bundles the built `.next/` (~246 MB) into the function and the deploy fails entirely
+with *"1 function exceeded the uncompressed maximum size of 250 MB."* `engagement_ping_cron`
+has its entry — **don't remove it**, and any NEW `api/*.py` you add needs the same line.
 
 **Backfill:** `scripts/backfill_engagements.py --days N` replays calls+forms into the table
-(no pinging — there's no Slack in the backfill). **Re-point a mislinked form:** clear the
-engagement's `final_at`/`form_id`, set the correct form's link (the engagement page is the
-human surface for this).
+(no pinging — there's no Slack in the backfill; 2-day backfill already run). **Re-point a
+mislinked form:** clear the engagement's `final_at` / `form_id`, set the correct form's link
+(the engagement page is the human surface for this).
 
 ---
 

@@ -76,7 +76,9 @@ missing-form flag's closer trigger (1.5h after meeting start; setter trigger is 
 The precise call↔form link (supersedes lead-level matching for the *phone* forms —
 setter triage + closer/confirmation triage, both Close calls). Logic in
 `shared/engagements.py`; table `engagements` (migration 0086, see
-`docs/schema/engagements.md`); ops in [`ingestion.md`](./ingestion.md) § Engagement pinger.
+`docs/schema/engagements.md`); ops + status in [`ingestion.md`](./ingestion.md) §
+Engagement pinger. **The matching/tracking below is live; the Slack pinger built on top
+of it is currently PAUSED (2026-06-16) — see ingestion.md for why + how to resume.**
 
 **An engagement = a rep's cluster of calls to one lead toward one form** (not one call —
 back-to-back redials collapse in). Sticky tag-timestamps, set once, never cleared; read
