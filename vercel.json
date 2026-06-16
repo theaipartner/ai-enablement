@@ -2,6 +2,11 @@
   "framework": "nextjs",
   "regions": ["cle1"],
   "functions": {
+    "api/engagement_ping_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
+    },
     "api/slack_events.py": {
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
