@@ -9,24 +9,22 @@ import { DeleteLeadButton } from './delete-lead-button'
 // returns (cohort order); clicking a column header sorts by it — desc → asc →
 // back to default. Null/missing values always sort to the end.
 
-const COLS = '1.6fr 1.1fr 1.2fr 1.2fr 1.2fr 0.85fr 0.7fr 0.35fr'
+const COLS = '1.6fr 1.1fr 1.2fr 1.2fr 0.85fr 0.7fr 0.35fr'
 
 type SortKey =
-  | 'prospect' | 'optInAt' | 'latestStage' | 'status' | 'speed' | 'connected' | 'intensity' | ''
+  | 'prospect' | 'optInAt' | 'latestStage' | 'speed' | 'connected' | 'intensity' | ''
 type SortDir = 'asc' | 'desc' | null
 
 const HEADERS: { label: string; key: SortKey }[] = [
   { label: 'Prospect', key: 'prospect' },
   { label: 'Opted in (ET)', key: 'optInAt' },
   { label: 'Latest stage', key: 'latestStage' },
-  { label: 'Status', key: 'status' },
   { label: 'Time to call', key: 'speed' },
   { label: 'Connected', key: 'connected' },
   { label: 'Intensity', key: 'intensity' },
   { label: '', key: '' },
 ]
 
-const TYPE_RANK: Record<LeadRow['leadType'], number> = { dq: 3, reactivation: 2, direct: 1, optin: 0 }
 // Stage order for sorting; the three closed labels (offer names) all rank top.
 const STAGE_RANK: Record<string, number> = {
   'Opted in': 0, Connected: 1, Booked: 2, Confirmed: 3, Showed: 4,
@@ -38,7 +36,6 @@ function sortValue(r: LeadRow, key: SortKey): number | string | null {
     case 'prospect': return r.prospectName ?? ''
     case 'optInAt': return r.optInAt
     case 'latestStage': return STAGE_RANK[r.latestStageWord] ?? 0
-    case 'status': return TYPE_RANK[r.leadType]
     case 'speed': return r.speedSec
     case 'connected': return r.totalConnectedDurationSec
     case 'intensity': return r.intensity
@@ -122,7 +119,6 @@ function LeadRowView({ r, canDelete, backQuery }: { r: LeadRow; canDelete: boole
       </span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>{formatEt(r.optInAt)}</span>
       <span><LatestStageCell word={r.latestStageWord} /></span>
-      <span><StatusCell r={r} /></span>
       <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-2)', letterSpacing: '0.04em' }}>
         {r.speedSec !== null ? (
           <>
@@ -190,29 +186,6 @@ function LatestStageCell({ word }: { word: string }) {
       title="Furthest funnel stage reached (any phase) — independent of current status"
     >
       {word}
-    </span>
-  )
-}
-
-const STATUS_COLOR: Record<LeadRow['leadType'], string> = {
-  direct: 'var(--color-geg-pos)',
-  optin: 'var(--color-geg-warn)',
-  reactivation: '#7ea8dd',
-  dq: 'var(--color-geg-neg)',
-}
-
-function StatusCell({ r }: { r: LeadRow }) {
-  const color = STATUS_COLOR[r.leadType]
-  if (r.statusWord === '—') {
-    return <span className="geg-mono" style={{ fontSize: 11, color: 'var(--color-geg-text-faint)' }}>—</span>
-  }
-  return (
-    <span
-      className="geg-mono"
-      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
-      title={`${r.leadType} lead`}
-    >
-      {r.statusWord}
     </span>
   )
 }

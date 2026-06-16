@@ -81,4 +81,6 @@ The per-call transcript / review page. Reached **only** from a per-lead Lifecycl
 - The three side-by-side `bookingType` booking boxes (replaced by the stacked
   Total/Direct/Setter/Reactivation model).
 - The all/unique view toggle and the Opt-in badge column on Leads.
+- The **Status column** on the Leads roster (removed 2026-06-16; the lead-type
+  status is still shown on the per-lead page, just not in the list).
 </content>
