@@ -252,6 +252,18 @@ class handler(BaseHTTPRequestHandler):
                     "close_webhook: lead retag failed lead=%s: %s", lead_id, exc,
                 )
 
+        # Engagement open/grow (missing-form pinger). A >=90s outbound call opens
+        # an engagement; later calls within 45 min join it. Fail-soft like retag.
+        if route == "close_calls" and upserted_id:
+            try:
+                from shared.engagements import open_or_grow_engagement
+
+                open_or_grow_engagement(upserted_id)
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning(
+                    "close_webhook: engagement open/grow failed call=%s: %s", upserted_id, exc,
+                )
+
         # Live transcription trigger. When the upsert touched close_calls
         # AND the call is eligible (>=90s + has recording + not expired),
         # fire the Deepgram pipeline synchronously. Cheap eligibility

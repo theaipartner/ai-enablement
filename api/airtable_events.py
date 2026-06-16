@@ -249,6 +249,31 @@ class handler(BaseHTTPRequestHandler):
                 retag(lead_ids=list(outcome.touched_lead_ids), trigger="webhook:airtable")
             except Exception as exc:  # noqa: BLE001 — fail-soft by design
                 logger.warning("airtable_webhook: lead retag failed: %s", exc)
+
+        # Engagement FINAL — link any not-yet-linked triage form for the touched
+        # leads to its oldest open engagement (closes it, stops the pings).
+        # Fail-soft; the not-in-engagements guard keeps it from re-using a form.
+        if outcome.touched_lead_ids:
+            try:
+                from shared.engagements import _connect, link_form
+
+                conn = _connect()
+                cur = conn.cursor()
+                cur.execute(
+                    """select record_id, lead_id, setter_record_ids, airtable_created_at
+                       from airtable_setter_triage_calls
+                       where lead_id = any(%s) and airtable_created_at is not null
+                         and record_id not in (select form_id from engagements where form_id is not null)
+                       order by airtable_created_at asc""",
+                    (list(outcome.touched_lead_ids),),
+                )
+                for rid, lead, srecs, created in cur.fetchall():
+                    link_form(cur, form_table="airtable_setter_triage_calls", record_id=rid,
+                              lead_id=lead, setter_record_ids=srecs, created_at=created)
+                conn.commit()
+                conn.close()
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning("airtable_webhook: engagement link failed: %s", exc)
         self._respond(
             200,
             {
