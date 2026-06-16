@@ -164,25 +164,14 @@ function MultiCallTag({ count }: { count: number }) {
 
 
 // Latest journey stage — the furthest funnel stage the lead ever reached
-// (Total-funnel ladder), independent of the phase-scoped Status. Closed reads
-// the offer (High Ticket / Digital College).
-const STAGE_COLOR: Record<string, string> = {
-  'Opted in': 'var(--color-geg-text-faint)',
-  Connected: 'var(--color-geg-text-3)',
-  Booked: 'var(--color-geg-text-2)',
-  Confirmed: 'var(--color-geg-accent)',
-  Showed: 'var(--color-geg-text)',
-  Closed: 'var(--color-geg-pos)',
-  'High Ticket': 'var(--color-geg-pos)',
-  'Digital College': 'var(--color-geg-pos)',
-}
-
+// (Total-funnel ladder). Closed reads the offer (High Ticket / Digital College).
+// All stages render white: yellow/green are reserved for other meanings
+// elsewhere on the page, so colour-coding the stage here read as confusing.
 function LatestStageCell({ word }: { word: string }) {
-  const color = STAGE_COLOR[word] ?? 'var(--color-geg-text-2)'
   return (
     <span
       className="geg-mono"
-      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
+      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)', border: '1px solid var(--color-geg-text)', borderRadius: 4, padding: '1px 5px' }}
       title="Furthest funnel stage reached (any phase) — independent of current status"
     >
       {word}
