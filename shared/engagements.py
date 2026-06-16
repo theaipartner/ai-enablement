@@ -22,12 +22,43 @@ import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
 
 CONNECTED_SEC = 90       # a call must be >=90s to OPEN an engagement
 WINDOW_MIN = 45          # rolling-window / freeze gap, in minutes
+PING_GAP_MIN = 15        # min minutes between pings for one engagement
+BIZ_START_ET = 10        # pinging window: 10:00 ET ..
+BIZ_END_ET = 22          # .. 22:00 ET (Drake handles pre-10am verbally)
+_ET = ZoneInfo("America/New_York")
+
+# Form links (env so Drake can fix the closer URL without a deploy). The closer-
+# triage form is the CONFIRMATION call — owed only by currently-direct leads.
+SETTER_TRIAGE_FORM_URL = os.getenv("SETTER_TRIAGE_FORM_URL", "")
+CLOSER_TRIAGE_FORM_URL = os.getenv("CLOSER_TRIAGE_FORM_URL", "")
+
+
+def form_url_for_lead(cur, lead_id: str) -> str:
+    """Closer-triage link only when the lead's latest cycle is CURRENTLY direct
+    (became_direct_at set AND reactive_at null — reactivation drops direct status,
+    Drake 2026-06-16); otherwise the setter-triage link."""
+    cur.execute(
+        "select became_direct_at, reactive_at from lead_cycles where close_id=%s order by opt_in_at desc limit 1",
+        (lead_id,),
+    )
+    row = cur.fetchone()
+    if row and row[0] is not None and row[1] is None:
+        return CLOSER_TRIAGE_FORM_URL or SETTER_TRIAGE_FORM_URL
+    return SETTER_TRIAGE_FORM_URL
+
+
+def render_ping(slack_id: str, lead_name: str, anchor_at, url: str) -> str:
+    """The short Slack ping. Keep it one line."""
+    t = anchor_at.astimezone(_ET).strftime("%-I:%M %p ET")
+    tail = f" → {url}" if url else ""
+    return f"<@{slack_id}> 📝 Missing form — *{lead_name}*, call {t}{tail}"
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -213,15 +244,72 @@ def flip_overdue(cur) -> int:
     return cur.rowcount
 
 
-def due_pings(cur, ping_gap_min: int = 15):
-    """Return engagements due for a ping right now (overdue, no form, >=gap since
-    last ping, slack id known). The cron sends + then stamps last_pinged_at."""
+def run_ping_cycle(dry_run: bool = False) -> dict[str, Any]:
+    """One cron tick: flip overdue (always), then — inside the ET business-hours
+    window — send a ping for each engagement that's due (overdue, no form, slack
+    id known, >=15 min since last ping, and overdue at/after ENGAGEMENT_PING_FLOOR
+    so the backfilled ones are never pinged). Posts as Ella to
+    SALES_FORM_NOTIFY_SLACK_CHANNEL. Unset channel OR dry_run => render only, no
+    post. Never raises."""
+    from datetime import datetime
+    from shared.slack_post import post_message
+
+    channel = os.getenv("SALES_FORM_NOTIFY_SLACK_CHANNEL", "").strip()
+    floor = os.getenv("ENGAGEMENT_PING_FLOOR") or None
+    effective_dry = dry_run or not channel
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        flipped = flip_overdue(cur)
+        conn.commit()
+
+        hour = datetime.now(_ET).hour
+        if not (BIZ_START_ET <= hour < BIZ_END_ET):
+            return {"flipped": flipped, "pinged": 0, "skipped": "outside_business_hours", "et_hour": hour}
+
+        rows = due_pings(cur, floor_iso=floor)
+        sent = []
+        for eid, lead_id, _rep_name, slack_id, anchor_at, _pc, lead_name in rows:
+            text = render_ping(slack_id, lead_name, anchor_at, form_url_for_lead(cur, lead_id))
+            if effective_dry:
+                sent.append({"engagement": str(eid), "text": text})
+                continue
+            res = post_message(channel, text)
+            if res.get("ok"):
+                cur.execute(
+                    "update engagements set last_pinged_at=now(), ping_count=ping_count+1 where id=%s",
+                    (eid,),
+                )
+                conn.commit()
+                sent.append({"engagement": str(eid), "ok": True})
+            else:
+                sent.append({"engagement": str(eid), "ok": False, "error": res.get("slack_error")})
+        return {
+            "flipped": flipped,
+            "candidates": len(rows),
+            "pinged": sum(1 for s in sent if s.get("ok")),
+            "dry_run": effective_dry,
+            "sent": sent,
+        }
+    finally:
+        conn.close()
+
+
+def due_pings(cur, floor_iso: str | None = None, ping_gap_min: int = PING_GAP_MIN):
+    """Engagements due for a ping right now: overdue, no form, slack id known,
+    >=gap since last ping, and (the go-live floor) overdue at/after `floor_iso` —
+    so the backfilled-overdue engagements are never pinged. Returns rows of
+    (id, lead_id, rep_name, rep_slack_id, anchor_at, ping_count, lead_name)."""
     cur.execute(
-        """select id, lead_id, rep_name, rep_slack_id, anchor_at, ping_count
-           from engagements
-           where overdue_at is not null and final_at is null and rep_slack_id is not null
-             and (last_pinged_at is null or now() - last_pinged_at >= make_interval(mins => %s))
-           order by anchor_at asc""",
-        (ping_gap_min,),
+        """select e.id, e.lead_id, e.rep_name, e.rep_slack_id, e.anchor_at, e.ping_count,
+                  coalesce(l.display_name, e.lead_id)
+           from engagements e
+           left join close_leads l on l.close_id = e.lead_id
+           where e.overdue_at is not null and e.final_at is null and e.rep_slack_id is not null
+             and (%s::timestamptz is null or e.overdue_at >= %s::timestamptz)
+             and (e.last_pinged_at is null or now() - e.last_pinged_at >= make_interval(mins => %s))
+           order by e.anchor_at asc""",
+        (floor_iso, floor_iso, ping_gap_min),
     )
     return cur.fetchall()
