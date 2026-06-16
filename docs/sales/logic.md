@@ -200,6 +200,16 @@ math.
 
 ---
 
+## Speed-to-lead — business-hours clock (2026-06-16)
+
+Speed-to-lead = opt-in → first outbound dial, counting **only business-hours time
+(10:00–22:00 ET)**, DST-aware (`businessHoursElapsedSec` in `est-periods.ts`). Overnight
+waits don't count: a 1am opt-in first dialled at noon is **2h**, not 11h. All called leads
+are included (24h cap per lead). This replaced the old wall-clock average + the "< 3h"
+overnight-stripping subset. Anchors are `lead_cycles.opt_in_at` / `first_call_at`
+(tagger-materialized). Drives the Leads-page box, the per-lead "time to call", and the
+`/api/speed-to-lead` endpoint.
+
 ## Dial close-cap — reconciled to the tagger's definition (2026-06-12)
 
 The roster's dial cap (`closeTimeIso`) now comes from the **tag** — `lead_cycle_stages.closed_at`
