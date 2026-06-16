@@ -74,6 +74,15 @@ old "reactivation ⊂ direct" framing — that invariant is gone. When the tag a
 legacy `reactivated_at` column disagree, **the tag wins** (the column is a legacy
 backfill + the fallback for leads with no `lead_cycles` row only).
 
+The Reactivation box's **dials bracket** counts post-reactivation outbound dials
+lower-bounded on the tagger's `reactive_at` too (migration 0087 / `sales_funnel_counts`).
+It previously keyed off `close_leads.reactivated_at`, which the 0063–0065 backfill set
+for only ~20 leads while the tagger marks ~316 — so the bracket read ~0 next to non-zero
+books/shows until the bound moved onto the tag. Note one residual: a `partnership_rebook`
+reactivation anchors `reactive_at` at the rebook-log moment, so its driving dials sit
+just *before* the anchor (primary phase) and don't show in the reactive bracket — by
+design today, flagged as a possible future refinement.
+
 ### Qualified — from Typeform, per cycle (2026-06-15)
 
 Qualification comes from the **Typeform SFedWelr investment answer** ("how much are you

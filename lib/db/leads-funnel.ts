@@ -358,7 +358,13 @@ export async function getLeadsFunnel(
   const qualByLead = new Map(rows.map((r) => [r.leadId, r.qualified]))
 
   const win = await scanDialWindows(
-    rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
+    // Post-reactivation dials scope off the tagger's reactive_at (the same
+    // signal that defines reactivation membership + every reactive stage), not
+    // close_leads.reactivated_at — that column is set by a separate backfill for
+    // only a handful of leads, so it orphaned the reactive dial count to ~0.
+    // Mirrors the SQL path (migration 0087). Falls back to the close_leads
+    // column when the tag value is absent.
+    rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.tagReactivatedAt ?? r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
   )
 
   const countCyc = (type: LeadFilterType | null, stage: FunnelStage) =>
