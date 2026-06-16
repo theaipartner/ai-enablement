@@ -152,3 +152,65 @@ export function getEstMonthStart(offsetMonths: number): Date {
       + offsetMinutes * 60 * 1000,
   )
 }
+
+// The America/New_York calendar date (year / month 1-12 / day) of a UTC
+// instant. Used to walk day-by-day for the business-hours clock below.
+function etCalendarDate(at: Date): { y: number; m: number; d: number } {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  const parts = fmt.formatToParts(at).reduce<Record<string, string>>((acc, p) => {
+    if (p.type !== 'literal') acc[p.type] = p.value
+    return acc
+  }, {})
+  return { y: parseInt(parts.year, 10), m: parseInt(parts.month, 10), d: parseInt(parts.day, 10) }
+}
+
+// The [open, close) window on one ET calendar date as UTC instants. The
+// ET→UTC offset is read at noon that day, which is correct for any hour in
+// a 10:00–22:00 window — the DST switch happens at 02:00, well outside it,
+// so a single day's offset applies to both bounds.
+function etWindowForDate(
+  y: number, m: number, d: number, openHour: number, closeHour: number,
+): { open: number; close: number } {
+  const noonEst = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  const offsetMs = getEstOffsetMinutes(noonEst) * 60 * 1000
+  return {
+    open: Date.UTC(y, m - 1, d, openHour, 0, 0) + offsetMs,
+    close: Date.UTC(y, m - 1, d, closeHour, 0, 0) + offsetMs,
+  }
+}
+
+// Seconds of elapsed time between `start` and `end` that fall inside the
+// business-hours window (default 10:00–22:00 ET) on each calendar day,
+// summed across days. DST-aware. The "speed-to-lead" clock: a lead that
+// opts in at 01:00 ET and is first dialled at 12:00 ET counts 2h (the
+// 10:00→12:00 slice), not 11h — overnight time isn't the team being slow.
+// Time before `start` or after `end` is never counted; an interval wholly
+// outside the window (e.g. 23:00→23:15) returns 0.
+export function businessHoursElapsedSec(
+  start: Date, end: Date, openHour = 10, closeHour = 22,
+): number {
+  const startMs = start.getTime()
+  const endMs = end.getTime()
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0
+
+  let total = 0
+  let { y, m, d } = etCalendarDate(start)
+  // Walk ET days from start's date forward. Bounded well above any real
+  // opt-in→first-dial gap (the cohort caps outliers elsewhere anyway).
+  for (let i = 0; i < 400; i++) {
+    const { open, close } = etWindowForDate(y, m, d, openHour, closeHour)
+    if (open >= endMs) break // this day's window starts after we're done
+    const lo = Math.max(open, startMs)
+    const hi = Math.min(close, endMs)
+    if (hi > lo) total += (hi - lo) / 1000
+    // Advance one calendar day (pure date arithmetic, tz-independent).
+    const next = new Date(Date.UTC(y, m - 1, d + 1))
+    y = next.getUTCFullYear(); m = next.getUTCMonth() + 1; d = next.getUTCDate()
+  }
+  return total
+}

@@ -47,24 +47,14 @@ export function SpeedToLeadBoxes({
       }}
     >
       <StatCell
-        label="Avg speed to lead (< 3h)"
-        value={cohort.avgSpeedToLeadSecUnder3h !== null ? formatDuration(cohort.avgSpeedToLeadSecUnder3h) : '—'}
+        label="Avg speed to lead (10a–10p ET)"
+        value={cohort.avgSpeedToLeadSec !== null ? formatDuration(cohort.avgSpeedToLeadSec) : '—'}
         subtext={
-          <>
-            <div>
-              {`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
-            </div>
-            {cohort.avgSpeedToLeadSec !== null ? (
-              <div
-                title={`All-time avg includes every called lead in the cohort, with a 24h outlier cap on individual contributions. ${cohort.leadsCalled - cohort.leadsUnder3h} leads were first-called more than 3 hours after creation.`}
-              >
-                All-time STL: {formatDuration(cohort.avgSpeedToLeadSec)}{' '}
-                <span style={{ color: 'var(--color-geg-text-faint)' }}>
-                  · {cohort.leadsCalled - cohort.leadsUnder3h} outside 3h
-                </span>
-              </div>
-            ) : null}
-          </>
+          <div
+            title="Opt-in → first dial, counting only business-hours time (10am–10pm ET). Overnight waits don't count — a lead that opts in at 1am and is first dialled at noon is a 2h speed-to-lead. Every called lead included; 24h outlier cap per lead."
+          >
+            {`${cohort.leadsCalled} leads called${activeCaller ? ' (filtered)' : ''}`}
+          </div>
         }
       />
       <StatCell

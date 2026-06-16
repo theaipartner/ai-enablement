@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
 import { fetchChunked, fetchChunkedPaged } from './query-parallel'
+import { businessHoursElapsedSec } from '@/lib/time/est-periods'
 
 // Funnel · Appointment Setting stage — Tier 1 (timing/effort) live
 // from Close system-recorded calls/SMS; Tier 2 (outcome splits) live
@@ -1131,17 +1132,11 @@ export type SpeedToLeadCohortResult = {
   // the old name meant "first call connected" which is no longer
   // the metric.
   leadsConnected: number
-  avgSpeedToLeadSec: number | null  // mean of speedSec (24h cap on outliers)
-  // Same average computed against the subset of leads whose first
-  // call landed within 3 hours. Drake's filter for the "active dialing
-  // pace today" view — strips overnight leads that aren't an honest
-  // signal of how fast the team is reacting in the moment.
-  // null when zero leads in the cohort meet the threshold.
-  avgSpeedToLeadSecUnder3h: number | null
-  // Count of leads that contributed to avgSpeedToLeadSecUnder3h.
-  // Surfaces in the UI as "(N of M)" subtext so the small-sample
-  // case is obvious.
-  leadsUnder3h: number
+  // Mean speed-to-lead over all called leads. speedSec counts only
+  // business-hours time (10a–10p ET), so overnight waits are excluded
+  // natively — this replaced the old wall-clock avg + the "<3h" subset
+  // (Drake 2026-06-16). 24h cap on individual contributions still applies.
+  avgSpeedToLeadSec: number | null
   connectedRate: number | null      // leadsConnected / leadsCalled
   // Mean total dials per CALLED lead in the cohort. "How hard did we
   // work the average lead." Mirrors the per-row Intensity column;
@@ -1164,29 +1159,23 @@ export type CohortStats = Pick<
   | 'leadsCalled'
   | 'leadsConnected'
   | 'avgSpeedToLeadSec'
-  | 'avgSpeedToLeadSecUnder3h'
-  | 'leadsUnder3h'
   | 'connectedRate'
   | 'avgIntensity'
 >
 
 export function summarizeCohortRows(rows: SpeedToLeadCohortRow[]): CohortStats {
-  const UNDER_3H_THRESHOLD_SEC = 3 * 60 * 60
   let cappedSum = 0
   let speedN = 0
-  let under3hSum = 0
-  let under3hN = 0
   let connectedCount = 0
   let calledCount = 0
   let intensitySum = 0
   for (const r of rows) {
     if (r.speedSec !== null) {
+      // speedSec is business-hours-elapsed (10a–10p ET), so overnight waits
+      // are already excluded. The 24h cap still guards against a multi-day
+      // straggler (24 business-hours ≈ 2 working days un-dialled) dominating.
       cappedSum += Math.min(r.speedSec, SPEED_CAP_SEC)
       speedN++
-      if (r.speedSec < UNDER_3H_THRESHOLD_SEC) {
-        under3hSum += r.speedSec
-        under3hN++
-      }
     }
     if (r.firstCallAt) {
       calledCount++
@@ -1199,8 +1188,6 @@ export function summarizeCohortRows(rows: SpeedToLeadCohortRow[]): CohortStats {
     leadsCalled: calledCount,
     leadsConnected: connectedCount,
     avgSpeedToLeadSec: speedN > 0 ? cappedSum / speedN : null,
-    avgSpeedToLeadSecUnder3h: under3hN > 0 ? under3hSum / under3hN : null,
-    leadsUnder3h: under3hN,
     connectedRate: calledCount > 0 ? connectedCount / calledCount : null,
     avgIntensity: calledCount > 0 ? intensitySum / calledCount : null,
   }
@@ -1316,7 +1303,7 @@ export async function getSpeedToLeadCohort(
   }
 
   if (cohortLeads.length === 0) {
-    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, avgSpeedToLeadSecUnder3h: null, leadsUnder3h: 0, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
+    return { cohortSize: 0, leadsCalled: 0, leadsConnected: 0, avgSpeedToLeadSec: null, connectedRate: null, avgIntensity: null, callers: [], rows: [] }
   }
   const qualifyingLeads = cohortLeads
   const qualifyingMap = new Map(qualifyingLeads.map((l) => [l.close_id, l]))
@@ -1490,8 +1477,12 @@ export async function getSpeedToLeadCohort(
     let speedSec: number | null = null
     if (call) {
       // Speed runs from the opt-in moment (account-creation for new
-      // leads, latest_opt_in_date for re-opt-ins), not account creation.
-      const dt = (new Date(call.activity_at).getTime() - new Date(lead.optInAt).getTime()) / 1000
+      // leads, latest_opt_in_date for re-opt-ins), not account creation —
+      // and counts ONLY business-hours time (10:00–22:00 ET). A lead that
+      // opts in at 01:00 and is first dialled at noon is a 2h speed-to-lead
+      // (10:00→12:00), not 11h: overnight time isn't the team being slow
+      // (Drake 2026-06-16). DST-aware via businessHoursElapsedSec.
+      const dt = businessHoursElapsedSec(new Date(lead.optInAt), new Date(call.activity_at))
       if (Number.isFinite(dt) && dt >= 0) speedSec = dt
     }
     const firstConnected = call ? (call.duration ?? 0) >= 90 : false

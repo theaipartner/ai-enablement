@@ -33,20 +33,24 @@ curl -s -H "Authorization: Bearer $SPEED_TO_LEAD_API_KEY" \
 {
   "date": "2026-05-29",
   "timezone": "America/New_York",
-  "averageSpeedToLead":        { "seconds": 5400, "minutes": 90 },
-  "averageSpeedToLeadUnder3h": { "seconds": 1800, "minutes": 30, "leadCount": 7 },
+  "averageSpeedToLead": { "seconds": 5400, "minutes": 90 },
   "cohortSize": 12,
   "leadsCalled": 10
 }
 ```
 
 - `averageSpeedToLead` — mean opt-in → first-call across all called
-  leads in the day's cohort (24h cap on outliers). `seconds`/`minutes`
-  are `null` when no leads were called.
-- `averageSpeedToLeadUnder3h` — same mean restricted to leads called
-  within 3 hours (strips overnight leads). `leadCount` = how many leads
-  contributed (watch for small samples).
-- `cohortSize` / `leadsCalled` — context for the averages.
+  leads in the day's cohort, counting **only business-hours time
+  (10am–10pm ET)**: overnight waits don't count, so a lead that opts in
+  at 1am and is first dialled at noon is a 2h speed-to-lead. 24h cap on
+  outliers per lead. `seconds`/`minutes` are `null` when no leads were
+  called.
+- `cohortSize` / `leadsCalled` — context for the average.
+
+> **Changed 2026-06-16:** the metric switched from wall-clock to a
+> business-hours clock, and the separate `averageSpeedToLeadUnder3h`
+> object was **removed** (the business-hours clock supersedes the old
+> "< 3h" overnight-stripping). Update any consumer that read that field.
 
 ## Errors
 
