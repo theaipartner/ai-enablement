@@ -78,10 +78,21 @@ The Reactivation box's **dials bracket** counts post-reactivation outbound dials
 lower-bounded on the tagger's `reactive_at` too (migration 0087 / `sales_funnel_counts`).
 It previously keyed off `close_leads.reactivated_at`, which the 0063–0065 backfill set
 for only ~20 leads while the tagger marks ~316 — so the bracket read ~0 next to non-zero
-books/shows until the bound moved onto the tag. Note one residual: a `partnership_rebook`
-reactivation anchors `reactive_at` at the rebook-log moment, so its driving dials sit
-just *before* the anchor (primary phase) and don't show in the reactive bracket — by
-design today, flagged as a possible future refinement.
+books/shows until the bound moved onto the tag.
+
+**Two reactivation kinds dial differently** (`lead_cycles.reactive_source`):
+- **`cold`** — `reactive_at` is the cold-gap start, so genuine re-engagement dials
+  land *after* it. Count = outbound dials strictly after `reactive_at`.
+- **`partnership_rebook`** — `reactive_at` is the moment the setter *logs* the rebook
+  (the triage form), so the rebook-driving dial lands a few minutes *before* it. For
+  these leads only, the bracket **also** counts the single most-recent outbound dial in
+  `(opt-in, reactive_at]` (migration 0088). Cold leads are excluded from this — their
+  last pre-anchor dial is a stale primary-phase dial 2–3 days earlier.
+
+Both the SQL (`sales_funnel_counts`) and the JS fallback (`leads-funnel.ts`
+`scanDialWindows`) apply this. Note the bracket can still be < Connected, because
+**Connected counts a setter triage form that reached, not just a dial** — a
+form-based reach has no countable dial behind it.
 
 ### Qualified — from Typeform, per cycle (2026-06-15)
 

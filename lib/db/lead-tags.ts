@@ -78,6 +78,10 @@ export type LeadCycleRow = {
   // reachedStage/matchesType (below) can count this cycle in any box.
   becameDirect: boolean
   reactivatedAt: string | null
+  // 'cold' | 'partnership_rebook' — how the lead reactivated. The funnel's
+  // reactivation dial rule treats partnership_rebook specially (counts the
+  // rebook-driving dial just before the anchor; see leads-funnel.ts).
+  reactiveSource: string | null
   primaryHits: StageHits
   reactiveHits: StageHits | null
 }
@@ -314,6 +318,7 @@ export const getLeadCycleRows = cache(async (range: DateRange): Promise<LeadCycl
         dcClosed: !!c.dcClosedAt,
         becameDirect: !!c.becameDirectAt,
         reactivatedAt: c.reactivatedAt,
+        reactiveSource: c.reactiveSource,
         primaryHits: stageHits(c.primary),
         reactiveHits: c.reactive ? stageHits(c.reactive) : null,
       })

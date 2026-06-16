@@ -216,7 +216,7 @@ type DialWindows = {
 
 // One outbound-call scan over the cohort → per-lead windowed dial counts.
 async function scanDialWindows(
-  leads: Array<{ leadId: string; optInAt: string; reactivatedAt: string | null; closeTimeIso: string | null }>,
+  leads: Array<{ leadId: string; optInAt: string; reactivatedAt: string | null; reactiveSource: string | null; closeTimeIso: string | null }>,
 ): Promise<Map<string, DialWindows>> {
   const out = new Map<string, DialWindows>()
   for (const l of leads) out.set(l.leadId, { dialsBeforeClose: 0, postReactDials: 0 })
@@ -224,7 +224,15 @@ async function scanDialWindows(
 
   const optInById = new Map(leads.map((l) => [l.leadId, l.optInAt]))
   const reactById = new Map(leads.map((l) => [l.leadId, l.reactivatedAt]))
+  const reactSrcById = new Map(leads.map((l) => [l.leadId, l.reactiveSource]))
   const closeById = new Map(leads.map((l) => [l.leadId, l.closeTimeIso]))
+  // For partnership_rebook leads: the latest in-window outbound dial AT/BEFORE
+  // reactivatedAt — the rebook-driving dial. The rebook anchors at the form-log
+  // moment, so that dial sits just before the anchor and the strict
+  // post-react filter misses it. We count it once, post-pass. Mirrors the SQL
+  // `lastpre` CTE (migration 0088). Cold reactivations are excluded — their
+  // last pre-anchor dial is a stale primary-phase dial days earlier.
+  const lastPreRebookDial = new Map<string, string>()
   const sb = createAdminClient()
   const ids = leads.map((l) => l.leadId)
 
@@ -259,7 +267,16 @@ async function scanDialWindows(
     const reactIso = reactById.get(c.lead_id) ?? null
     if (reactIso && c.activity_at > reactIso) {
       w.postReactDials += 1
+    } else if (reactIso && reactSrcById.get(c.lead_id) === 'partnership_rebook' && c.activity_at <= reactIso) {
+      // Track the latest dial at/before the rebook anchor.
+      const prev = lastPreRebookDial.get(c.lead_id)
+      if (!prev || c.activity_at > prev) lastPreRebookDial.set(c.lead_id, c.activity_at)
     }
+  }
+  // Add the single rebook-driving dial for each partnership_rebook lead.
+  for (const leadId of Array.from(lastPreRebookDial.keys())) {
+    const w = out.get(leadId)
+    if (w) w.postReactDials += 1
   }
   return out
 }
@@ -357,14 +374,29 @@ export async function getLeadsFunnel(
   const cycles = (await getLeadCycleRows(range)).filter((c) => rowIds.has(c.closeId))
   const qualByLead = new Map(rows.map((r) => [r.leadId, r.qualified]))
 
+  // Latest-cycle reactive source per lead (matches tagReactivatedAt, which is
+  // also the collapsed-latest cycle) — drives the partnership_rebook dial rule.
+  const latestReactSrc = new Map<string, { optInAt: string; src: string | null }>()
+  for (const c of cycles) {
+    const prev = latestReactSrc.get(c.closeId)
+    if (!prev || c.optInAt > prev.optInAt) latestReactSrc.set(c.closeId, { optInAt: c.optInAt, src: c.reactiveSource })
+  }
+
   const win = await scanDialWindows(
     // Post-reactivation dials scope off the tagger's reactive_at (the same
     // signal that defines reactivation membership + every reactive stage), not
     // close_leads.reactivated_at — that column is set by a separate backfill for
     // only a handful of leads, so it orphaned the reactive dial count to ~0.
-    // Mirrors the SQL path (migration 0087). Falls back to the close_leads
-    // column when the tag value is absent.
-    rows.map((r) => ({ leadId: r.leadId, optInAt: r.optInAt, reactivatedAt: r.tagReactivatedAt ?? r.reactivatedAt, closeTimeIso: r.closeTimeIso })),
+    // Mirrors the SQL path (migrations 0087 + 0088, incl. the partnership_rebook
+    // rebook-dial rule). Falls back to the close_leads column when the tag value
+    // is absent.
+    rows.map((r) => ({
+      leadId: r.leadId,
+      optInAt: r.optInAt,
+      reactivatedAt: r.tagReactivatedAt ?? r.reactivatedAt,
+      reactiveSource: latestReactSrc.get(r.leadId)?.src ?? null,
+      closeTimeIso: r.closeTimeIso,
+    })),
   )
 
   const countCyc = (type: LeadFilterType | null, stage: FunnelStage) =>
