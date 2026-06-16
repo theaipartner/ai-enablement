@@ -214,6 +214,7 @@ This is the list the upcoming table audit works from.
 | `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |
 | `lead_cycle_stages` | per-stage timestamps within a cycle (the funnel ladder) | funnel stage attribution, per-lead journey |
 | `lead_tag_runs` | audit log of every tagger run (~69k rows) | tagger diagnostics, lead-tag-log page |
+| `engagements` | call↔form match unit (0086) — sticky open/overdue/final tags per rep+lead | missing-form pinger (logic.md § Engagements, ingestion.md § Engagement pinger) |
 | `calendly_scheduled_events` | event mirror (filter by `name`) | closer drill, booking funnels, call typing |
 | `calendly_invitees` | invitee mirror — `no_show`, `rescheduled`, `utm_term`, email | lead matching, reschedule counts |
 | `calendly_event_types` | event-type reference (mostly not joined — retired URIs) | reference |

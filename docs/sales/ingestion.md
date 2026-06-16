@@ -67,6 +67,28 @@ meeting-duration metrics.
 ### Setter-calls sweep
 `setter_calls_sweep_cron` (`*/15`) — keeps setter call activity current.
 
+### Engagement pinger (missing-form notifier)
+Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a phone
+call. Logic + lifecycle: [`logic.md`](./logic.md) § Engagements. Three writers:
+- **Open/grow** — fail-soft hook in `api/close_events.py` (every ≥90s outbound call).
+- **Final** — fail-soft hook in `api/airtable_events.py` (a landed triage form closes
+  its oldest open engagement, guarded against re-using an already-linked form).
+- **Overdue + ping** — `api/engagement_ping_cron.py` (`*/5`, `CRON_SECRET`-auth). Flips
+  overdue every tick; pings only inside **10am–10pm ET** (gate in code, DST-safe).
+
+**Env (Vercel):** `SALES_FORM_NOTIFY_SLACK_CHANNEL` (the channel — **unset = kill switch**,
+cron drops to dry-run, engagements still track, nobody is messaged), `ENGAGEMENT_PING_FLOOR`
+(go-live timestamp — only engagements overdue at/after it are pinged; keeps backfilled rows
+silent), `SETTER_TRIAGE_FORM_URL` / `CLOSER_TRIAGE_FORM_URL` (the form-fill links — Airtable
+form-page URLs, not the table id; both forms share table `tblaoMsiE3FSkHjQt`). Reuses
+`SLACK_BOT_TOKEN` (Ella) — she must be **in the channel**. A rep is pingable only with a
+`team_members.slack_user_id`.
+
+**Backfill:** `scripts/backfill_engagements.py --days N` replays calls+forms into the table
+(no pinging — there's no Slack in the backfill). **Re-point a mislinked form:** clear the
+engagement's `final_at`/`form_id`, set the correct form's link (the engagement page is the
+human surface for this).
+
 ---
 
 ## Ops traps (read before touching data or migrations)

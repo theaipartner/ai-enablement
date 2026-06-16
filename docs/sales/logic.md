@@ -71,6 +71,37 @@ missing-form flag's closer trigger (1.5h after meeting start; setter trigger is 
 
 ---
 
+## Engagements — call↔form matching + the missing-form pinger
+
+The precise call↔form link (supersedes lead-level matching for the *phone* forms —
+setter triage + closer/confirmation triage, both Close calls). Logic in
+`shared/engagements.py`; table `engagements` (migration 0086, see
+`docs/schema/engagements.md`); ops in [`ingestion.md`](./ingestion.md) § Engagement pinger.
+
+**An engagement = a rep's cluster of calls to one lead toward one form** (not one call —
+back-to-back redials collapse in). Sticky tag-timestamps, set once, never cleared; read
+the tags for state (like `lead_cycle_stages`):
+
+- **OPEN** — a **≥90s** outbound call with no open engagement for `(lead, rep)` opens one.
+  Only ≥90s seeds one, so no-answer dials never create a form obligation (this sidesteps
+  "is a sub-90s call a real connect" — Close's `disposition`/`date_answered` are unreliable,
+  ~98% of short dials show `answered`, and most short calls have no recording to transcribe).
+- **GROW** — any later call (any length) within **45 min** of `last_call_at` joins it and
+  rolls the window. Once 45 min of silence pass the call-set is **frozen** — a later call
+  starts a NEW engagement (so an engagement can't span a gap, let alone days).
+- **OVERDUE** — 45-min silence with no form → `overdue_at` set; the pinger takes over.
+- **FINAL** — a triage form for `(lead, rep)` links to the **oldest** open engagement
+  (FIFO), set once. Rep resolves from the form's `setter_record_ids` →
+  `team_members.airtable_user_id` → `close_user_id`. A form matching no open engagement
+  stays unlinked → the review pile (off-Close ~6-8%, irreducible).
+
+**Form-link routing (which link the ping sends):** closer-triage link **only** when the
+lead's latest cycle is *currently direct* — `became_direct_at` set **AND** `reactive_at`
+null (reactivation drops direct status). Else the setter-triage link.
+(`form_url_for_lead`.)
+
+---
+
 ## Closer outcome derivation — `deriveNewOutcome(call_outcome)`
 
 `funnel-closing.ts`, for `form_type='New'` closer EOC forms:
