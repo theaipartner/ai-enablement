@@ -3,6 +3,12 @@ import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import type { LeadsFunnel, LeadFilterType, FunnelStage } from '@/lib/db/leads-funnel'
 import type { FunnelCash, CashCollected } from '@/lib/db/funnel-cash'
 
+// Exact dollar amount with cents + thousands separators ($10,823.47). Used for
+// the funnel's Adspend node — Nabeel wants the precise spend, not a compact
+// abbreviation (10.8K). Everything else keeps compactUsd.
+const fullUsd = (value: number): string =>
+  value.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+
 // Stacked funnel — Total on top, then Direct / Setter-led / Reactivation, each a
 // full-width horizontal funnel. Lives on the Funnel (Pulse) page; every stage
 // node links to the Leads roster pre-filtered to that funnel's (type, stage),
@@ -303,7 +309,7 @@ function FunnelNode({
         style={{ fontSize: 22, letterSpacing: '-0.02em', color: valueColor }}
         title={pending ? 'Not wired yet' : undefined}
       >
-        {pending ? '—' : usd ? compactUsd(value) : value.toLocaleString('en-US')}
+        {pending ? '—' : usd ? fullUsd(value) : value.toLocaleString('en-US')}
       </div>
       {bracket ? (
         <div className="geg-mono" style={{ fontSize: 10, fontWeight: 400, letterSpacing: '0.04em', color: 'var(--color-geg-text-faint)', marginTop: 1 }}>
