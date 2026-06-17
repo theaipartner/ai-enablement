@@ -125,10 +125,41 @@ export default async function SalesDashboardFunnelPage({
   )
 }
 
+// Campaign + ad names start with a launch date (`M/D/YY | …` for campaigns,
+// `M/D/YY - …` for ads; year is sometimes absent, e.g. `3/31`, and a few names
+// carry no date). Parse that leading date into a sortable YYYYMMDD key so the
+// cascade dropdowns order by date; null when no leading date is present (those
+// sink to the bottom). Missing year defaults to 2026 (the funnel's only cohort).
+function leadingDateKey(name: string): number | null {
+  const m = name.match(/^\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/)
+  if (!m) return null
+  const month = Number(m[1])
+  const day = Number(m[2])
+  let year = m[3] ? Number(m[3]) : 2026
+  if (year < 100) year += 2000
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  return year * 10000 + month * 100 + day
+}
+
+// Newest date first, then higher lead count; undated names last (date key null).
+function byDateDescThenCount<T extends { count: number }>(name: (t: T) => string) {
+  return (x: T, y: T): number => {
+    const dx = leadingDateKey(name(x))
+    const dy = leadingDateKey(name(y))
+    if (dx !== dy) {
+      if (dx === null) return 1
+      if (dy === null) return -1
+      return dy - dx
+    }
+    return y.count - x.count
+  }
+}
+
 // Campaign → Ad Set → Ad hierarchy across the cohort's rows, with per-node lead
-// counts, for the cascade filter. Each level sorted by volume; leads with no
-// ad_id (organic/direct) are omitted. Ad names collide (Meta reuses creative
-// names) → disambiguate with a short ad-id suffix.
+// counts, for the cascade filter. Campaigns + ads sort by launch date (newest
+// first), ad sets by volume (id-only, no date); leads with no ad_id
+// (organic/direct) are omitted. Ad names collide (Meta reuses creative names) →
+// disambiguate with a short ad-id suffix.
 function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
   type C = { campaignName: string; count: number; adsets: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }> }
   const camps = new Map<string, C>()
@@ -164,7 +195,7 @@ function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
     for (const a of list) names.set(a.adName, (names.get(a.adName) ?? 0) + 1)
     return list
       .map((a) => ((names.get(a.adName) ?? 0) > 1 ? { ...a, adName: `${a.adName} · …${a.adId.slice(-4)}` } : a))
-      .sort((x, y) => y.count - x.count)
+      .sort(byDateDescThenCount((a) => a.adName))
   }
   const adsetNodes = (m: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }>): AdsetNode[] =>
     Array.from(m.entries())
@@ -173,7 +204,7 @@ function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
   return {
     campaigns: Array.from(camps.entries())
       .map(([campaignId, v]) => ({ campaignId, campaignName: v.campaignName, count: v.count, adsets: adsetNodes(v.adsets) }))
-      .sort((x, y) => y.count - x.count),
+      .sort(byDateDescThenCount((c) => c.campaignName)),
     adsetsAll: adsetNodes(adsetsAll),
     adsAll: dedupeAds(adsAll),
   }
