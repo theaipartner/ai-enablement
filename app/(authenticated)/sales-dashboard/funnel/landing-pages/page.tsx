@@ -7,7 +7,6 @@ import { Sparkline } from '@/components/sales/sparkline'
 import {
   getVslMetrics,
   getTypVideoMetrics,
-  VSL_OPTIONS,
   type VideoMetrics,
 } from '@/lib/db/funnel-lp'
 import {
@@ -16,6 +15,7 @@ import {
   clampAdsRange,
 } from '@/lib/db/funnel-ads'
 import { getTypeformMetrics, type TypeformMetrics } from '@/lib/db/funnel-typeform'
+import { getLandingPage } from '@/lib/db/landing-pages'
 import type { AggMetric } from '@/lib/db/funnel-mocks'
 import { compactCount } from '@/lib/db/sales-dashboard-shared'
 import {
@@ -53,11 +53,14 @@ export default async function FunnelLandingPagesPage({
     start?: string | string[]
     end?: string | string[]
     vsl?: string | string[]
+    lp?: string | string[]
   }
 }) {
   const win = resolveSalesWindow(searchParams)
   const range = resolveDateRange({ start: win.start ?? undefined, end: win.end ?? undefined })
-  const vslHashedId = parseVslId(searchParams?.vsl)
+  // Which landing page's stats we're showing (registry-driven).
+  const lp = getLandingPage(searchParams?.lp)
+  const vslHashedId = parseVslId(searchParams?.vsl, lp.vsl.map((o) => o.hashedId))
 
   // LP visits = Meta unique link clicks (Drake 2026-05-27 — keeps
   // a single source of truth across Pulse + this LP detail page).
@@ -72,9 +75,9 @@ export default async function FunnelLandingPagesPage({
   ] = await Promise.all([
     getAdsAggregateLive(adsRange),
     getAdsUniqueClicksTrend7d(),
-    getVslMetrics(range, vslHashedId),
-    getTypVideoMetrics(range),
-    getTypeformMetrics(range),
+    getVslMetrics(range, lp.vsl, vslHashedId),
+    getTypVideoMetrics(range, lp.confirmVideoHashedId, lp.confirmVideoLabel),
+    getTypeformMetrics(range, lp.typeformFormId),
   ])
 
   const todayEt = todayEtDate()
@@ -86,13 +89,17 @@ export default async function FunnelLandingPagesPage({
       return 0
     })()
 
+  const backHref =
+    `/sales-dashboard/funnel?start=${range.startEtDate}&end=${range.endEtDate}` +
+    (searchParams?.lp ? `&lp=${lp.slug}` : '')
+
   return (
     <>
-      <PersistPageState window filters={['vsl']} />
+      <PersistPageState window filters={['vsl', 'lp']} />
       <StageDetailLayout
-        eyebrow="FUNNEL · LANDING PAGE"
+        eyebrow={`FUNNEL · LANDING PAGE · ${lp.label}`}
         title="Landing page."
-      backHref={`/sales-dashboard/funnel?start=${range.startEtDate}&end=${range.endEtDate}`}
+      backHref={backHref}
       headline={{
         label: `Landing page visits  ·  Meta unique link clicks  ·  ${rangeLabel(range.startEtDate, range.endEtDate)}`,
         value: metaUniqueClicks,
@@ -112,9 +119,10 @@ export default async function FunnelLandingPagesPage({
 
       <VideoSection
         eyebrow="VSL ON LANDING PAGE"
-        title="Wistia · play rate + average view duration."
+        title="Wistia · the five key metrics + average view duration."
         currentHashedId={vsl.hashedId}
         video={vsl}
+        vslOptions={lp.vsl}
       />
 
       <VideoSection
@@ -124,7 +132,7 @@ export default async function FunnelLandingPagesPage({
         video={typVideo}
       />
 
-      <StageSection eyebrow="TYPEFORM · LEADS" title="Starts and completions on the SFedWelr coaching application.">
+      <StageSection eyebrow="TYPEFORM · LEADS" title={`Starts and completions on the ${lp.typeformLabel}.`}>
         <TypeformBlock typeform={typeform} />
       </StageSection>
       </StageDetailLayout>
@@ -132,10 +140,13 @@ export default async function FunnelLandingPagesPage({
   )
 }
 
-function parseVslId(raw: string | string[] | undefined): string | undefined {
+function parseVslId(
+  raw: string | string[] | undefined,
+  allowed: string[],
+): string | undefined {
   const v = Array.isArray(raw) ? raw[0] : raw
   if (!v) return undefined
-  return VSL_OPTIONS.some((o) => o.hashedId === v) ? v : undefined
+  return allowed.includes(v) ? v : undefined
 }
 
 // Decode the page's date-range from search params.
@@ -204,16 +215,18 @@ function VideoSection({
   title,
   currentHashedId,
   video,
+  vslOptions,
 }: {
   eyebrow: string
   title: string
   currentHashedId: string
   video: VideoMetrics
+  vslOptions?: { hashedId: string; label: string }[]
 }) {
   return (
     <StageSection eyebrow={eyebrow} title={title}>
-      {eyebrow === 'VSL ON LANDING PAGE' ? (
-        <VslSelector options={VSL_OPTIONS} currentHashedId={currentHashedId} />
+      {vslOptions && vslOptions.length > 1 ? (
+        <VslSelector options={vslOptions} currentHashedId={currentHashedId} />
       ) : null}
       <div
         style={{

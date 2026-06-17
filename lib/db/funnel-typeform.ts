@@ -97,14 +97,14 @@ export function classifyResponse(row: TfRow): 'qualified' | 'non-qualified' | 'u
   return 'qualified'
 }
 
-async function loadResponses(range: DateRange): Promise<TfRow[]> {
+async function loadResponses(range: DateRange, formId: string): Promise<TfRow[]> {
   const sb = createAdminClient()
   // submitted_at is timestamptz (UTC) — filter against the UTC ISO
   // boundaries derived from the ET calendar range.
   const { data, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id, form_id, landed_at, submitted_at, answers')
-    .eq('form_id', MAIN_FORM_ID)
+    .eq('form_id', formId)
     .gte('submitted_at', range.startUtcIso)
     .lt('submitted_at', range.endUtcIso)
   if (error) throw new Error(`typeform_responses read failed: ${error.message}`)
@@ -207,10 +207,13 @@ async function deriveStartsForRange(formId: string, range: DateRange): Promise<{
   return { starts: Math.max(0, starts), partial: true, anchorAt: inside.snapshot_at }
 }
 
-export async function getTypeformMetrics(arg: Window | DateRange): Promise<TypeformMetrics> {
+export async function getTypeformMetrics(
+  arg: Window | DateRange,
+  formId: string = MAIN_FORM_ID,
+): Promise<TypeformMetrics> {
   const range = resolveRange(arg)
-  const rows = await loadResponses(range)
-  const startsResult = await deriveStartsForRange(MAIN_FORM_ID, range)
+  const rows = await loadResponses(range, formId)
+  const startsResult = await deriveStartsForRange(formId, range)
 
   let qualified = 0
   let nonQualified = 0
@@ -243,7 +246,7 @@ export async function getTypeformMetrics(arg: Window | DateRange): Promise<Typef
   const { data: trendData, error: trendErr } = await sb
     .from('typeform_responses' as never)
     .select('submitted_at, answers')
-    .eq('form_id', MAIN_FORM_ID)
+    .eq('form_id', formId)
     .gte('submitted_at', trendStart)
   if (trendErr) throw new Error(`typeform trend read failed: ${trendErr.message}`)
   const trendRows = (trendData ?? []) as unknown as { submitted_at: string; answers: unknown }[]

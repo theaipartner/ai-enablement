@@ -8,12 +8,7 @@ import {
   type IsolationDebug,
 } from './clarity-window'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
-import {
-  HIGH_TICKET_PRIMARY_VSL_HASHED_ID,
-  HIGH_TICKET_VSL_HASHED_IDS,
-  HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
-  isHighTicketVsl,
-} from './funnel-assets'
+import type { LandingPageVsl } from './landing-pages'
 
 // Funnel · Landing Page stage — consolidated detail page data layer.
 //
@@ -39,28 +34,9 @@ const CANONICAL_LP_PATH = '/lp-vsl'
 // path. Mirrors THANK_YOU_PAGE_PATH in ingestion/clarity/__init__.py.
 const CANONICAL_TYP_PATH = '/lp-confirmation'
 
-// Default Wistia hashed_ids — sourced from the high-ticket funnel asset
-// lock so the LP page can only ever read the locked VSL + confirm videos.
-//
-// VSL on the LP: "VSL Vídeo Motion - Nabeel (Horizontal) Direct Closer
-//   Funnel" (primary) + the v2 variant. TYP (confirmation page) video:
-//   "V2 precall shortened".
-const DEFAULT_VSL_HASHED_ID = HIGH_TICKET_PRIMARY_VSL_HASHED_ID
-const TYP_HASHED_ID = HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID
-
-// Display labels for the locked VSL set. Options are DERIVED from
-// HIGH_TICKET_VSL_HASHED_IDS so the page's VSL selector can never offer a
-// video outside the lock (it previously listed Horizontal-v1 / Vertical
-// variants that belong to other cuts — those are gone now).
-const VSL_LABELS: Record<string, string> = {
-  i1173gx76b: 'Vídeo Motion · Nabeel (Horizontal) · Direct Closer Funnel',
-  nbump1crwb: 'Vídeo Motion · Nabeel (Horizontal) v2',
-}
-export const VSL_OPTIONS: { hashedId: string; label: string }[] =
-  HIGH_TICKET_VSL_HASHED_IDS.map((hashedId) => ({
-    hashedId,
-    label: VSL_LABELS[hashedId] ?? 'VSL',
-  }))
+// The VSL / confirmation-video hashed_ids are no longer module constants
+// here — they come from the landing-page registry (lib/db/landing-pages.ts)
+// and are passed into getVslMetrics / getTypVideoMetrics per selected LP.
 
 // Pull 60 days of Clarity so the rolling-3 recurrence has runway.
 const CLARITY_HISTORY_DAYS = 60
@@ -510,18 +486,25 @@ export async function getLpRowsLive(arg: Window | DateRange, submitsCount: numbe
   return out.slice(0, 10)
 }
 
-// VSL metrics for the LP detail page. Single-video version; the
-// dropdown stub on the page calls this with whichever option the
-// user selects.
-export async function getVslMetrics(arg: Window | DateRange, hashedId?: string): Promise<VideoMetrics> {
-  // Clamp to the locked set — a caller-supplied id outside the high-ticket
-  // VSLs (stale link, another funnel) falls back to the primary.
-  const id = isHighTicketVsl(hashedId) ? (hashedId as string) : DEFAULT_VSL_HASHED_ID
-  const label = VSL_OPTIONS.find((o) => o.hashedId === id)?.label ?? 'VSL'
-  return getVideoMetrics(id, label, resolveRange(arg))
+// VSL metrics for the LP detail page. `vslOptions` is the selected
+// landing page's VSL variant set (registry-driven); `selected` is the
+// caller-chosen variant. A selected id outside the LP's set (stale link,
+// another LP) clamps to the LP's first variant.
+export async function getVslMetrics(
+  arg: Window | DateRange,
+  vslOptions: LandingPageVsl[],
+  selected?: string,
+): Promise<VideoMetrics> {
+  const match = vslOptions.find((o) => o.hashedId === selected)
+  const chosen = match ?? vslOptions[0]
+  return getVideoMetrics(chosen.hashedId, chosen.label, resolveRange(arg))
 }
 
-// Confirmation video (TYP-side).
-export async function getTypVideoMetrics(arg: Window | DateRange): Promise<VideoMetrics> {
-  return getVideoMetrics(TYP_HASHED_ID, 'V2 precall shortened', resolveRange(arg))
+// Confirmation / thank-you video (TYP-side) for the selected landing page.
+export async function getTypVideoMetrics(
+  arg: Window | DateRange,
+  confirmHashedId: string,
+  label: string,
+): Promise<VideoMetrics> {
+  return getVideoMetrics(confirmHashedId, label, resolveRange(arg))
 }
