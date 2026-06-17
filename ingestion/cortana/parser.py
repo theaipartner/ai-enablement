@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-Grain = Literal["ad", "campaign"]
+Grain = Literal["ad", "campaign", "adset"]
 
 
 def _num(v: Any) -> float | None:

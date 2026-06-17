@@ -42,6 +42,10 @@ _BROWSER_UA = (
 CORTANA_DT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 VALID_GROUP_BY = ("source", "campaign", "medium", "ad")
+# groupBy=medium is how we get the ad-set grain: Meta's URL template puts the
+# ad-set name in utm_medium, and Cortana keys each medium row to the real Meta
+# ad-set id via platformEntityId (the API has no native ad-set grouping). See
+# ingestion/cortana/pipeline.py + migration 0089_cortana_adset_daily.sql.
 
 
 class CortanaAPIError(RuntimeError):

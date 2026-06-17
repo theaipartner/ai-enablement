@@ -7,7 +7,7 @@ Usage:
   # dry run: pull N days, report counts, NO writes (default 3 days)
   .venv/bin/python scripts/backfill_cortana.py --days 3
 
-  # apply: upsert into meta_ad_daily + cortana_{campaign,ad}_daily
+  # apply: upsert into meta_ad_daily + cortana_{campaign,adset,ad}_daily
   .venv/bin/python scripts/backfill_cortana.py --days 3 --apply
 
 Reads CORTANA_API_KEY + CORTANA_BUSINESS_ID from .env.local (loaded by
@@ -135,7 +135,7 @@ def run_cloud_pg(days: int) -> int:
     print(f"Cortana backfill (CLOUD/psycopg2): {start_day} .. {end_day} ({days} ET days)")
     conn = _pg_conn()
     conn.autocommit = False
-    totals = {"meta": 0, "campaign": 0, "ad": 0}
+    totals = {"meta": 0, "campaign": 0, "adset": 0, "ad": 0}
     try:
         with conn.cursor() as cur:
             d = start_day
@@ -144,8 +144,9 @@ def run_cloud_pg(days: int) -> int:
                 if rows.meta_ad_daily is not None:
                     totals["meta"] += _pg_upsert(cur, "meta_ad_daily", [rows.meta_ad_daily], ["day"])
                 totals["campaign"] += _pg_upsert(cur, "cortana_campaign_daily", rows.campaign, ["day", "entity_key"])
+                totals["adset"] += _pg_upsert(cur, "cortana_adset_daily", rows.adset, ["day", "entity_key"])
                 totals["ad"] += _pg_upsert(cur, "cortana_ad_daily", rows.ad, ["day", "entity_key"])
-                print(f"  {d}: meta={1 if rows.meta_ad_daily else 0} campaign={len(rows.campaign)} ad={len(rows.ad)}")
+                print(f"  {d}: meta={1 if rows.meta_ad_daily else 0} campaign={len(rows.campaign)} adset={len(rows.adset)} ad={len(rows.ad)}")
                 d += timedelta(days=1)
         conn.commit()
     finally:
@@ -155,7 +156,7 @@ def run_cloud_pg(days: int) -> int:
 
 
 def smoke() -> int:
-    """Pull yesterday (a complete ET day) across all 3 grains; print; no write."""
+    """Pull yesterday (a complete ET day) across all grains; print; no write."""
     client = _client()
     day = _today_et() - timedelta(days=1)
     start, end = et_day_window(day)
@@ -171,12 +172,17 @@ def smoke() -> int:
 
     campaign = client.attribution_data(start, end, group_by="campaign")
     crows = campaign.get("data", [])
+    medium = client.attribution_data(start, end, group_by="medium")
+    mrows = [r for r in medium.get("data", []) if (r.get("platformEntityId") or "").isdigit()]
     ad = client.attribution_data(start, end, group_by="ad")
     arows = ad.get("data", [])
-    print(f"\ncampaign rows: {len(crows)}  ad rows: {len(arows)}")
+    print(f"\ncampaign rows: {len(crows)}  ad-set rows (medium, numeric id): {len(mrows)}  ad rows: {len(arows)}")
     if crows:
         sample = parse_entity(crows[0], day.isoformat(), "campaign")
         print(f"  sample campaign: {sample['entity_name']!r} spent={sample['spent']} leads={sample['leads']} conv_keys={list(sample['conversions'])}")
+    if mrows:
+        sample = parse_entity(mrows[0], day.isoformat(), "adset")
+        print(f"  sample ad set: {sample['entity_name']!r} id={sample['platform_entity_id']} spent={sample['spent']} leads={sample['leads']}")
     if arows:
         sample = parse_entity(arows[0], day.isoformat(), "ad")
         print(f"  sample ad: {sample['entity_name']!r} spent={sample['spent']} leads={sample['leads']} conv_keys={list(sample['conversions'])}")
@@ -193,17 +199,19 @@ def run(days: int, apply: bool, cloud: bool) -> int:
     if not apply:
         # Dry run: pull + count, no DB.
         d = start_day
-        totals = {"meta": 0, "campaign": 0, "ad": 0}
+        totals = {"meta": 0, "campaign": 0, "adset": 0, "ad": 0}
         while d <= end_day:
             start, end = et_day_window(d)
             src = client.attribution_data(start, end, group_by="source")
             has_meta = any((r.get("dimension") or "").lower() == "meta ads" for r in src.get("data", []))
             crows = client.attribution_data(start, end, group_by="campaign").get("data", [])
+            mrows = [r for r in client.attribution_data(start, end, group_by="medium").get("data", []) if (r.get("platformEntityId") or "").isdigit()]
             arows = client.attribution_data(start, end, group_by="ad").get("data", [])
             totals["meta"] += 1 if has_meta else 0
             totals["campaign"] += len(crows)
+            totals["adset"] += len(mrows)
             totals["ad"] += len(arows)
-            print(f"  {d}: meta_ad_daily={'yes' if has_meta else 'no'} campaign={len(crows)} ad={len(arows)}")
+            print(f"  {d}: meta_ad_daily={'yes' if has_meta else 'no'} campaign={len(crows)} adset={len(mrows)} ad={len(arows)}")
             d += timedelta(days=1)
         print(f"\nDRY RUN totals: {totals}.  Re-run with --apply to write.")
         return 0
@@ -213,8 +221,8 @@ def run(days: int, apply: bool, cloud: bool) -> int:
     print(
         f"\nAPPLIED: days={len(outcome.days_covered)} "
         f"meta_ad_daily={outcome.meta_ad_daily_upserts} "
-        f"campaign={outcome.campaign_upserts} ad={outcome.ad_upserts} "
-        f"errors={len(outcome.errors)}"
+        f"campaign={outcome.campaign_upserts} adset={outcome.adset_upserts} "
+        f"ad={outcome.ad_upserts} errors={len(outcome.errors)}"
     )
     for e in outcome.errors:
         print(f"  ERROR {e}")
