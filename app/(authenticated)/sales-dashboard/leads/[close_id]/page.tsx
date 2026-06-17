@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { getLeadDetail, type LeadTimelineEvent, type LeadCallEntry } from '@/lib/db/lead-detail'
+import { getLeadNote } from '@/lib/db/lead-notes'
+import { LeadNotes } from '@/components/sales/lead-notes'
 
 // Per-lead detail page. One Close lead's opt-in facts + header (qualification,
 // dials/connected counts, booking stage) + a form-driven lifecycle timeline:
@@ -19,7 +21,7 @@ export default async function LeadDetailPage({
   searchParams?: { ret?: string | string[] }
 }) {
   const closeId = decodeURIComponent(params.close_id)
-  const lead = await getLeadDetail(closeId)
+  const [lead, note] = await Promise.all([getLeadDetail(closeId), getLeadNote(closeId)])
   if (!lead) notFound()
 
   // Return to the leads page preserving the window/filters it was left in
@@ -56,6 +58,14 @@ export default async function LeadDetailPage({
       />
 
       <FactStrip lead={lead} />
+
+      <SectionHeading>Notes</SectionHeading>
+      <LeadNotes
+        closeId={closeId}
+        initialNote={note?.note ?? ''}
+        initialUpdatedAt={note?.updatedAt ?? null}
+        initialUpdatedBy={note?.updatedBy ?? null}
+      />
 
       <SectionHeading>Journey</SectionHeading>
       <div className="geg-mono" style={{ marginTop: 2, marginBottom: 10, fontSize: 9, letterSpacing: '0.08em', color: 'var(--color-geg-text-faint)' }}>

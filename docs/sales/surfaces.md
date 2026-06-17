@@ -44,7 +44,9 @@ moved to `/funnel`.)
 
 ### `/leads/[close_id]` — per-lead page
 A facts strip (qualified, opt-in dates, **Stage** chip-funnel, dials, connected
-count+duration, reschedules, follow-ups) + a **two-phase Journey** (Direct → Reactivation)
+count+duration, reschedules, follow-ups) + a **Notes** section (one free-text
+scratchpad per lead — type + save, overwrites; `lead_notes`, migration 0090;
+any team member can edit) + a **two-phase Journey** (Direct → Reactivation)
 + a **day-grouped Lifecycle** (full history, newest-first, opt-in dividers) + a Close-
 details section. Bookings are matched to the lead by email + name + unique utm_term token.
 The journey **resets on re-opt-in**. There is a lead search bar (`?q=`) that resolves a
