@@ -52,6 +52,7 @@ subdomain plan). Nothing in here should reference Ella, Clients, CSM, or Gregory
 | [`logic.md`](./logic.md) | The load-bearing matching & business logic — the rules you must not break (utm_term guard, form selection, the connected signal, outcome derivation, the 1000-row cap, timezone). |
 | [`ingestion.md`](./ingestion.md) | Every data source, its webhook/cron model, and the **ops traps** (the env gotcha, the migration apply path). |
 | [`surfaces.md`](./surfaces.md) | The page-by-page UI map — routes, what each shows, what was removed. |
+| [`landing-pages.md`](./landing-pages.md) | How landing pages work + **the checklist for adding a new one** (the 5 things to collect, what's deferred). |
 
 Per-table column detail stays in `docs/schema/<table>.md` (kept as-is; the manifest
 in `data-model.md` says which of those are sales).
