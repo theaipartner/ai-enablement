@@ -81,12 +81,15 @@ function showedFromCloser(f: { form_type: string | null; call_outcome: string | 
   return (f.showed ?? '').toLowerCase() === 'yes'
 }
 
-// A close requires EXPLICIT plans. Robby (the DC closer) habitually marks
-// "Digital College Closed" on calls that didn't actually close, so the outcome
-// alone is unreliable (Drake 2026-06-06). Only count a close when the plan field
-// ("What plan did we get them on?", dc_plans) is filled. A "DC Closed" form with
-// no plan is treated as a SHOW (showedFromCloser already catches it), not a
-// close — surfaced separately as markedNoPlan so the habit is visible.
+// A close = EXPLICIT plans. The plan field ("What plan did we get them on?",
+// dc_plans) is the close indicator: if it's filled, it's a close (Drake
+// 2026-06-17) — same definition the main tagger uses (has_dc_plan). The
+// call_outcome string is NOT used to gate the close: closers split between
+// "Digital College Closed" (Robby) and "Digital College" (Brad/Josh/Connor +
+// a redesigned form where the DC outcome reveals a separate Closed yes/no
+// field) — keying on "...closed" dropped ~half the real DC closes. A form whose
+// outcome names DC but has NO plan is a SHOW, not a close (showedFromCloser
+// catches it), surfaced as markedNoPlan so the no-plan habit stays visible.
 function dcCloseUnits(f: {
   form_type: string | null
   call_outcome: string | null
@@ -96,8 +99,8 @@ function dcCloseUnits(f: {
 }): { isClose: boolean; units: number; markedNoPlan: boolean } {
   const units = (f.dc_plans ?? []).filter((p) => (p ?? '').trim() !== '').length
   if (f.form_type === 'New') {
-    const marked = (f.call_outcome ?? '').toLowerCase().includes('digital college closed')
-    if (marked && units > 0) return { isClose: true, units, markedNoPlan: false }
+    if (units > 0) return { isClose: true, units, markedNoPlan: false }
+    const marked = (f.call_outcome ?? '').toLowerCase().includes('digital college')
     return { isClose: false, units: 0, markedNoPlan: marked }
   }
   // Legacy form: closed=yes + a DC plan_type → a real close, one plan unit.
