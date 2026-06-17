@@ -11,6 +11,7 @@ split. Nav is **flat: Funnel · Leads · Talent**, with Revival nested under Fun
 
 The stacked cohort funnel: **Total / Direct / Setter / Reactivation** boxes (opt-ins →
 connected → booked → confirmed → showed → closed; `confirmed` only on Direct/Total;
+the **Total box hides the Books node** — Confirms is the meaningful one there;
 `closed` split HT/DC). Stage nodes are `<Link>`s into the filtered **Leads** roster
 (type + stage), so a box's number equals the roster it opens. The page also hosts:
 

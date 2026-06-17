@@ -66,7 +66,9 @@ export function FunnelStack({ funnel, cash, range, ad, campaign, adset }: { funn
         stages={[
           { value: t.optIns, caption: 'Opt-ins', accent: true, bracket: dials(t.dials) },
           { value: t.connected, caption: 'Connected', stage: 'connected' },
-          { value: t.books, caption: 'Books', stage: 'booked' },
+          // Books intentionally omitted from the Total funnel only — Confirms is
+          // the meaningful node here (Drake 2026-06-17). t.books still drives the
+          // data/guard and stays on Direct / Setter / Reactivation.
           { value: t.confirms, caption: 'Confirms', stage: 'confirmed' },
           { value: t.shows, caption: 'Shows', stage: 'showed' },
           { value: t.closes, caption: 'Closes', stage: 'closed', bracket: closeSplit(t.closesHt, t.closesDc) },

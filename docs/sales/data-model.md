@@ -51,6 +51,9 @@ opt-ins → connected → booked → confirmed → showed → closed
 ```
 
 - **`confirmed` exists only on Direct (and Total).** Setter and Reactivation skip it.
+- **The Total box does not *display* a Books node** (removed 2026-06-17 — Confirms is the
+  meaningful node there). `books` is still computed and still drives the integrity guard +
+  the Direct / Setter / Reactivation boxes; it's only hidden from the Total box's bars.
 - The **closed** node is split `(N HT / N DC)`.
 - `books ≥ connected ≥ confirms ≥ shows ≥ closes` — enforced as an integrity guard.
   **Exception:** in the **Total** funnel, Books *can* exceed Connected, because a pure
