@@ -26,11 +26,24 @@ one**. If you're picking this up cold (new chat, time has passed): start at
 
 ## The one thing that's deferred (and why)
 
-The dropdown **does not yet re-scope the funnel boxes** by landing page. It
-can't until every lead is tagged with *which landing page's form* it came
-through — and right now our lead pipeline only ingests one Typeform
-(`SFedWelr`), so there's nothing to filter on. This unblocks the moment a
-second landing page (with its own form) goes live.
+**Two deferred items, both unblocking when the second LP is real:**
+
+1. **Funnel-box re-scope by landing page.** The dropdown doesn't yet re-scope
+   the funnel boxes — it can't until every lead is tagged with *which landing
+   page's form* it came through, and right now our pipeline only ingests one
+   Typeform (`SFedWelr`), so there's nothing to filter on.
+
+2. **Per-landing-page video metrics for *shared* videos.** Each LP has its own
+   Typeform, but the **VSL / thank-you videos may be shared** across LPs. We
+   want each LP's page to show that video's stats *as embedded on that LP* —
+   not its grand total. But we pull `wistia_media_daily`, which is **per-media,
+   account-wide** (one set of daily numbers per video, summed across *every*
+   page it's embedded on). So today (one LP) it's correct; the day a video is
+   shared across two LPs, both LPs would show the *combined* numbers. Fixing
+   this needs Wistia broken out **by embed / page URL** (Wistia tracks the
+   `embed_url` per play, but the timeseries endpoint we ingest today doesn't
+   expose it — likely a per-play events ingestion; needs a discovery pass to
+   confirm the endpoint + limits). Only bites when a video is actually shared.
 
 ---
 
@@ -61,16 +74,9 @@ page + form will have them:
    source `form_id` (small migration + tagger change in `lib/db/lead-tags.ts`).
 3. Add the `form_id` filter to the funnel SQL (`sales_funnel_counts`). → the
    dropdown now **re-scopes the funnel boxes**, composable with the ad filter.
+4. **If the new LP shares a VSL or thank-you video with another LP**, do the
+   Wistia per-embed work (deferred item 2 above) so each LP shows that video's
+   own numbers. Skip if the new LP's videos are unique to it.
 
-Steps 2–3 are why the form has to exist first — Builder matches the form's real
+Steps 2–4 are why the form has to exist first — Builder matches the form's real
 shape (qualification question, hidden fields) rather than guessing.
-
----
-
-## Note on reused videos
-
-The same VSL or thank-you video may be embedded on more than one landing page.
-Wistia reports stats **per embed**, so once we want per-LP video breakouts for a
-shared video, that comes from Wistia's embed dimension — not a new hashed_id.
-Our cron currently pulls per-media (account-wide) daily stats; confirm the
-embed/URL breakout path when that need arrives.
