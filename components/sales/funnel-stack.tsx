@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import type { LeadsFunnel, LeadFilterType, FunnelStage } from '@/lib/db/leads-funnel'
 import type { FunnelCash, CashCollected } from '@/lib/db/funnel-cash'
 
@@ -321,7 +320,7 @@ function FunnelNode({
       </div>
       {costPerUnit != null ? (
         <div className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.02em', color: 'var(--color-geg-text)', marginTop: 2 }}>
-          {compactUsd(costPerUnit)}/ea
+          {fullUsd(costPerUnit)}/ea
         </div>
       ) : null}
     </>
