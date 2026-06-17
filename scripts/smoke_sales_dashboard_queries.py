@@ -39,7 +39,7 @@ WINDOW_START_DATE = WINDOW_START.date().isoformat()
 # Typeform: NO form-id filter — "Typeform Submits ('Leads')" counts all
 # opt-ins across all active funnels. The historical Setter Funnel
 # (PWSNd0h2) went dormant; SFedWelr is the current active funnel.
-VSL_HASHED_IDS = ["i1173gx76b", "nbump1crwb"]
+VSL_HASHED_IDS = ["i1173gx76b"]
 TYP_HASHED_ID = "4v9rok4kct"
 CLOSER_EVENT_NAMES_LOWER = ["ai partner strategy call"]
 

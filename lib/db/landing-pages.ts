@@ -42,10 +42,9 @@ export type LandingPage = {
   confirmVideoLabel: string
 }
 
-// Display labels for the high-ticket VSL variants.
+// Display labels for the high-ticket VSL(s).
 const HT_VSL_LABELS: Record<string, string> = {
   i1173gx76b: 'Vídeo Motion · Nabeel (Horizontal) · Direct Closer Funnel',
-  nbump1crwb: 'Vídeo Motion · Nabeel (Horizontal) v2',
 }
 
 export const LANDING_PAGES: LandingPage[] = [

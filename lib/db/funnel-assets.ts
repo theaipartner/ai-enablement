@@ -20,10 +20,12 @@
 // (e.g. Digital College) form are deliberately excluded.
 export const HIGH_TICKET_TYPEFORM_FORM_ID = 'SFedWelr'
 
-// Wistia: the LP VSL variants in rotation for the high-ticket funnel.
+// Wistia: the LP VSL for the high-ticket funnel.
 //   i1173gx76b — "VSL Vídeo Motion - Nabeel (Horizontal) Direct Closer Funnel"
-//   nbump1crwb — "VSL Vídeo Motion - Nabeel (Horizontal) v2"
-export const HIGH_TICKET_VSL_HASHED_IDS = ['i1173gx76b', 'nbump1crwb'] as const
+// The "Horizontal v2" variant (nbump1crwb) was removed 2026-06-16 — its
+// A/B test had concluded (traffic had dropped to a trickle) and the new
+// per-landing-page setup doesn't need an in-page variant toggle.
+export const HIGH_TICKET_VSL_HASHED_IDS = ['i1173gx76b'] as const
 
 // The primary VSL for single-video surfaces (the LP detail page default).
 export const HIGH_TICKET_PRIMARY_VSL_HASHED_ID = HIGH_TICKET_VSL_HASHED_IDS[0]
