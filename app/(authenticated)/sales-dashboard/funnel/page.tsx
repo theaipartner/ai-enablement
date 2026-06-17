@@ -4,6 +4,8 @@ import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcFunnelSection } from '@/components/sales/dc-funnel'
 import { getLeadsForRange, type LeadRow } from '@/lib/db/leads'
 import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '@/components/sales/ad-cascade-filter'
+import { LandingPageFilter } from '@/components/sales/landing-page-filter'
+import { LANDING_PAGES } from '@/lib/db/landing-pages'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getFunnelCash } from '@/lib/db/funnel-cash'
@@ -28,7 +30,7 @@ export const maxDuration = 60
 export default async function SalesDashboardFunnelPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[]; ad?: string | string[]; campaign?: string | string[]; adset?: string | string[] }
+  searchParams?: { start?: string | string[]; end?: string | string[]; ad?: string | string[]; campaign?: string | string[]; adset?: string | string[]; lp?: string | string[] }
 }) {
   const { start, end } = resolveSalesWindow(searchParams)
   const range = resolveFunnelRange(start ?? undefined, end ?? undefined)
@@ -37,6 +39,10 @@ export default async function SalesDashboardFunnelPage({
   const campaign = param(searchParams?.campaign)
   const adset = param(searchParams?.adset)
   const ad = param(searchParams?.ad)
+  // Landing-page selection (orthogonal to the ad cascade). Drives which LP
+  // the "Landing pages →" button opens; the funnel-box re-scope by LP is
+  // pending per-lead form attribution (see landing-page-filter.tsx).
+  const lp = param(searchParams?.lp)
 
   // Cohort → roster rows fetched CONCURRENTLY with the Digital College funnel
   // (independent). The ad filter then narrows the rows in-memory and the HT
@@ -70,11 +76,13 @@ export default async function SalesDashboardFunnelPage({
   // campaign). ROAS renders on the Total box only (window adspend → whole cohort).
   const cash = await getFunnelCash(range, rows, funnel.adspendUsd, { excludeDc: filterActive })
 
-  const lpHref = `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}`
+  const lpHref =
+    `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}` +
+    (lp ? `&lp=${lp}` : '')
 
   return (
     <div>
-      <PersistPageState window filters={['campaign', 'adset', 'ad']} />
+      <PersistPageState window filters={['campaign', 'adset', 'ad', 'lp']} />
       <HeaderBand eyebrow="SALES · FUNNEL" title="Funnel." />
 
       {/* Filter row — its own wrapping row below the title so the controls never
@@ -99,6 +107,7 @@ export default async function SalesDashboardFunnelPage({
           Landing pages →
         </Link>
         <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
+        <LandingPageFilter options={LANDING_PAGES.map((p) => ({ slug: p.slug, label: p.label }))} selected={lp} />
         <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
       </div>
 
