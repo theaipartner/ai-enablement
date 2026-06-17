@@ -291,12 +291,16 @@ export async function getLeadsFunnel(
   // has no Cortana feed, so its spend/ROAS is null; otherwise the account total.
   let adspendUsd: number | null = null
   let uniqueLinkClicks: number | null = null
-  // ad → per-ad table; campaign → per-campaign table; both keyed by platform_entity_id.
+  // ad → per-ad table; ad-set → per-ad-set table; campaign → per-campaign table;
+  // all keyed by platform_entity_id. Deepest active selection wins (the funnel is
+  // scoped to it), so ad over ad-set over campaign.
   const spendEntity = opts?.adId
     ? { table: 'cortana_ad_daily', id: opts.adId }
-    : opts?.campaignId
-      ? { table: 'cortana_campaign_daily', id: opts.campaignId }
-      : null
+    : opts?.adsetId
+      ? { table: 'cortana_adset_daily', id: opts.adsetId }
+      : opts?.campaignId
+        ? { table: 'cortana_campaign_daily', id: opts.campaignId }
+        : null
   if (spendEntity) {
     try {
       const sb = createAdminClient()
@@ -316,10 +320,6 @@ export async function getLeadsFunnel(
       adspendUsd = null
       uniqueLinkClicks = null
     }
-  } else if (opts?.adsetId) {
-    // Ad-set has no Cortana spend feed — leave spend/ROAS null (shows "—").
-    adspendUsd = null
-    uniqueLinkClicks = null
   } else {
     try {
       const ads = await getAdsAggregateLive(clampAdsRange(range.startEtDate, range.endEtDate))

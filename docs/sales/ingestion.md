@@ -44,10 +44,18 @@ form `SFedWelr`.** `PWSNd0h2` is the dormant Setter Funnel.
 ### Meta / Cortana ads — `ingestion/cortana/`
 `api/cortana_sync_cron.py`, **3-hour cron** (`0 */3 * * *`). **Source changed
 2026-05-29:** `meta_ad_daily` now comes from the **Cortana Attribution API**
-(`groupBy=source`); `cortana_campaign_daily` (`groupBy=campaign`) and `cortana_ad_daily`
-(`groupBy=ad`). The old `ingestion/meta/` Google-Sheet pipeline is **retired**. HT
+(`groupBy=source`); `cortana_campaign_daily` (`groupBy=campaign`), `cortana_ad_daily`
+(`groupBy=ad`), and `cortana_adset_daily` (`groupBy=medium` — the ad-set grain; see below).
+The old `ingestion/meta/` Google-Sheet pipeline is **retired**. HT
 adspend = **`Closer Funnel`-token campaigns only** (excludes other funnels and Meta noise
 rows like `Bot Traffic`, `facebook.com`, `calendly.com`).
+
+The **ad-set grain rides `groupBy=medium`** (migration 0089 / `cortana_adset_daily`): the API
+has no native ad-set grouping, but `utm_medium` carries the ad-set name and Cortana keys each
+medium row to the real Meta ad-set id (`platformEntityId`, joins `close_leads.adset_id`).
+Ingestion keeps **only numeric-`platformEntityId` rows** — that filter drops the organic /
+placement noise the medium grouping also emits ("Bot Traffic", "calendly.com",
+"instagram_reels", "no referrer").
 
 ### Clarity — `ingestion/clarity/`
 Daily cron (`clarity_sync_cron`, `0 10 * * *`), **no backfill possible**.

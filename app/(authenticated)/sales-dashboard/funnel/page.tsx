@@ -7,6 +7,7 @@ import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '
 import { LandingPageFilter } from '@/components/sales/landing-page-filter'
 import { LANDING_PAGES } from '@/lib/db/landing-pages'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
+import { getAdsetNameMap } from '@/lib/db/cortana-adset-names'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getFunnelCash } from '@/lib/db/funnel-cash'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
@@ -59,7 +60,12 @@ export default async function SalesDashboardFunnelPage({
     // Digital College funnel — tag-driven, unique leads only, same window as HT.
     getDcFunnel(range),
   ])
-  const hierarchy = buildAdHierarchy(allRows)
+  // Ad-set names (cortana_adset_daily) for the cascade's Ad Set dropdown —
+  // scoped to the ids present in the cohort so the read stays small.
+  const adsetNames = await getAdsetNameMap(
+    allRows.map((r) => r.adsetId).filter((id): id is string => !!id),
+  )
+  const hierarchy = buildAdHierarchy(allRows, adsetNames)
   // Deepest active filter wins (ad > ad set > campaign); rows + funnel scope to it.
   const rows = ad
     ? allRows.filter((r) => r.adId === ad)
@@ -160,7 +166,7 @@ function byDateDescThenCount<T extends { count: number }>(name: (t: T) => string
 // first), ad sets by volume (id-only, no date); leads with no ad_id
 // (organic/direct) are omitted. Ad names collide (Meta reuses creative names) →
 // disambiguate with a short ad-id suffix.
-function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
+function buildAdHierarchy(rows: LeadRow[], adsetNames?: Map<string, string>): AdHierarchy {
   type C = { campaignName: string; count: number; adsets: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }> }
   const camps = new Map<string, C>()
   const adsetsAll = new Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }>()
@@ -199,7 +205,7 @@ function buildAdHierarchy(rows: LeadRow[]): AdHierarchy {
   }
   const adsetNodes = (m: Map<string, { count: number; ads: Map<string, { adName: string; count: number }> }>): AdsetNode[] =>
     Array.from(m.entries())
-      .map(([adsetId, v]) => ({ adsetId, count: v.count, ads: dedupeAds(v.ads) }))
+      .map(([adsetId, v]) => ({ adsetId, adsetName: adsetNames?.get(adsetId), count: v.count, ads: dedupeAds(v.ads) }))
       .sort((x, y) => y.count - x.count)
   return {
     campaigns: Array.from(camps.entries())

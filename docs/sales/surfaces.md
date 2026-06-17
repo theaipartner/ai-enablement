@@ -19,8 +19,8 @@ connected → booked → confirmed → showed → closed; `confirmed` only on Di
 - the **integrity-guard banner** (flags `books ≥ connected ≥ confirms ≥ shows ≥ closes`
   violations),
 - the **Campaign → Ad Set → Ad cascade filter** (three dependent dropdowns; the deepest
-  selection scopes the whole funnel — see `data-model.md` § cascade. Ad Set shows the id,
-  no name/spend),
+  selection scopes the whole funnel — see `data-model.md` § cascade. All three
+  levels are named with spend/ROAS, including Ad Set since migration 0089),
 - the **adspend** node → Ads page, and a header link → Landing Pages.
 
 ### `/funnel/revival`

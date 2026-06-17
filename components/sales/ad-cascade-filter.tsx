@@ -7,12 +7,13 @@ import type { ChangeEvent } from 'react'
 // re-scopes the whole HT funnel (and the rosters its stages link to) to that
 // entity's leads, and clears the downstream selections. URL-param driven
 // (?campaign / ?adset / ?ad), preserving the window; persisted by
-// PersistPageState. Campaign + Ad show names; Ad Set shows the id (no Cortana
-// ad-set feed → no name). The option lists cascade: ad sets reflect the chosen
-// campaign, ads reflect the chosen ad set.
+// PersistPageState. All three levels show names; ad-set names come from the
+// cortana_adset_daily medium mirror (an ad set with no name row falls back to
+// its id). The option lists cascade: ad sets reflect the chosen campaign, ads
+// reflect the chosen ad set.
 
 export type AdNode = { adId: string; adName: string; count: number }
-export type AdsetNode = { adsetId: string; count: number; ads: AdNode[] }
+export type AdsetNode = { adsetId: string; adsetName?: string; count: number; ads: AdNode[] }
 export type CampaignNode = { campaignId: string; campaignName: string; count: number; adsets: AdsetNode[] }
 export type AdHierarchy = { campaigns: CampaignNode[]; adsetsAll: AdsetNode[]; adsAll: AdNode[] }
 
@@ -91,7 +92,7 @@ export function AdCascadeFilter({
         <option value="">All ad sets</option>
         {adsetOptions.map((a) => (
           <option key={a.adsetId} value={a.adsetId}>
-            {a.adsetId} ({a.count})
+            {a.adsetName ?? a.adsetId} ({a.count})
           </option>
         ))}
       </select>

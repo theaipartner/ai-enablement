@@ -194,14 +194,18 @@ through, so a drill keeps the selection.
 | Level | Filter key | Name source | Spend / ROAS source |
 |-------|-----------|-------------|---------------------|
 | Campaign | `campaign_id` | `utm_campaign` (+ `cortana_campaign_daily.entity_name`) | `cortana_campaign_daily.spent` |
-| Ad Set | `adset_id` | **none** — UI shows the numeric id | **none** |
+| Ad Set | `adset_id` | `cortana_adset_daily.entity_name` (`getAdsetNameMap`) | `cortana_adset_daily.spent` |
 | Ad | `ad_id` | `ad_name` (+ `cortana_ad_daily.entity_name`) | `cortana_ad_daily.spent` |
 
-⚠️ **The ad-set gap:** there is **no Cortana ad-set feed** (only per-campaign and per-ad
-daily tables), so ad sets have **neither a name nor spend** — the dropdown shows the id and
-the ROAS line reads "—" when an ad set is the active filter. The fix is a **Cortana ad-set
-export** (Zain), mirrored like the ad/campaign feeds; then the cascade is fully named with
-ad-set ROAS. No Meta API access exists either (everything is via the Cortana → Sheet path).
+**Ad-set names + spend (closed 2026-06-17, migration 0089).** The cascade's Ad Set level
+is fully named with spend/ROAS, via `cortana_adset_daily` — a per-ad-set mirror sourced from
+Cortana's **`groupBy=medium`** feed. The API has no native ad-set grouping, but Meta's URL
+template puts the ad-set name in `utm_medium` and Cortana keys each medium row to the real
+Meta ad-set id (`platformEntityId`), which joins `close_leads.adset_id` (21/22 cohort ad sets
+matched; the miss is a junk `{{adset.id}}` macro). Per-ad-set `spent` partitions total spend
+to the cent against the campaign + ad feeds. Ingestion keeps only numeric-`platformEntityId`
+rows (drops the organic/placement noise the medium grouping also emits). No Zain export and
+no Meta API access needed after all.
 
 ### Coverage / "unattributed"
 
@@ -247,7 +251,7 @@ This is the list the upcoming table audit works from.
 | `meta_ad_daily` | account-level daily Meta spend (Cortana-fed) | Ads page, adspend fallback |
 | `cortana_ad_daily` | per-ad daily attribution + spend | Ads page, funnel cascade (per-ad ROAS) |
 | `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
-| **(no ad-set table)** | — | the cascade's Ad Set level has no name/spend; needs a Cortana ad-set feed |
+| `cortana_adset_daily` | per-ad-set daily (from `groupBy=medium`) — ad-set name + spend | funnel cascade Ad Set level (name + per-ad-set ROAS) |
 | `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |
