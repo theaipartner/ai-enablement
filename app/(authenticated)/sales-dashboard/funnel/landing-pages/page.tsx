@@ -5,7 +5,6 @@ import {
 } from '@/components/sales/stage-detail'
 import { Sparkline } from '@/components/sales/sparkline'
 import {
-  getLpClarityMetrics,
   getVslMetrics,
   getTypVideoMetrics,
   VSL_OPTIONS,
@@ -17,7 +16,6 @@ import {
   clampAdsRange,
 } from '@/lib/db/funnel-ads'
 import { getTypeformMetrics, type TypeformMetrics } from '@/lib/db/funnel-typeform'
-import { getDirectBookings, type DirectBookings } from '@/lib/db/funnel-calendly'
 import type { AggMetric } from '@/lib/db/funnel-mocks'
 import { compactCount } from '@/lib/db/sales-dashboard-shared'
 import {
@@ -35,14 +33,15 @@ import { VslSelector } from './vsl-selector'
 
 // Funnel · Landing Page — consolidated detail page.
 //
-// One page for the entire LP stage. Sections, top to bottom:
-//   1. Headline: LP visits + 14-day sparkline
-//   2. Clarity: LP visits, avg time on page (windowed isolation)
+// One page for the selected landing page. Sections, top to bottom:
+//   1. Headline: LP visits (Meta unique link clicks) + 14-day sparkline
+//   2. LP conversion: Typeform submits ÷ LP visits
 //   3. VSL on LP: Wistia play rate + avg view duration + 14-day plays sparkline
-//   4. Confirmation video (TYP): same metrics, different hashed_id
+//   4. Confirmation / thank-you video: same metrics, different hashed_id
 //   5. Typeform: submits, qualified vs non-qualified, avg time to complete
-//   6. Calendly: closer bookings (round-robin "AI Partner Strategy Call" team URL)
-//   7. Per-LP table: Clarity breakdown across all url_paths Clarity sees
+//
+// Clarity (time-on-page) and Calendly (closer bookings) were removed
+// 2026-06-16 — we've stopped using Clarity and are moving off Calendly.
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -62,25 +61,20 @@ export default async function FunnelLandingPagesPage({
 
   // LP visits = Meta unique link clicks (Drake 2026-05-27 — keeps
   // a single source of truth across Pulse + this LP detail page).
-  // Clarity still drives the time-on-page section below.
   const adsRange = clampAdsRange(range.startEtDate, range.endEtDate)
 
   const [
-    clarity,
     ads,
     visitsTrend7d,
     vsl,
     typVideo,
     typeform,
-    calendly,
   ] = await Promise.all([
-    getLpClarityMetrics(range),
     getAdsAggregateLive(adsRange),
     getAdsUniqueClicksTrend7d(),
     getVslMetrics(range, vslHashedId),
     getTypVideoMetrics(range),
     getTypeformMetrics(range),
-    getDirectBookings(range),
   ])
 
   const todayEt = todayEtDate()
@@ -114,7 +108,7 @@ export default async function FunnelLandingPagesPage({
       }
       personPill={<PersonPill label="EST · Nabeel" />}
     >
-      <MetricsGrid metrics={buildLpMetrics(clarity, metaUniqueClicks, typeform)} columns={3} />
+      <MetricsGrid metrics={buildLpMetrics(metaUniqueClicks, typeform)} columns={1} />
 
       <VideoSection
         eyebrow="VSL ON LANDING PAGE"
@@ -132,10 +126,6 @@ export default async function FunnelLandingPagesPage({
 
       <StageSection eyebrow="TYPEFORM · LEADS" title="Starts and completions on the SFedWelr coaching application.">
         <TypeformBlock typeform={typeform} />
-      </StageSection>
-
-      <StageSection eyebrow="CALENDLY · CLOSER BOOKINGS" title='Round-robin "AI Partner Strategy Call" team URL.'>
-        <CalendlyBlock calendly={calendly} />
       </StageSection>
       </StageDetailLayout>
     </>
@@ -179,43 +169,22 @@ function formatMonthDay(etDate: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Clarity metrics block
+// LP conversion metric
 // ---------------------------------------------------------------------------
 
-// LP-detail metric grid — time-on-page (Clarity) + LP conversion
-// (Meta unique-clicks → Typeform submits). The headline tile above
-// shows LP visits (Meta unique link clicks) so we don't repeat it
-// here. LP conversion fills the 3rd slot of the 3-column grid,
-// directly under the headline. Drake 2026-05-27 — conversion is
+// LP-detail metric grid — LP conversion (Meta unique-clicks → Typeform
+// submits). The headline tile above shows LP visits (Meta unique link
+// clicks) so we don't repeat it here. Drake 2026-05-27 — conversion is
 // submits/visits, not bookings/visits (bookings come later in the
-// funnel and have their own conversion view).
+// funnel and have their own conversion view). The two Clarity
+// time-on-page tiles were removed 2026-06-16 (Clarity retired).
 function buildLpMetrics(
-  c: {
-    avgTimeOnLpSec: number | null
-    avgTimeOnTypSec: number | null
-    canonicalPath: string
-    canonicalTypPath: string
-  },
   metaUniqueClicks: number,
   typeform: TypeformMetrics,
 ): AggMetric[] {
   const lpConversion =
     metaUniqueClicks > 0 ? (typeform.submits / metaUniqueClicks) * 100 : null
   return [
-    {
-      id: 'avg-time',
-      label: 'Average time on landing page',
-      value: c.avgTimeOnLpSec,
-      format: 'duration_seconds',
-      note: `Clarity active-time ÷ sessions · path ${c.canonicalPath}`,
-    },
-    {
-      id: 'avg-time-typ',
-      label: 'Average time on thank-you page',
-      value: c.avgTimeOnTypSec,
-      format: 'duration_seconds',
-      note: `Clarity active-time ÷ sessions · path ${c.canonicalTypPath}`,
-    },
     {
       id: 'lp-conversion',
       label: 'LP conversion',
@@ -454,52 +423,5 @@ function formatStampShort(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(iso)) + ' ET'
-}
-
-// ---------------------------------------------------------------------------
-// Calendly closer-bookings block
-// ---------------------------------------------------------------------------
-
-function CalendlyBlock({ calendly }: { calendly: DirectBookings }) {
-  return (
-    <div>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: 1,
-          background: 'var(--color-geg-border)',
-          border: '1px solid var(--color-geg-border)',
-          borderRadius: 10,
-          overflow: 'hidden',
-        }}
-      >
-        {/* Direct bookings = the "Ai Partner Strategy Call" funnel link
-            only. Total spans the row; the day-out split (today / +1 / +2,
-            the only options Calendly offers) replaced active/canceled
-            per Drake 2026-05-29. */}
-        <div style={{ gridColumn: '1 / -1' }}>
-          <VideoMetricCellTrend label="Direct bookings created (14-day)" total={calendly.total} trend={calendly.trend} />
-        </div>
-        <VideoMetricCell label="Booked today" value={compactCount(calendly.today)} />
-        <VideoMetricCell label="Booked 1 day out" value={compactCount(calendly.oneDayOut)} />
-        <VideoMetricCell label="Booked 2 days out" value={compactCount(calendly.twoDaysOut)} />
-      </div>
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.12em',
-          color: 'var(--color-geg-text-faint)',
-          marginTop: 10,
-        }}
-      >
-        Direct = the funnel self-book link “Ai Partner Strategy Call”
-        (event type <code>8f6795d3…</code>). Excludes the Aman-solo
-        “AI Partner Strategy Call”, the period variant, and setter-led
-        “Partnership Call w/ …” bookings. Live via the Calendly webhook.
-      </div>
-    </div>
-  )
 }
 
