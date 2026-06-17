@@ -44,7 +44,7 @@ const CANONICAL_TYP_PATH = '/lp-confirmation'
 //
 // VSL on the LP: "VSL Vídeo Motion - Nabeel (Horizontal) Direct Closer
 //   Funnel" (primary) + the v2 variant. TYP (confirmation page) video:
-//   "3 - Nabeel - Confirm Video".
+//   "V2 precall shortened".
 const DEFAULT_VSL_HASHED_ID = HIGH_TICKET_PRIMARY_VSL_HASHED_ID
 const TYP_HASHED_ID = HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID
 
@@ -211,6 +211,8 @@ type WistiaRow = {
   play_rate: number | null
   played_time_seconds: number | null
   plays_filtered: number | null
+  unique_visitors: number | null
+  engagement_rate: number | null
   // `updated_at`, NOT `synced_at`. The upsert in the pipeline doesn't
   // include synced_at in its update set, so synced_at on existing
   // rows is frozen at INSERT time (typically backfill). `updated_at`
@@ -226,7 +228,7 @@ async function loadWistiaRows(hashedIds: string[], range: DateRange): Promise<Wi
   const sb = createAdminClient()
   const { data, error } = await sb
     .from('wistia_media_daily' as never)
-    .select('hashed_id, day, play_rate, played_time_seconds, plays_filtered, updated_at')
+    .select('hashed_id, day, play_rate, played_time_seconds, plays_filtered, unique_visitors, engagement_rate, updated_at')
     .in('hashed_id', hashedIds)
     .gte('day', range.startEtDate)
     .lte('day', range.endEtDate)
@@ -234,7 +236,10 @@ async function loadWistiaRows(hashedIds: string[], range: DateRange): Promise<Wi
   return (data ?? []) as unknown as WistiaRow[]
 }
 
-function sumW(rows: WistiaRow[], field: 'played_time_seconds' | 'plays_filtered'): number {
+function sumW(
+  rows: WistiaRow[],
+  field: 'played_time_seconds' | 'plays_filtered' | 'unique_visitors',
+): number {
   let total = 0
   for (const r of rows) {
     const v = r[field]
@@ -243,23 +248,23 @@ function sumW(rows: WistiaRow[], field: 'played_time_seconds' | 'plays_filtered'
   return total
 }
 
-// Volume-weighted play_rate across rows. Each row's play_rate is a
-// 0-1 fraction (plays / unique_loads). Weighting by plays_filtered
-// gives a play-volume-weighted average; per the schema doc this is
-// the recommended cross-row aggregation.
-function weightedPlayRate(rows: WistiaRow[]): number | null {
+// Volume-weighted 0-1 rate across rows, weighted by plays_filtered. Used
+// for both play_rate (plays / unique_loads) and engagement_rate (avg %
+// of the video watched). Per the schema doc, weighting these by play
+// volume is the recommended cross-row aggregation.
+function weightedRate(rows: WistiaRow[], field: 'play_rate' | 'engagement_rate'): number | null {
   let totalWeighted = 0
   let totalWeight = 0
   for (const r of rows) {
     const w = r.plays_filtered
-    const p = r.play_rate
+    const p = r[field]
     if (typeof p !== 'number' || !Number.isFinite(p)) continue
     if (typeof w === 'number' && Number.isFinite(w) && w > 0) {
       totalWeighted += p * w
       totalWeight += w
     } else {
-      // Day with engagement metadata but no plays_filtered — count
-      // with weight 1 so it still contributes.
+      // Day with rate metadata but no plays_filtered — count with
+      // weight 1 so it still contributes.
       totalWeighted += p
       totalWeight += 1
     }
@@ -270,8 +275,11 @@ function weightedPlayRate(rows: WistiaRow[]): number | null {
 export type VideoMetrics = {
   label: string
   hashedId: string
+  visits: number                     // sum of unique_visitors
   playRate: number | null            // 0-1 fraction
-  avgViewDurationSec: number | null  // seconds per play
+  timePlayedSec: number              // sum of played_time_seconds
+  engagementRate: number | null      // 0-1 fraction, volume-weighted
+  avgViewDurationSec: number | null  // seconds per play (we derive)
   totalPlays: number                 // sum of plays_filtered
   trendPlays: number[]               // last 14 days
   // ISO timestamp of the most recent cron pull that touched a row in
@@ -288,8 +296,10 @@ async function getVideoMetrics(
   const windowRows = await loadWistiaRows([hashedId], range)
   const playsTotal = sumW(windowRows, 'plays_filtered')
   const playedTotal = sumW(windowRows, 'played_time_seconds')
+  const visitsTotal = sumW(windowRows, 'unique_visitors')
   const avgViewDur = playsTotal > 0 ? playedTotal / playsTotal : null
-  const playRate = weightedPlayRate(windowRows)
+  const playRate = weightedRate(windowRows, 'play_rate')
+  const engagementRate = weightedRate(windowRows, 'engagement_rate')
   // Latest updated_at across the rows in the window. Renders as a
   // "data as of" stamp. Wistia API returns settled per-day numbers
   // that the cron re-pulls every 3h, so updated_at is the honest
@@ -322,7 +332,10 @@ async function getVideoMetrics(
   return {
     label,
     hashedId,
+    visits: visitsTotal,
     playRate,
+    timePlayedSec: playedTotal,
+    engagementRate,
     avgViewDurationSec: avgViewDur,
     totalPlays: playsTotal,
     trendPlays: trend,
@@ -510,5 +523,5 @@ export async function getVslMetrics(arg: Window | DateRange, hashedId?: string):
 
 // Confirmation video (TYP-side).
 export async function getTypVideoMetrics(arg: Window | DateRange): Promise<VideoMetrics> {
-  return getVideoMetrics(TYP_HASHED_ID, '3 · Nabeel · Confirm Video', resolveRange(arg))
+  return getVideoMetrics(TYP_HASHED_ID, 'V2 precall shortened', resolveRange(arg))
 }

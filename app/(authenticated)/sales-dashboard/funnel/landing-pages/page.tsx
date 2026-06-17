@@ -218,7 +218,7 @@ function VideoSection({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1.2fr',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
           gap: 1,
           background: 'var(--color-geg-border)',
           border: '1px solid var(--color-geg-border)',
@@ -226,9 +226,12 @@ function VideoSection({
           overflow: 'hidden',
         }}
       >
-        <VideoMetricCell label="Play rate" value={video.playRate !== null ? `${(video.playRate * 100).toFixed(1)}%` : '—'} />
-        <VideoMetricCell label="Avg view duration" value={video.avgViewDurationSec !== null ? formatDuration(video.avgViewDurationSec) : '—'} />
+        <VideoMetricCell label="Visits" value={compactCount(video.visits)} />
         <VideoMetricCellTrend label="Plays (14-day trend)" total={video.totalPlays} trend={video.trendPlays} />
+        <VideoMetricCell label="Play rate" value={video.playRate !== null ? `${(video.playRate * 100).toFixed(1)}%` : '—'} />
+        <VideoMetricCell label="Time played" value={formatWatchTime(video.timePlayedSec)} />
+        <VideoMetricCell label="Engagement" value={video.engagementRate !== null ? `${(video.engagementRate * 100).toFixed(1)}%` : '—'} />
+        <VideoMetricCell label="Avg view duration" value={video.avgViewDurationSec !== null ? formatDuration(video.avgViewDurationSec) : '—'} />
       </div>
       <div
         className="geg-mono"
@@ -300,6 +303,17 @@ function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.round(sec - m * 60)
   return `${m}m ${s.toString().padStart(2, '0')}s`
+}
+
+// Total watch time ("Time played") — can run to hours across a window,
+// so roll up to h/m above an hour rather than spilling minutes.
+function formatWatchTime(sec: number): string {
+  if (sec <= 0) return '—'
+  if (sec < 60) return `${Math.round(sec)}s`
+  if (sec < 3600) return `${Math.round(sec / 60)}m`
+  const h = Math.floor(sec / 3600)
+  const m = Math.round((sec - h * 3600) / 60)
+  return `${h}h ${m.toString().padStart(2, '0')}m`
 }
 
 // ---------------------------------------------------------------------------
