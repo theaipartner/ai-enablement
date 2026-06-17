@@ -40,7 +40,7 @@ WINDOW_START_DATE = WINDOW_START.date().isoformat()
 # opt-ins across all active funnels. The historical Setter Funnel
 # (PWSNd0h2) went dormant; SFedWelr is the current active funnel.
 VSL_HASHED_IDS = ["i1173gx76b", "nbump1crwb"]
-TYP_HASHED_ID = "fbgjxwe62y"
+TYP_HASHED_ID = "4v9rok4kct"
 CLOSER_EVENT_NAMES_LOWER = ["ai partner strategy call"]
 
 

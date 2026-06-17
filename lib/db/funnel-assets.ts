@@ -28,8 +28,12 @@ export const HIGH_TICKET_VSL_HASHED_IDS = ['i1173gx76b', 'nbump1crwb'] as const
 // The primary VSL for single-video surfaces (the LP detail page default).
 export const HIGH_TICKET_PRIMARY_VSL_HASHED_ID = HIGH_TICKET_VSL_HASHED_IDS[0]
 
-// Wistia: the confirmation / thank-you-page video ("3 - Nabeel - Confirm Video").
-export const HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID = 'fbgjxwe62y'
+// Wistia: the confirmation / thank-you-page video. Wistia name
+// "V2 precall shortened". Updated 2026-06-16 from the prior
+// "3 - Nabeel - Confirm Video" (fbgjxwe62y). The same video may be
+// embedded on more than one landing page — Wistia reports per-embed,
+// so per-LP breakouts come from the embed dimension, not a new id.
+export const HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID = '4v9rok4kct'
 
 // True iff the hashed_id is one of the locked high-ticket VSL videos.
 // Use to clamp any caller-supplied id (stale link, another funnel) back to
