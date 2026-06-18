@@ -75,19 +75,21 @@ meeting-duration metrics.
 ### Setter-calls sweep
 `setter_calls_sweep_cron` (`*/15`) — keeps setter call activity current.
 
-### Engagement pinger (missing-form notifier) — ⏸ PAUSED (2026-06-16)
+### Engagement pinger (missing-form notifier) — ▶ LIVE (resumed 2026-06-19 10am ET)
 
-> **STATUS: PAUSED.** The `*/5` cron schedule was removed from `vercel.json` (commit
-> `0b0f4de`) after the first live fire (10am ET 2026-06-16) surfaced issues still being
-> worked through — so **no pings go out**. Engagement **tracking is still live** (the
-> Close- and Airtable-webhook hooks are untouched): engagements keep opening / growing /
-> closing in real time; only overdue-flip + Slack pinging are off.
+> **STATUS: LIVE.** Paused 2026-06-16 after the first live fire surfaced issues (non-rep
+> Close users leaking into pings, no way to dismiss a not-needed form). Those are fixed —
+> ping now gated to sales reps (`sales_role` setter/closer/dc_closer), @Ella-in-thread
+> dismissal, and DC closer forms end engagements. Resumed by re-adding the `*/5` cron to
+> `vercel.json` with `ENGAGEMENT_PING_FLOOR=2026-06-19T10:00:00-04:00` (clean start — the
+> ~28-form backlog flips overdue with historical timestamps below the floor, so only forms
+> going overdue at/after 10am ET 2026-06-19 ping).
 >
-> **To resume:** re-add `{ "path": "/api/engagement_ping_cron", "schedule": "*/5 * * * *" }`
-> to the `crons` array in `vercel.json`, **and reset `ENGAGEMENT_PING_FLOOR` to the resume
-> moment** (so it doesn't fire a backlog burst for everything that went overdue while
-> paused), then push. The function, its `functions`-block config, and all env vars are
-> left in place — resume is just those two changes.
+> **To pause again:** remove the `engagement_ping_cron` line from `vercel.json`'s `crons`
+> and push (kill switch (a) below). **To re-clean-start after any pause:** re-add the cron
+> line **and** reset `ENGAGEMENT_PING_FLOOR` to the resume moment so the backlog stays
+> silent, then push. The function, its `functions`-block config, and all env vars stay in
+> place across a pause — resume is just those two changes.
 
 Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a phone call.
 Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/engagements.md`

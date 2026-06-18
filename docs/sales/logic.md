@@ -77,8 +77,9 @@ The precise call↔form link (supersedes lead-level matching for the *phone* for
 setter triage + closer/confirmation triage, both Close calls). Logic in
 `shared/engagements.py`; table `engagements` (migration 0086, see
 `docs/schema/engagements.md`); ops + status in [`ingestion.md`](./ingestion.md) §
-Engagement pinger. **The matching/tracking below is live; the Slack pinger built on top
-of it is currently PAUSED (2026-06-16) — see ingestion.md for why + how to resume.**
+Engagement pinger. **Both the matching/tracking and the Slack pinger are LIVE (pinger
+resumed 2026-06-19 10am ET after the 2026-06-16 fixes) — see ingestion.md for the kill
+switch + clean-start mechanics.**
 
 **An engagement = a rep's cluster of calls to one lead toward one form** (not one call —
 back-to-back redials collapse in). Sticky tag-timestamps, set once, never cleared; read
