@@ -54,8 +54,9 @@ export default async function SalesDashboardFunnelPage({
   const dailyTablePromise = getDailyFunnelTable({ adId: ad, adsetId: adset, campaignId: campaign })
 
   // Inline Ads + Landing-Page summary (replaces the two click-through pages).
-  // Window-scoped to the funnel range; LP section follows the lp selector.
-  const adsLpPromise = getAdsLpSummary(range, lp)
+  // Window-scoped to the funnel range. The ads block follows the ad cascade;
+  // the landing-page block follows the lp selector — scoped separately.
+  const adsLpPromise = getAdsLpSummary(range, lp, { adId: ad, adsetId: adset, campaignId: campaign })
 
   // Cohort → roster rows fetched CONCURRENTLY with the Digital College funnel
   // (independent). The ad filter then narrows the rows in-memory and the HT

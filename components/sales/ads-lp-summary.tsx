@@ -21,6 +21,16 @@ function fmtDuration(sec: number | null): string {
   return `${m}m ${s.toString().padStart(2, '0')}s`
 }
 
+// Total watch time can run to hours across a window — roll up above an hour.
+function fmtWatch(sec: number): string {
+  if (sec <= 0) return '—'
+  if (sec < 60) return `${Math.round(sec)}s`
+  if (sec < 3600) return `${Math.round(sec / 60)}m`
+  const h = Math.floor(sec / 3600)
+  const m = Math.round((sec - h * 3600) / 60)
+  return `${h}h ${m.toString().padStart(2, '0')}m`
+}
+
 export function AdsLpSummarySection({ summary }: { summary: AdsLpSummary }) {
   const { ads, typeform, vsl, typVideo } = summary
   return (
@@ -58,20 +68,23 @@ export function AdsLpSummarySection({ summary }: { summary: AdsLpSummary }) {
 
         {/* Videos */}
         <Block title="Videos">
-          <VideoRows label="VSL on LP" v={vsl} />
+          <Divider label="VSL on LP" />
+          <VideoRows v={vsl} />
           <Divider label="Confirmation video" />
-          <VideoRows label="" v={typVideo} compact />
+          <VideoRows v={typVideo} />
         </Block>
       </div>
     </div>
   )
 }
 
-function VideoRows({ label, v, compact }: { label: string; v: VideoMetrics; compact?: boolean }) {
+function VideoRows({ v }: { v: VideoMetrics }) {
   return (
     <>
-      {label && !compact ? <Divider label={label} /> : null}
+      <Row label="Visits" value={fmtCount(v.visits)} />
+      <Row label="Plays" value={fmtCount(v.totalPlays)} />
       <Row label="Play rate" value={v.playRate != null ? `${(v.playRate * 100).toFixed(1)}%` : '—'} />
+      <Row label="Time played" value={fmtWatch(v.timePlayedSec)} />
       <Row label="Engagement" value={fmtFrac(v.engagementRate)} />
       <Row label="Avg view duration" value={fmtDuration(v.avgViewDurationSec)} />
     </>
