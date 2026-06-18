@@ -8,6 +8,10 @@ redials collapse in) that expects one form. The sticky-tag lifecycle:
   OVERDUE 45 min of silence pass with no form -> overdue_at set; the call-set is
           now frozen (a later call starts a NEW engagement) and pinging begins.
   FINAL   a form for (lead, rep) links to the oldest open engagement.
+  DISMISSED a rep @-mentions Ella in the ping's Slack thread -> dismissed_at set;
+          pinging stops. For the genuinely-form-not-needed case (e.g. a lead
+          calling for tech support). Distinct from FINAL so a dismissal is never
+          counted as a filed form.
 
 Writers: api/close_events.py (open/grow, real-time), api/airtable_events.py
 (final, real-time), and a cron (flip_overdue + due_pings). All connect via
@@ -277,9 +281,16 @@ def run_ping_cycle(dry_run: bool = False) -> dict[str, Any]:
                 continue
             res = post_message(channel, text)
             if res.get("ok"):
+                # Record this ping's Slack ts so a thread reply (@Ella) can map
+                # back to this engagement to dismiss it. Guard the null-ts case.
+                ts = res.get("ts")
                 cur.execute(
-                    "update engagements set last_pinged_at=now(), ping_count=ping_count+1 where id=%s",
-                    (eid,),
+                    """update engagements
+                       set last_pinged_at=now(), ping_count=ping_count+1,
+                           ping_ts = case when %s is null then ping_ts
+                                          else array_append(ping_ts, %s) end
+                       where id=%s""",
+                    (ts, ts, eid),
                 )
                 conn.commit()
                 sent.append({"engagement": str(eid), "ok": True})
@@ -315,10 +326,80 @@ def due_pings(cur, floor_iso: str | None = None, ping_gap_min: int = PING_GAP_MI
              on tm.close_user_id = e.rep_user_id and tm.archived_at is null
             and tm.sales_role in ('setter', 'closer', 'dc_closer')
            left join close_leads l on l.close_id = e.lead_id
-           where e.overdue_at is not null and e.final_at is null and e.rep_slack_id is not null
+           where e.overdue_at is not null and e.final_at is null and e.dismissed_at is null
+             and e.rep_slack_id is not null
              and (%s::timestamptz is null or e.overdue_at >= %s::timestamptz)
              and (e.last_pinged_at is null or now() - e.last_pinged_at >= make_interval(mins => %s))
            order by e.anchor_at asc""",
         (floor_iso, floor_iso, ping_gap_min),
     )
     return cur.fetchall()
+
+
+# --------------------------------------------------------------------------- #
+# DISMISS — a rep @-mentions Ella in a ping thread: the form isn't needed      #
+# --------------------------------------------------------------------------- #
+def _strip_mentions(text: str) -> str:
+    """Drop Slack <@U...> mention tokens, leaving the rep's free text (the
+    dismiss note). May be empty — a bare @Ella with no words still dismisses."""
+    return re.sub(r"<@[^>]+>", "", text or "").strip()
+
+
+def handle_dismissal_mention(event: dict[str, Any]) -> dict[str, Any]:
+    """A rep @-mentioned Ella inside a missing-form ping's Slack thread → mark
+    that engagement dismissed (form genuinely not needed) and stop pinging.
+
+    `event` is the Slack `app_mention` event. The reply's `thread_ts` maps to
+    the engagement via its recorded ping ts (`ping_ts`). Stamps `dismissed_at`,
+    stores the rep's text as `dismiss_reason` (may be blank), and acks in-thread.
+    Never raises (called fail-soft from the webhook). A mention that isn't a
+    thread reply to a known ping is a logged no-op — it's some other chatter."""
+    import logging
+
+    thread_ts = event.get("thread_ts")
+    user = event.get("user")
+    channel = event.get("channel")
+    if not thread_ts or not channel:
+        return {"dismissed": False, "reason": "not_a_thread_reply"}
+
+    reason = _strip_mentions(event.get("text") or "")
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """select e.id, coalesce(l.display_name, e.lead_id)
+               from engagements e
+               left join close_leads l on l.close_id = e.lead_id
+               where %s = any(e.ping_ts)
+                 and e.dismissed_at is null and e.final_at is null
+               limit 1""",
+            (thread_ts,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"dismissed": False, "reason": "no_matching_ping", "thread_ts": thread_ts}
+        eid, lead_name = row
+        cur.execute(
+            "update engagements set dismissed_at=now(), dismissed_by=%s, dismiss_reason=%s where id=%s",
+            (user, reason or None, eid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Ack in-thread so the rep sees it landed (fail-soft — never block on this).
+    try:
+        from shared.slack_post import post_message
+
+        post_message(
+            channel,
+            f"✅ Got it — marked *{lead_name}* not-needed. No more pings.",
+            thread_ts=thread_ts,
+        )
+    except Exception as exc:  # pragma: no cover — ack is best-effort
+        logging.getLogger("ai_enablement.engagements").warning(
+            "dismissal ack failed engagement=%s: %s", eid, exc
+        )
+
+    return {"dismissed": True, "engagement": str(eid), "thread_ts": thread_ts}

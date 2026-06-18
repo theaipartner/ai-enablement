@@ -97,6 +97,13 @@ Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/
   its oldest open engagement, guarded against re-using an already-linked form).
 - **Overdue + ping** — `api/engagement_ping_cron.py` (`*/5` when scheduled, `CRON_SECRET`-auth).
   Flips overdue every tick; pings only inside **10am–10pm ET** (gate in code, DST-safe).
+  Each ping records its Slack `ts` in `engagements.ping_ts`.
+- **Dismiss** — `api/slack_events.py` (the existing Ella Slack webhook). A rep @-mentions
+  Ella in a ping's **thread** when the form isn't needed; the `app_mention` event routes to
+  `handle_dismissal_mention`, which matches `thread_ts` → `ping_ts`, stamps `dismissed_at`,
+  and acks in-thread. The sales channel is intercepted before Ella's client passive-monitor.
+  No Slack-app reconfig was needed — message/app_mention events from the public sales
+  channel already reach the webhook (verified in `webhook_deliveries`).
 
 **Env (Vercel):** `SALES_FORM_NOTIFY_SLACK_CHANNEL` (the channel — currently `C0BBQAE7BA4`),
 `ENGAGEMENT_PING_FLOOR` (go-live timestamp — only engagements overdue at/after it are pinged;

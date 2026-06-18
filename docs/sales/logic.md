@@ -100,6 +100,12 @@ the tags for state (like `lead_cycle_stages`):
   (FIFO), set once. Rep resolves from the form's `setter_record_ids` →
   `team_members.airtable_user_id` → `close_user_id`. A form matching no open engagement
   stays unlinked → the review pile (off-Close ~6-8%, irreducible).
+- **DISMISSED** — a rep **@-mentions Ella in the ping's Slack thread** when the form is
+  genuinely not needed (e.g. a lead called for tech support, not a sales call). The
+  reply's `thread_ts` matches the engagement's recorded `ping_ts` → `dismissed_at` set,
+  pinging stops, the rep's text stored as `dismiss_reason`. Thread-reply only (so it
+  isn't confused for another ping); whatever they type — or a bare @Ella — dismisses.
+  Kept **distinct from FINAL** so a dismissal is never counted as a filed form.
 
 **Form-link routing (which link the ping sends):** closer-triage link **only** when the
 lead's latest cycle is *currently direct* — `became_direct_at` set **AND** `reactive_at`

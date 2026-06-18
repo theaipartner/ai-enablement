@@ -122,7 +122,17 @@ class handler(BaseHTTPRequestHandler):
 
         if payload.get("type") == "event_callback":
             event = payload.get("event") or {}
-            if event.get("type") == "app_mention":
+            sales_channel = os.environ.get("SALES_FORM_NOTIFY_SLACK_CHANNEL", "").strip()
+            if (
+                event.get("type") == "app_mention"
+                and sales_channel
+                and event.get("channel") == sales_channel
+            ):
+                # Sales form-notify channel: an @Ella mention here is a rep
+                # dismissing a missing-form ping (form genuinely not needed).
+                # Route to the engagement dismisser, NOT Ella's client monitor.
+                _handle_engagement_dismissal(event)
+            elif event.get("type") == "app_mention":
                 # Unified-path refactor (2026-05-18 PM): the reactive
                 # path is GONE. Slack fires a parallel `message` event
                 # alongside every `app_mention` (the app is subscribed
@@ -138,12 +148,18 @@ class handler(BaseHTTPRequestHandler):
                     event.get("user"),
                 )
             elif event.get("type") == "message":
-                # Every message in a client channel lands in
-                # `slack_messages` and forks into the unified passive
-                # monitor (the ONLY evaluation path now — @-mentions
-                # included). Fail-soft: any exception is caught inside
-                # ingest_message_event so Slack's 200 ack still fires.
-                _ingest_message_event(payload)
+                if sales_channel and event.get("channel") == sales_channel:
+                    # Sales form-notify channel isn't a client channel — the
+                    # dismissal signal is the app_mention above, so this
+                    # message event is a no-op (skip the ingest round-trip).
+                    pass
+                else:
+                    # Every message in a client channel lands in
+                    # `slack_messages` and forks into the unified passive
+                    # monitor (the ONLY evaluation path now — @-mentions
+                    # included). Fail-soft: any exception is caught inside
+                    # ingest_message_event so Slack's 200 ack still fires.
+                    _ingest_message_event(payload)
 
         # Ack regardless of inner event type. Anything non-200 tells
         # Slack to retry, which we don't want for events we didn't
@@ -224,6 +240,20 @@ class handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
+
+
+def _handle_engagement_dismissal(event: dict[str, Any]) -> None:
+    """Forward an @Ella mention in the sales form-notify channel to the
+    engagement dismisser. A rep replies @Ella in a missing-form ping's thread
+    when the form isn't needed; that dismisses the engagement and stops pings.
+    Fail-soft: any error is logged so Slack's 200 ack still fires."""
+    try:
+        from shared.engagements import handle_dismissal_mention
+
+        result = handle_dismissal_mention(event)
+        logger.info("slack_webhook: engagement dismissal -> %s", result)
+    except Exception as exc:
+        logger.exception("slack_webhook: handle_dismissal_mention raised: %s", exc)
 
 
 def _ingest_message_event(payload: dict[str, Any]) -> None:

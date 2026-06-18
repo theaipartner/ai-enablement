@@ -11,9 +11,11 @@ Three tag columns are nullable timestamps, **set once and never cleared**. The
 current state is derived by reading them — there is no `status` column:
 
 - `final_at` set → **FINAL** (a form linked; pinging stopped).
-- `overdue_at` set, `final_at` null → **OVERDUE** (45-min silence elapsed with no
-  form; currently pinging every 15 min in business hours).
-- `final_at` null (regardless of `overdue_at`) → still **owed** a form.
+- `dismissed_at` set → **DISMISSED** (a rep marked it not-needed; pinging stopped).
+  Distinct from `final_at` so a dismissal is never counted as a filed form.
+- `overdue_at` set, `final_at` + `dismissed_at` null → **OVERDUE** (45-min silence
+  elapsed with no form; currently pinging every 15 min in business hours).
+- `final_at` + `dismissed_at` null (regardless of `overdue_at`) → still **owed** a form.
 
 The 45-min freeze is implicit: a new call only joins an engagement whose
 `last_call_at` is within 45 minutes, so once that gap passes (and `overdue_at` is
@@ -35,15 +37,20 @@ stamped) the call-set is frozen — a later call starts a NEW engagement.
 | `opened_at` | `timestamptz` | **OPEN** tag — set on creation. |
 | `overdue_at` | `timestamptz` | **OVERDUE** tag — set once when `last_call_at + 45min` passes with no form. |
 | `final_at` | `timestamptz` | **FINAL** tag — set once when a form links. |
+| `dismissed_at` | `timestamptz` | **DISMISSED** tag — set once when a rep @-mentions Ella in the ping thread to mark the form not-needed. Stops pinging; kept distinct from `final_at`. Added 0091. |
+| `dismissed_by` | `text` | Slack user id of the rep who dismissed. Added 0091. |
+| `dismiss_reason` | `text` | The rep's reply text (mention stripped; may be null for a bare @Ella). Added 0091. |
 | `form_id` | `text` | Linked Airtable form `record_id` (null until final). |
 | `form_table` | `text` | Which Airtable form table the form came from. |
 | `last_pinged_at` | `timestamptz` | 15-min ping cadence bookkeeping. |
 | `ping_count` | `integer` | Pings sent so far (visibility). |
+| `ping_ts` | `text[]` | Slack ts of every ping message posted, so a thread reply (`thread_ts`) maps back to this engagement for dismissal. Added 0091. |
 | `created_at` / `updated_at` | `timestamptz` | Bookkeeping (`updated_at` via trigger). |
 
 **Indexes:** `(lead_id, rep_user_id)` (webhook open/grow lookup) · partial
 `(overdue_at) where final_at is null` (cron + accountability read) · GIN on
-`call_ids` (call→engagement) · `(form_id) where form_id is not null`.
+`call_ids` (call→engagement) · `(form_id) where form_id is not null` · GIN on
+`ping_ts` (thread reply → engagement, for dismissal).
 
 ## Lifecycle — who writes what
 
@@ -57,8 +64,12 @@ stamped) the call-set is frozen — a later call starts a NEW engagement.
   resolves filler → `rep_user_id` (via `team_members`), closes the **oldest** open
   engagement for `(lead, rep)` → `final_at` + `form_id`. No match → form is
   unlinked (review pile).
-- **PING — cron (~5 min).** Overdue, non-final, business-hours (9am–10pm ET),
-  ≥15 min since `last_pinged_at` → Slack ping; never gives up until a form lands.
+- **PING — cron (~5 min).** Overdue, non-final, non-dismissed, business-hours
+  (10am–10pm ET), ≥15 min since `last_pinged_at` → Slack ping (records the ping ts
+  in `ping_ts`); never gives up until a form lands or the rep dismisses.
+- **DISMISS — Slack `app_mention` webhook (real-time).** A rep @-mentions Ella in a
+  ping's thread (`api/slack_events.py` → `handle_dismissal_mention`); the reply's
+  `thread_ts` matches `ping_ts` → `dismissed_at` + `dismiss_reason`. Stops pinging.
 
 ## What reads it
 
