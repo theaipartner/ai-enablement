@@ -103,8 +103,12 @@ Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/
 keeps backfilled rows silent), `SETTER_TRIAGE_FORM_URL` / `CLOSER_TRIAGE_FORM_URL` (the
 form-fill links — Airtable form-PAGE URLs `…/pag…/form`, not the table id; both forms write
 the same table `tblaoMsiE3FSkHjQt`). Reuses `SLACK_BOT_TOKEN` (Ella) — she must be **in the
-channel**. A rep is pingable only with a `team_members.slack_user_id` (and `close_user_id`
-for the call→rep match).
+channel**. A rep is pingable only when they are a **sales rep** — `team_members.sales_role`
+in `setter`/`closer`/`dc_closer` (gated in `due_pings` via a join on `close_user_id`) — AND
+carry a `team_members.slack_user_id` (and `close_user_id` for the call→rep match). The
+sales-role gate keeps non-rep Close users out of the channel: Nabeel/Scott (leadership) and
+Ellis (ops) all have Close accounts but no `sales_role`, so they never ping even though
+engagements still track for everyone.
 
 **Two kill switches** (both need a redeploy to take effect): (a) **remove the cron line**
 from `vercel.json` — the current pause; stops the cron entirely (overdue-flip + pings). (b)

@@ -300,11 +300,20 @@ def due_pings(cur, floor_iso: str | None = None, ping_gap_min: int = PING_GAP_MI
     """Engagements due for a ping right now: overdue, no form, slack id known,
     >=gap since last ping, and (the go-live floor) overdue at/after `floor_iso` —
     so the backfilled-overdue engagements are never pinged. Returns rows of
-    (id, lead_id, rep_name, rep_slack_id, anchor_at, ping_count, lead_name)."""
+    (id, lead_id, rep_name, rep_slack_id, anchor_at, ping_count, lead_name).
+
+    Only **sales reps** are pinged: the engagement's rep must map to a current
+    team_members row with sales_role in setter/closer/dc_closer. This keeps
+    non-rep Close users out of the channel — Nabeel/Scott (leadership) and Ellis
+    (ops) all have Close accounts and would otherwise leak in. Tracking still
+    opens engagements for everyone; only the ping channel is gated."""
     cur.execute(
         """select e.id, e.lead_id, e.rep_name, e.rep_slack_id, e.anchor_at, e.ping_count,
                   coalesce(l.display_name, e.lead_id)
            from engagements e
+           join team_members tm
+             on tm.close_user_id = e.rep_user_id and tm.archived_at is null
+            and tm.sales_role in ('setter', 'closer', 'dc_closer')
            left join close_leads l on l.close_id = e.lead_id
            where e.overdue_at is not null and e.final_at is null and e.rep_slack_id is not null
              and (%s::timestamptz is null or e.overdue_at >= %s::timestamptz)

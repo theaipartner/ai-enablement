@@ -92,6 +92,10 @@ the tags for state (like `lead_cycle_stages`):
   rolls the window. Once 45 min of silence pass the call-set is **frozen** — a later call
   starts a NEW engagement (so an engagement can't span a gap, let alone days).
 - **OVERDUE** — 45-min silence with no form → `overdue_at` set; the pinger takes over.
+  Only **sales reps** are pinged: the rep must map to a `team_members` row with `sales_role`
+  in `setter`/`closer`/`dc_closer` (gated in `due_pings`). Non-rep Close users —
+  Nabeel/Scott (leadership), Ellis (ops) — have Close accounts but no `sales_role`, so they
+  track engagements but never ping.
 - **FINAL** — a triage form for `(lead, rep)` links to the **oldest** open engagement
   (FIFO), set once. Rep resolves from the form's `setter_record_ids` →
   `team_members.airtable_user_id` → `close_user_id`. A form matching no open engagement
