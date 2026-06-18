@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { HeaderBand } from '@/components/gregory/header-band'
 import { FunnelStack } from '@/components/sales/funnel-stack'
 import { DcFunnelSection } from '@/components/sales/dc-funnel'
@@ -12,6 +11,8 @@ import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getFunnelCash } from '@/lib/db/funnel-cash'
 import { getDailyFunnelTable } from '@/lib/db/funnel-daily'
 import { DailyFunnelTable } from '@/components/sales/daily-funnel-table'
+import { getAdsLpSummary } from '@/lib/db/funnel-summary'
+import { AdsLpSummarySection } from '@/components/sales/ads-lp-summary'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { todayEtDate } from '@/lib/db/funnel-window'
@@ -52,6 +53,10 @@ export default async function SalesDashboardFunnelPage({
   // with the funnel's own fetches; awaited at render.
   const dailyTablePromise = getDailyFunnelTable({ adId: ad, adsetId: adset, campaignId: campaign })
 
+  // Inline Ads + Landing-Page summary (replaces the two click-through pages).
+  // Window-scoped to the funnel range; LP section follows the lp selector.
+  const adsLpPromise = getAdsLpSummary(range, lp)
+
   // Cohort → roster rows fetched CONCURRENTLY with the Digital College funnel
   // (independent). The ad filter then narrows the rows in-memory and the HT
   // funnel re-scopes for free — getLeadsFunnel counts only the leads passed in,
@@ -89,11 +94,7 @@ export default async function SalesDashboardFunnelPage({
   // campaign). ROAS renders on the Total box only (window adspend → whole cohort).
   const cash = await getFunnelCash(range, rows, funnel.adspendUsd, { excludeDc: filterActive })
 
-  const dailyRows = await dailyTablePromise
-
-  const lpHref =
-    `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}` +
-    (lp ? `&lp=${lp}` : '')
+  const [dailyRows, adsLp] = await Promise.all([dailyTablePromise, adsLpPromise])
 
   return (
     <div>
@@ -104,23 +105,6 @@ export default async function SalesDashboardFunnelPage({
           force a horizontal scroll, and there's room for more dropdowns later
           (Drake 2026-06-15). flexWrap lets them drop to a second line. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 16 }}>
-        <Link
-          href={lpHref}
-          className="geg-mono"
-          style={{
-            fontSize: 11,
-            letterSpacing: '0.06em',
-            color: 'var(--color-geg-text-2)',
-            textDecoration: 'none',
-            border: '1px solid var(--color-geg-border)',
-            borderRadius: 6,
-            padding: '6px 12px',
-            background: 'var(--color-geg-bg-elev)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Landing pages →
-        </Link>
         <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
         <LandingPageFilter options={LANDING_PAGES.map((p) => ({ slug: p.slug, label: p.label }))} selected={lp} />
         <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
@@ -132,11 +116,13 @@ export default async function SalesDashboardFunnelPage({
 
       <DailyFunnelTable rows={dailyRows} />
 
+      <AdsLpSummarySection summary={adsLp} />
+
       <div
         className="geg-mono"
         style={{ marginTop: 20, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', textAlign: 'center' }}
       >
-        Click any stage to open the matching leads · adspend opens the ads page
+        Click any stage to open the matching leads
       </div>
     </div>
   )

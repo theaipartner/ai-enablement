@@ -31,11 +31,6 @@ function leadsHref(range: Range, type: LeadFilterType | null, stage: FunnelStage
   return `/sales-dashboard/leads?${p.toString()}`
 }
 
-function adsHref(range: Range): string {
-  const p = new URLSearchParams({ start: range.startEtDate, end: range.endEtDate })
-  return `/sales-dashboard/funnel/ads?${p.toString()}`
-}
-
 // Dials live in a bracket beside each funnel's lead amount (not a stage), so the
 // funnel reads strictly top-down. Coats: Direct green, Setter-led ("new
 // opt-ins") yellow, Reactivation pale blue, Total neutral.
@@ -60,7 +55,6 @@ export function FunnelStack({ funnel, cash, range, ad, campaign, adset }: { funn
         cash={cash.total}
         showRoas
         adspend={funnel.adspendUsd}
-        adspendHref={adsHref(range)}
         clicks={funnel.uniqueLinkClicks}
         costBase={funnel.adspendUsd}
         stages={[
