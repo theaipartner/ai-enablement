@@ -31,10 +31,11 @@ There is exactly one "what's true right now": the current text of these files.
 
 An internal **sales analytics** dashboard. Three surfaces, flat nav:
 
-- **Funnel** — the cohort funnel (opt-ins → connected → booked → confirmed → showed →
-  closed), split Total / Direct / Setter / Reactivation, plus the Digital College
-  funnel, a Cash Collected / ROAS block, and child pages for Ads, Landing Pages, and
-  Revival.
+- **Marketing** (route `/funnel`, was "Funnel") — the cohort funnel (opt-ins → connected →
+  booked → confirmed → showed → closed), split Total / Direct / Setter / Reactivation, plus
+  the Digital College funnel, a Cash Collected / ROAS block, a **last-5-days daily table**,
+  and an **inline Ads + Landing-Page summary** (the old Ads / Landing-Pages detail pages,
+  now surfaced in-page). Revival is a nested child page.
 - **Leads** — the lead roster + filters + speed-to-lead + first-meaningful-response
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.
