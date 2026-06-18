@@ -60,10 +60,13 @@ stamped) the call-set is frozen — a later call starts a NEW engagement.
   joins an already-open engagement.
 - **OVERDUE — cron (~5 min).** Stamps `overdue_at` on non-final engagements past
   `last_call_at + 45min`.
-- **FINAL — Airtable form webhook (real-time).** A new setter/closer triage form
-  resolves filler → `rep_user_id` (via `team_members`), closes the **oldest** open
-  engagement for `(lead, rep)` → `final_at` + `form_id`. No match → form is
-  unlinked (review pile).
+- **FINAL — Airtable form webhook (real-time).** A new form resolves its filler →
+  `rep_user_id` (via `team_members`), closes the **oldest** open engagement for
+  `(lead, rep)` → `final_at` + `form_id`. Two form types end an engagement: a
+  **setter/closer triage form** (`airtable_setter_triage_calls`, rep from
+  `setter_record_ids`) and a **DC closer form** (`airtable_full_closer_report`,
+  `call_outcome` = Digital College / Digital College Closed, rep from
+  `closer_record_ids`; HT outcomes excluded). No match → form is unlinked (review pile).
 - **PING — cron (~5 min).** Overdue, non-final, non-dismissed, business-hours
   (10am–10pm ET), ≥15 min since `last_pinged_at` → Slack ping (records the ping ts
   in `ping_ts`); never gives up until a form lands or the rep dismisses.

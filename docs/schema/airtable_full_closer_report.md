@@ -138,6 +138,8 @@ All three converge on `pipeline._upsert_batch(target_table='airtable_full_closer
 
 The Engine-sheet Closing section rows 96-116 — Showed/CCMI/No-Show/Reschedule/Cancel dispositions, Total Deposits, Closed Deals (by meeting type + direct-booking-led/setter-led attribution), all five Cash Collected buckets.
 
+**Engagement FINAL.** `api/airtable_events.py` also reads this table to close missing-form engagements: a row with `call_outcome in ('Digital College', 'Digital College Closed')` ends the rep's (from `closer_record_ids`) oldest open engagement — a DC closer who closes over the phone files this instead of a triage form. HT outcomes are excluded. See `docs/schema/engagements.md` + `docs/sales/logic.md` § Engagements.
+
 Example aggregations:
 
 ```sql

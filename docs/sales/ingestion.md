@@ -93,8 +93,12 @@ Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a p
 Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/engagements.md`
 (migration 0086). Three writers:
 - **Open/grow** — fail-soft hook in `api/close_events.py` (every ≥90s outbound call).
-- **Final** — fail-soft hook in `api/airtable_events.py` (a landed triage form closes
-  its oldest open engagement, guarded against re-using an already-linked form).
+- **Final** — fail-soft hooks in `api/airtable_events.py`, two independent blocks: a
+  landed **triage form** closes its oldest open engagement, and a **DC closer form**
+  (`airtable_full_closer_report`, `call_outcome` = Digital College / Digital College
+  Closed; rep from `closer_record_ids`) does the same — a DC closer who closes over the
+  phone files this instead of a triage form. HT outcomes excluded. Both guard against
+  re-using an already-linked form. `scripts/backfill_engagements.py` replays both.
 - **Overdue + ping** — `api/engagement_ping_cron.py` (`*/5` when scheduled, `CRON_SECRET`-auth).
   Flips overdue every tick; pings only inside **10am–10pm ET** (gate in code, DST-safe).
   Each ping records its Slack `ts` in `engagements.ping_ts`.

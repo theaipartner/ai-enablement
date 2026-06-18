@@ -190,18 +190,20 @@ def open_or_grow_engagement(close_call_id: str) -> str | None:
 # FINAL — link a triage form to its engagement                                #
 # --------------------------------------------------------------------------- #
 def link_form(cur, *, form_table: str, record_id: str, lead_id: str,
-              setter_record_ids: list[str] | None, created_at) -> str | None:
-    """Link a triage form to the OLDEST open engagement for (lead, rep).
+              rep_record_ids: list[str] | None, created_at) -> str | None:
+    """Link a form to the OLDEST open engagement for (lead, rep), set FINAL.
 
-    Rep resolves from the form's setter_record_ids via team_members
-    (airtable_user_id -> close_user_id); falls back to lead-only if unresolved.
-    Returns the engagement id closed, or None if nothing matched (form stays
-    unlinked -> review pile).
+    `rep_record_ids` are the Airtable Sales-Team-Member record ids that identify
+    the rep who owes the engagement — setter triage forms pass setter_record_ids;
+    DC closer (Full Closer Report) forms pass closer_record_ids. Rep resolves via
+    team_members (airtable_user_id -> close_user_id); falls back to lead-only if
+    unresolved. Returns the engagement id closed, or None if nothing matched
+    (form stays unlinked -> review pile).
     """
     if not lead_id:
         return None
     rep = None
-    for aid in (setter_record_ids or []):
+    for aid in (rep_record_ids or []):
         cur.execute("select close_user_id from team_members where airtable_user_id=%s", (aid,))
         row = cur.fetchone()
         if row and row[0]:

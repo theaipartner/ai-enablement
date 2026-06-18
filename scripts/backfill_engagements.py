@@ -47,11 +47,32 @@ def main(days: int) -> None:
     linked = 0
     for rid, lead, srecs, created in forms:
         eid = link_form(cur, form_table="airtable_setter_triage_calls", record_id=rid,
-                        lead_id=lead, setter_record_ids=srecs, created_at=created)
+                        lead_id=lead, rep_record_ids=srecs, created_at=created)
         if eid:
             linked += 1
     conn.commit()
-    print(f"forms processed: {len(forms)}  linked: {linked}  unlinked: {len(forms)-linked}")
+    print(f"triage forms processed: {len(forms)}  linked: {linked}  unlinked: {len(forms)-linked}")
+
+    # 2b. DC closer forms (Full Closer Report, Digital College outcome) — these
+    # also close the rep's open engagement (rep from closer_record_ids).
+    cur.execute(
+        """select record_id, lead_id, closer_record_ids, setter_record_ids, airtable_created_at
+           from airtable_full_closer_report
+           where airtable_created_at >= now() - make_interval(days => %s)
+             and lead_id is not null
+             and call_outcome in ('Digital College', 'Digital College Closed')
+           order by airtable_created_at asc""",
+        (days,),
+    )
+    dc_forms = cur.fetchall()
+    dc_linked = 0
+    for rid, lead, crecs, srecs, created in dc_forms:
+        eid = link_form(cur, form_table="airtable_full_closer_report", record_id=rid,
+                        lead_id=lead, rep_record_ids=(crecs or srecs), created_at=created)
+        if eid:
+            dc_linked += 1
+    conn.commit()
+    print(f"DC closer forms processed: {len(dc_forms)}  linked: {dc_linked}  unlinked: {len(dc_forms)-dc_linked}")
 
     # 3. flip overdue
     n = flip_overdue(cur)

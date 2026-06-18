@@ -96,10 +96,14 @@ the tags for state (like `lead_cycle_stages`):
   in `setter`/`closer`/`dc_closer` (gated in `due_pings`). Non-rep Close users —
   Nabeel/Scott (leadership), Ellis (ops) — have Close accounts but no `sales_role`, so they
   track engagements but never ping.
-- **FINAL** — a triage form for `(lead, rep)` links to the **oldest** open engagement
-  (FIFO), set once. Rep resolves from the form's `setter_record_ids` →
-  `team_members.airtable_user_id` → `close_user_id`. A form matching no open engagement
-  stays unlinked → the review pile (off-Close ~6-8%, irreducible).
+- **FINAL** — a form for `(lead, rep)` links to the **oldest** open engagement (FIFO),
+  set once. Two forms end an engagement: **(a) a setter/closer triage form** (rep from
+  `setter_record_ids`), and **(b) a DC closer form** — a `airtable_full_closer_report`
+  row with `call_outcome in ('Digital College', 'Digital College Closed')`, rep from
+  `closer_record_ids` (a DC closer who closes over the phone files this instead of a
+  triage form). Outcome-based: **High Ticket outcomes never end an engagement.** Rep
+  resolves via `team_members.airtable_user_id` → `close_user_id`. A form matching no open
+  engagement stays unlinked → the review pile (off-Close ~6-8%, irreducible).
 - **DISMISSED** — a rep **@-mentions Ella in the ping's Slack thread** when the form is
   genuinely not needed (e.g. a lead called for tech support, not a sales call). The
   reply's `thread_ts` matches the engagement's recorded `ping_ts` → `dismissed_at` set,

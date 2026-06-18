@@ -269,11 +269,41 @@ class handler(BaseHTTPRequestHandler):
                 )
                 for rid, lead, srecs, created in cur.fetchall():
                     link_form(cur, form_table="airtable_setter_triage_calls", record_id=rid,
-                              lead_id=lead, setter_record_ids=srecs, created_at=created)
+                              lead_id=lead, rep_record_ids=srecs, created_at=created)
                 conn.commit()
                 conn.close()
             except Exception as exc:  # noqa: BLE001 — fail-soft by design
                 logger.warning("airtable_webhook: engagement link failed: %s", exc)
+
+        # Engagement FINAL — DC closer forms. A Full Closer Report row with a
+        # Digital College outcome closes the rep's oldest open engagement too:
+        # a DC closer who closes over the phone files this form instead of a
+        # triage form, so it should end the form obligation. Outcome-based (HT
+        # excluded); rep resolves from closer_record_ids. Fail-soft, isolated
+        # from the triage block so either can fail independently.
+        if outcome.touched_lead_ids:
+            try:
+                from shared.engagements import _connect, link_form
+
+                conn = _connect()
+                cur = conn.cursor()
+                cur.execute(
+                    """select record_id, lead_id, closer_record_ids, setter_record_ids,
+                              airtable_created_at
+                       from airtable_full_closer_report
+                       where lead_id = any(%s) and airtable_created_at is not null
+                         and call_outcome in ('Digital College', 'Digital College Closed')
+                         and record_id not in (select form_id from engagements where form_id is not null)
+                       order by airtable_created_at asc""",
+                    (list(outcome.touched_lead_ids),),
+                )
+                for rid, lead, crecs, srecs, created in cur.fetchall():
+                    link_form(cur, form_table="airtable_full_closer_report", record_id=rid,
+                              lead_id=lead, rep_record_ids=(crecs or srecs), created_at=created)
+                conn.commit()
+                conn.close()
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                logger.warning("airtable_webhook: DC closer engagement link failed: %s", exc)
         self._respond(
             200,
             {
