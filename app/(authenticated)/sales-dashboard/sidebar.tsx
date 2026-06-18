@@ -27,7 +27,7 @@ const NAV: NavItem[] = [
   // other funnel, so they get their own surface.
   {
     href: '/sales-dashboard/funnel',
-    label: 'Funnel',
+    label: 'Marketing',
     children: [{ href: '/sales-dashboard/funnel/revival', label: 'Revival' }],
   },
   // Leads = the roster of every lead opted-in in the window (new + re-opt-in),

@@ -89,7 +89,7 @@ export default async function SalesDashboardFunnelPage({
   return (
     <div>
       <PersistPageState window filters={['campaign', 'adset', 'ad', 'lp']} />
-      <HeaderBand eyebrow="SALES · FUNNEL" title="Funnel." />
+      <HeaderBand eyebrow="SALES · MARKETING" title="Marketing." />
 
       {/* Filter row — its own wrapping row below the title so the controls never
           force a horizontal scroll, and there's room for more dropdowns later
