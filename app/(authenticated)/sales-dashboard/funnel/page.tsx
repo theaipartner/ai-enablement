@@ -10,6 +10,8 @@ import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getAdsetNameMap } from '@/lib/db/cortana-adset-names'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
 import { getFunnelCash } from '@/lib/db/funnel-cash'
+import { getDailyFunnelTable } from '@/lib/db/funnel-daily'
+import { DailyFunnelTable } from '@/components/sales/daily-funnel-table'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { todayEtDate } from '@/lib/db/funnel-window'
@@ -44,6 +46,11 @@ export default async function SalesDashboardFunnelPage({
   // the "Landing pages →" button opens; the funnel-box re-scope by LP is
   // pending per-lead form attribution (see landing-page-filter.tsx).
   const lp = param(searchParams?.lp)
+
+  // Last-5-days daily table (bottom of page) — independent of the date picker,
+  // scoped to the active ad-cascade selection. Kicked off here so it overlaps
+  // with the funnel's own fetches; awaited at render.
+  const dailyTablePromise = getDailyFunnelTable({ adId: ad, adsetId: adset, campaignId: campaign })
 
   // Cohort → roster rows fetched CONCURRENTLY with the Digital College funnel
   // (independent). The ad filter then narrows the rows in-memory and the HT
@@ -81,6 +88,8 @@ export default async function SalesDashboardFunnelPage({
   // scopes to the active entity for free; under a filter DC is excluded (separate
   // campaign). ROAS renders on the Total box only (window adspend → whole cohort).
   const cash = await getFunnelCash(range, rows, funnel.adspendUsd, { excludeDc: filterActive })
+
+  const dailyRows = await dailyTablePromise
 
   const lpHref =
     `/sales-dashboard/funnel/landing-pages?start=${range.startEtDate}&end=${range.endEtDate}` +
@@ -120,6 +129,8 @@ export default async function SalesDashboardFunnelPage({
       <FunnelStack funnel={funnel} cash={cash} range={range} ad={ad} campaign={campaign} adset={adset} />
 
       {filterActive ? null : <DcFunnelSection dc={dcFunnel} />}
+
+      <DailyFunnelTable rows={dailyRows} />
 
       <div
         className="geg-mono"
