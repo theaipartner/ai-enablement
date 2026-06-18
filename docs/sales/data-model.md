@@ -145,11 +145,17 @@ the **main closer EOC form** (`airtable_full_closer_report`), not the dedicated 
 ## Revival (separate campaign — not part of the main funnel)
 
 The **DC Revival** re-engagement campaign. Leads carry `REVIVAL_CF`
-(`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P`, "DC Revival Lead") — ~2,115 today.
-They have no Typeform cycle, so they drop out of the cohort, the tagger, and every main
-funnel. The **`/funnel/revival`** sub-page is the **only** surface that counts them, and
-it reads **raw signals, no tagger**. Per-lead anchor = later of (`date_created`,
-`2026-05-24 00:00 ET`); a signal counts only if its timestamp ≥ anchor.
+(`cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P`, "DC Revival Lead") — ~10.5k and growing
+(the campaign auto-creates them daily). They have no Typeform cycle, so they drop out of the
+cohort, the tagger, and every main funnel. The **`/funnel/revival`** sub-page is the **only**
+surface that counts them, and it reads **raw signals, no tagger**. Per-lead anchor = later of
+(`date_created`, `2026-06-03 00:00 ET` — the blast start); a signal counts only if its
+timestamp ≥ anchor.
+
+A revival **close** = a closer form (old or new) carrying an explicit DC plan
+(Base/Wix × Monthly/Yearly) — plan-presence is the signal, **not** the `call_outcome`
+string (Robby over-marks "Digital College Closed"). Showed/booked read the closer/triage
+forms directly and were always correct.
 
 Don't confuse **Revival** (this campaign) with **Reactivation** (a unique lead that lost
 its strategy-call spot — a `lead_cycles` flag, part of the main funnel).
