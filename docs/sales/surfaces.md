@@ -43,6 +43,13 @@ first-meaningful-response (FMR) chart — all window- and filter-scoped to the s
 The roster shows a per-lead booking tag. (The stacked funnel **no longer lives here** — it
 moved to `/funnel`.)
 
+The **Connected rate** box is `connected ÷ leads worked`, where *worked* = leads
+**dialed OR connected** (not the whole cohort) — a true connection rate that
+never-touched leads don't dilute (Drake 2026-06-18). "Connected" is the broad
+form-OR-≥90s-call signal (`reachedStage`), so a form/text reach counts even with no
+dial; those form-no-dial leads sit in both the numerator and the denominator (so the
+rate can't exceed 100%). A bare SMS reply with **no form** is *not* connected.
+
 ### `/leads/[close_id]` — per-lead page
 A facts strip (qualified, opt-in dates, **Stage** chip-funnel, dials, connected
 count+duration, reschedules, follow-ups) + a **Notes** section (one free-text

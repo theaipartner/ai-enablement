@@ -102,6 +102,16 @@ export default async function SalesDashboardLeadsPage({
   // filter; the speed-to-lead boxes recompute over the SAME filtered rows.
   const rows = allRows.filter((r) => matchesLeadFilter(r, types, stage))
   const filteredCohort = { ...speedCohort, ...summarizeCohortRows(rows), rows }
+  // Connected rate = connected ÷ leads we actually WORKED (dialed OR connected),
+  // not the whole cohort — a "true connection rate" that never-touched leads
+  // don't dilute (Drake 2026-06-18). "Connected" is the broad form-OR-call
+  // signal (reachedStage), so a form/text reach counts even with no dial; those
+  // form-no-dial leads sit in BOTH the numerator and denominator (firstCallAt
+  // is the outbound-dial marker). Text-only with no form is NOT connected.
+  const connectedCount = rows.filter((r) => reachedStage(r, null, 'connected')).length
+  const dialedOrConnectedCount = rows.filter(
+    (r) => r.firstCallAt != null || reachedStage(r, null, 'connected'),
+  ).length
   // FMR follows the window, and ALSO the type filter — but only the Direct /
   // Opt-in (setter) values, since "response by hour of opt-in" isn't meaningful
   // for reactivation (ignored here). No type selected → the full window cohort.
@@ -164,7 +174,11 @@ export default async function SalesDashboardLeadsPage({
 
       <div style={{ marginTop: 26 }}>
         <SectionLabel>Speed to lead · this window</SectionLabel>
-        <SpeedToLeadBoxes cohort={filteredCohort} connectedLeads={rows.filter((r) => reachedStage(r, null, 'connected')).length} />
+        <SpeedToLeadBoxes
+          cohort={filteredCohort}
+          connectedLeads={connectedCount}
+          connectedDenominator={dialedOrConnectedCount}
+        />
       </div>
 
       <div style={{ marginTop: 26 }}>

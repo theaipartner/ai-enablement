@@ -17,20 +17,28 @@ export function SpeedToLeadBoxes({
   activeCaller,
   filter,
   connectedLeads,
+  connectedDenominator,
 }: {
   cohort: SpeedToLeadCohortResult
   activeCaller?: string | null
   filter?: React.ReactNode
   // Broad form-OR-call connected count (matches the funnel's Connected). When
   // provided it overrides the cohort's dial-only count so "connected" is one
-  // number everywhere; the rate becomes reached / cohort.
+  // number everywhere.
   connectedLeads?: number
+  // Denominator for the connected rate = leads we actually WORKED (dialed OR
+  // connected), not the whole cohort (Drake 2026-06-18). A "true connection
+  // rate": never-touched leads don't dilute it. Connected leads with no dial
+  // (a form/text reach — e.g. a self-booked direct who showed) stay in BOTH
+  // the numerator and this denominator, so the rate can't exceed 100%.
+  connectedDenominator?: number
 }) {
   const reached = connectedLeads ?? cohort.leadsConnected
+  const denom = connectedDenominator ?? cohort.leadsCalled
   const reachedRate =
     connectedLeads !== undefined
-      ? cohort.cohortSize > 0
-        ? reached / cohort.cohortSize
+      ? denom > 0
+        ? reached / denom
         : null
       : cohort.connectedRate
   return (
@@ -67,7 +75,7 @@ export function SpeedToLeadBoxes({
         value={reachedRate !== null ? `${(reachedRate * 100).toFixed(0)}%` : '—'}
         subtext={
           connectedLeads !== undefined
-            ? `${reached} / ${cohort.cohortSize} leads reached (call or form)`
+            ? `${reached} / ${denom} connected · of leads dialed or form-reached`
             : `${cohort.leadsConnected} / ${cohort.leadsCalled} leads reached (any dial)`
         }
       />
