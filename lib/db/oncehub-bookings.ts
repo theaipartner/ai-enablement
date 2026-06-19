@@ -179,6 +179,15 @@ const ONCEHUB_USER_EMAIL: Record<string, string> = {
   'USR-6C5K0JNR1G': 'success@theaipartner.io', // Success (account owner)
 }
 
+// The team-member email for a OnceHub owner USR-id (via the seed directory).
+// Lets a consumer feed OnceHub's `owner` into the existing host-email→closer
+// resolvers (e.g. funnel-closing's closerIdentity) so OnceHub bookings resolve
+// to the same canonical closer identity as Calendly hosts.
+export function oncehubOwnerEmail(ownerUserId: string | null | undefined): string | null {
+  if (!ownerUserId) return null
+  return ONCEHUB_USER_EMAIL[ownerUserId] ?? null
+}
+
 export type OnceHubCloser = {
   closeUserId: string | null
   name: string | null

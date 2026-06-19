@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
-import { loadOnceHubBookings } from './oncehub-bookings'
+import { loadOnceHubBookings, oncehubOwnerEmail } from './oncehub-bookings'
 import { fetchChunked } from './query-parallel'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
@@ -932,7 +932,19 @@ export async function getClosingScheduledList(
     .map((e) => ({ e, callType: categorizeEvent(e.event_type_uri, e.name) }))
     .filter((x): x is { e: typeof rawEvents[number]; callType: CloserCallType } => x.callType !== null)
 
-  if (typed.length === 0) {
+  // OnceHub bookings since the floor (by meeting time), additive to Calendly.
+  // Injected into the SAME pipeline below (typed + inviteeByEvent) so they get
+  // form-matched, per-lead-collapsed, and closer-attributed identically — the
+  // win being OnceHub's reliable `owner` instead of read-time host guessing.
+  // Today only ht_consultation (direct self-book) is live; partnership ('setter')
+  // folds in once those pages carry real bookings. Open-ended upper bound so
+  // future-scheduled bookings count (mirrors the Calendly load's floor-only gate).
+  const oncehubBks = await loadOnceHubBookings(
+    { ...range, startUtcIso: floorIso, endUtcIso: '2999-01-01T00:00:00.000Z' },
+    { dateField: 'scheduled_at', roles: ['ht_consultation'] },
+  )
+
+  if (typed.length === 0 && oncehubBks.length === 0) {
     return { closers: [], aggregate: emptyAggregate('', 'All closers'), drillByCloser: {} }
   }
 
@@ -1018,6 +1030,37 @@ export async function getClosingScheduledList(
       if (inv.leadId || !inv.email) return
       const lid = emailToLeadId.get(inv.email.toLowerCase().trim())
       if (lid) inviteeByEvent.set(uri, { ...inv, leadId: lid })
+    })
+  }
+
+  // 2e. Inject OnceHub bookings as synthetic events into the same structures.
+  //     host_user_email = the closer's team_member email (from OnceHub's owner),
+  //     so closerIdentity.byHost resolves them to the SAME canonical closer as a
+  //     Calendly host. invitee carries the resolved Close lead_id + email/name so
+  //     form-matching + per-lead collapse work unchanged. callType is 'direct'
+  //     (ht_consultation); 'setter' joins when partnership bookings are classified.
+  for (const b of oncehubBks) {
+    if (!b.scheduledAt) continue // can't place on the timeline
+    const uri = b.bookingId
+    typed.push({
+      e: {
+        uri,
+        name: b.subject ?? '',
+        start_time: b.scheduledAt,
+        host_user_name: b.closer?.name ?? null,
+        host_user_email: oncehubOwnerEmail(b.ownerUserId),
+        status: b.status, // 'canceled' → dead downstream; no_show stays live (form drives it)
+        event_type_uri: null,
+      },
+      callType: 'direct',
+    })
+    const phone = normalizePhone(b.inviteePhone)
+    inviteeByEvent.set(uri, {
+      name: b.inviteeName,
+      email: b.inviteeEmail,
+      phones: phone ? [phone] : [],
+      noShow: b.isNoShow,
+      leadId: b.leadId,
     })
   }
 
