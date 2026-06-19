@@ -168,6 +168,29 @@ class handler(BaseHTTPRequestHandler):
             "oncehub_webhook: processed event=%s route=%s upserted=%s",
             event_name, route, upserted_id,
         )
+
+        # Live re-tag of the booking's lead so lead_cycles updates immediately
+        # (the OnceHub analog of api/calendly_events.py's retag). A booking carries
+        # the invitee email/phone; retag_by_contact resolves identity → in-scope
+        # close_id(s) and recomputes their cycle. Fail-soft; a brand-new lead whose
+        # Close row doesn't exist yet is a clean no-op (the Close webhook tags it).
+        if isinstance(event_name, str) and event_name.startswith("booking."):
+            form = data.get("form_submission") if isinstance(data, dict) else None
+            if isinstance(form, dict):
+                email = form.get("email")
+                phone = form.get("phone") or form.get("mobile_phone")
+                if email or phone:
+                    try:
+                        from shared.lead_tagging import retag_by_contact
+
+                        retag_by_contact(
+                            emails=[email] if email else None,
+                            phones=[phone] if phone else None,
+                            trigger="webhook:oncehub",
+                        )
+                    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                        logger.warning("oncehub_webhook: lead retag failed: %s", exc)
+
         self._respond(
             200,
             {"delivered": True, "event": event_name, "upserted_id": upserted_id},
