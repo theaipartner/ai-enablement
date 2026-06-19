@@ -54,6 +54,7 @@ subdomain plan). Nothing in here should reference Ella, Clients, CSM, or Gregory
 | [`ingestion.md`](./ingestion.md) | Every data source, its webhook/cron model, and the **ops traps** (the env gotcha, the migration apply path). |
 | [`surfaces.md`](./surfaces.md) | The page-by-page UI map — routes, what each shows, what was removed. |
 | [`landing-pages.md`](./landing-pages.md) | How landing pages work + **the checklist for adding a new one** (the 5 things to collect, what's deferred). |
+| [`booking-to-close.md`](./booking-to-close.md) | **(Design, deferred until OnceHub.)** The booking→confirmation→show→close lifecycle: a `booking_cycles` sibling to engagements, how OnceHub carries the lead_id + fires native show/no-show events, and what it unlocks for the Talent closer card. |
 
 Per-table column detail stays in `docs/schema/<table>.md` (kept as-is; the manifest
 in `data-model.md` says which of those are sales).
