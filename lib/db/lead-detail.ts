@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { SetterCallReviewFull } from './setter-calls'
 import type { BookingType } from './leads'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
+import { classifyOnceHubBooking } from './oncehub-bookings'
 import { getLeadCycles, deriveType, type CycleStages } from './lead-tags'
 import { fetchChunked } from './query-parallel'
 
@@ -372,7 +373,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       addInvitees((data ?? []) as unknown as Array<{ uri: string; event_uri: string; rescheduled: boolean | null }>)
     }
   }
-  const rescheduleCount = Array.from(inviteeByUri.values()).filter((i) => i.rescheduled).length
+  let rescheduleCount = Array.from(inviteeByUri.values()).filter((i) => i.rescheduled).length
 
   const eventUris = Array.from(new Set(Array.from(inviteeByUri.values()).map((i) => i.eventUri)))
   let hasDirect = false
@@ -415,6 +416,63 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       if (e.start_time) bookings.push({ at: e.start_time, link, name: e.name })
     }
   }
+  // 6b. OnceHub bookings for this lead (additive; replaces Calendly going
+  //     forward). Matched by hidden lead_id, then email, then name — the same
+  //     identity keys used above. Today only ht_consultation (direct self-book):
+  //     folds into hasDirect + the timeline + reschedule count like a direct
+  //     Calendly booking. bookedAt drives the in-cycle gate; scheduledAt is the
+  //     timeline slot. partnership/dc fold in once those flows carry bookings.
+  {
+    type OhRow = {
+      booking_id: string
+      master_page_id: string | null
+      booking_calendar_id: string | null
+      subject: string | null
+      scheduled_at: string | null
+      booked_at: string | null
+      rescheduled_booking_id: string | null
+    }
+    const ohCols =
+      'booking_id, master_page_id, booking_calendar_id, subject, scheduled_at, booked_at, rescheduled_booking_id'
+    const ohById = new Map<string, OhRow>()
+    const addOh = (rows: OhRow[]) => {
+      for (const r of rows) if (!ohById.has(r.booking_id)) ohById.set(r.booking_id, r)
+    }
+    {
+      const { data, error } = await sb
+        .from('oncehub_bookings' as never)
+        .select(ohCols)
+        .is('excluded_at', null)
+        .eq('lead_id', closeId)
+      if (error) throw new Error(`lead-detail: oncehub (lead_id) read failed: ${error.message}`)
+      addOh((data ?? []) as unknown as OhRow[])
+    }
+    if (leadEmails.size > 0) {
+      const { data, error } = await sb
+        .from('oncehub_bookings' as never)
+        .select(ohCols)
+        .is('excluded_at', null)
+        .in('invitee_email', Array.from(leadEmails))
+      if (error) throw new Error(`lead-detail: oncehub (email) read failed: ${error.message}`)
+      addOh((data ?? []) as unknown as OhRow[])
+    }
+    if (leadNameLc) {
+      const { data, error } = await sb
+        .from('oncehub_bookings' as never)
+        .select(ohCols)
+        .is('excluded_at', null)
+        .ilike('invitee_name', leadNameLc)
+      if (error) throw new Error(`lead-detail: oncehub (name) read failed: ${error.message}`)
+      addOh((data ?? []) as unknown as OhRow[])
+    }
+    for (const b of Array.from(ohById.values())) {
+      if (classifyOnceHubBooking(b) !== 'ht_consultation') continue // direct flow only for now
+      if (b.rescheduled_booking_id) rescheduleCount++
+      if (afterOptIn(b.booked_at)) hasDirect = true
+      if (b.scheduled_at) bookings.push({ at: b.scheduled_at, link: 'direct', name: b.subject ?? 'OnceHub Strategy Call' })
+    }
+  }
+
   const bookingType: BookingType =
     hasDirect && hasPartnership ? 'reactivation' : hasDirect ? 'direct' : hasPartnership ? 'setter' : null
 
