@@ -1,109 +1,14 @@
+'use client'
+
+import { useState } from 'react'
 import Link from 'next/link'
-import type { CallActivityResult, CallActivityRepRow } from '@/lib/db/funnel-appointment-setting'
-import type { CloserScheduledResult, CloserScheduledAggregate } from '@/lib/db/funnel-closing'
-import type { DigitalCollegeResult, DcAggregate } from '@/lib/db/funnel-digital-college'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
+import type { RosterPerson } from './roster-data'
 
-// Talent · Roster (By Rep) — the per-person re-presentation of the existing
-// Talent loaders. ONE block per human, keyed by Close user_id, unioning the
-// setter row + closer row from Call Activity, the per-closer scheduled
-// aggregate (showed / no-show / closed / cash), and the Digital College
-// aggregate. No new data: this reads the exact same loader output the /people
-// page reads, merged and reshaped. Drilldowns are NOT on the card — they live
-// on the per-person detail view (?rep=) which reuses the existing tables.
-
-export type RosterPerson = {
-  userId: string
-  name: string
-  isSetter: boolean
-  isCloser: boolean
-  isDc: boolean
-  setter: CallActivityRepRow | null
-  closer: CallActivityRepRow | null
-  scheduled: CloserScheduledAggregate | null
-  dc: DcAggregate | null
-  // Person-level rollups. Dials are total (identical across a both-rep's two
-  // rows, so we take the max, not the sum); Connected is family-split, so a
-  // both-rep's total connected is setter + closer.
-  dials: number
-  connected: number
-  score: number
-}
-
-export function buildRoster(
-  activity: CallActivityResult,
-  scheduled: CloserScheduledResult,
-  digitalCollege: DigitalCollegeResult,
-): RosterPerson[] {
-  const map = new Map<string, RosterPerson>()
-  const ensure = (userId: string, name: string | null): RosterPerson => {
-    let p = map.get(userId)
-    if (!p) {
-      p = {
-        userId,
-        name: name ?? userId,
-        isSetter: false,
-        isCloser: false,
-        isDc: false,
-        setter: null,
-        closer: null,
-        scheduled: null,
-        dc: null,
-        dials: 0,
-        connected: 0,
-        score: 0,
-      }
-      map.set(userId, p)
-    }
-    // Prefer a real name over a bare user_id placeholder.
-    if ((!p.name || p.name === p.userId) && name) p.name = name
-    return p
-  }
-
-  for (const s of activity.setters) {
-    if (!s.userId) continue
-    const p = ensure(s.userId, s.name)
-    p.setter = s
-    p.isSetter = true
-  }
-  for (const c of activity.closers) {
-    if (!c.userId) continue
-    const p = ensure(c.userId, c.name)
-    p.closer = c
-    p.isCloser = true
-  }
-  for (const sc of scheduled.closers) {
-    // 'ghost' = unresolved closer (not a real person) — skip it on the roster.
-    if (!sc.closerKey || sc.closerKey === 'ghost') continue
-    const p = ensure(sc.closerKey, sc.closerName)
-    p.scheduled = sc
-    p.isCloser = true
-  }
-  for (const d of digitalCollege.closers) {
-    if (!d.closerKey) continue
-    const p = ensure(d.closerKey, d.closerName)
-    p.dc = d
-    p.isDc = true
-  }
-
-  const all = Array.from(map.values())
-  for (const p of all) {
-    p.dials = Math.max(p.setter?.totalCalls ?? 0, p.closer?.totalCalls ?? 0)
-    p.connected = (p.setter?.totalConnected ?? 0) + (p.closer?.totalConnected ?? 0)
-    p.score =
-      p.dials +
-      p.connected +
-      (p.scheduled?.calls ?? 0) +
-      (p.scheduled?.closed ?? 0) * 5 +
-      (p.dc?.dials ?? 0) +
-      (p.dc?.meetings ?? 0) +
-      (p.dc?.closes ?? 0) * 5
-  }
-
-  return all.filter((p) => p.score > 0).sort((a, b) => b.score - a.score)
-}
-
-// ---------------------------------------------------------------------------
+// Talent · Roster (By Rep) — the per-person card grid. One block per rep;
+// click a block to open the per-person detail view (?rep=). Inactive reps are
+// hidden by default; the "Show inactive" toggle reveals them. All blocks are
+// rendered equal-height (grid-auto-rows: 1fr + card height: 100%).
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -205,12 +110,14 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
         display: 'flex',
         flexDirection: 'column',
         gap: 16,
+        height: '100%',
         padding: '20px 22px 22px',
         background: 'var(--color-geg-bg-elev)',
         border: '1px solid var(--color-geg-border)',
         borderRadius: 12,
         textDecoration: 'none',
         color: 'inherit',
+        opacity: person.active ? 1 : 0.7,
       }}
     >
       {/* Header */}
@@ -249,10 +156,11 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
           >
             {person.name}
           </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {chips.map((c) => (
               <RoleChip key={c} label={c} />
             ))}
+            {!person.active ? <RoleChip label="Inactive" /> : null}
           </div>
         </div>
       </div>
@@ -311,28 +219,93 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
 }
 
 export function RosterGrid({ people, windowQs }: { people: RosterPerson[]; windowQs: string }) {
-  if (people.length === 0) {
-    return (
-      <div
-        className="geg-serif"
-        style={{ padding: '48px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 15 }}
-      >
-        No rep activity in this range.
-      </div>
-    )
-  }
+  const [showInactive, setShowInactive] = useState(false)
+
+  const activeCount = people.filter((p) => p.active).length
+  const inactiveCount = people.length - activeCount
+  const shown = showInactive ? people : people.filter((p) => p.active)
+
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-        gap: 16,
-        alignItems: 'start',
-      }}
-    >
-      {people.map((p) => (
-        <PersonCard key={p.userId} person={p} windowQs={windowQs} />
-      ))}
+    <div>
+      {/* Toggle bar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, gap: 12 }}>
+        <div
+          className="geg-mono"
+          style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}
+        >
+          {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ''}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowInactive((v) => !v)}
+          className="geg-mono"
+          aria-pressed={showInactive}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '7px 12px',
+            background: showInactive ? 'var(--color-geg-accent-fill)' : 'transparent',
+            border: `1px solid ${showInactive ? 'var(--color-geg-accent)' : 'var(--color-geg-border-strong)'}`,
+            borderRadius: 6,
+            fontSize: 11,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: showInactive ? 'var(--color-geg-accent)' : 'var(--color-geg-text-3)',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          <span
+            style={{
+              width: 26,
+              height: 14,
+              borderRadius: 8,
+              background: showInactive ? 'var(--color-geg-accent)' : 'var(--color-geg-border-strong)',
+              position: 'relative',
+              flexShrink: 0,
+              transition: 'background 120ms ease',
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: 2,
+                left: showInactive ? 14 : 2,
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: 'var(--color-geg-bg-elev)',
+                transition: 'left 120ms ease',
+              }}
+            />
+          </span>
+          Show inactive
+        </button>
+      </div>
+
+      {shown.length === 0 ? (
+        <div
+          className="geg-serif"
+          style={{ padding: '48px 0', textAlign: 'center', fontStyle: 'italic', color: 'var(--color-geg-text-3)', fontSize: 15 }}
+        >
+          No rep activity in this range.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+            gridAutoRows: '1fr',
+            gap: 16,
+            alignItems: 'stretch',
+          }}
+        >
+          {shown.map((p) => (
+            <PersonCard key={p.userId} person={p} windowQs={windowQs} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

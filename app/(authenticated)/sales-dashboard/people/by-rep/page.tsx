@@ -19,13 +19,34 @@ import { todayEtDate, dateRangeFromExplicit } from '@/lib/db/funnel-window'
 import { resolveSalesWindow } from '@/lib/db/sales-window-cookie'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { PerRepCallActivityTable } from '../../funnel/appointment-setting/_components/sortable-tables'
 import { CloserScheduledTables } from '../../funnel/closed/_components/closer-tables'
 import { DigitalCollegeTables } from '../_components/digital-college-tables'
 import { DateRangePicker } from '../../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../../header-pills'
 import { PersistPageState } from '@/components/sales/persist-page-state'
-import { buildRoster, RosterGrid, type RosterPerson } from './_components/roster-grid'
+import { buildRoster, type RosterPerson } from './_components/roster-data'
+import { RosterGrid } from './_components/roster-grid'
+
+// Active sales reps = team_members.is_active among non-archived sales rows,
+// keyed by close_user_id. is_active is the durable, editable flag (no code
+// deploy to change the roster — one SQL update flips it). Sales reps are all
+// is_csm=false, so this flag is independent of the CSM-side surfaces.
+async function loadActiveSalesUserIds(): Promise<Set<string>> {
+  const sb = createAdminClient()
+  const { data, error } = await sb
+    .from('team_members' as never)
+    .select('close_user_id, is_active')
+    .not('sales_role', 'is', null)
+    .is('archived_at', null)
+  if (error) throw new Error(`team_members active read failed: ${error.message}`)
+  const out = new Set<string>()
+  for (const r of (data ?? []) as unknown as Array<{ close_user_id: string | null; is_active: boolean | null }>) {
+    if (r.close_user_id && r.is_active) out.add(r.close_user_id)
+  }
+  return out
+}
 
 // Sales Dashboard — Talent · Roster (By Rep).
 //
@@ -71,18 +92,19 @@ export default async function SalesRosterPage({
   const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
   const selectedDcCloser = typeof selectedDcCloserRaw === 'string' && selectedDcCloserRaw.length > 0 ? selectedDcCloserRaw : null
 
-  const [activity, repDrill, scheduled, closingData, digitalCollege, access] = await Promise.all([
+  const [activity, repDrill, scheduled, closingData, digitalCollege, access, activeUserIds] = await Promise.all([
     getCallActivityMetrics(range),
     selectedRep ? getCallActivityForUser(range, selectedRep) : Promise.resolve([] as CallActivityDrillRow[]),
     getClosingScheduledList(range),
     getClosingActivity(range),
     getDigitalCollegeActivity(range),
     getCurrentUserAccessTier(),
+    loadActiveSalesUserIds(),
   ])
   void closingData
   const canDelete = access?.tier === 'creator'
 
-  const roster = buildRoster(activity, scheduled, digitalCollege)
+  const roster = buildRoster(activity, scheduled, digitalCollege, activeUserIds)
   const person = selectedRep ? roster.find((p) => p.userId === selectedRep) ?? null : null
 
   // Window-only query string for the roster cards' detail links.
