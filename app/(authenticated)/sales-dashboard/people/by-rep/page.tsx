@@ -26,24 +26,25 @@ import { DigitalCollegeTables } from '../_components/digital-college-tables'
 import { DateRangePicker } from '../../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../../header-pills'
 import { PersistPageState } from '@/components/sales/persist-page-state'
-import { buildRoster, type RosterPerson } from './_components/roster-data'
+import { buildRoster, type RosterPerson, type SalesRole } from './_components/roster-data'
 import { RosterGrid } from './_components/roster-grid'
 
-// Active sales reps = team_members.is_active among non-archived sales rows,
-// keyed by close_user_id. is_active is the durable, editable flag (no code
-// deploy to change the roster — one SQL update flips it). Sales reps are all
-// is_csm=false, so this flag is independent of the CSM-side surfaces.
-async function loadActiveSalesUserIds(): Promise<Set<string>> {
+// Sales identity = team_members (close_user_id → canonical sales_role +
+// is_active) among non-archived sales rows. is_active is the durable, editable
+// flag (no code deploy to change the roster — one SQL update flips it); sales
+// reps are all is_csm=false, so it's independent of the CSM-side surfaces.
+// sales_role is the canonical role the card chip + crucial metrics key off.
+async function loadSalesIdentity(): Promise<Map<string, { active: boolean; role: SalesRole }>> {
   const sb = createAdminClient()
   const { data, error } = await sb
     .from('team_members' as never)
-    .select('close_user_id, is_active')
+    .select('close_user_id, is_active, sales_role')
     .not('sales_role', 'is', null)
     .is('archived_at', null)
-  if (error) throw new Error(`team_members active read failed: ${error.message}`)
-  const out = new Set<string>()
-  for (const r of (data ?? []) as unknown as Array<{ close_user_id: string | null; is_active: boolean | null }>) {
-    if (r.close_user_id && r.is_active) out.add(r.close_user_id)
+  if (error) throw new Error(`team_members identity read failed: ${error.message}`)
+  const out = new Map<string, { active: boolean; role: SalesRole }>()
+  for (const r of (data ?? []) as unknown as Array<{ close_user_id: string | null; is_active: boolean | null; sales_role: SalesRole }>) {
+    if (r.close_user_id) out.set(r.close_user_id, { active: !!r.is_active, role: r.sales_role })
   }
   return out
 }
@@ -92,19 +93,19 @@ export default async function SalesRosterPage({
   const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
   const selectedDcCloser = typeof selectedDcCloserRaw === 'string' && selectedDcCloserRaw.length > 0 ? selectedDcCloserRaw : null
 
-  const [activity, repDrill, scheduled, closingData, digitalCollege, access, activeUserIds] = await Promise.all([
+  const [activity, repDrill, scheduled, closingData, digitalCollege, access, identity] = await Promise.all([
     getCallActivityMetrics(range),
     selectedRep ? getCallActivityForUser(range, selectedRep) : Promise.resolve([] as CallActivityDrillRow[]),
     getClosingScheduledList(range),
     getClosingActivity(range),
     getDigitalCollegeActivity(range),
     getCurrentUserAccessTier(),
-    loadActiveSalesUserIds(),
+    loadSalesIdentity(),
   ])
   void closingData
   const canDelete = access?.tier === 'creator'
 
-  const roster = buildRoster(activity, scheduled, digitalCollege, activeUserIds)
+  const roster = buildRoster(activity, scheduled, digitalCollege, identity)
   const person = selectedRep ? roster.find((p) => p.userId === selectedRep) ?? null : null
 
   // Window-only query string for the roster cards' detail links.

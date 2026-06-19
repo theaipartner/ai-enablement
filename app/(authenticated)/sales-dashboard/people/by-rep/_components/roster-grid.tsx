@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
-import type { RosterPerson } from './roster-data'
+import type { RosterPerson, SalesRole } from './roster-data'
 
 // Talent · Roster (By Rep) — the per-person card grid. One block per rep;
 // click a block to open the per-person detail view (?rep=). Inactive reps are
@@ -70,38 +70,74 @@ function Stat({ label, value, accent }: { label: string; value: string | number;
   )
 }
 
-function StatGroup({ eyebrow, children }: { eyebrow: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div
-        className="geg-mono"
-        style={{
-          fontSize: 9,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          color: 'var(--color-geg-text-3)',
-          marginBottom: 8,
-        }}
-      >
-        {eyebrow}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(58px, 1fr))', gap: '12px 14px' }}>
-        {children}
-      </div>
-    </div>
-  )
+function pct(num: number, den: number): string {
+  if (!den) return '—'
+  return `${Math.round((num / den) * 100)}%`
+}
+
+// The single role the rep IS. Prefer the canonical team_members.sales_role;
+// fall back to inferring from which families they have activity in.
+function effectiveRole(person: RosterPerson): SalesRole {
+  if (person.canonicalRole && person.canonicalRole !== 'other') return person.canonicalRole
+  if (person.isDc) return 'dc_closer'
+  if (person.isCloser) return 'closer'
+  if (person.isSetter) return 'setter'
+  return person.canonicalRole
+}
+
+function roleLabel(role: SalesRole): string {
+  switch (role) {
+    case 'setter': return 'Setter'
+    case 'closer': return 'Closer'
+    case 'dc_closer': return 'DC Closer'
+    default: return 'Sales'
+  }
+}
+
+// The crucial metrics for the card, keyed off the canonical role (per the
+// Engine data sheet's per-rep funnels). Everything else lives on the detail
+// view (the full reused tables).
+function crucialStats(person: RosterPerson, role: SalesRole): { label: string; value: string | number; accent?: boolean }[] {
+  if (role === 'dc_closer') {
+    const d = person.dc
+    return [
+      { label: 'Dials', value: d?.dials ?? 0 },
+      { label: 'Meetings', value: d?.meetings ?? 0 },
+      { label: 'Shows', value: d?.shows ?? 0 },
+      { label: 'Closes', value: d?.closes ?? 0, accent: true },
+    ]
+  }
+  if (role === 'closer') {
+    const sc = person.scheduled
+    const showed = sc?.showed ?? 0
+    const closed = sc?.closed ?? 0
+    return [
+      { label: 'Showed', value: showed },
+      { label: 'Closed', value: closed, accent: true },
+      { label: 'Close rate', value: pct(closed, showed) },
+      { label: 'Cash', value: compactUsd(sc?.upfront ?? 0) },
+    ]
+  }
+  // setter (and the sales fallback)
+  const s = person.setter
+  const triages = person.connected
+  const booked = (s?.htBookings ?? 0) + (s?.dcBookings ?? 0)
+  return [
+    { label: 'Dials', value: person.dials, accent: true },
+    { label: 'Triages', value: triages },
+    { label: 'Booked', value: booked },
+    { label: 'Book rate', value: pct(booked, triages) },
+  ]
 }
 
 function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: string }) {
-  const fam = person.isCloser ? 'closer' : 'setter'
+  const role = effectiveRole(person)
+  const fam = role === 'setter' ? 'setter' : 'closer'
   const qs = [windowQs, `rep=${encodeURIComponent(person.userId)}`, `repfam=${fam}`]
     .filter(Boolean)
     .join('&')
 
-  const chips: string[] = []
-  if (person.isSetter) chips.push('Setter')
-  if (person.isCloser) chips.push('Closer')
-  if (person.isDc) chips.push('Digital College')
+  const stats = crucialStats(person, role)
 
   return (
     <Link
@@ -157,62 +193,17 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
             {person.name}
           </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {chips.map((c) => (
-              <RoleChip key={c} label={c} />
-            ))}
+            <RoleChip label={roleLabel(role)} />
             {!person.active ? <RoleChip label="Inactive" /> : null}
           </div>
         </div>
       </div>
 
-      {/* Top-line dials / connected (only when the person has call activity) */}
-      {person.setter || person.closer ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
-          <Stat label="Dials" value={person.dials} accent />
-          <Stat label="Connected" value={person.connected} />
-        </div>
-      ) : null}
-
-      {/* Role-scoped stat groups */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {person.setter ? (
-          <StatGroup eyebrow="Setting">
-            <Stat label="HT Book" value={person.setter.htBookings} />
-            <Stat label="DC Book" value={person.setter.dcBookings} />
-            <Stat label="DC Close" value={person.setter.dcCloses} />
-            <Stat label="Pipeline" value={person.setter.followUps} />
-            <Stat label="DQ" value={person.setter.dqs} />
-          </StatGroup>
-        ) : null}
-
-        {person.closer ? (
-          <StatGroup eyebrow="Confirming">
-            <Stat label="Confirmed" value={person.closer.confirmedBooks} />
-            <Stat label="Resched" value={person.closer.confirmedNewTime} />
-            <Stat label="Downsold" value={person.closer.downsellsOnCall} />
-            <Stat label="Pipeline" value={person.closer.followUps} />
-            <Stat label="DQ" value={person.closer.dqs} />
-          </StatGroup>
-        ) : null}
-
-        {person.scheduled ? (
-          <StatGroup eyebrow="Closing">
-            <Stat label="Scheduled" value={person.scheduled.calls} />
-            <Stat label="Showed" value={person.scheduled.showed} />
-            <Stat label="No-show" value={person.scheduled.noShows} />
-            <Stat label="Closed" value={person.scheduled.closed} />
-            <Stat label="Upfront" value={compactUsd(person.scheduled.upfront)} />
-          </StatGroup>
-        ) : null}
-
-        {person.dc ? (
-          <StatGroup eyebrow="Digital College">
-            <Stat label="DC Dials" value={person.dc.dials} />
-            <Stat label="Meetings" value={person.dc.meetings} />
-            <Stat label="Shows" value={person.dc.shows} />
-            <Stat label="Closes" value={person.dc.closes} />
-          </StatGroup>
-        ) : null}
+      {/* Crucial metrics — keyed off the canonical role. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginTop: 'auto' }}>
+        {stats.map((s) => (
+          <Stat key={s.label} label={s.label} value={s.value} accent={s.accent} />
+        ))}
       </div>
     </Link>
   )

@@ -9,10 +9,17 @@ import type { DigitalCollegeResult, DcAggregate } from '@/lib/db/funnel-digital-
 // the Digital College aggregate. No new data: this reads the exact same loader
 // output the /people page reads, merged and reshaped.
 
+export type SalesRole = 'setter' | 'closer' | 'dc_closer' | 'other' | null
+
 export type RosterPerson = {
   userId: string
   name: string
   active: boolean
+  // Canonical role from team_members.sales_role — the single role the rep IS,
+  // independent of which call families they happen to have activity in (a
+  // closer who filed some triage forms is still just a closer). Drives the
+  // single role chip + which crucial metrics the card surfaces.
+  canonicalRole: SalesRole
   isSetter: boolean
   isCloser: boolean
   isDc: boolean
@@ -32,16 +39,18 @@ export function buildRoster(
   activity: CallActivityResult,
   scheduled: CloserScheduledResult,
   digitalCollege: DigitalCollegeResult,
-  activeUserIds: Set<string>,
+  identity: Map<string, { active: boolean; role: SalesRole }>,
 ): RosterPerson[] {
   const map = new Map<string, RosterPerson>()
   const ensure = (userId: string, name: string | null): RosterPerson => {
     let p = map.get(userId)
     if (!p) {
+      const id = identity.get(userId)
       p = {
         userId,
         name: name ?? userId,
-        active: activeUserIds.has(userId),
+        active: id?.active ?? false,
+        canonicalRole: id?.role ?? null,
         isSetter: false,
         isCloser: false,
         isDc: false,
