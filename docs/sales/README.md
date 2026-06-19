@@ -40,7 +40,9 @@ An internal **sales analytics** dashboard. Three surfaces, flat nav:
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.
 - **Talent** (route `/people`) — per-rep setter/closer activity, scheduled tables,
-  Calendly bookings, Cash, and the Digital College drilldown.
+  Calendly bookings, Cash, and the Digital College drilldown. Its **Roster** sub-page
+  (`/people/by-rep`) is the by-person re-presentation — one block per rep, hide-inactive
+  by default — a candidate replacement for the by-call-type Talent page.
 
 Sales is being walled off from fulfillment entirely (own subdomain — see the
 subdomain plan). Nothing in here should reference Ella, Clients, CSM, or Gregory.

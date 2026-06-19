@@ -3,7 +3,8 @@
 Every sales page, what it shows, and what was removed. All routes currently live under
 `app/(authenticated)/sales-dashboard/` (server components, `force-dynamic`) — they move
 under a dedicated `(sales)` route group + subdomain as part of the fulfillment/sales
-split. Nav is **flat: Marketing · Leads · Talent**, with Revival nested under Marketing.
+split. Nav is **flat: Marketing · Leads · Talent**, with Revival nested under Marketing
+and Roster nested under Talent.
 
 ---
 
@@ -89,7 +90,45 @@ name → this page.
 
 Per-rep **Call Activity** (setters and closers), per-closer scheduled tables, Calendly-
 bookings boxes, **Cash**, and the **Digital College** drilldown (Robby). This is the
-rep-performance surface.
+rep-performance surface, organized **by call type** (a Triage table + a Confirmation
+table, etc.). Being superseded by Roster (below) — kept as the comparison baseline until
+Roster is trusted.
+
+### Talent · Roster — `/people/by-rep` (sidebar label "Roster")
+
+The **by-person** re-presentation of Talent — one block per rep instead of stacked
+by-call-type tables. A candidate replacement for `/people`; it reads the **exact same
+loaders** (`getCallActivityMetrics`, `getClosingScheduledList`, `getClosingActivity`,
+`getDigitalCollegeActivity`) and just reshapes them — **no new data, no new logic**.
+
+- **One card per rep**, keyed by Close `user_id`, merging that person's setter row +
+  closer row from Call Activity, their per-closer scheduled aggregate (shows / closes /
+  cash), and their Digital College aggregate. A rep who both sets and closes (e.g. Aman)
+  collapses into a single block instead of two scattered rows.
+- **One canonical role chip** from `team_members.sales_role` (Setter / Closer / DC
+  Closer) — the role the rep *is*, not a chip per call-family they happen to have
+  activity in. Cross-family activity (a closer's stray triage calls) still surfaces on
+  the detail view.
+- **Crucial metrics only on the card**, keyed off the role (from the Engine data sheet's
+  per-rep funnels): setters → Dials · Triages · Booked · Book-rate; closers → Showed ·
+  Closed · Close-rate · Cash; DC closers → Dials · Meetings · Shows · Closes. Everything
+  else lives on the click-through.
+- **Click a card → per-person detail** (`?rep=`): the full existing drilldown tables
+  (call activity + per-call drill, scheduled calls, DC) scoped to that one rep, with a
+  "← All reps" back link. Collapsing the drill returns to the grid (`?rep` is the page's
+  single person selector).
+- **Active/inactive.** Inactive reps are **hidden by default**; a "Show inactive" toggle
+  reveals them (dimmed, with an "Inactive" chip). Active = `team_members.is_active` among
+  non-archived sales rows (`is_csm=false`, so it's independent of the CSM surfaces;
+  flip one boolean to change the roster — no deploy). Today's active set: Aman, Cobe
+  Heydinger, Connor Malewicz, Yasmine Manno, Bradley, Joshua.
+- **Cards are equal-height** (grid-auto-rows), active reps sorted first.
+
+The closer card's funnel is **approximate today** because there's no reliable per-closer
+link from a booked meeting to its close — that's the deferred work in
+[`booking-to-close.md`](./booking-to-close.md). Once that ships, the closer card becomes
+an honest Dials · Books · Shows · Closes (HT/DC) · Cash · Cash-per-show funnel and Roster
+replaces `/people` outright.
 
 ---
 
