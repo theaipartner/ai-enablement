@@ -36,13 +36,20 @@ backfill → `calendly_scheduled_events`, `calendly_invitees`, `calendly_event_t
 Filter closer bookings by **event `name` ILIKE** `CLOSER_EVENT_TYPE_NAMES` — **don't**
 join `event_type_uri` (retired URIs). See `logic.md` § call typing.
 
-### OnceHub — `ingestion/oncehub/` ▶ CAPTURE PHASE (added 2026-06-19)
+### OnceHub — `ingestion/oncehub/` ▶ LIVE (capture phase, 2026-06-19)
 Webhook `api/oncehub_events.py` (real-time primary) + API backstop
 (`scripts/backfill_oncehub.py`) → `oncehub_bookings` (migration 0092, raw booking
 mirror). This is the scheduling platform that **replaces Calendly** for HT closer
 bookings (Calendly stays as-is for the existing funnel; we do not backfill it into
 the new mirror). The normalized `booking_cycles` spine that reads this table is
 still deferred — see [`booking-to-close.md`](./booking-to-close.md).
+
+**Live as of 2026-06-19** — verified end-to-end (a correctly-signed synthetic
+booking parsed + landed + lead_id-extracted, then cleaned up). Our webhook
+`WHK-9JXMFZKAH5` is registered → the production endpoint; `ONCEHUB_WEBHOOK_SECRET`
+is set in Vercel **Production** (Preview intentionally skipped — OnceHub delivers
+to the prod domain only; the v52 CLI can't set Preview anyway). Capture is on; the
+only thing not yet seen is a real OnceHub-form booking's `form_submission` shape.
 
 - **Account is v2 ("Booking Calendars")** — gates signed webhooks + the
   `custom_fields` passthrough. Auth: header `API-Key` (NOT Bearer), base
@@ -64,9 +71,11 @@ still deferred — see [`booking-to-close.md`](./booking-to-close.md).
   hidden field is unconfigured, so lead→booking match is **email/phone fallback**
   for now. `parser._extract_lead_id` accepts `lead_id`/`close_lead_id`/etc. for
   when Zain adds the hidden field + personalized `?lead_id=` links.
-- **Env (Vercel):** `ONCEHUB_API_KEY` (read + webhook mgmt; in `.env.local` now),
-  `ONCEHUB_WEBHOOK_SECRET` (per-endpoint signing secret, set after we register our
-  webhook). New `api/*.py` needs the `excludeFiles` line (250 MB cap, below).
+- **Env:** `ONCEHUB_API_KEY` (read + webhook mgmt) lives in `.env.local` only —
+  the deployed **receiver doesn't call the API**, so it's NOT needed in Vercel
+  (add it there only when a reconciliation cron lands). `ONCEHUB_WEBHOOK_SECRET`
+  (per-endpoint signing secret) **is set in Vercel Production**. New `api/*.py`
+  needs the `excludeFiles` line (250 MB cap, below).
 
 ### Typeform — `ingestion/typeform/`
 Webhook (real-time primary) + cron backstop (`typeform_sync_cron`, `*/15`) + insights
