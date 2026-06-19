@@ -1,9 +1,15 @@
-# Sales — Booking → Close lifecycle (design, deferred)
+# Sales — Booking → Close lifecycle (capture phase live, spine deferred)
 
-> **Status:** Design only. **Deferred until we move scheduling to OnceHub.** Nothing
-> here is built. This doc is the durable record of what we decided so the plan
-> survives until we pick it up. Edit in place as the design firms up; delete sections
-> that get retired rather than striking them through (the one folder rule).
+> **Status (2026-06-19):** OnceHub is the scheduling platform (Calendly dropped for
+> HT closing). **Discovery is done** and the **raw capture layer is built and
+> deploying** — `oncehub_bookings` (migration 0092) + the `api/oncehub_events.py`
+> webhook + the `ingestion/oncehub/` adapter mirror every booking into Supabase. The
+> normalized **`booking_cycles` spine + the per-leg pinger + the Talent closer card
+> are still deferred** — they read the mirror, and we build them once real bookings
+> (with a real `form_submission` + the hidden lead_id) have accumulated. Live OnceHub
+> config + the capture wiring live in [`ingestion.md`](./ingestion.md) § OnceHub;
+> this doc remains the durable design record for the spine. Edit in place; delete
+> retired sections rather than striking them through (the one folder rule).
 
 ## Why this exists — the gap
 
@@ -117,11 +123,17 @@ thin OnceHub adapter (and a Calendly adapter only if we need the interim). `book
 and the pinger read *our* table, so a future platform swap is a contained ingestion
 rewrite, never a journey-logic rewrite.
 
-**Discovery before build** (our standing rule): make one real authenticated OnceHub
-booking and inspect the actual webhook payload — confirm exact field names, that the
-assigned host/owner is present, and that our hidden lead_id field round-trips. The public
-payload doc was unreachable at design time; verify against live reality before coding the
-adapter.
+**Discovery — done 2026-06-19** (against the live v2 account). Confirmed: account is
+v2; events fire as listed above; the booking object carries `owner` = the assigned
+rep (USR-…) even on the team round-robin calendar, `rescheduled_booking_id` for
+reschedule lineage, and `cancel_reschedule_information` {reason, actioned_by,
+user_id}. Signature is `Oncehub-Signature: t=<ts>,s=<hex>`, HMAC-SHA256 over
+`<ts>.<body>`. The one thing **not yet observed** is a real `form_submission`
+(invitee name/email/phone) + a populated hidden-field `custom_fields` entry — the
+two admin/reschedule test bookings have `form_submission: null`. The parser is
+written defensively for both; **one real booking through the public link with the
+form filled (and a `?lead_id=` param once the hidden field exists)** is the last
+discovery step before the spine relies on those fields.
 
 ## Matching priority (when a booking arrives)
 

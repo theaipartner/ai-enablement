@@ -36,6 +36,38 @@ backfill → `calendly_scheduled_events`, `calendly_invitees`, `calendly_event_t
 Filter closer bookings by **event `name` ILIKE** `CLOSER_EVENT_TYPE_NAMES` — **don't**
 join `event_type_uri` (retired URIs). See `logic.md` § call typing.
 
+### OnceHub — `ingestion/oncehub/` ▶ CAPTURE PHASE (added 2026-06-19)
+Webhook `api/oncehub_events.py` (real-time primary) + API backstop
+(`scripts/backfill_oncehub.py`) → `oncehub_bookings` (migration 0092, raw booking
+mirror). This is the scheduling platform that **replaces Calendly** for HT closer
+bookings (Calendly stays as-is for the existing funnel; we do not backfill it into
+the new mirror). The normalized `booking_cycles` spine that reads this table is
+still deferred — see [`booking-to-close.md`](./booking-to-close.md).
+
+- **Account is v2 ("Booking Calendars")** — gates signed webhooks + the
+  `custom_fields` passthrough. Auth: header `API-Key` (NOT Bearer), base
+  `api.oncehub.com/v2`. Rate limit 5 req/s.
+- **Live config (Zain's):** team **Closers** (`TM-LHNGDXC42R59`: Cobe, Aman); a
+  team-hosted **"Ai Partner Strategy Call"** booking calendar (`BKC-0NJDVMLVJK`,
+  45-min, **round-robins** between the closers); public master page
+  **"AI Partner - FB"** (`go.oncehub.com/AIPartner-FB`).
+- **`owner` on each booking = the rep the round-robin landed on** — the per-closer
+  Books attribution that had no reliable source pre-OnceHub.
+- **Signature:** header `Oncehub-Signature: t=<ts>,s=<hex>`, HMAC-SHA256 over
+  `<ts>.<body>`, per-endpoint secret. Same scheme as Calendly bar `s=` vs `v1=`.
+  Dedup keys on the envelope `id` (`EVNT-…`, a stable per-delivery id).
+- **A second webhook already exists** → make.com (`WHK-L0WXHC9Z2D`, Zain's
+  automation). Ours is a **separate** subscription (`POST /v2/webhooks` via
+  `scripts/register_oncehub_webhook.py`); the two coexist. The signing secret is
+  readable from `/v2/webhooks`.
+- **lead_id carriage NOT live yet:** bookings return `custom_fields: []` — the
+  hidden field is unconfigured, so lead→booking match is **email/phone fallback**
+  for now. `parser._extract_lead_id` accepts `lead_id`/`close_lead_id`/etc. for
+  when Zain adds the hidden field + personalized `?lead_id=` links.
+- **Env (Vercel):** `ONCEHUB_API_KEY` (read + webhook mgmt; in `.env.local` now),
+  `ONCEHUB_WEBHOOK_SECRET` (per-endpoint signing secret, set after we register our
+  webhook). New `api/*.py` needs the `excludeFiles` line (250 MB cap, below).
+
 ### Typeform — `ingestion/typeform/`
 Webhook (real-time primary) + cron backstop (`typeform_sync_cron`, `*/15`) + insights
 cron + full backfill → `typeform_responses`, `typeform_forms`. **Active HT opt-in gate =
