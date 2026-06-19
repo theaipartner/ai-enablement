@@ -86,6 +86,24 @@ _LOOKBACK_DAYS = 14
 # misleading partial pre-launch month bucket on the client page.
 _LAUNCH_FLOOR = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
+# Booking-link exclusions — events that must never enter Gregory, dropped
+# alongside cancelled events / OOO blocks. The "Digital College Implementation
+# Call with Nico" is booked on Nico's calendar through a separate program's
+# booking link (api.leadconnectorhq.com) and must NOT count as a client meeting
+# (Scott, 2026-06-19). Matched two ways so neither a title edit nor a missing
+# booking-link in the payload defeats the exclusion:
+#   - exact event title (case-insensitive, trimmed), and
+#   - the booking-link URL anywhere in the event payload (forward-insurance —
+#     today's calendar events carry the title but not the URL).
+_IGNORED_EVENT_TITLES = frozenset(
+    {
+        "digital college implementation call with nico",
+    }
+)
+_IGNORED_EVENT_URLS = (
+    "api.leadconnectorhq.com/widget/bookings/coaching-call-with-nico",
+)
+
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
@@ -297,6 +315,8 @@ def _upsert_client_meetings(
     for ev in events:
         if ev.get("status") == "cancelled":
             continue
+        if _is_ignored_event(ev):
+            continue
         start = (ev.get("start") or {}).get("dateTime")
         end = (ev.get("end") or {}).get("dateTime")
         if not start or not end:
@@ -432,6 +452,17 @@ def _fetch_personal_emails(db) -> set[str]:
             if isinstance(email, str) and email.strip():
                 out.add(email.strip().lower())
     return out
+
+
+def _is_ignored_event(event: dict[str, Any]) -> bool:
+    """True for events excluded from Gregory entirely — booking links that
+    must never count as client meetings (see _IGNORED_EVENT_TITLES). Matches
+    on the exact event title OR the booking-link URL anywhere in the payload."""
+    title = (event.get("summary") or "").strip().lower()
+    if title in _IGNORED_EVENT_TITLES:
+        return True
+    blob = json.dumps(event).lower()
+    return any(url in blob for url in _IGNORED_EVENT_URLS)
 
 
 def _has_external_attendee(

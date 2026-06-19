@@ -122,6 +122,20 @@ When a new leak pattern surfaces, add to the list via SQL — no code deploy nee
 
 If you add a personal email and existing rows in `calendar_events` should be dropped, run a one-time cleanup DELETE matching the spec's pattern (see `docs/reports/teams-personal-email-exclusion-and-nabeel-removal.md` § Verification for the SQL).
 
+### Ignored booking links (2026-06-19)
+
+Independent of the attendee filter, the cron drops a small ignore list of
+booking links that must never surface as meetings — dropped at the same point
+as cancelled events. Helper: `_is_ignored_event` (constants
+`_IGNORED_EVENT_TITLES` / `_IGNORED_EVENT_URLS`).
+
+- **Digital College Implementation Call with Nico** (Scott). A separate program
+  booked on Nico's calendar via an external booking link
+  (`api.leadconnectorhq.com`). Matched by exact title (case-insensitive,
+  trimmed) **and** by the booking-link URL anywhere in the payload. The genuine
+  "Coaching Call with Nico" is untouched. Mirrored in `client_meetings_sync_cron.py`
+  (the pay-driving sync — see `docs/runbooks/client_meetings_sync.md`).
+
 **Debugging "why doesn't meeting X show up on /teams":**
 1. Check that the meeting has at least one external attendee on the actual Google Calendar entry. CSMs sometimes invite themselves only ("hold this slot") — that won't show.
 2. Check `calendar_events` directly: if the row is missing, the filter dropped it. If the row is present but the page doesn't render it, look at the title-and-time match (next section).

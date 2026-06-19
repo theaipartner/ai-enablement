@@ -24,6 +24,24 @@ month history (CSM pay inputs).
 6. Writes a summary audit row to `webhook_deliveries` (`source =
    'client_meetings_sync'`).
 
+## Excluded events
+
+Beyond cancelled / dateless / internal-only events, the cron drops a small
+ignore list of booking links that must never count as client meetings —
+dropped at the same point as cancelled events, before attribution. Helper:
+`_is_ignored_event` (constants `_IGNORED_EVENT_TITLES` / `_IGNORED_EVENT_URLS`).
+
+- **Digital College Implementation Call with Nico** (Scott, 2026-06-19). A
+  separate program booked on Nico's calendar via an external booking link
+  (`api.leadconnectorhq.com`). Matched by exact title (case-insensitive,
+  trimmed) **and** by the booking-link URL anywhere in the event payload.
+  Today's calendar events carry the title but not the URL — the URL guard is
+  forward-insurance. The genuine "Coaching Call with Nico" is untouched (its
+  title isn't on the list and its booking link is a different URL).
+
+To add another exclusion, extend the two constants in
+`api/client_meetings_sync_cron.py` (and mirror in `teams_calendar_sync_cron.py`).
+
 ## Schedule
 
 `30 4 * * *` UTC in `vercel.json` (≈11:30pm EST / 12:30am EDT). `maxDuration`

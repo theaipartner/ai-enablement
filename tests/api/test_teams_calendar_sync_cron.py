@@ -320,6 +320,52 @@ def test_cancelled_and_dateless_events_skipped(fake_db, monkeypatch):
     assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-keep"
 
 
+def test_digital_college_booking_link_ignored(fake_db, monkeypatch):
+    """The "Digital College Implementation Call with Nico" booking link must
+    never enter Gregory — dropped like a cancelled event. Matched by exact
+    title (case-insensitive) and by the booking-link URL in the payload. The
+    genuine coaching call with Nico is untouched (Scott, 2026-06-19)."""
+    fake_db.drake_rows = [_drake_row()]
+    fake_db.csm_rows = [_csm("tm-1", "nico@theaipartner.io", "Nico Cabrera")]
+    _stub_access_token(monkeypatch)
+    _stub_calendar_response(
+        monkeypatch,
+        {
+            "nico@theaipartner.io": [
+                # DC link, matched by exact title (varied case/whitespace).
+                _event(
+                    "ev-dc-title",
+                    "  Digital College Implementation Call with Nico ",
+                    "2026-06-20T14:00:00Z",
+                    "2026-06-20T15:00:00Z",
+                ),
+                # DC link surfacing via the booking URL in the payload.
+                {
+                    "id": "ev-dc-url",
+                    "summary": "Some other title",
+                    "start": {"dateTime": "2026-06-20T16:00:00Z"},
+                    "end": {"dateTime": "2026-06-20T17:00:00Z"},
+                    "attendees": [{"email": "prospect@example.com"}],
+                    "description": "Booked via "
+                    "https://api.leadconnectorhq.com/widget/bookings/coaching-call-with-nico",
+                },
+                # Genuine coaching call — must be kept.
+                _event(
+                    "ev-coaching-keep",
+                    "Jordan Lucas - Coaching Call with Nico",
+                    "2026-06-20T18:00:00Z",
+                    "2026-06-20T19:00:00Z",
+                ),
+            ],
+        },
+    )
+
+    result = cron.run_teams_calendar_sync_cron()
+
+    assert result["events_upserted"] == 1
+    assert fake_db.calendar_upserts[0]["google_event_id"] == "ev-coaching-keep"
+
+
 # ---------------------------------------------------------------------------
 # External-attendee filter (2026-05-15)
 # ---------------------------------------------------------------------------
