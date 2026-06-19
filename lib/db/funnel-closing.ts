@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
+import { loadOnceHubBookings } from './oncehub-bookings'
 import { fetchChunked } from './query-parallel'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
@@ -363,10 +364,22 @@ function buildMoney(rows: CloserReportRow[]): ClosingMoney {
 // ---------------------------------------------------------------------------
 
 export async function getClosingActivity(range: DateRange): Promise<ClosingActivity> {
-  const [bookings, rows] = await Promise.all([
+  const [calBookings, rows, ohBookings] = await Promise.all([
     loadCalendlyBookings(range),
     loadCloserReportRows(range),
+    // OnceHub bookings join the booking-activity tiles ADDITIVELY (OnceHub
+    // replaces Calendly going forward; both shown through the transition).
+    // Counted by booked_at — same "when the booking was made" grain Calendly
+    // uses (invitee_created_at). Each OnceHub booking is one attempt; reschedule
+    // new-legs are their own rows, so the grain matches Calendly's per-invitee.
+    loadOnceHubBookings(range, { dateField: 'booked_at' }),
   ])
+
+  const bookings: CalendlyBookingActivity = {
+    total: calBookings.total + ohBookings.length,
+    rescheduled: calBookings.rescheduled + ohBookings.filter((b) => b.isRescheduled).length,
+    canceled: calBookings.canceled + ohBookings.filter((b) => b.isCanceled).length,
+  }
 
   const { closers, aggregate } = buildLeaderboard(rows)
   const money = buildMoney(rows)
