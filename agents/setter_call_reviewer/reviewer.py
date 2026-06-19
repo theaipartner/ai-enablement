@@ -219,6 +219,26 @@ def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
         if tm_resp and tm_resp.data:
             setter_name = tm_resp.data.get("full_name")
 
+    # Fallback: a rep not in team_members yet (e.g. a brand-new hire before the
+    # daily close_users sync / manual add) would otherwise post as "Unknown
+    # setter". Resolve the real name straight from Close so the review never
+    # shows "Unknown setter". Best-effort — on any failure we keep None and the
+    # post falls back to the generic label.
+    if setter_name is None and call.get("user_id"):
+        try:
+            from ingestion.close.client import CloseClient
+
+            u = CloseClient.from_env().get_user(call["user_id"])
+            nm = " ".join(
+                p for p in [(u.get("first_name") or "").strip(), (u.get("last_name") or "").strip()] if p
+            ).strip()
+            setter_name = nm or None
+        except Exception as exc:  # noqa: BLE001 — display fallback, never fail the review
+            logger.warning(
+                "setter_review.close_name_fallback_failed user_id=%s err=%s",
+                call.get("user_id"), exc,
+            )
+
     prospect_name: str | None = None
     is_revival = False
     if call.get("lead_id"):

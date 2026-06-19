@@ -206,6 +206,13 @@ class CloseClient:
         """Full lead object including all `custom.cf_*` keys."""
         return self._request("GET", f"/lead/{lead_id}/")
 
+    def get_user(self, user_id: str) -> dict[str, Any]:
+        """Full Close user object (`first_name`, `last_name`, `email`).
+
+        Used as a display fallback to resolve a rep's name when they're not
+        in `team_members` yet (see the setter-call reviewer)."""
+        return self._request("GET", f"/user/{user_id}/")
+
     def iter_users(
         self,
         *,
