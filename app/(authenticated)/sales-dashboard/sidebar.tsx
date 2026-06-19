@@ -34,8 +34,14 @@ const NAV: NavItem[] = [
   // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },
   // Talent = per-rep views (Call Activity, per-closer scheduled, bookings, cash).
-  // Route stays /people; only the display name is "Talent".
-  { href: '/sales-dashboard/people', label: 'Talent' },
+  // Route stays /people; only the display name is "Talent". Roster is the
+  // by-person re-presentation (one block per rep) — a candidate replacement,
+  // reading the same loaders, nested as a sub-page for now.
+  {
+    href: '/sales-dashboard/people',
+    label: 'Talent',
+    children: [{ href: '/sales-dashboard/people/by-rep', label: 'Roster' }],
+  },
   // The Calls list page is gone — per-call review pages are reached from the
   // per-lead Lifecycle (each call links there, and returns "Back to lead").
 ]
