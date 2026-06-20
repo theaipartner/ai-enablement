@@ -436,18 +436,38 @@ export type RepCloserFormMetrics = { closerForms: number; meetings: number; clos
 
 export async function getCloserFormMetricsByRep(range: DateRange): Promise<Map<string, RepCloserFormMetrics>> {
   const sb = createAdminClient()
-  const [rows, closerIdentity] = await Promise.all([
-    loadCloserReportRows(range),
-    buildCloserIdentityResolver(sb),
-  ])
+  // Attribute by closer_record_ids → close_user_id across ALL reps (ANY
+  // sales_role). The unified Roster card shows closer-form metrics for every rep,
+  // not just sales_role='closer' — buildCloserIdentityResolver is closer-only,
+  // which silently zeroed DC closers (Robby, Bradley, Joshua) + setters (Connor)
+  // who file EOC forms. (Verified 2026-06-20: Robby had 39 closes / $17.9k hidden.)
+  const { data: tmData, error: tmErr } = await sb
+    .from('team_members' as never)
+    .select('airtable_user_id, close_user_id')
+    .not('close_user_id', 'is', null)
+    .is('archived_at', null)
+  if (tmErr) throw new Error(`team_members (rep-form attribution) read failed: ${tmErr.message}`)
+  const ridToUser = new Map<string, string>()
+  for (const t of (tmData ?? []) as unknown as Array<{ airtable_user_id: string | null; close_user_id: string | null }>) {
+    if (t.airtable_user_id && t.close_user_id) ridToUser.set(t.airtable_user_id, t.close_user_id)
+  }
+  const resolveUser = (ids: string[] | null): string | null => {
+    for (const rid of ids ?? []) {
+      const u = ridToUser.get(rid)
+      if (u) return u
+    }
+    return null
+  }
+
+  const rows = await loadCloserReportRows(range)
   const out = new Map<string, RepCloserFormMetrics>()
   for (const r of rows) {
-    const id = closerIdentity.byFormRecordIds(r.closer_record_ids)
-    if (!id) continue // non-closer / unattributed forms drop out
-    let m = out.get(id.key)
+    const userId = resolveUser(r.closer_record_ids)
+    if (!userId) continue // unattributed forms drop out
+    let m = out.get(userId)
     if (!m) {
       m = { closerForms: 0, meetings: 0, closes: 0, cash: 0 }
-      out.set(id.key, m)
+      out.set(userId, m)
     }
     m.closerForms++
 
