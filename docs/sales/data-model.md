@@ -251,7 +251,7 @@ This is the list the upcoming table audit works from.
 | `calendly_scheduled_events` | event mirror (filter by `name`) | closer drill, booking funnels, call typing |
 | `calendly_invitees` | invitee mirror — `no_show`, `rescheduled`, `utm_term`, email | lead matching, reschedule counts |
 | `calendly_event_types` | event-type reference (mostly not joined — retired URIs) | reference |
-| `oncehub_bookings` | OnceHub booking mirror (0092) — `owner` (round-robin rep), `scheduled_at`, `status`, reschedule/cancel lineage, hidden-field `lead_id` | booking→close spine (deferred); replaces Calendly for HT closer bookings |
+| `oncehub_bookings` | OnceHub booking mirror (0092) — `owner` (round-robin rep), `master_page`/`booking_page` (direct/setter), `scheduled_at`, `status`, reschedule/cancel lineage, hidden-field `lead_id` | **replaces Calendly** (additive); read via `lib/db/oncehub-bookings.ts` → tagger (lead_cycles), Talent, per-lead, missing-forms |
 | `airtable_setter_triage_calls` | triage + confirmation forms — `call_status`, `form_type` | connected/confirmed/DQ, tagger, CEO flags |
 | `airtable_full_closer_report` | closer EOC (US+AUS) — `call_outcome`, cash/plan fields | closer drill, showed/closed, Cash, DC routing, tagger |
 | `airtable_digital_college_sales` | Robby's dedicated DC form | DC drilldown (Talent), per-lead DC |

@@ -88,8 +88,9 @@ name → this page.
 
 ## Talent — `/people` (display name "Talent")
 
-Per-rep **Call Activity** (setters and closers), per-closer scheduled tables, Calendly-
-bookings boxes, **Cash**, and the **Digital College** drilldown (Robby). This is the
+Per-rep **Call Activity** (setters and closers), per-closer scheduled tables, the
+**BOOKINGS** boxes (Calendly + OnceHub — relabelled from "CALENDLY BOOKINGS" 2026-06-20),
+**Cash**, and the **Digital College** drilldown (Robby). This is the
 rep-performance surface, organized **by call type** (a Triage table + a Confirmation
 table, etc.). Being superseded by Roster (below) — kept as the comparison baseline until
 Roster is trusted.
@@ -124,11 +125,12 @@ loaders** (`getCallActivityMetrics`, `getClosingScheduledList`, `getClosingActiv
   Heydinger, Connor Malewicz, Yasmine Manno, Bradley, Joshua.
 - **Cards are equal-height** (grid-auto-rows), active reps sorted first.
 
-The closer card's funnel is **approximate today** because there's no reliable per-closer
-link from a booked meeting to its close — that's the deferred work in
-[`booking-to-close.md`](./booking-to-close.md). Once that ships, the closer card becomes
-an honest Dials · Books · Shows · Closes (HT/DC) · Cash · Cash-per-show funnel and Roster
-replaces `/people` outright.
+The closer card's funnel reads the read-time loaders (`getClosingScheduledList` etc.),
+which now reconstruct booking→closer-form from **Calendly + OnceHub** — and OnceHub's
+reliable `owner` makes the per-closer attribution trustworthy (the gap that once motivated
+the `booking_cycles` spine, now **shelved** — see [`booking-to-close.md`](./booking-to-close.md)).
+Books/Shows/Closes stay read-time-reconstructed (no persisted spine); Roster can replace
+`/people` once it's trusted on the real numbers.
 
 ---
 

@@ -45,11 +45,17 @@ fine — it's a high-precision key, not a high-recall one.
 
 ---
 
-## Calendly → lead matching precedence
+## Booking → lead matching precedence
 
-`utm_term` token **first**, then **email** (invitee email → `close_leads.contacts`),
-then phone, then name. Used in `leads.ts` `directBooked` and across `funnel-closing.ts`
-(`leadKeyOf`, `buildBookedByResolver`, `matchForm`).
+**Calendly:** `utm_term` token **first**, then **email** (invitee email →
+`close_leads.contacts`), then phone, then name. Used in `leads.ts` `directBooked` and across
+`funnel-closing.ts` (`leadKeyOf`, `buildBookedByResolver`, `matchForm`).
+
+**OnceHub:** the same precedence with a stronger primary — **hidden `lead_id` first** (when
+the field is configured; exact, not ambiguity-gated like utm), then **email → phone → name**
+(`lib/db/oncehub-bookings.ts` `buildOnceHubLeadResolver`; the tagger resolves the same way).
+The hidden field isn't live yet, so today OnceHub matches on email/phone/name — the utm hack
+is replaced by an exact id once Zain adds the hidden field + `?lead_id=` links.
 
 Why email is the reliable middle key: invitee names are often first-name-only ("EDavid"
 vs "EDavid Waugh") and the closer form's `prospect_email` is frequently null. **Match by
@@ -163,9 +169,12 @@ close).
 
 ---
 
-## Direct vs setter call typing — always from Calendly
+## Direct vs setter call typing — from the booking platform (Calendly + OnceHub)
 
-The call type comes from the **Calendly event**, never the form:
+The call type comes from the **booking** (a Calendly event or an OnceHub booking), never
+the form. OnceHub **replaces Calendly** going forward; the dashboard reads both additively.
+
+**Calendly** (historical + still live):
 
 - **Direct** = `event_type_uri === DIRECT_BOOKING_EVENT_TYPE_URI`
   (`…/event_types/8f6795d3-992a-4cbd-b584-9ecaabb3938c`, "Ai Partner Strategy Call").
@@ -176,6 +185,20 @@ The call type comes from the **Calendly event**, never the form:
 Filter closer bookings by `calendly_scheduled_events.name` ILIKE the `CLOSER_EVENT_TYPE_
 NAMES` entries — **do not** join `event_type_uri` to `calendly_event_types` (58% of
 historical events reference retired URIs).
+
+**OnceHub** (`oncehub_bookings`; classified in `lib/db/oncehub-bookings.ts` + the matching
+copy in `shared/lead_tagging.py` — **keep both in sync**):
+
+- **Direct** = `master_page` set (`BP-MVKDFLP85W`, the FB funnel) — checked **FIRST**,
+  because a direct booking *also* carries a partnership `booking_page` underneath.
+- **Setter-led** = `booking_page` set (`BP-UBK4DVGWFX` Aman / `BP-182H3QCWET` Cobe) with
+  `master_page` NULL.
+- Internal 1:1 "Meeting with X" calendars dropped; **no OnceHub DC** (phone-based).
+
+Both platforms feed the same downstream logic: the tagger unions OnceHub **direct** bookings
+into the lead_cycles "booked" signal (setter rides the triage form, same as Calendly), and
+`funnel-closing.ts` / `lead-detail.ts` / `ceo-missing-forms.ts` union OnceHub bookings in
+additively (OnceHub's `owner` → the same `closerIdentity` as a Calendly host).
 
 **Setter id→name** (`buildSetterNameResolver`): the new closer form dropped the Setter
 Name lookup, so resolve record-id→name by learning every `(record_id, name)` pair from

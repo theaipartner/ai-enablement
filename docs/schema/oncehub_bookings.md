@@ -5,11 +5,11 @@ idempotent (upsert). Migration `0092_oncehub_bookings.sql`.
 
 ## Purpose
 
-The capture/discovery layer for the booking→close lifecycle (see
-`docs/sales/booking-to-close.md`). OnceHub **replaces Calendly** for HT closer
-bookings. The dashboard / future `booking_cycles` spine read THIS table, never
-`api.oncehub.com` directly (core principle #1/#3). The normalized spine, the
-per-leg pinger, and the Talent closer card are deferred — they read this mirror.
+The OnceHub booking mirror. OnceHub **replaces Calendly** as the scheduling platform
+(additive — the dashboard reads Calendly + OnceHub). The dashboard reads THIS table,
+never `api.oncehub.com` directly (core principle #1/#3). The persisted `booking_cycles`
+spine is **shelved** — read-time reconstruction + `lead_cycles` cover the booking→close
+linkage (see `docs/sales/booking-to-close.md` for the decision + revisit trigger).
 
 ## What populates it
 
@@ -30,8 +30,10 @@ Both go through `ingestion/oncehub/parser.parse_booking` → the same row shape.
 | `booking_id` | PK, the v2 `id` (`BKNG-…`). |
 | `status` | OnceHub-cased: `scheduled` / `canceled` / `completed` / `no_show`. |
 | `scheduled_at` | meeting start (`starting_time`) — the closing-leg clock. |
-| `owner_user_id` | **the rep the round-robin landed on** (`USR-…`). The per-closer Books attribution that had no reliable source pre-OnceHub. |
-| `booking_calendar_id` | `BKC-…` (the team calendar — `BKC-0NJDVMLVJK` = "Ai Partner Strategy Call"). |
+| `owner_user_id` | **the rep the round-robin landed on** (`USR-…`). The per-closer Books attribution that had no reliable source pre-OnceHub. Resolved owner→closer in `lib/db/oncehub-bookings.ts`. |
+| `master_page_id` | `BP-MVKDFLP85W` ("AI Partner - FB" funnel) → **direct**. Checked FIRST (a direct booking also carries a partnership `booking_page` underneath). |
+| `booking_page_id` | `BP-UBK4DVGWFX` (Aman) / `BP-182H3QCWET` (Cobe) "Partnership Call w/" → **setter**, but only when `master_page_id` is NULL. |
+| `booking_calendar_id` | `BKC-…` — `BKC-0NJDVMLVJK` = "Ai Partner Strategy Call" (team, direct); "Meeting with X" calendars = internal (dropped). |
 | `invitee_name`/`_email`/`_phone` | from `form_submission` — **null on admin/reschedule-created bookings**; populated on real form bookings. Lead-match fallback. |
 | `lead_id` | Close lead_id from the hidden custom field. **Null until the hidden field is configured in OnceHub** + links carry `?lead_id=`. Tamperable — validate against `close_leads` before trusting. |
 | `custom_fields` | the raw `custom_fields` array (top-level + `form_submission`, merged). |
@@ -43,15 +45,25 @@ Both go through `ingestion/oncehub/parser.parse_booking` → the same row shape.
 
 ## Reads from it
 
-Nothing yet — the `booking_cycles` spine + Talent closer card are deferred. This
-table accumulates real bookings so those can be built against reality.
+All via the read foundation `lib/db/oncehub-bookings.ts` (classify role → resolve
+booking→lead → resolve owner→closer), unioned **additively** with Calendly:
 
-## Live OnceHub config (2026-06-19)
+- **`shared/lead_tagging.py`** (the tagger) — OnceHub **direct** bookings feed the
+  `lead_cycles` "booked" signal (setter rides the triage form). Lights up the funnel,
+  roster, and per-lead booked stage via the materialized `lead_cycle_stages`.
+- **`lib/db/funnel-closing.ts`** — the Talent booking tiles + per-closer scheduled tables
+  (owner → the same `closerIdentity` as a Calendly host).
+- **`lib/db/lead-detail.ts`** — the per-lead journey timeline + booked stage.
+- **`lib/db/ceo-missing-forms.ts`** — the missing-form flagger.
 
-v2 account. Team **Closers** (`TM-LHNGDXC42R59`: Cobe, Aman). Team-hosted
-**"Ai Partner Strategy Call"** calendar round-robins between them. Public master
-page **"AI Partner - FB"** (`go.oncehub.com/AIPartner-FB`). A second webhook →
-make.com (Zain's) coexists with ours. See `docs/sales/ingestion.md` § OnceHub.
+## Live OnceHub config (2026-06-20)
+
+v2 account. Team **Closers** (`TM-LHNGDXC42R59`: Cobe, Aman). **Direct:** team-hosted
+**"Ai Partner Strategy Call"** calendar (`BKC-0NJDVMLVJK`, round-robin) behind the master
+page **"AI Partner - FB"** (`BP-MVKDFLP85W`, `go.oncehub.com/AIPartner-FB`). **Setter:**
+per-closer **"Partnership Call w/ {Aman,Cobe}"** pages (`BP-UBK4DVGWFX` / `BP-182H3QCWET`).
+A second webhook → make.com (Zain's) coexists with ours. See `docs/sales/ingestion.md` §
+OnceHub.
 
 ## Example queries
 
