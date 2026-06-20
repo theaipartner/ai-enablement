@@ -9,8 +9,10 @@ import {
   getClosingScheduledList,
   getClosingActivity,
   getCloserFormMetricsByRep,
+  getCloserFormsForRep,
   CLOSING_FLOOR_ET,
   type CloserScheduledDrillRow,
+  type RepCloserFormRow,
 } from '@/lib/db/funnel-closing'
 import {
   getDigitalCollegeActivity,
@@ -94,13 +96,14 @@ export default async function SalesRosterPage({
   const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
   const selectedDcCloser = typeof selectedDcCloserRaw === 'string' && selectedDcCloserRaw.length > 0 ? selectedDcCloserRaw : null
 
-  const [activity, repDrill, scheduled, closingData, digitalCollege, closerForms, access, identity] = await Promise.all([
+  const [activity, repDrill, scheduled, closingData, digitalCollege, closerForms, closerFormRows, access, identity] = await Promise.all([
     getCallActivityMetrics(range),
     selectedRep ? getCallActivityForUser(range, selectedRep) : Promise.resolve([] as CallActivityDrillRow[]),
     getClosingScheduledList(range),
     getClosingActivity(range),
     getDigitalCollegeActivity(range),
     getCloserFormMetricsByRep(range),
+    selectedRep ? getCloserFormsForRep(range, selectedRep) : Promise.resolve([] as RepCloserFormRow[]),
     getCurrentUserAccessTier(),
     loadSalesIdentity(),
   ])
@@ -147,6 +150,7 @@ export default async function SalesRosterPage({
           person={person}
           windowQs={windowQs}
           repDrill={repDrill}
+          closerFormRows={closerFormRows}
           scheduledDrill={selectedCloser ? scheduled.drillByCloser[selectedCloser] ?? [] : []}
           dcDrill={selectedDcCloser ? digitalCollege.drillByCloser[selectedDcCloser] ?? [] : []}
           selectedCloser={selectedCloser}
@@ -173,6 +177,7 @@ function PersonDetail({
   person,
   windowQs,
   repDrill,
+  closerFormRows,
   scheduledDrill,
   dcDrill,
   selectedCloser,
@@ -183,6 +188,7 @@ function PersonDetail({
   person: RosterPerson
   windowQs: string
   repDrill: CallActivityDrillRow[]
+  closerFormRows: RepCloserFormRow[]
   scheduledDrill: CloserScheduledDrillRow[]
   dcDrill: DcDrillRow[]
   selectedCloser: string | null
@@ -248,6 +254,15 @@ function PersonDetail({
                 />
               ) : null}
             </div>
+          </SectionBox>
+        ) : null}
+
+        {closerFormRows.length > 0 ? (
+          <SectionBox
+            eyebrow="CLOSER FORMS"
+            title={`Every closer EOC form this rep filed in range — ${closerFormRows.length} total.`}
+          >
+            <CloserFormsTable rows={closerFormRows} />
           </SectionBox>
         ) : null}
 
@@ -319,5 +334,55 @@ function SectionBox({
       </div>
       {children}
     </section>
+  )
+}
+
+// Every closer EOC form the rep filed in range (any role/booking). Cash + Close
+// follow the same forms-only logic as the card (HT close / DC = dc_plans · $300).
+function CloserFormsTable({ rows }: { rows: RepCloserFormRow[] }) {
+  const fmtDate = (iso: string) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(iso))
+  const th = (label: string, right = false): React.CSSProperties => ({
+    padding: '8px 10px',
+    fontSize: 10,
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid var(--color-geg-border)',
+    textAlign: right ? 'right' : 'left',
+    color: 'var(--color-geg-text-3)',
+  })
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr>
+            <th className="geg-mono" style={th('Date')}>Date</th>
+            <th className="geg-mono" style={th('Prospect')}>Prospect</th>
+            <th className="geg-mono" style={th('Outcome')}>Outcome</th>
+            <th className="geg-mono" style={th('Plan')}>Plan</th>
+            <th className="geg-mono" style={th('Cash', true)}>Cash</th>
+            <th className="geg-mono" style={th('')}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.recordId} style={{ borderBottom: '1px solid var(--color-geg-border)' }}>
+              <td className="geg-mono" style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: 'var(--color-geg-text-3)' }}>{fmtDate(r.dateIso)}</td>
+              <td style={{ padding: '8px 10px', color: 'var(--color-geg-text)' }}>{r.prospectName ?? '—'}</td>
+              <td style={{ padding: '8px 10px', color: 'var(--color-geg-text-2)' }}>{r.callOutcome ?? '—'}</td>
+              <td style={{ padding: '8px 10px', color: 'var(--color-geg-text-3)' }}>{r.plan ?? '—'}</td>
+              <td className="geg-numeric-serif" style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--color-geg-text)' }}>{r.cash > 0 ? compactUsd(r.cash) : '—'}</td>
+              <td style={{ padding: '8px 10px' }}>
+                {r.isClose ? (
+                  <span className="geg-mono" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'var(--color-geg-bg)', border: '1px solid var(--color-geg-border)', color: 'var(--color-geg-text-2)', whiteSpace: 'nowrap' }}>
+                    {r.closeType === 'dc' ? 'DC close' : 'Close'}
+                  </span>
+                ) : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

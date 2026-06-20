@@ -139,7 +139,11 @@ logic.
 - **Click a card → per-person detail** (`?rep=`): the full existing drilldown tables
   (call activity + per-call drill, scheduled calls, DC) scoped to that one rep, with a
   "← All reps" back link. Collapsing the drill returns to the grid (`?rep` is the page's
-  single person selector).
+  single person selector). Plus a **"Closer forms" table** (`getCloserFormsForRep`) listing
+  **every** closer EOC form the rep filed in range — date / prospect / outcome / plan /
+  cash / close-badge — attributed across **all** roles, so DC closers + setters who file
+  forms (Connor, Bradley, Joshua) finally see their forms here (the scheduled tables only
+  show `sales_role='closer'`, so they were invisible before — Drake 2026-06-20).
 - **Active/inactive.** Inactive reps are **hidden by default**; a "Show inactive" toggle
   reveals them (dimmed, with an "Inactive" chip). Active = `team_members.is_active` among
   non-archived sales rows (`is_csm=false`, so it's independent of the CSM surfaces;
