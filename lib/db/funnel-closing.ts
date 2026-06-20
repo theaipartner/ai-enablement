@@ -1179,7 +1179,7 @@ export async function getClosingScheduledList(
       'record_id, lead_id, prospect_name, prospect_email, date_time_of_call, showed, closed, ' +
       'amount_paid_today_currency, amount_paid_today_number, deposit_amount, ' +
       'payment_plan_type, closer_names, closer_record_ids, setter_names, setter_record_ids, ' +
-      'form_type, call_outcome, airtable_created_at',
+      'form_type, call_outcome, airtable_created_at, dc_plans',
     )
     .gte('date_time_of_call', widenStartIso)
     .lt('date_time_of_call', widenEndIso)
@@ -1203,6 +1203,7 @@ export async function getClosingScheduledList(
     form_type: string | null
     call_outcome: string | null
     airtable_created_at: string | null
+    dc_plans: string[] | null
   }>
 
   const formsByName = new Map<string, typeof forms>()
@@ -1375,6 +1376,14 @@ export async function getClosingScheduledList(
       closeType = closed === 'yes' ? classifyPlan(form.payment_plan_type) : null
       upfront = toNum(form.amount_paid_today_currency)
     }
+    // Fold in DC cash — $300 per plan unit. DC forms carry no amount_paid; their
+    // cash is the plan units (Drake 2026-06-20; matches funnel-cash + the rep card).
+    if (form) {
+      const dcCounts = emptyPlans()
+      addPlan(dcCounts, form.dc_plans)
+      const dcCash = dcPlanUnits(dcCounts) * DC_PLAN_PRICE_USD
+      if (dcCash > 0) upfront = (upfront ?? 0) + dcCash
+    }
 
     // Setter name: prefer the matched form's own Setter Name (id→name),
     // fall back to the triage-form resolver. Only for setter-led calls;
@@ -1487,7 +1496,12 @@ export async function getClosingScheduledList(
     if (!closer) continue
     const agg = bumpAgg(closer)
     const paid = toNum(f.amount_paid_today_number) ?? toNum(f.amount_paid_today_currency)
-    const upfront = d.closed === 'deposit' ? (toNum(f.deposit_amount) ?? paid) : paid
+    let upfront = d.closed === 'deposit' ? (toNum(f.deposit_amount) ?? paid) : paid
+    // Fold in DC cash — $300 per plan unit (DC forms carry no amount_paid).
+    const dcCounts = emptyPlans()
+    addPlan(dcCounts, f.dc_plans)
+    const dcCash = dcPlanUnits(dcCounts) * DC_PLAN_PRICE_USD
+    if (dcCash > 0) upfront = (upfront ?? 0) + dcCash
     const bookedBy = callType === 'setter' ? (setterNameResolver(f.setter_record_ids) ?? null) : null
     agg.calls++
     if (callType === 'direct') agg.directCalls++
