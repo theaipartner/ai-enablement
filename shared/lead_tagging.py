@@ -80,6 +80,10 @@ ROBBY_DC_URI = "https://api.calendly.com/event_types/6f06c6ba-6ca2-48d2-ae17-a6c
 # map) — keep them in sync as Zain adds OnceHub pages (e.g. a setter or DC link).
 ONCEHUB_HT_MASTER_PAGES = ("BP-MVKDFLP85W",)  # "AI Partner - FB"
 ONCEHUB_HT_CALENDARS = ("BKC-0NJDVMLVJK",)    # "Ai Partner Strategy Call" (team round-robin)
+# Setter-led "Partnership Call w/ {closer}" pages. A direct FB-funnel booking also
+# carries one of these as its underlying page, so the HT master/calendar are matched
+# FIRST below — booking_page is only decisive when neither HT key is present.
+ONCEHUB_PARTNERSHIP_PAGES = ("BP-UBK4DVGWFX", "BP-182H3QCWET")  # Aman, Cobe
 
 CONNECTED_SEC = 90
 COLD = timedelta(days=3)
@@ -336,16 +340,22 @@ def _compute(cur, lead_ids):
     # name — the same priority as Calendly. A lead books ONE platform per cycle,
     # so the union never double-sets booked_at (raw_book is a min, not a sum).
     cur.execute(
-        """select master_page_id, booking_calendar_id, lead_id, invitee_email,
-                  invitee_phone, invitee_name, scheduled_at, status, booked_at
+        """select master_page_id, booking_calendar_id, booking_page_id, lead_id,
+                  invitee_email, invitee_phone, invitee_name, scheduled_at, status, booked_at
            from oncehub_bookings where excluded_at is null"""
     )
-    for mp, bcal, oh_lead, oemail, ophone, oname, start, status, created in cur.fetchall():
-        if mp not in ONCEHUB_HT_MASTER_PAGES and bcal not in ONCEHUB_HT_CALENDARS:
+    for mp, bcal, bpage, oh_lead, oemail, ophone, oname, start, status, created in cur.fetchall():
+        # HT (direct self-book) wins over the underlying partnership page; only a
+        # bare partnership-page booking (no HT key) is setter-led.
+        if mp in ONCEHUB_HT_MASTER_PAGES or bcal in ONCEHUB_HT_CALENDARS:
+            kind = "direct"
+        elif bpage in ONCEHUB_PARTNERSHIP_PAGES:
+            kind = "partnership"
+        else:
             continue  # internal 1:1 / unmapped page — not a sales booking
         cid = oh_lead if (oh_lead and oh_lead in cycles_by_lead) else resolve(None, oemail, ophone, oname)
         if cid in cycles_by_lead:
-            bookings[cid].append(("direct", start, norm(status), created))
+            bookings[cid].append((kind, start, norm(status), created))
 
     # 4. Per-lead signals (forms / calls / sms).
     def fetch(table, cols, extra=""):

@@ -936,12 +936,12 @@ export async function getClosingScheduledList(
   // Injected into the SAME pipeline below (typed + inviteeByEvent) so they get
   // form-matched, per-lead-collapsed, and closer-attributed identically — the
   // win being OnceHub's reliable `owner` instead of read-time host guessing.
-  // Today only ht_consultation (direct self-book) is live; partnership ('setter')
-  // folds in once those pages carry real bookings. Open-ended upper bound so
-  // future-scheduled bookings count (mirrors the Calendly load's floor-only gate).
+  // ht_consultation → 'direct', partnership → 'setter' (both live). Open-ended
+  // upper bound so future-scheduled bookings count (mirrors the Calendly load's
+  // floor-only gate).
   const oncehubBks = await loadOnceHubBookings(
     { ...range, startUtcIso: floorIso, endUtcIso: '2999-01-01T00:00:00.000Z' },
-    { dateField: 'scheduled_at', roles: ['ht_consultation'] },
+    { dateField: 'scheduled_at', roles: ['ht_consultation', 'partnership'] },
   )
 
   if (typed.length === 0 && oncehubBks.length === 0) {
@@ -1037,8 +1037,8 @@ export async function getClosingScheduledList(
   //     host_user_email = the closer's team_member email (from OnceHub's owner),
   //     so closerIdentity.byHost resolves them to the SAME canonical closer as a
   //     Calendly host. invitee carries the resolved Close lead_id + email/name so
-  //     form-matching + per-lead collapse work unchanged. callType is 'direct'
-  //     (ht_consultation); 'setter' joins when partnership bookings are classified.
+  //     form-matching + per-lead collapse work unchanged. callType: ht_consultation
+  //     → 'direct', partnership → 'setter'.
   for (const b of oncehubBks) {
     if (!b.scheduledAt) continue // can't place on the timeline
     const uri = b.bookingId
@@ -1052,7 +1052,7 @@ export async function getClosingScheduledList(
         status: b.status, // 'canceled' → dead downstream; no_show stays live (form drives it)
         event_type_uri: null,
       },
-      callType: 'direct',
+      callType: b.role === 'partnership' ? 'setter' : 'direct',
     })
     const phone = normalizePhone(b.inviteePhone)
     inviteeByEvent.set(uri, {

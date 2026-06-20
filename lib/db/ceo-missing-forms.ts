@@ -165,7 +165,7 @@ async function closerFlags(
   // covers them uniformly. ht_consultation only today (the direct closer flow).
   const ohBks = await loadOnceHubBookings(
     { startEtDate: '', endEtDate: '', startUtcIso: todayStart, endUtcIso: cutoff },
-    { dateField: 'scheduled_at', roles: ['ht_consultation'] },
+    { dateField: 'scheduled_at', roles: ['ht_consultation', 'partnership'] },
   )
   for (const b of ohBks) {
     if (!b.leadId || !b.scheduledAt || b.isCanceled) continue

@@ -427,13 +427,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       booking_id: string
       master_page_id: string | null
       booking_calendar_id: string | null
+      booking_page_id: string | null
       subject: string | null
       scheduled_at: string | null
       booked_at: string | null
       rescheduled_booking_id: string | null
     }
     const ohCols =
-      'booking_id, master_page_id, booking_calendar_id, subject, scheduled_at, booked_at, rescheduled_booking_id'
+      'booking_id, master_page_id, booking_calendar_id, booking_page_id, subject, scheduled_at, booked_at, rescheduled_booking_id'
     const ohById = new Map<string, OhRow>()
     const addOh = (rows: OhRow[]) => {
       for (const r of rows) if (!ohById.has(r.booking_id)) ohById.set(r.booking_id, r)
@@ -466,10 +467,19 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       addOh((data ?? []) as unknown as OhRow[])
     }
     for (const b of Array.from(ohById.values())) {
-      if (classifyOnceHubBooking(b) !== 'ht_consultation') continue // direct flow only for now
-      if (b.rescheduled_booking_id) rescheduleCount++
-      if (afterOptIn(b.booked_at)) hasDirect = true
-      if (b.scheduled_at) bookings.push({ at: b.scheduled_at, link: 'direct', name: b.subject ?? 'OnceHub Strategy Call' })
+      const role = classifyOnceHubBooking(b)
+      if (role === 'ht_consultation') {
+        if (b.rescheduled_booking_id) rescheduleCount++
+        if (afterOptIn(b.booked_at)) hasDirect = true
+        if (b.scheduled_at) bookings.push({ at: b.scheduled_at, link: 'direct', name: b.subject ?? 'OnceHub Strategy Call' })
+      } else if (role === 'partnership') {
+        if (b.rescheduled_booking_id) rescheduleCount++
+        if (afterOptIn(b.booked_at)) {
+          hasPartnership = true
+          if (b.booked_at) partnershipCreatedTimes.push(b.booked_at)
+        }
+        if (b.scheduled_at) bookings.push({ at: b.scheduled_at, link: 'setter', name: b.subject ?? 'OnceHub Partnership Call' })
+      }
     }
   }
 

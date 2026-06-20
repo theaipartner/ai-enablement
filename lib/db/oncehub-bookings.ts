@@ -31,7 +31,7 @@ import type { DateRange } from './funnel-window'
 // booked it. (Direct-vs-setter is a lead-state concern derived from the triage
 // form by the tagger, not from the booking itself.) 'internal' = a non-sales
 // meeting (individual 1:1 calendars) we must NOT count as a sales booking.
-export type OnceHubBookingRole = 'ht_consultation' | 'dc' | 'internal' | 'unknown'
+export type OnceHubBookingRole = 'ht_consultation' | 'partnership' | 'dc' | 'internal' | 'unknown'
 
 // The classification map — the single source of truth for "which OnceHub page
 // is which funnel flow". Grows as Zain adds pages; keep it confirmed with him.
@@ -51,18 +51,33 @@ const ROLE_BY_BOOKING_CALENDAR: Record<string, OnceHubBookingRole> = {
   'BKC-LDJ8E33M5X': 'internal', // "Meeting with Aman"   (individual 1:1 — confirm w/ Drake if setters use it)
   'BKC-P96Y2PP26X': 'internal', // "Meeting with Success"
 }
+// Setter-led "Partnership Call w/ {closer}" pages (the Classic booking-page
+// surface). A FB-funnel direct booking ALSO carries one of these as its
+// underlying page, so booking_page is only decisive when master_page is absent
+// (verified live 2026-06-20: direct = master_page set; partnership = master_page
+// null + booking_page set). Hence booking_page is checked LAST below.
+const ROLE_BY_BOOKING_PAGE: Record<string, OnceHubBookingRole> = {
+  'BP-UBK4DVGWFX': 'partnership', // "Partnership Call w/ Aman"
+  'BP-182H3QCWET': 'partnership', // "Partnership Call w/ Cobe"
+}
 
 export function classifyOnceHubBooking(b: {
   master_page_id?: string | null
   booking_calendar_id?: string | null
+  booking_page_id?: string | null
 }): OnceHubBookingRole {
-  // Master page wins (a funnel booking carries master_page; a direct-calendar
-  // booking carries booking_calendar — they're mutually exclusive in practice).
+  // Order matters: a FB-funnel direct booking carries master_page AND a
+  // partnership booking_page underneath — master_page makes it direct. A bare
+  // partnership-page booking has no master_page → setter. So master/calendar
+  // are checked before booking_page.
   if (b.master_page_id && ROLE_BY_MASTER_PAGE[b.master_page_id]) {
     return ROLE_BY_MASTER_PAGE[b.master_page_id]
   }
   if (b.booking_calendar_id && ROLE_BY_BOOKING_CALENDAR[b.booking_calendar_id]) {
     return ROLE_BY_BOOKING_CALENDAR[b.booking_calendar_id]
+  }
+  if (b.booking_page_id && ROLE_BY_BOOKING_PAGE[b.booking_page_id]) {
+    return ROLE_BY_BOOKING_PAGE[b.booking_page_id]
   }
   return 'unknown'
 }
@@ -259,6 +274,7 @@ type OnceHubRow = {
   booking_id: string
   master_page_id: string | null
   booking_calendar_id: string | null
+  booking_page_id: string | null
   lead_id: string | null
   owner_user_id: string | null
   subject: string | null
@@ -289,13 +305,13 @@ export async function loadOnceHubBookings(
   opts: LoadOnceHubOptions = {},
 ): Promise<OnceHubBooking[]> {
   const dateField = opts.dateField ?? 'booked_at'
-  const roles = opts.roles ?? ['ht_consultation', 'dc']
+  const roles = opts.roles ?? ['ht_consultation', 'partnership']
 
   const sb = createAdminClient()
   const { data, error } = await sb
     .from('oncehub_bookings' as never)
     .select(
-      'booking_id, master_page_id, booking_calendar_id, lead_id, owner_user_id, subject, ' +
+      'booking_id, master_page_id, booking_calendar_id, booking_page_id, lead_id, owner_user_id, subject, ' +
         'scheduled_at, booked_at, status, last_event_type, rescheduled_booking_id, ' +
         'invitee_name, invitee_email, invitee_phone',
     )
