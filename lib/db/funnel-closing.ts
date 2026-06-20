@@ -168,6 +168,7 @@ type CloserReportRow = {
   amount_paid_today_currency: number | null
   total_contract_amount: number | null
   closer_names: string[] | null
+  closer_record_ids: string[] | null
   prospect_name: string | null
   // New-form (redesigned) fields — the close + cash live here on New forms;
   // the legacy `closed` / `amount_paid_today_currency` are null on them.
@@ -203,7 +204,7 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
       .from('airtable_full_closer_report' as never)
       .select(
         'record_id, lead_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
-        'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, prospect_name, ' +
+        'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, closer_record_ids, prospect_name, ' +
         'form_type, call_outcome, amount_paid_today_number, deposit_amount',
       )
       .gte('airtable_created_at', widenStartIso)
@@ -418,6 +419,58 @@ export async function getCloserCallsForCloser(range: DateRange, closerName: stri
     const bx = b.dateTimeOfCall ?? ''
     return ax < bx ? 1 : ax > bx ? -1 : 0
   })
+  return out
+}
+
+// ===========================================================================
+// Per-rep closer-form metrics — FORMS-ONLY (for the Roster's unified card)
+// ===========================================================================
+//
+// Each rep's closer EOC forms (`airtable_full_closer_report`) in range, attributed
+// by `closer_record_ids` → `close_user_id` (the same identity the scheduled tables
+// use). NO booking-platform data (Calendly/OnceHub) — strictly forms (Drake
+// 2026-06-20). `meetings` = forms with a SHOWED outcome; `closerForms` = all forms
+// filed; `closes` = full closes; `cash` = upfront collected.
+
+export type RepCloserFormMetrics = { closerForms: number; meetings: number; closes: number; cash: number }
+
+export async function getCloserFormMetricsByRep(range: DateRange): Promise<Map<string, RepCloserFormMetrics>> {
+  const sb = createAdminClient()
+  const [rows, closerIdentity] = await Promise.all([
+    loadCloserReportRows(range),
+    buildCloserIdentityResolver(sb),
+  ])
+  const out = new Map<string, RepCloserFormMetrics>()
+  for (const r of rows) {
+    const id = closerIdentity.byFormRecordIds(r.closer_record_ids)
+    if (!id) continue // non-closer / unattributed forms drop out
+    let m = out.get(id.key)
+    if (!m) {
+      m = { closerForms: 0, meetings: 0, closes: 0, cash: 0 }
+      out.set(id.key, m)
+    }
+    m.closerForms++
+
+    let showed: CloserScheduledDrillRow['showed']
+    let closed: 'yes' | 'no' | 'deposit' | null
+    let paid: number | null
+    if (r.form_type === 'New') {
+      const d = deriveNewOutcome(r.call_outcome)
+      showed = d.showed
+      closed = d.closed
+      const p = toNum(r.amount_paid_today_number) ?? toNum(r.amount_paid_today_currency)
+      paid = d.closed === 'deposit' ? toNum(r.deposit_amount) ?? p : p
+    } else {
+      showed = normalizeShowed(r.showed)
+      closed = normalizeClosed(r.closed)
+      paid = toNum(r.amount_paid_today_currency)
+    }
+    // Meetings = SHOWED (attended): a yes/DQ-show or a follow-up — the same
+    // "showed" definition the scheduled aggregate uses (logic.md § closer outcome).
+    if (showed === 'yes' || showed === 'short_follow' || showed === 'long_follow') m.meetings++
+    if (closed === 'yes') m.closes++
+    if (paid !== null && Number.isFinite(paid)) m.cash += paid
+  }
   return out
 }
 

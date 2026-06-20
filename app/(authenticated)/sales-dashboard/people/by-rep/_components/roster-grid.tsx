@@ -94,39 +94,30 @@ function roleLabel(role: SalesRole): string {
   }
 }
 
-// The crucial metrics for the card, keyed off the canonical role (per the
-// Engine data sheet's per-rep funnels). Everything else lives on the detail
-// view (the full reused tables).
-function crucialStats(person: RosterPerson, role: SalesRole): { label: string; value: string | number; accent?: boolean }[] {
-  if (role === 'dc_closer') {
-    const d = person.dc
-    return [
-      { label: 'Dials', value: d?.dials ?? 0 },
-      { label: 'Meetings', value: d?.meetings ?? 0 },
-      { label: 'Shows', value: d?.shows ?? 0 },
-      { label: 'Closes', value: d?.closes ?? 0, accent: true },
-    ]
-  }
-  if (role === 'closer') {
-    const sc = person.scheduled
-    const showed = sc?.showed ?? 0
-    const closed = sc?.closed ?? 0
-    return [
-      { label: 'Showed', value: showed },
-      { label: 'Closed', value: closed, accent: true },
-      { label: 'Close rate', value: pct(closed, showed) },
-      { label: 'Cash', value: compactUsd(sc?.upfront ?? 0) },
-    ]
-  }
-  // setter (and the sales fallback)
-  const s = person.setter
-  const triages = person.connected
-  const booked = (s?.htBookings ?? 0) + (s?.dcBookings ?? 0)
+// The unified crucial metrics — the SAME nine for every rep (Drake 2026-06-20),
+// since everyone both sets and closes a little. The role chip still shows their
+// dedicated role; only the metric set is unified. The card walks setter-side →
+// closer-side, STRICTLY from the forms (no booking-platform data):
+//   Dials · Connections · Bookings · Book rate  (setter side, calls + triage forms)
+//   Meetings · Closer forms · Closes · Cash · Cash/mtg  (closer side, EOC forms)
+// - Bookings = this rep's setter "Booked" (HT + DC from the triage table).
+// - Meetings = closer EOC forms with a SHOWED outcome; Closer forms = all filed.
+// - Cash / mtg = cash ÷ meetings (showed).
+function crucialStats(person: RosterPerson): { label: string; value: string | number; accent?: boolean }[] {
+  const cf = person.closerForms
+  const bookings = (person.setter?.htBookings ?? 0) + (person.setter?.dcBookings ?? 0)
+  const meetings = cf?.meetings ?? 0
+  const cash = cf?.cash ?? 0
   return [
-    { label: 'Dials', value: person.dials, accent: true },
-    { label: 'Triages', value: triages },
-    { label: 'Booked', value: booked },
-    { label: 'Book rate', value: pct(booked, triages) },
+    { label: 'Dials', value: person.dials },
+    { label: 'Connections', value: person.connected },
+    { label: 'Bookings', value: bookings },
+    { label: 'Book rate', value: pct(bookings, person.connected) },
+    { label: 'Meetings', value: meetings },
+    { label: 'Closer forms', value: cf?.closerForms ?? 0 },
+    { label: 'Closes', value: cf?.closes ?? 0, accent: true },
+    { label: 'Cash', value: compactUsd(cash) },
+    { label: 'Cash / mtg', value: meetings > 0 ? compactUsd(cash / meetings) : '—' },
   ]
 }
 
@@ -137,7 +128,7 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
     .filter(Boolean)
     .join('&')
 
-  const stats = crucialStats(person, role)
+  const stats = crucialStats(person)
 
   return (
     <Link
@@ -199,8 +190,8 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
         </div>
       </div>
 
-      {/* Crucial metrics — keyed off the canonical role. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginTop: 'auto' }}>
+      {/* Crucial metrics — the unified nine (same for every rep), 3×3. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 'auto' }}>
         {stats.map((s) => (
           <Stat key={s.label} label={s.label} value={s.value} accent={s.accent} />
         ))}

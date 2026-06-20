@@ -1,5 +1,5 @@
 import type { CallActivityResult, CallActivityRepRow } from '@/lib/db/funnel-appointment-setting'
-import type { CloserScheduledResult, CloserScheduledAggregate } from '@/lib/db/funnel-closing'
+import type { CloserScheduledResult, CloserScheduledAggregate, RepCloserFormMetrics } from '@/lib/db/funnel-closing'
 import type { DigitalCollegeResult, DcAggregate } from '@/lib/db/funnel-digital-college'
 
 // Talent · Roster (By Rep) — data merge. Server-safe (no React), so it can be
@@ -26,6 +26,10 @@ export type RosterPerson = {
   setter: CallActivityRepRow | null
   closer: CallActivityRepRow | null
   scheduled: CloserScheduledAggregate | null
+  // FORMS-ONLY closer metrics (the unified card's closer side) — meetings (showed
+  // forms) / closerForms / closes / cash, attributed by closer_record_ids. No
+  // booking-platform data. Null when this rep filed no closer forms in range.
+  closerForms: RepCloserFormMetrics | null
   dc: DcAggregate | null
   // Person-level rollups. Dials are total (identical across a both-rep's two
   // rows, so we take the max, not the sum); Connected is family-split, so a
@@ -39,6 +43,7 @@ export function buildRoster(
   activity: CallActivityResult,
   scheduled: CloserScheduledResult,
   digitalCollege: DigitalCollegeResult,
+  closerForms: Map<string, RepCloserFormMetrics>,
   identity: Map<string, { active: boolean; role: SalesRole }>,
 ): RosterPerson[] {
   const map = new Map<string, RosterPerson>()
@@ -57,6 +62,7 @@ export function buildRoster(
         setter: null,
         closer: null,
         scheduled: null,
+        closerForms: null,
         dc: null,
         dials: 0,
         connected: 0,
@@ -94,6 +100,11 @@ export function buildRoster(
     p.dc = d
     p.isDc = true
   }
+  for (const [userId, m] of Array.from(closerForms)) {
+    const p = ensure(userId, null)
+    p.closerForms = m
+    p.isCloser = true
+  }
 
   const all = Array.from(map.values())
   for (const p of all) {
@@ -104,6 +115,8 @@ export function buildRoster(
       p.connected +
       (p.scheduled?.calls ?? 0) +
       (p.scheduled?.closed ?? 0) * 5 +
+      (p.closerForms?.closerForms ?? 0) +
+      (p.closerForms?.closes ?? 0) * 5 +
       (p.dc?.dials ?? 0) +
       (p.dc?.meetings ?? 0) +
       (p.dc?.closes ?? 0) * 5

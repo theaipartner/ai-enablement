@@ -8,6 +8,7 @@ import {
 import {
   getClosingScheduledList,
   getClosingActivity,
+  getCloserFormMetricsByRep,
   CLOSING_FLOOR_ET,
   type CloserScheduledDrillRow,
 } from '@/lib/db/funnel-closing'
@@ -93,19 +94,20 @@ export default async function SalesRosterPage({
   const selectedDcCloserRaw = Array.isArray(searchParams?.dccloser) ? searchParams?.dccloser[0] : searchParams?.dccloser
   const selectedDcCloser = typeof selectedDcCloserRaw === 'string' && selectedDcCloserRaw.length > 0 ? selectedDcCloserRaw : null
 
-  const [activity, repDrill, scheduled, closingData, digitalCollege, access, identity] = await Promise.all([
+  const [activity, repDrill, scheduled, closingData, digitalCollege, closerForms, access, identity] = await Promise.all([
     getCallActivityMetrics(range),
     selectedRep ? getCallActivityForUser(range, selectedRep) : Promise.resolve([] as CallActivityDrillRow[]),
     getClosingScheduledList(range),
     getClosingActivity(range),
     getDigitalCollegeActivity(range),
+    getCloserFormMetricsByRep(range),
     getCurrentUserAccessTier(),
     loadSalesIdentity(),
   ])
   void closingData
   const canDelete = access?.tier === 'creator'
 
-  const roster = buildRoster(activity, scheduled, digitalCollege, identity)
+  const roster = buildRoster(activity, scheduled, digitalCollege, closerForms, identity)
   const person = selectedRep ? roster.find((p) => p.userId === selectedRep) ?? null : null
 
   // Window-only query string for the roster cards' detail links.
