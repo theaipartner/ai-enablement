@@ -98,26 +98,44 @@ Roster is trusted.
 ### Talent · Roster — `/people/by-rep` (sidebar label "Roster")
 
 The **by-person** re-presentation of Talent — one block per rep instead of stacked
-by-call-type tables. A candidate replacement for `/people`; it reads the **exact same
-loaders** (`getCallActivityMetrics`, `getClosingScheduledList`, `getClosingActivity`,
-`getDigitalCollegeActivity`) and just reshapes them — **no new data, no new logic**.
+by-call-type tables. A candidate replacement for `/people`. The **click-through detail**
+reuses the existing loaders (`getCallActivityMetrics`, `getClosingScheduledList`,
+`getDigitalCollegeActivity`) unchanged; the **card's crucial metrics** are computed
+**forms-only** (below) via `getCloserFormMetricsByRep` — the one piece of Roster-specific
+logic.
 
-- **One card per rep**, keyed by Close `user_id`, merging that person's setter row +
-  closer row from Call Activity, their per-closer scheduled aggregate (shows / closes /
-  cash), and their Digital College aggregate. A rep who both sets and closes (e.g. Aman)
+- **One card per rep**, keyed by Close `user_id`, merging that person's setter + closer
+  rows from Call Activity (dials / connections / bookings) with their **forms-only closer
+  metrics** (meetings / closes / cash). A rep who both sets and closes (e.g. Aman)
   collapses into a single block instead of two scattered rows.
 - **One canonical role chip** from `team_members.sales_role` (Setter / Closer / DC
   Closer) — the role the rep *is*, not a chip per call-family they happen to have
   activity in. Cross-family activity (a closer's stray triage calls) still surfaces on
   the detail view.
 - **Crucial metrics — the SAME eight on every card** (Drake 2026-06-20; every rep both sets
-  and closes a little, so the role-keyed sets were merged). The role chip still shows their
-  dedicated role; only the metric set is unified. Setter-side → closer-side, **strictly from
-  the forms** (no booking-platform data): **Dials · Connections · Bookings · Book rate ·
-  Meetings · Closes · Cash · Cash/mtg**. Bookings = the rep's setter "Booked" (HT+DC from the
-  triage table); Meetings = closer EOC forms with a **showed** outcome (attributed by
-  `closer_record_ids` → `user_id` — `getCloserFormMetricsByRep`); Book rate = Bookings ÷
-  Connections; Cash/mtg = Cash ÷ Meetings. Everything else lives on the click-through.
+  and closes a little, so the old role-keyed sets were merged — the role chip still shows the
+  dedicated role, only the metric set is unified). Setter-side → closer-side, **strictly from
+  the forms** (no booking-platform data), in a 4×2 grid:
+  - **Dials · Connections** — the rep's calls (`close_calls`; ≥90s = connected).
+  - **Bookings** — the rep's setter "Booked" (HT + DC from the triage table). **Book rate**
+    = Bookings ÷ Connections.
+  - **Meetings · Closes · Cash · Cash/mtg** — from the rep's closer EOC forms
+    (`airtable_full_closer_report`), attributed by `closer_record_ids` → `user_id` across
+    **ALL** reps, not just `sales_role='closer'` (`getCloserFormMetricsByRep`; a closer-only
+    resolver previously zeroed DC closers + setters who file EOC forms — Drake 2026-06-20).
+    - **Meetings** = forms with a *showed* outcome, **incl. any Digital College disposition**
+      (a DC form means a DC meeting was held).
+    - **Closes** = a High-Ticket close (`call_outcome = 'High Ticket Closed'`) **OR** a DC
+      close = **`dc_plans` filled** (the canonical signal — *not* the `'Digital College
+      Closed'` text, which appears with no plan = a fake close, and misses bare `'Digital
+      College'` + plan = a real one).
+    - **Cash** = `amount_paid` (HT + deposits) **+ $300 per DC plan unit** (`DC_PLAN_PRICE_USD`,
+      the same flat-rate logic as `funnel-cash`/`funnel-dc`). **Cash/mtg** = Cash ÷ Meetings.
+
+  Everything else lives on the click-through. (The per-closer scheduled tables on the
+  detail also fold DC `$300`/plan into their **Cash** column — Drake 2026-06-20 — though
+  their `closedDc` *count* still keys on the outcome text; only the card is fully
+  `dc_plans`-consistent on both closes and cash.)
 - **Click a card → per-person detail** (`?rep=`): the full existing drilldown tables
   (call activity + per-call drill, scheduled calls, DC) scoped to that one rep, with a
   "← All reps" back link. Collapsing the drill returns to the grid (`?rep` is the page's
