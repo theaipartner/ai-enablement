@@ -5,6 +5,7 @@ import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
 import { loadOnceHubBookings, oncehubOwnerEmail } from './oncehub-bookings'
+import { addPlan, emptyPlans, dcPlanUnits, DC_PLAN_PRICE_USD } from './funnel-dc'
 import { fetchChunked } from './query-parallel'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
@@ -176,6 +177,7 @@ type CloserReportRow = {
   call_outcome: string | null
   amount_paid_today_number: number | null
   deposit_amount: number | string | null
+  dc_plans: string[] | null
 }
 
 // Effective call date = date_time_of_call when present, else airtable_created_at.
@@ -205,7 +207,7 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
       .select(
         'record_id, lead_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
         'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, closer_record_ids, prospect_name, ' +
-        'form_type, call_outcome, amount_paid_today_number, deposit_amount',
+        'form_type, call_outcome, amount_paid_today_number, deposit_amount, dc_plans',
       )
       .gte('airtable_created_at', widenStartIso)
       .order('airtable_created_at', { ascending: false })
@@ -471,30 +473,41 @@ export async function getCloserFormMetricsByRep(range: DateRange): Promise<Map<s
     }
     m.closerForms++
 
+    // Closes + cash, split HT vs DC — DC uses the canonical plan logic (funnel-dc /
+    // funnel-cash / shared lead_tagging), NOT the call_outcome text:
+    //   HT close = 'High Ticket Closed' (New) / old closed=yes non-DC → +1, + amount_paid.
+    //   DC close = a dc_plans value ("if it's filled, it's a close", Drake 2026-06-17)
+    //              → +1, + $300 per plan unit. The 'Digital College Closed' TEXT is
+    //              IGNORED for closes/cash — it appears with no plan (dc_closed=No) =
+    //              a fake close, and bare 'Digital College' WITH a plan is a real one.
+    //   Deposit = showed, not a close, but its cash still counts.
+    const dcCounts = emptyPlans()
+    addPlan(dcCounts, r.dc_plans)
+    const dcUnits = dcPlanUnits(dcCounts)
+
     let showed: CloserScheduledDrillRow['showed']
-    let closed: 'yes' | 'no' | 'deposit' | null
-    let paid: number | null
+    let htClose = false
     if (r.form_type === 'New') {
       const d = deriveNewOutcome(r.call_outcome)
       showed = d.showed
-      closed = d.closed
-      const p = toNum(r.amount_paid_today_number) ?? toNum(r.amount_paid_today_currency)
-      paid = d.closed === 'deposit' ? toNum(r.deposit_amount) ?? p : p
+      htClose = d.closeType === 'ht'
     } else {
       showed = normalizeShowed(r.showed)
-      closed = normalizeClosed(r.closed)
-      paid = toNum(r.amount_paid_today_currency)
+      htClose = normalizeClosed(r.closed) === 'yes' && classifyPlan(r.payment_plan_type) !== 'dc'
     }
-    // Meetings = SHOWED (the meeting was held). The base set is the same "showed"
-    // the scheduled aggregate uses (logic.md § closer outcome) PLUS any Digital
-    // College disposition: a DC form means a DC meeting was held (Drake 2026-06-20),
-    // and the bare "Digital College" outcome is left unmapped by deriveNewOutcome.
-    // "Digital College Closed" already derives showed=yes, so the OR can't
-    // double-count. Local to the rep card — does NOT touch the HT funnel.
+    // Cash collected on the form: HT payments + deposits live in amount_paid_today;
+    // DC carries none there — its cash is the plan units (× $300) added below.
+    const paid = toNum(r.amount_paid_today_number) ?? toNum(r.amount_paid_today_currency) ?? 0
+
+    // Meetings = SHOWED (the meeting was held): the same "showed" set the scheduled
+    // aggregate uses (logic.md § closer outcome) PLUS any Digital College disposition
+    // (a DC form means a DC meeting was held, Drake 2026-06-20 — the bare 'Digital
+    // College' outcome is unmapped by deriveNewOutcome). Local to the rep card.
     const isDcMeeting = (r.call_outcome ?? '').toLowerCase().includes('digital college')
     if (showed === 'yes' || showed === 'short_follow' || showed === 'long_follow' || isDcMeeting) m.meetings++
-    if (closed === 'yes') m.closes++
-    if (paid !== null && Number.isFinite(paid)) m.cash += paid
+    if (htClose) m.closes++
+    if (dcUnits > 0) m.closes++
+    m.cash += paid + dcUnits * DC_PLAN_PRICE_USD
   }
   return out
 }
