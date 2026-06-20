@@ -485,9 +485,14 @@ export async function getCloserFormMetricsByRep(range: DateRange): Promise<Map<s
       closed = normalizeClosed(r.closed)
       paid = toNum(r.amount_paid_today_currency)
     }
-    // Meetings = SHOWED (attended): a yes/DQ-show or a follow-up — the same
-    // "showed" definition the scheduled aggregate uses (logic.md § closer outcome).
-    if (showed === 'yes' || showed === 'short_follow' || showed === 'long_follow') m.meetings++
+    // Meetings = SHOWED (the meeting was held). The base set is the same "showed"
+    // the scheduled aggregate uses (logic.md § closer outcome) PLUS any Digital
+    // College disposition: a DC form means a DC meeting was held (Drake 2026-06-20),
+    // and the bare "Digital College" outcome is left unmapped by deriveNewOutcome.
+    // "Digital College Closed" already derives showed=yes, so the OR can't
+    // double-count. Local to the rep card — does NOT touch the HT funnel.
+    const isDcMeeting = (r.call_outcome ?? '').toLowerCase().includes('digital college')
+    if (showed === 'yes' || showed === 'short_follow' || showed === 'long_follow' || isDcMeeting) m.meetings++
     if (closed === 'yes') m.closes++
     if (paid !== null && Number.isFinite(paid)) m.cash += paid
   }
