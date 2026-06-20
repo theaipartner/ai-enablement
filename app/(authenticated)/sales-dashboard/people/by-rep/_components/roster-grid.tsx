@@ -99,9 +99,9 @@ function roleLabel(role: SalesRole): string {
 // dedicated role; only the metric set is unified. The card walks setter-side →
 // closer-side, STRICTLY from the forms (no booking-platform data):
 //   Dials · Connections · Bookings · Book rate  (setter side, calls + triage forms)
-//   Meetings · Closer forms · Closes · Cash · Cash/mtg  (closer side, EOC forms)
+//   Meetings · Closes · Cash · Cash/mtg  (closer side, EOC forms)
 // - Bookings = this rep's setter "Booked" (HT + DC from the triage table).
-// - Meetings = closer EOC forms with a SHOWED outcome; Closer forms = all filed.
+// - Meetings = closer EOC forms with a SHOWED outcome.
 // - Cash / mtg = cash ÷ meetings (showed).
 function crucialStats(person: RosterPerson): { label: string; value: string | number; accent?: boolean }[] {
   const cf = person.closerForms
@@ -114,7 +114,6 @@ function crucialStats(person: RosterPerson): { label: string; value: string | nu
     { label: 'Bookings', value: bookings },
     { label: 'Book rate', value: pct(bookings, person.connected) },
     { label: 'Meetings', value: meetings },
-    { label: 'Closer forms', value: cf?.closerForms ?? 0 },
     { label: 'Closes', value: cf?.closes ?? 0, accent: true },
     { label: 'Cash', value: compactUsd(cash) },
     { label: 'Cash / mtg', value: meetings > 0 ? compactUsd(cash / meetings) : '—' },
@@ -190,8 +189,8 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
         </div>
       </div>
 
-      {/* Crucial metrics — the unified nine (same for every rep), 3×3. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 'auto' }}>
+      {/* Crucial metrics — the unified eight (same for every rep), 4×2. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginTop: 'auto' }}>
         {stats.map((s) => (
           <Stat key={s.label} label={s.label} value={s.value} accent={s.accent} />
         ))}

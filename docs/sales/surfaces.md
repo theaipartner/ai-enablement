@@ -110,15 +110,14 @@ loaders** (`getCallActivityMetrics`, `getClosingScheduledList`, `getClosingActiv
   Closer) — the role the rep *is*, not a chip per call-family they happen to have
   activity in. Cross-family activity (a closer's stray triage calls) still surfaces on
   the detail view.
-- **Crucial metrics — the SAME nine on every card** (Drake 2026-06-20; every rep both sets
+- **Crucial metrics — the SAME eight on every card** (Drake 2026-06-20; every rep both sets
   and closes a little, so the role-keyed sets were merged). The role chip still shows their
   dedicated role; only the metric set is unified. Setter-side → closer-side, **strictly from
   the forms** (no booking-platform data): **Dials · Connections · Bookings · Book rate ·
-  Meetings · Closer forms · Closes · Cash · Cash/mtg**. Bookings = the rep's setter "Booked"
-  (HT+DC from the triage table); Meetings = closer EOC forms with a **showed** outcome;
-  Closer forms = all EOC forms filed (attributed by `closer_record_ids` → `user_id` —
-  `getCloserFormMetricsByRep`); Book rate = Bookings ÷ Connections; Cash/mtg = Cash ÷
-  Meetings. Everything else lives on the click-through.
+  Meetings · Closes · Cash · Cash/mtg**. Bookings = the rep's setter "Booked" (HT+DC from the
+  triage table); Meetings = closer EOC forms with a **showed** outcome (attributed by
+  `closer_record_ids` → `user_id` — `getCloserFormMetricsByRep`); Book rate = Bookings ÷
+  Connections; Cash/mtg = Cash ÷ Meetings. Everything else lives on the click-through.
 - **Click a card → per-person detail** (`?rep=`): the full existing drilldown tables
   (call activity + per-call drill, scheduled calls, DC) scoped to that one rep, with a
   "← All reps" back link. Collapsing the drill returns to the grid (`?rep` is the page's
