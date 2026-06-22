@@ -17,6 +17,7 @@ Capture promoter/detractor signal as structured data so CSM Co-Pilot can factor 
 | `survey_source` | `text` | `slack_workflow`, `typeform`, ... |
 | `submitted_at` | `timestamptz` | Not null. When the client submitted |
 | `ingested_at` | `timestamptz` | When we captured it |
+| `recorded_by` | `uuid` | Optional. The `team_members` row (or the Gregory Bot sentinel) that recorded the submission — set by the manual `NpsEntryForm` and by the Path 1 NPS RPC |
 
 ## Relationships
 

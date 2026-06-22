@@ -28,6 +28,21 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | Bumped by trigger |
 | `archived_at` | `timestamptz` | Soft delete |
+| `notes` | `text` | Free-text CSM notes |
+| `country` | `text` | `USA` / `AUS`. Set at seed time (also mirrored into `metadata.country`); indexed |
+| `birth_year` | `integer` | Profile field (migration 0017) |
+| `location` | `text` | Profile field |
+| `occupation` | `text` | Profile field |
+| `csm_standing` | `text` | CSM-relationship health: `happy` / `neutral` / `at_risk` / `problem` (or null). Auto-derived from `nps_standing` on every NPS write (0027 NPS-is-gospel) except `problem` (manual-only). Drives the M5.6 negative-status cascade and the M5.7 Trustpilot cascade. Indexed |
+| `archetype` | `text` | Client archetype / persona label |
+| `contracted_revenue` | `numeric` | Financial field (0017). NOT written by `seed_clients.py` — revenue is dropped at ingestion (§ data hygiene); editable in the dashboard |
+| `upfront_cash_collected` | `numeric` | Financial field; same not-from-import caveat as `contracted_revenue` |
+| `arrears` | `numeric` | Not null, default 0. Outstanding balance owed |
+| `arrears_note` | `text` | Free-text note on `arrears` |
+| `trustpilot_status` | `text` | Trustpilot review state: `given` / `declined` / `ask` / `asked` (0020 vocab; labels in `lib/client-vocab.ts`). Auto-flipped to `ask` when `csm_standing` → `happy` (M5.7), with a first-month carve-out (0037). Indexed |
+| `ghl_adoption` | `text` | GoHighLevel adoption status. Indexed |
+| `sales_group_candidate` | `boolean` | Whether the client is a sales-group candidate |
+| `dfy_setting` | `boolean` | Done-for-you setting flag |
 
 `journey_stage` vs `status`: `journey_stage` is lifecycle bucket, `status` is present engagement. A client can be `journey_stage = 'active'` and `status = 'paused'` simultaneously.
 
@@ -94,9 +109,10 @@ The Slack-hygiene badges on the same surfaces (`Missing Slack channel`, `Missing
 
 ## Populated By
 
-- Drive ingestion (client list doc) for initial seed
-- CRM ingestion in Phase 2
-- Manual admin corrections
+- `scripts/seed_clients.py` — the Financial Master Sheet `Active++` import (initial seed + re-sync; see § Bulk imports)
+- Fathom call ingestion — auto-creates `needs_review` rows for unresolved call participants (§ needs_review lifecycle)
+- `api/airtable_onboarding_webhook.py` — Path 3, Zain's onboarding flow (create-or-update RPC)
+- Dashboard edits — inline-editable cells on `/clients` and the detail-page Server Actions
 
 ## Read By
 
