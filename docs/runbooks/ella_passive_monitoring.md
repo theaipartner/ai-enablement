@@ -264,8 +264,6 @@ Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the pr
 | Var | Purpose | Default |
 |-----|---------|---------|
 | `ELLA_PASSIVE_MONITORING_ENABLED` | Global kill switch. `'true'` enables; anything else disables. | unset (= disabled) |
-| `ESCALATION_RECIPIENT_SLACK_USER_ID` | Slack user_id of the head CSM (Scott) DMed on **reactive `digest_only`** escalations alongside the channel's primary CSM. No longer used on the passive path (passive doesn't escalate post-2026-05-18). | unset (= primary CSM only) |
-| `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID` | Optional CC for the daily digest cron (Drake). See `docs/runbooks/ella_daily_digest.md`. | unset (= head-CSM only) |
 | `CRON_SECRET` | Bearer-token auth for the per-minute cron + the daily digest cron. Shared across all cron endpoints. | (set in Vercel) |
 | `SLACK_WORKSPACE` | Optional. Subdomain used in escalation-DM + digest permalinks. | (omitted = clean fallback) |
 

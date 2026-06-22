@@ -2,20 +2,20 @@
 
 ## What it is
 
-`api/ella_daily_digest_cron.py` — a daily Vercel Cron that DMs Scott
-(head of fulfillment) + an optional CC (Drake) a curated skim of every
-message Ella's decision Haiku flagged in the trailing 24h. It is a
-*visibility* surface, not an escalation queue: false positives are
-explicitly fine; Scott scans it for things worth a second look.
+`api/ella_daily_digest_cron.py` — a daily Vercel Cron that posts to the
+`#daily-digest` Slack channel a curated skim of every message Ella's
+decision Haiku flagged in the trailing 24h. It is a *visibility* surface,
+not an escalation queue: false positives are explicitly fine; the team
+scans it for things worth a second look.
 
 Every flagged message is a `pending_digest_items` row
 (`docs/schema/pending_digest_items.md`), written when the decision
 Haiku set `digest_flag=true` on either the passive path
 (`agents/ella/passive_dispatch.py`) or the reactive @-mention path
 (`agents/ella/agent.py`). The cron drains all unsent rows in the
-window, groups by client, formats a body, fans out one DM + one
-`webhook_deliveries` audit row per recipient, then marks every drained
-row `sent_in_digest_at = now()` in a single UPDATE.
+window, formats a body, posts one message to `#daily-digest` (+ one
+`webhook_deliveries` audit row), then marks every drained row
+`sent_in_digest_at = now()` in a single UPDATE.
 
 ## Schedule
 
@@ -24,19 +24,16 @@ drift — same convention as every other fixed cron, see ADR 0003 and
 `docs/runbooks/cron_schedule.md`). The instant is fixed; the wall-clock
 ET hour shifts one hour across the DST boundary.
 
-## Recipients
+## Destination
 
-- **Primary:** the `team_members` row(s) with `access_tier='head_csm'`
-  AND `archived_at IS NULL` (Scott today). Resolved at runtime — mirrors
-  the FAQ-digest pattern, auto-handles a future `slack_user_id` change.
-  - Zero rows → `recipient_warnings=['zero_head_csm_resolved']`, an
-    error audit row, and a CC-only send (no crash).
-  - Multiple rows → all are added (a future second head CSM correctly
-    joins the list); `multiple_head_csm_resolved:N` warning.
-- **CC:** `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID` (Drake during the
-  validation period, gate (d)). Must match `^U[A-Z0-9]+$`. Unset =
-  primary-only. Malformed = warning + ignored. Equal to a primary
-  recipient = deduped.
+Posts to the `#daily-digest` channel, resolved from
+`ELLA_DAILY_DIGEST_CHANNEL_SLACK_ID` (required — if unset the cron writes a
+config-gap audit row and returns without posting). The bot must be a member
+of the channel.
+
+*Historical: before the 2026-05-28 channels-only redesign this cron DMed the
+head CSM + an optional CC (`ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`). All Ella DMs
+were retired; that CC var is now dead.*
 
 ## Body shape
 
