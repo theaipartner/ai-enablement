@@ -33,6 +33,8 @@ there. Swapping any external tool is a contained rewrite of its `ingestion/` mod
 
 ## Local setup
 
+*New here? [`docs/onboarding/FIRST-DAY.md`](docs/onboarding/FIRST-DAY.md) walks this through step by step with verification checkpoints.*
+
 **Prerequisites:** WSL2 (if on Windows — see [`docs/runbooks/setup_wsl.md`](docs/runbooks/setup_wsl.md)),
 Python 3.11+, Node 18+, and the Supabase CLI. All dev happens inside WSL, not the Windows filesystem.
 
@@ -66,6 +68,7 @@ app + the Python serverless functions in `api/`. Cron schedules live in `vercel.
 
 | You want… | Go to |
 |---|---|
+| to set up the repo on day one | [`docs/onboarding/FIRST-DAY.md`](docs/onboarding/FIRST-DAY.md) |
 | how the system fits together | [`docs/fulfillment/architecture.md`](docs/fulfillment/architecture.md) |
 | the conventions (UI, call titling, data hygiene) | [`docs/fulfillment/conventions.md`](docs/fulfillment/conventions.md) |
 | the sales funnel / dashboard | [`docs/sales/`](docs/sales/README.md) |
