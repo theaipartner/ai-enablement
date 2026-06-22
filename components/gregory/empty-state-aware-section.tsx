@@ -16,7 +16,7 @@
 // DiagnosticsCollapse, not this primitive, for the collapsed-by-default
 // case).
 //
-// Conventions: docs/gregory-conventions.md § Empty-state rules.
+// Conventions: docs/fulfillment/gregory-conventions.md § Empty-state rules.
 // Slot owner: any section in detail/list pages.
 // Tokens consumed: --color-geg-text-3 (chevron), .geg-eyebrow utility,
 //   .geg-section-title utility from app/globals.css.

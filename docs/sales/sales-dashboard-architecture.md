@@ -643,7 +643,7 @@ In rough order. Each is a separate commit.
 - **Status as a boxed tag** (4 types: Direct green / Reactivated blue / Opt-in
   yellow / DQ red), DQ keyed off forms only (NOT Close `status_label`, which is
   inaccurate — `status_label` is intentionally unused).
-- **Perf option A** (`PERFORMANCE-SCALING-DEBT.md` at repo root): deduped the
+- **Perf option A** (`docs/fulfillment/PERFORMANCE-SCALING-DEBT.md`): deduped the
   double cohort fetch on `/leads`; cached `getFmrTimeBlocks` (`unstable_cache`,
   10-min). **Perf option B step 1**: `getSpeedToLeadCohort`'s `close_calls` +
   `close_lead_status_changes` scans filter to the cohort via chunked
@@ -957,7 +957,7 @@ already removes a lead from BOTH the list and the counter (the cohort filters
   prior days. Drake works around midnight ET so "today" can roll unexpectedly.
 
 ## 8. PERF
-See `PERFORMANCE-SCALING-DEBT.md` (repo root). Option A + B-step-1 shipped; the
+See `docs/fulfillment/PERFORMANCE-SCALING-DEBT.md`. Option A + B-step-1 shipped; the
 DB-side SQL-aggregation layer (the build-alongside-and-diff items) is deferred.
 The new 3h-lapse RPC + the cohort scans are fine at current scale (5.4k leads,
 16k calls, 158 calendly) but are on that doc's radar.

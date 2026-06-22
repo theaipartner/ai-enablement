@@ -16,7 +16,7 @@ connections). Local falls back to supabase/.temp/pooler-url + SUPABASE_DB_PASSWO
 Every retag is logged to lead_tag_runs; the exception-only admin page surfaces
 runs that errored or produced an anomaly (a set-once identity tag that changed).
 
-Rules (authoritative — mirror docs/sales-dashboard-architecture.md):
+Rules (authoritative — mirror docs/sales/sales-dashboard-architecture.md):
   direct   = earliest "Ai Partner Strategy Call" Calendly self-book in the cycle,
              only if at/before reactive_at.
   reactive = min of (A) cold: first >3-day gap between contacts (opt-in + inbound

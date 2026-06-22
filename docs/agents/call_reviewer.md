@@ -66,7 +66,7 @@ sets are pinned in `shared/ingestion/validate.py` against
 - `is_active = false` at write time. `match_document_chunks` skips
   inactive rows, so the V1 retrieval-side invariant is enforced
   defensively even though the function's exclusion list doesn't name
-  `call_review` explicitly. Tracked in `docs/known-issues.md` for a
+  `call_review` explicitly. Tracked in `docs/fulfillment/known-issues.md` for a
   follow-up that promotes the exclusion into the SQL function.
 
 ## Telemetry

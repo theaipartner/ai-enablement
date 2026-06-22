@@ -61,7 +61,7 @@ Same shape as Path 2 outbound's secret rotation. The secret is shared between Ve
 
 **Optional (3):** `phone`, `slack_user_id`, `slack_channel_id`. Each may be omitted from the payload OR sent as `null`. If PRESENT in the payload, the value must be a non-empty string after strip — sending `""` is a 400 `wrong_type` (we surface the operator error rather than silently coerce). The receiver passes `null` to the RPC for any optional field that's absent / null in the payload.
 
-Country isn't validated against a vocab — Zain owns the contract. Today's expected values are `'USA'` / `'AUS'`, but anything else passes through as-is. (See followup in `docs/known-issues.md` about `/clients` filter drift if Zain ever sends `'United States'`.)
+Country isn't validated against a vocab — Zain owns the contract. Today's expected values are `'USA'` / `'AUS'`, but anything else passes through as-is. (See followup in `docs/fulfillment/known-issues.md` about `/clients` filter drift if Zain ever sends `'United States'`.)
 
 ---
 

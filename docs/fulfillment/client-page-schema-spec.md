@@ -4,7 +4,7 @@
 
 **Scope:** Adds the schema needed to support a CSM-facing client detail page with 7 sections (Identity & Contact, Lifecycle & Standing, Financials, Activity & Action Items, Profile & Background, Adoption & Programs, Notes), per the layout designed with Drake. Adds 14 columns to `clients`, 1 column to `nps_submissions`, and 4 new tables. Specifies import-time transformations from the Active++ master sheet CSV.
 
-**Non-goals:** Reorganization of the existing schema. The known design seam between `alerts` and `client_health_scores.factors.concerns[]` is deferred and tracked in `docs/known-issues.md` § "`alerts` vs. `client_health_scores.factors.concerns[]` — two-table redundancy" — concerns stay in jsonb for V1; will resolve when CSM Co-Pilot needs a single read source.
+**Non-goals:** Reorganization of the existing schema. The known design seam between `alerts` and `client_health_scores.factors.concerns[]` is deferred and tracked in `docs/fulfillment/known-issues.md` § "`alerts` vs. `client_health_scores.factors.concerns[]` — two-table redundancy" — concerns stay in jsonb for V1; will resolve when CSM Co-Pilot needs a single read source.
 
 ---
 

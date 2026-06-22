@@ -6,7 +6,7 @@
 // `app/(authenticated)/clients/page.tsx`'s existing header so a Part 2
 // migration of that file is a pure refactor with zero visible diff.
 //
-// Conventions: docs/gregory-conventions.md § Header pattern.
+// Conventions: docs/fulfillment/gregory-conventions.md § Header pattern.
 // Slot owner: detail/list § HeaderBand slot.
 // Tokens consumed: --color-geg-border-strong, --color-geg-text-3,
 //   plus the .geg-eyebrow + .geg-display utility classes from
@@ -17,7 +17,7 @@ import type { ReactNode } from 'react'
 
 export type HeaderBandProps = {
   // Small-caps eyebrow label rendered above the serif title.
-  // Use the eyebrow taxonomy in docs/gregory-conventions.md (CSM · CLIENTS,
+  // Use the eyebrow taxonomy in docs/fulfillment/gregory-conventions.md (CSM · CLIENTS,
   // CLIENT · DETAIL, etc.) — copy is the page's call, not the primitive's.
   eyebrow: string
   // Serif title content. String is rendered directly; ReactNode supports

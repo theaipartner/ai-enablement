@@ -232,7 +232,7 @@ def test_compute_health_for_all_active_records_wall_clock_duration(
 ):
     """V2 telemetry: SweepResult must carry duration_ms +
     avg_per_client_ms so the cron-ceiling watchpoint
-    (docs/known-issues.md) has the data it needs to decide whether to
+    (docs/fulfillment/known-issues.md) has the data it needs to decide whether to
     re-architect."""
     def fake_compute(client_id, db, trigger_type):
         return agent.HealthComputeResult(

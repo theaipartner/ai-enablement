@@ -1,6 +1,6 @@
 # Sales Dashboard
 
-> **Architecture & code map:** see `docs/sales-dashboard-architecture.md` for the
+> **Architecture & code map:** see `docs/sales/sales-dashboard-architecture.md` for the
 > route topology, data-layer modules, mirror-table model, the Calendly↔lead /
 > booking-funnel / closer-outcome logic, and the environment traps (local-vs-cloud
 > creds, migration apply, Airtable schema API). Read that first for "how the code

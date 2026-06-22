@@ -34,7 +34,7 @@ Capture promoter/detractor signal as structured data so CSM Co-Pilot can factor 
 
 ## Future score-piping (V1.5)
 
-Path 1's NPS-is-gospel RPC currently writes only the segment classification (`promoter` / `neutral` / `at_risk`) to `clients.nps_standing`, not the numeric 0-10 score. NPS score piping V1.5 would extend Path 1 to also write `nps_submissions` rows. Followup: see `docs/future-ideas.md` § Batch B.
+Path 1's NPS-is-gospel RPC currently writes only the segment classification (`promoter` / `neutral` / `at_risk`) to `clients.nps_standing`, not the numeric 0-10 score. NPS score piping V1.5 would extend Path 1 to also write `nps_submissions` rows. Followup: see `docs/fulfillment/future-ideas.md` § Batch B.
 
 ## Example Queries
 

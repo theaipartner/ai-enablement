@@ -16,7 +16,7 @@ What to do when a Vercel auto-deploy fails with `A Serverless Function has excee
 
 Same error message; different root cause. Decision tree:
 
-- If the failed build log starts with `Restored build cache from previous deployment (<cache-id>)` AND the error fires during "Deploying outputs..." → likely **cache contamination** (2026-05-08 signature). Fix: dashboard Redeploy with **Use existing Build Cache** UNCHECKED. See `docs/known-issues.md` § Vercel build cache can carry forward bloated function bundles.
+- If the failed build log starts with `Restored build cache from previous deployment (<cache-id>)` AND the error fires during "Deploying outputs..." → likely **cache contamination** (2026-05-08 signature). Fix: dashboard Redeploy with **Use existing Build Cache** UNCHECKED. See `docs/fulfillment/known-issues.md` § Vercel build cache can carry forward bloated function bundles.
 - If the failed build log shows `vercel inspect` per-function breakdown citing `.next/cache/`, `node_modules/`, or a heavy Python dep as the top contributor → **bundle size at the cap** (2026-05-11 signature). Fix: add or expand `excludeFiles` in `vercel.json`. This runbook.
 
 Both signatures can coexist over time; check the build log to disambiguate.

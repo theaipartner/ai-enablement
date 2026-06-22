@@ -1,6 +1,6 @@
 """Chunk a Fathom transcript into retrieval-friendly pieces.
 
-Implements `docs/ingestion/metadata-conventions.md` §3 and §4:
+Implements `docs/fulfillment/metadata-conventions.md` §3 and §4:
 
   - Target 400–600 words per chunk (~500 tokens).
   - Start and end on speaker-turn boundaries — never mid-utterance.

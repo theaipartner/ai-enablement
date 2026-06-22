@@ -11,7 +11,7 @@ unknowns from F2.1 (retry schedule, `webhook-id` stability across retries) are
 still open; the design is robust to worst-case assumptions on both.
 
 **Related docs.**
-- `docs/known-issues.md` § "Fathom webhook — delivery semantics live-test (3 of 4 still open, plan-tier resolved)" — the unknowns still to resolve empirically
+- `docs/fulfillment/known-issues.md` § "Fathom webhook — delivery semantics live-test (3 of 4 still open, plan-tier resolved)" — the unknowns still to resolve empirically
 - `docs/runbooks/fathom_backlog_ingest.md` — batch path that this complements
 - `docs/runbooks/slack_webhook.md` — sync-on-Vercel precedent (same pattern here)
 - `docs/agents/ella/ella.md` — downstream consumer of the data this lands
@@ -37,7 +37,7 @@ doc is the source of truth on what actually ships:
    retained. Pinned by `test_summary_with_markdown_formatted_field_accepted`.
 
 The shared lesson: read OpenAPI carefully, but probe with one real
-curl before declaring discovery done. Captured in `docs/known-issues.md`
+curl before declaring discovery done. Captured in `docs/fulfillment/known-issues.md`
 § "API integration discovery — verify auth scheme empirically before
 declaring done" and in saved memory.
 
@@ -498,7 +498,7 @@ are still decision gates for Drake:
 
 ## Open follow-ups (not blocking F2.3)
 
-Tracked in `docs/known-issues.md`:
+Tracked in `docs/fulfillment/known-issues.md`:
 
 - **Webhook secret rotation runbook.** Fathom has no `PATCH /webhooks` to rotate a secret — rotation = delete + recreate, which means a coordinated env-var update + downtime window. Runbook needed before the first rotation.
 - **Cron-driven reconciliation observability.** Daily query for `status` distribution in `webhook_deliveries` is manual. A weekly Slack DM to Drake with the 7-day summary would turn this into push instead of pull. Nice-to-have.

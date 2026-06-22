@@ -6,7 +6,7 @@ Vercel Cron POSTs here on a schedule (08:00 UTC daily, configured in
 in the lookback window we don't have yet, then ingests them through the
 same adapter + pipeline the live webhook uses.
 
-Design rationale (`docs/architecture/fathom_webhook.md` §f):
+Design rationale (`docs/fulfillment/fathom_webhook.md` §f):
 
 - The webhook is the live path. The cron is the safety net for the rare
   case where a delivery fails to stick (Vercel cold-start timeout, brief

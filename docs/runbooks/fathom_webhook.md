@@ -2,7 +2,7 @@
 
 Operational runbook for `api/fathom_events.py` — the Vercel serverless
 endpoint that ingests Fathom `new-meeting-content-ready` deliveries. Full
-design in `docs/architecture/fathom_webhook.md`.
+design in `docs/fulfillment/fathom_webhook.md`.
 
 **Status as of 2026-04-30 (M4.1 re-registration):** handler deployed,
 secret rotated, webhook **re-registered via API** (not UI this time).
@@ -452,7 +452,7 @@ time; raise `maxDuration` or investigate the latency source.
 | All deliveries 401 | Secret mismatch between Fathom and Vercel env var | Rotate the secret — see "Rotate Secret" below. |
 | All deliveries 500 | OpenAI or Supabase outage | Check status pages. Cron backfill catches up once service restored. |
 | Some deliveries `malformed` | Fathom payload shape drift | Inspect `webhook_deliveries.payload` — compare to adapter's expectations in `ingestion/fathom/webhook_adapter.py`. |
-| `needs_review` queue growing fast | New client roster — resolver doesn't match | Expected; merge via the Gregory dashboard's "Merge into…" button on the Clients detail page (visible only on `needs_review`-tagged clients). See `docs/known-issues.md` § "Auto-created client review workflow". |
+| `needs_review` queue growing fast | New client roster — resolver doesn't match | Expected; merge via the Gregory dashboard's "Merge into…" button on the Clients detail page (visible only on `needs_review`-tagged clients). See `docs/fulfillment/known-issues.md` § "Auto-created client review workflow". |
 | Duplicate calls in DB | Shouldn't happen — pipeline idempotency covers this | File a bug; worth investigating the classifier / upsert paths. |
 | `calls` row but no `call_summary` document | Summary was empty in the webhook payload | Normal — older calls or calls Fathom didn't summarize. Not a bug. |
 | `calls` row but no `call_action_items` | Same — not all calls have action items | Normal. |
@@ -478,7 +478,7 @@ verify, the correct pattern is:
    original webhook via `DELETE /webhooks/<original_id>`.
 6. Unset `FATHOM_WEBHOOK_SECRET_PREV` on Vercel + redeploy.
 
-See `docs/known-issues.md` § "Fathom webhook secret rotation runbook" for the
+See `docs/fulfillment/known-issues.md` § "Fathom webhook secret rotation runbook" for the
 pending work to update the handler's verify function to support the dual-
 secret overlap window.
 
@@ -502,7 +502,7 @@ recoverable via the F2.6 cron backfill once the webhook is re-registered.
 
 ## References
 
-- `docs/architecture/fathom_webhook.md` — full design spec.
+- `docs/fulfillment/fathom_webhook.md` — full design spec.
 - `api/fathom_events.py` — handler source, annotated.
 - `ingestion/fathom/webhook_adapter.py` — payload → FathomCallRecord.
 - `ingestion/fathom/pipeline.py` — `ingest_call`, `_ensure_summary_document`,
@@ -510,7 +510,7 @@ recoverable via the F2.6 cron backfill once the webhook is re-registered.
 - `supabase/migrations/0011_webhook_deliveries_and_doc_type_unique.sql` —
   table DDL.
 - `scripts/test_fathom_webhook_locally.py` — local 5-path test loop.
-- `docs/known-issues.md` — open questions, secret rotation, observability push-
+- `docs/fulfillment/known-issues.md` — open questions, secret rotation, observability push-
   vs-pull.
 - `docs/runbooks/slack_webhook.md` — structurally-similar handler; sync
   pattern precedent.

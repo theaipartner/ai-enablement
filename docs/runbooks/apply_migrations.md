@@ -26,7 +26,7 @@ docker ps
 
 If `docker ps` succeeds and shows a running daemon, **STOP**. Disable Docker Desktop's WSL integration first (Docker Desktop → Settings → Resources → WSL Integration → toggle off the Ubuntu distro), then re-verify with `docker ps`.
 
-Reason: Supabase CLI v2.90.0 silently misroutes `db push --linked` when both a linked-cloud project AND a reachable local Docker stack are present. The bug surfaced 2026-04-28 (every migration 0011–0028 then shipped via Studio + manual ledger as a workaround for ~10 days); Phase 3 discovery on 2026-05-08 confirmed the CLI works correctly when there's no reachable local Docker target. See `docs/known-issues.md` for the resolved entries documenting the era.
+Reason: Supabase CLI v2.90.0 silently misroutes `db push --linked` when both a linked-cloud project AND a reachable local Docker stack are present. The bug surfaced 2026-04-28 (every migration 0011–0028 then shipped via Studio + manual ledger as a workaround for ~10 days); Phase 3 discovery on 2026-05-08 confirmed the CLI works correctly when there's no reachable local Docker target. See `docs/fulfillment/known-issues.md` for the resolved entries documenting the era.
 
 Other preconditions:
 

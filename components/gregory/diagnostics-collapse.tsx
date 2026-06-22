@@ -17,7 +17,7 @@
 // "DIAGNOSTICS" eyebrow, no card chrome) so it reads as a footer
 // affordance rather than primary content.
 //
-// Conventions: docs/gregory-conventions.md § Diagnostics-collapse rule.
+// Conventions: docs/fulfillment/gregory-conventions.md § Diagnostics-collapse rule.
 // Slot owner: detail-page footer ("Diagnostics" slot).
 // Tokens consumed: --color-geg-border, --color-geg-text-3, .geg-eyebrow.
 

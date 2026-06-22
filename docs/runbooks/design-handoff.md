@@ -28,7 +28,7 @@ If the work has both visual + data-layer components (the typical redesign — ne
 
 ## Builder's role
 
-- Read the UI spec, the mock, `docs/gregory-conventions.md`, the data layer for the surface, and the existing primitives.
+- Read the UI spec, the mock, `docs/fulfillment/gregory-conventions.md`, the data layer for the surface, and the existing primitives.
 - Implement using existing primitives and tokens. **Do not paint raw hex** — every color comes from a `--color-geg-*` variable; every spacing / typography decision references the established system.
 - Visually verify on the deploy preview via Playwright (see § Preview-auth bypass). Each surface family has a verifier:
   - Calls: `scripts/verify-calls-preview.ts`.

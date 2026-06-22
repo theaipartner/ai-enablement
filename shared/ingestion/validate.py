@@ -5,7 +5,7 @@ Every ingestion pipeline calls these **before** inserting rows. The
 goal is to catch missing required keys at write time rather than at
 retrieval time, and to make it obvious when a pipeline drifts away
 from the metadata conventions pinned in
-`docs/ingestion/metadata-conventions.md`.
+`docs/fulfillment/metadata-conventions.md`.
 
 Two behaviors:
   - Missing required keys — raise `ValueError` with the missing list.
@@ -44,7 +44,7 @@ from dataclasses import dataclass
 
 from shared.logging import logger
 
-_CONVENTIONS_REF = "docs/ingestion/metadata-conventions.md"
+_CONVENTIONS_REF = "docs/fulfillment/metadata-conventions.md"
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class _Spec:
 
 
 # Document metadata conventions keyed by (source, document_type). Mirrors
-# docs/ingestion/metadata-conventions.md §2 exactly. If this table and the
+# docs/fulfillment/metadata-conventions.md §2 exactly. If this table and the
 # doc disagree, the doc is the spec — update the table.
 _DOCUMENT_SPECS: dict[tuple[str, str], _Spec] = {
     ("fathom", "call_summary"): _Spec(
@@ -80,8 +80,8 @@ _DOCUMENT_SPECS: dict[tuple[str, str], _Spec] = {
     # call_reviewer agent output. Stored as a documents row for
     # dashboard surfacing only — is_active=False at write time so the
     # row never lands in match_document_chunks results. See
-    # docs/ingestion/metadata-conventions.md §2 "Fathom call reviews"
-    # and the followup in docs/known-issues.md about promoting the
+    # docs/fulfillment/metadata-conventions.md §2 "Fathom call reviews"
+    # and the followup in docs/fulfillment/known-issues.md about promoting the
     # exclusion into the SQL function when V2 generates these inline.
     ("fathom", "call_review"): _Spec(
         required=frozenset({"client_id", "call_id", "call_category", "started_at"}),

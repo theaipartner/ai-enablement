@@ -3,7 +3,7 @@
 **Who this is for:** anyone who wants to understand what the sales-dashboard
 funnel actually measures — no technical background needed. This is the plain-
 English companion to the technical map in
-`docs/sales-dashboard-architecture.md`.
+`docs/sales/sales-dashboard-architecture.md`.
 
 We'll build this doc up one stage at a time as we verify each part of the
 funnel. It starts at the very top (the ads) and will grow downward toward the

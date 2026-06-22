@@ -2,7 +2,7 @@
 confidence, and (for client calls) `primary_client_id`.
 
 Implements the 6-step cascade pinned in
-`docs/ingestion/metadata-conventions.md` §5. Short-circuits short
+`docs/fulfillment/metadata-conventions.md` §5. Short-circuits short
 files at the top because `excluded` is terminal regardless of what
 later steps would have said.
 

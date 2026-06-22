@@ -263,7 +263,7 @@ def compute_all_signals(db: Any, client_id: str) -> list[Signal]:
     array (with AI signal sorted first per the V2 dashboard order).
 
     Slack engagement is still omitted — slack_messages cloud table is
-    empty (local-only ingestion per docs/future-ideas.md). Add it as
+    empty (local-only ingestion per docs/fulfillment/future-ideas.md). Add it as
     a fourth deterministic signal once cloud Slack ingestion lands.
     """
     return [

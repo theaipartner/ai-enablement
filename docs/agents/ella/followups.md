@@ -2,7 +2,7 @@
 
 Ops reminders and known gaps specific to Ella that aren't "ideas to build" (those live in `docs/agents/ella/future-ideas.md`).
 
-For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work see `docs/agents/ella/future-ideas.md`.
+For Gregory's known issues see `docs/fulfillment/known-issues.md`. For Ella's deferred work see `docs/agents/ella/future-ideas.md`.
 
 **Entry format.** Short. Four lines:
 
@@ -15,7 +15,7 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 
 ## Reply-as-human rollback procedure (post-2026-05-23 evening ship)
 
-- **What:** The 2026-05-23 evening `ella-reply-as-human` spec routed Ella's @-mention replies through `shared.slack_post.post_message_as_user_first` — `SLACK_USER_TOKEN` first, `SLACK_BOT_TOKEN` fallback. If user-token posting needs to go away (rendering issue, scope problem, anything), the rollback is purely operational: **unset `SLACK_USER_TOKEN` in Vercel env vars and redeploy**. The helper sees no token, falls through to the bot path immediately, replies revert to APP-tagged bot posts. No code change required. Same shape as the M1.4 operational rollback procedure (`docs/architecture/ella_user_token.md` if it still exists; the pattern is identical).
+- **What:** The 2026-05-23 evening `ella-reply-as-human` spec routed Ella's @-mention replies through `shared.slack_post.post_message_as_user_first` — `SLACK_USER_TOKEN` first, `SLACK_BOT_TOKEN` fallback. If user-token posting needs to go away (rendering issue, scope problem, anything), the rollback is purely operational: **unset `SLACK_USER_TOKEN` in Vercel env vars and redeploy**. The helper sees no token, falls through to the bot path immediately, replies revert to APP-tagged bot posts. No code change required. Same shape as the M1.4 operational rollback procedure (`docs/fulfillment/ella_user_token.md` if it still exists; the pattern is identical).
 - **Why it matters:** zero-code-change rollback is the safety net for any future reason to swap back to bot-only posting. Drake should know the procedure without needing to grep code.
 - **Next action:** none — closed. Listed for operational reference.
 - **Logged:** 2026-05-23 evening.
@@ -46,7 +46,7 @@ For Gregory's known issues see `docs/known-issues.md`. For Ella's deferred work 
 - **What:** M1.4.1 (discovery) → M1.4.2 (operational setup) → M1.4.3 (code change + 14 tests) all shipped 2026-04-27 in commits up to `751cb38`. `api/slack_events.py:_post_to_slack` now uses a two-token strategy: try `SLACK_USER_TOKEN` (xoxp-, posts as @ella user, no APP tag); fall back to `SLACK_BOT_TOKEN` (xoxb-, with APP tag) on any failure. Smoke-tested in `#ella-test-drakeonly` — replies render with no APP tag. Operational rollback (unset `SLACK_USER_TOKEN` + redeploy) takes ~30 sec, no code change. Pinned by `test_no_user_token_uses_bot_directly`.
 - **Known constraint surfaced post-deploy:** the *@-mention to invoke Ella* still targets the bot, because Slack's `app_mention` event subscription is bound to the bot user — that's a Slack architectural constraint, not a code choice. The reply renders cleanly as the user; the mention does not. Whether this addresses Nabeel's "looks unprofessional" feedback is open — pending his read.
 - **Why it matters:** if Nabeel says current state addresses the ask → invite @ella user to the 6 remaining pilot channels (M1.4.5) and ship. If not → workaround design needed (e.g., custom mention pattern, slash command, accept-and-document the constraint).
-- **Next action:** Nabeel feedback first. Then either M1.4.5 pilot rollout (~30 min: invite @ella to each of Fernando G / Musa / Jenny / Dhamen / Trevor / Art channels via the channel UI) OR M1.4.6 design session for the mention constraint. Step-by-step in `docs/architecture/ella_user_token.md` § Deploy + smoke-test runbook.
+- **Next action:** Nabeel feedback first. Then either M1.4.5 pilot rollout (~30 min: invite @ella to each of Fernando G / Musa / Jenny / Dhamen / Trevor / Art channels via the channel UI) OR M1.4.6 design session for the mention constraint. Step-by-step in `docs/fulfillment/ella_user_token.md` § Deploy + smoke-test runbook.
 - **Logged:** 2026-04-27 (M1.4.1 → M1.4.3 implementation + deploy in one day; pilot rollout gated on Nabeel).
 
 ## Slack AI/impersonation policy — Drake elected NOT to add "(AI)" suffix; revisit on signal

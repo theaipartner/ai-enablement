@@ -26,7 +26,7 @@ script remains a documented no-op for already-handled cases):
     in alternates from the merge).
 
 The dashboard surfaces `metadata.alternate_emails` read-only by
-design (M3.2 followup logged in `docs/known-issues.md`); this script
+design (M3.2 followup logged in `docs/fulfillment/known-issues.md`); this script
 is the canonical write path until that affordance lands.
 
 Usage:

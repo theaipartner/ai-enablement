@@ -190,4 +190,4 @@ use them.
 These fixes add Postgres functions (RPCs) → migrations. Local Docker is up, so
 `supabase db push` misroutes — apply via psycopg2 against the pooler + manual
 ledger insert + dual-verify (schema/pg_proc AND `schema_migrations`). See
-`docs/sales-dashboard-architecture.md` §0.2 and `docs/runbooks/apply_migrations.md`.
+`docs/sales/sales-dashboard-architecture.md` §0.2 and `docs/runbooks/apply_migrations.md`.

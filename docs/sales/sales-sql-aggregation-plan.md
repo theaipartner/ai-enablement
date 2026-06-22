@@ -2,7 +2,7 @@
 
 **Status:** plan (not yet started)
 **Author:** investigation 2026-06-11
-**Companion docs:** `PERFORMANCE-SCALING-DEBT.md` (the why + the parallelization/dedup items), `docs/sales-dashboard-architecture.md` (surface map + ops traps), `docs/runbooks/apply_migrations.md` (migration apply).
+**Companion docs:** `docs/fulfillment/PERFORMANCE-SCALING-DEBT.md` (the why + the parallelization/dedup items), `docs/sales/sales-dashboard-architecture.md` (surface map + ops traps), `docs/runbooks/apply_migrations.md` (migration apply).
 
 ---
 
@@ -116,9 +116,9 @@ query instead of N chunked-and-paginated round-trips + JS Maps.
 
 - **Diff harness:** a temporary Route Handler that calls V1 (JS) and V2 (RPC) for
   the same inputs and returns a field-by-field JSON diff, curl-able against the
-  deploy (cloud DB). Reused by every iteration. (Per `PERFORMANCE-SCALING-DEBT.md`
+  deploy (cloud DB). Reused by every iteration. (Per `docs/fulfillment/PERFORMANCE-SCALING-DEBT.md`
   § Methodology.)
-- **Standing rule** (write into `PERFORMANCE-SCALING-DEBT.md` § Standing rule):
+- **Standing rule** (write into `docs/fulfillment/PERFORMANCE-SCALING-DEBT.md` § Standing rule):
   *New sales aggregations compute counts/sums/mins in SQL via the aggregation
   layer and return small result sets. Never paginate a whole table into Node to
   loop over it.* This is the line that makes the foundation stick.
@@ -181,7 +181,7 @@ diff to zero, switch callers, delete V1. Each is independently shippable.
   `showed` / `closed` / `closeType` / `upfront`, with the ±48h event-match window.
 - **Resolvers** (`buildCalendlyLeadResolver`, `buildSetterNameResolver`,
   `buildBookedByResolver`): these are *lookups*, not aggregations — handle via
-  `PERFORMANCE-SCALING-DEBT.md` item 6 (per-request `cache()` + date-bound), and
+  `docs/fulfillment/PERFORMANCE-SCALING-DEBT.md` item 6 (per-request `cache()` + date-bound), and
   eventually a unique-`utm_term` index/view + an id→name lookup table. Note them
   here so the cluster lands coherent.
 - **Long-term:** the cleanest home for `showed`/`closed`/`closeType` is the
@@ -271,7 +271,7 @@ Any SQL rewrite MUST preserve these exactly — they are the landmines:
 - **Migration apply:** these RPCs are migrations. Local Docker is up →
   `supabase db push` misroutes → apply via **psycopg2 against the pooler + manual
   ledger insert + dual-verify** (schema/`pg_proc` AND `schema_migrations`). See
-  `docs/sales-dashboard-architecture.md` §0.2 and `docs/runbooks/apply_migrations.md`.
+  `docs/sales/sales-dashboard-architecture.md` §0.2 and `docs/runbooks/apply_migrations.md`.
   **SQL review is a Drake gate** — he reviews each function's SQL before apply.
 - **Security:** RPCs are called via the service-role admin client (RLS bypass, as
   today). Define functions `security definer` only if needed; keep them read-only.

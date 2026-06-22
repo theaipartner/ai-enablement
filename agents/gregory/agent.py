@@ -66,7 +66,7 @@ class SweepResult:
     duration_ms tracks wall-clock for the entire sweep (start of first
     client to end of last). avg_per_client_ms is duration_ms divided by
     total_clients (or 0 if the sweep ran on zero clients). Both feed the
-    cron-ceiling watchpoint logged in docs/known-issues.md — re-architect
+    cron-ceiling watchpoint logged in docs/fulfillment/known-issues.md — re-architect
     when wall-clock duration approaches 80% of the Vercel maxDuration
     ceiling (i.e. 240s of 300s on Pro plan).
     """

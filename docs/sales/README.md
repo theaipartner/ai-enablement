@@ -4,7 +4,7 @@ This folder is the **single home for everything sales**. If it isn't in here (or
 `docs/schema/` for per-table column detail), it isn't current sales documentation.
 
 > **Status:** v1, created 2026-06-11. Synthesized from the old
-> `docs/sales-dashboard-architecture.md` palimpsest and its companions. The logic
+> `docs/sales/sales-dashboard-architecture.md` palimpsest and its companions. The logic
 > here is faithful to those docs but should be spot-checked against live behaviour
 > as we go — flag anything that disagrees with the running app and fix it *in place*.
 
@@ -81,7 +81,7 @@ the **tagger** materializes per-lead/per-cycle facts into the tag tables (`lead_
 (read-time) or direct column reads — instead of pulling thousands of raw rows into the
 page and crunching them in JS. New aggregation should follow this: don't add a JS scan
 over `close_*` / `airtable_*` when a function over the materialized tables will do. See
-`docs/sales-sql-aggregation-plan.md` for the migration arc.
+`docs/sales/sales-sql-aggregation-plan.md` for the migration arc.
 
 **Done:** funnel box counts (`sales_funnel_counts`, migration 0079); speed-to-lead + FMR
 (per-cycle facts materialized in `lead_cycles` via 0080, read by `getSpeedToLeadCohort` /
@@ -97,14 +97,14 @@ metrics.
 These predate this folder and are being consolidated here. Read them only to mine
 still-true detail, then delete once their content lives in the docs above:
 
-- `docs/sales-dashboard-architecture.md` — the 1,886-line palimpsest. **Superseded by
+- `docs/sales/sales-dashboard-architecture.md` — the 1,886-line palimpsest. **Superseded by
   this folder.**
 - `docs/runbooks/sales_dashboard.md` — the older v1/v2 metric-catalog surface
   (`/[section]`, `/states`, "~30 of ~140 LIVE"). A legacy layer the funnel/leads/talent
   product grew over, not the current product.
-- `docs/high-ticket-funnel-explained.md`, `docs/data-hygiene.md` — folded into
+- `docs/fulfillment/high-ticket-funnel-explained.md`, `docs/fulfillment/data-hygiene.md` — folded into
   `data-model.md` / `logic.md`.
-- `docs/sales-sql-aggregation-plan.md` — the live **performance** plan (push
+- `docs/sales/sales-sql-aggregation-plan.md` — the live **performance** plan (push
   aggregation into Postgres). Still active; will move under this folder.
 </content>
 </invoke>

@@ -29,7 +29,7 @@ text in `previous_message`, not in `text`, and overwriting the existing
 row would erase the original ingestion. We treat delete as a system
 event that doesn't change the historical record.
 
-The ingestion spec (`docs/ingestion/metadata-conventions.md`) pins the
+The ingestion spec (`docs/fulfillment/metadata-conventions.md`) pins the
 behavior; parser is the single place that decodes a raw Slack event.
 """
 
@@ -276,7 +276,7 @@ def _pick_message_type(event: dict[str, Any], thread_ts: str | None) -> str:
 def _pick_message_subtype(event: dict[str, Any], text: str) -> str | None:
     """Domain subtype: accountability_submission, nps_submission, or None.
 
-    The ingestion convention (`docs/ingestion/metadata-conventions.md`)
+    The ingestion convention (`docs/fulfillment/metadata-conventions.md`)
     is that downstream CSM Co-Pilot queries filter on these, so we
     apply the heuristic once at ingest time. Keep the pattern set
     tight — false positives are worse than misses.
