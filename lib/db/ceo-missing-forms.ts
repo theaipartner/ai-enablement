@@ -3,7 +3,6 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveFunnelRange } from './funnel-stages'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
-import { loadOnceHubBookings } from './oncehub-bookings'
 
 // CEO control-center — "forms not filled" flags for TODAY (ET).
 //
@@ -159,22 +158,6 @@ async function closerFlags(
       earliestMeeting.set(leadId, { at: e.start_time as string, closer: e.host_user_name, leadName: inv.name ?? leadId })
     }
   }
-  // OnceHub closer bookings in the same window (additive). The booking's `owner`
-  // gives the closer directly; the loader resolves the lead (hidden lead_id →
-  // email/phone/name). Feed the SAME earliestMeeting map so the form-check below
-  // covers them uniformly. ht_consultation only today (the direct closer flow).
-  const ohBks = await loadOnceHubBookings(
-    { startEtDate: '', endEtDate: '', startUtcIso: todayStart, endUtcIso: cutoff },
-    { dateField: 'scheduled_at', roles: ['ht_consultation', 'partnership'] },
-  )
-  for (const b of ohBks) {
-    if (!b.leadId || !b.scheduledAt || b.isCanceled) continue
-    const prev = earliestMeeting.get(b.leadId)
-    if (!prev || b.scheduledAt < prev.at) {
-      earliestMeeting.set(b.leadId, { at: b.scheduledAt, closer: b.closer?.name ?? null, leadName: b.inviteeName ?? b.leadId })
-    }
-  }
-
   const leadIds = Array.from(earliestMeeting.keys())
   if (leadIds.length === 0) return []
 

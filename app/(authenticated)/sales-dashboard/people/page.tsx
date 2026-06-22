@@ -263,7 +263,7 @@ function CallActivityStacked({
 
 function CalendlySection({ bookings }: { bookings: CalendlyBookingActivity }) {
   return (
-    <SectionBox eyebrow="BOOKINGS" title="Closer bookings booked in range — Calendly + OnceHub (direct + setter, excl. hidden).">
+    <SectionBox eyebrow="BOOKINGS" title="Closer bookings booked in range — Calendly (direct + setter, excl. hidden).">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
         <Tile label="Total bookings" value={bookings.total} />
         <Tile label="Rescheduled" value={bookings.rescheduled} />

@@ -89,7 +89,7 @@ name → this page.
 ## Talent — `/people` (display name "Talent")
 
 Per-rep **Call Activity** (setters and closers), per-closer scheduled tables, the
-**BOOKINGS** boxes (Calendly + OnceHub — relabelled from "CALENDLY BOOKINGS" 2026-06-20),
+**BOOKINGS** boxes (Calendly),
 **Cash**, and the **Digital College** drilldown (Robby). This is the
 rep-performance surface, organized **by call type** (a Triage table + a Confirmation
 table, etc.). Being superseded by Roster (below) — kept as the comparison baseline until
@@ -152,11 +152,11 @@ logic.
 - **Cards are equal-height** (grid-auto-rows), active reps sorted first.
 
 The closer card's funnel reads the read-time loaders (`getClosingScheduledList` etc.),
-which now reconstruct booking→closer-form from **Calendly + OnceHub** — and OnceHub's
-reliable `owner` makes the per-closer attribution trustworthy (the gap that once motivated
-the `booking_cycles` spine, now **shelved** — see [`booking-to-close.md`](./booking-to-close.md)).
-Books/Shows/Closes stay read-time-reconstructed (no persisted spine); Roster can replace
-`/people` once it's trusted on the real numbers.
+which reconstruct booking→closer-form from **Calendly** at read time (the per-closer
+attribution that once motivated the `booking_cycles` spine, now **shelved** — see
+[`booking-to-close.md`](./booking-to-close.md)). Books/Shows/Closes stay
+read-time-reconstructed (no persisted spine); Roster can replace `/people` once it's
+trusted on the real numbers.
 
 ---
 

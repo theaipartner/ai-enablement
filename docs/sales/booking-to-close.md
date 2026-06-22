@@ -1,23 +1,26 @@
-# Sales — Booking → Close lifecycle (spine SHELVED; OnceHub integration shipped)
+# Sales — Booking → Close lifecycle (spine SHELVED)
 
-> **Status (2026-06-20): the `booking_cycles` spine is SHELVED — not built, not
-> planned.** What got built instead is the full **OnceHub dashboard integration** (§ What
-> shipped, below). What's shelved is the persisted per-booking lifecycle table this doc
-> originally designed; the design is kept below as the durable record in case the revisit
-> trigger fires.
+> **Status: the `booking_cycles` spine is SHELVED — not built, not planned.** This doc
+> originally designed a persisted per-booking lifecycle table; the design is kept below as
+> the durable record in case the revisit trigger fires.
 >
-> **Why shelved (the decision).** The spine was justified by two things, both of which
-> evaporated:
+> **OnceHub was trialed and removed (2026-06-22).** A OnceHub scheduling integration was
+> built and briefly shipped (additive to Calendly) to make booking→closer linkage more
+> reliable, then **removed — we're not going with OnceHub**. Calendly is the scheduling
+> platform; the booking→close linkage is handled by **read-time reconstruction** in
+> `funnel-closing.ts` (48h booking↔closer-form match) plus the per-lead journey in
+> `lead_cycles`. No persisted spine.
+>
+> **Why shelved (the decision).** The spine was justified by two things, both of which fell
+> away:
 > 1. **Pinging.** Persisting a per-booking record only earned its keep if we *nudged* off
 >    it — you can't ping read-time math. Drake took booking-leg pinging off the table, which
 >    removes the main reason to persist anything.
-> 2. **Unreliable booking→closer linkage.** Pre-OnceHub, Calendly couldn't reliably say who
->    a booking was with or which form closed it, so a hand-maintained link looked necessary.
->    The **OnceHub integration shipped 2026-06-20 closed that gap**: `owner` gives the closer
->    reliably, lead resolution is solid, and `funnel-closing.ts` already reconstructs
->    booking→closer-form at read time (now fed by OnceHub). `lead_cycles` covers the
->    per-lead journey. A persisted spine would duplicate working read-time logic with no
->    consumer asking for per-booking durability.
+> 2. **Unreliable booking→closer linkage.** Calendly can't reliably say who a booking was
+>    with, so a hand-maintained link looked necessary. But the read-time reconstruction in
+>    `funnel-closing.ts` (booking↔closer-form match) + `lead_cycles` (per-lead journey) is
+>    good enough for every consumer asking today. A persisted spine would duplicate working
+>    read-time logic with no consumer asking for per-booking durability.
 >
 > **Revisit trigger.** Build `booking_cycles` if/when EITHER (a) booking-leg pinging becomes
 > a real priority (nudging closers for missing EOC forms on booked meetings — the
@@ -28,41 +31,14 @@
 > Edit in place; delete retired sections rather than striking them through (the one folder
 > rule).
 
-## What shipped instead — the OnceHub dashboard integration (2026-06-20)
-
-OnceHub **replaces Calendly** as the scheduling platform. The change is **additive**:
-Calendly stays for history and every sales surface now reads **Calendly + OnceHub**. The
-booking→close linkage the spine was meant to provide is handled by the read-time layer,
-now reliably fed by OnceHub:
-
-- **Capture** — `oncehub_bookings` mirror (migration 0092) + `api/oncehub_events.py`
-  webhook + `ingestion/oncehub/`. Full detail in [`ingestion.md`](./ingestion.md) § OnceHub.
-- **The read foundation** — `lib/db/oncehub-bookings.ts`: classify a booking by funnel role
-  (**direct** via `master_page`, **setter** via `booking_page`), resolve booking→lead (hidden
-  lead_id → email/phone/name), resolve `owner`→closer (the reliable per-closer Books owner).
-  Every surface unions OnceHub in through this one module.
-- **lead_cycles** — the tagger (`shared/lead_tagging.py`) feeds OnceHub **direct** bookings
-  into the "booked" signal; **setter** bookings ride the triage-form path (unchanged — setter
-  "booked" is form-driven). So the funnel / roster / per-lead booked stage light up
-  automatically (they read the materialized `lead_cycle_stages`).
-- **Talent** — `funnel-closing.ts` injects OnceHub bookings into the booking tiles + the
-  per-closer scheduled tables (owner → the SAME `closerIdentity` as a Calendly host, via
-  `host_user_email`); the "CALENDLY BOOKINGS" tile is relabelled "BOOKINGS".
-- **Per-lead journey** (`lead-detail.ts`) + **CEO missing-forms** (`ceo-missing-forms.ts`)
-  fold OnceHub bookings into the timeline + the missing-form flagger.
-
-Both the **direct** (FB-funnel) and **partnership** (setter) flows are wired. Digital
-College is intentionally NOT on OnceHub (it's phone-based now — `logic.md` § call typing).
-
 ---
 
 ## The shelved design (preserved for the revisit trigger)
 
 Everything below is the **original spine design. It is NOT built.** Kept so that if the
-trigger fires we resume from a worked-through design instead of a blank page. The "gap" it
-describes is now largely closed by the OnceHub integration above.
+trigger fires we resume from a worked-through design instead of a blank page.
 
-## Why this existed — the gap (now largely closed)
+## Why this existed — the gap
 
 We could see a rep's *dialing* accountability precisely (engagements — see
 [`logic.md`](./logic.md) § Engagements + [`engagements.md`](../schema/engagements.md)),
@@ -74,11 +50,11 @@ but **could not link a booked meeting to its eventual close** at the persistence
   with a Digital College outcome). **High-Ticket closing is deliberately excluded** —
   an HT-Closed closer form never ends an engagement, and the HT consultation itself is
   a scheduled video meeting, not a Close phone dial, so no engagement even opens for it.
-- **No per-closer link from booking to close** (pre-OnceHub). The only booking→closer hint
-  was the setter-triage `Booked with?` field (~18% populated). The closing dashboard
+- **No persisted per-closer link from booking to close.** The only booking→closer hint
+  is the setter-triage `Booked with?` field (~18% populated). The closing dashboard
   reconstructs a booking↔closer-form match at *read time* (48h window —
-  `lib/db/funnel-closing.ts`). **OnceHub's reliable `owner` now makes that read-time
-  reconstruction trustworthy**, which is why the persisted spine is no longer needed.
+  `lib/db/funnel-closing.ts`). That read-time match is what the dashboard relies on today;
+  a persisted spine would only be needed if we wanted to nudge off it.
 
 ## The model — a relay, not a single baton
 
@@ -89,10 +65,10 @@ artifact**, an **owner**, and a **nudge** when the artifact is missing:
 Booked ──▶ Confirmation reach-out ──▶ (confirmed? meeting : Setter Pipeline) ──▶ Showed ──▶ Closed
 ```
 
-1. **Booked.** A scheduled meeting (OnceHub event; Calendly until then) opens a
-   booking cycle for the lead. Anchor the spine **on the meeting**, not on a form —
-   most HT meetings are **direct books** (lead self-schedules, no setter, no triage
-   form), and those must enter the relay too.
+1. **Booked.** A scheduled meeting (Calendly event) opens a booking cycle for the lead.
+   Anchor the spine **on the meeting**, not on a form — most HT meetings are **direct
+   books** (lead self-schedules, no setter, no triage form), and those must enter the
+   relay too.
 2. **Confirmation reach-out.** Every booking gets a reach-out before the meeting —
    by **call** (opens an engagement, finalized by a Closer Triage Form) **or by text**
    (no Close call, so no engagement). Because it can be a text, the **canonical
@@ -123,7 +99,7 @@ state, mirroring `engagements` / `lead_cycle_stages` (set once, never cleared):
 | `id` | PK. |
 | `lead_id` | Close lead (`close_leads.close_id`). |
 | `closer_user_id` / `closer_name` | The host the meeting is booked with (from the booking platform). **This is what finally gives Books a reliable per-closer owner.** |
-| `source` | `oncehub` \| `calendly` — which adapter produced the booking. |
+| `source` | Which adapter produced the booking (`calendly`). |
 | `booking_ref` | The platform's event/booking id (normalized key). |
 | `scheduled_at` | The meeting time — drives the closing-leg clock. |
 | `booked_at` | Cycle opened. |
@@ -143,47 +119,15 @@ call-accountability layer that feeds it. The confirmation call's engagement link
 `confirm_engagement_id`; the close links via `closer_form_id`. Engagement logic and the
 existing missing-form pinger are unchanged.
 
-## How OnceHub fits — and why it's better than Calendly here
-
-OnceHub (`developers.oncehub.com`) supports our setup and closes the matching gap that
-Calendly left open:
-
-- **Native lifecycle webhooks**: `booking.scheduled`, `booking.rescheduled`,
-  `booking.canceled`, `booking.canceled_then_rescheduled`, `booking.completed`, and a
-  real **`booking.no_show`** event. Calendly only exposes a `no_show` *flag* we'd poll;
-  OnceHub *tells* us in real time — exactly the signal the closing leg needs to
-  auto-resolve a fallen-through meeting (so it stops nudging).
-- **Reliable lead_id carriage.** OnceHub personalized links carry custom/hidden fields
-  and support embedding a **CRM record ID** that returns in the webhook payload. We set
-  the **Close lead_id** as a hidden field on the booking link → every booking hands it
-  back directly. This replaces Calendly's `utm_term` `aaid_<token>` hack, which only
-  resolves ~20% of bookings (most utm_terms are generic ad labels, dropped for safety —
-  `lib/db/calendly-lead-match.ts`). Email/phone/name matching drops from *primary path*
-  to *backstop*.
-- Webhooks are signed (secret) and UI-configurable (OnceHub Apr 2026 update).
-
 **The adapter principle (core principle #3).** Do **not** wire the lifecycle to a
 platform's payload shape. Mirror a **normalized booking** into our DB —
 `{lead_id (resolved), closer, scheduled_at, status, source, booking_ref}` — fed by a
-thin OnceHub adapter (and a Calendly adapter only if we need the interim). `booking_cycles`
-and the pinger read *our* table, so a future platform swap is a contained ingestion
-rewrite, never a journey-logic rewrite.
-
-**Discovery — done 2026-06-19** (against the live v2 account). Confirmed: account is
-v2; events fire as listed above; the booking object carries `owner` = the assigned
-rep (USR-…) even on the team round-robin calendar, `rescheduled_booking_id` for
-reschedule lineage, and `cancel_reschedule_information` {reason, actioned_by,
-user_id}. Signature is `Oncehub-Signature: t=<ts>,s=<hex>`, HMAC-SHA256 over
-`<ts>.<body>`. The one thing **not yet observed** is a real `form_submission`
-(invitee name/email/phone) + a populated hidden-field `custom_fields` entry — the
-two admin/reschedule test bookings have `form_submission: null`. The parser is
-written defensively for both; **one real booking through the public link with the
-form filled (and a `?lead_id=` param once the hidden field exists)** is the last
-discovery step before the spine relies on those fields.
+thin adapter per platform. `booking_cycles` and the pinger read *our* table, so a future
+platform swap is a contained ingestion rewrite, never a journey-logic rewrite.
 
 ## Matching priority (when a booking arrives)
 
-1. **Close lead_id from the platform** (OnceHub hidden field; Calendly `utm_term` token).
+1. **Close lead_id from the platform** (Calendly `utm_term` token, ~20% of bookings).
 2. **Email**, then **phone**, then **normalized name** — the existing resolver
    (`calendly-lead-match.ts` + the booked-by identity resolver in `funnel-closing.ts`).
    Reuse it; don't rebuild.
@@ -223,14 +167,3 @@ trusted, the Roster replaces the current section-by-call-type Talent page.
 Until then the Roster reads the existing read-time loaders as-is, and the closer-card
 Books/Shows/Closes metrics stay approximate (the closing dashboard's Calendly-matched
 numbers).
-
-## Open decisions to confirm at build time
-
-- Confirm the **Closer Triage Form outcome is the canonical "confirmed" signal** (text
-  confirmations produce no call/engagement) — current working assumption.
-- **OnceHub cutover timing** decides whether we build the Calendly adapter at all or go
-  straight to OnceHub.
-- Whether **direct + setter-booked** meetings share one `booking_cycles` shape (assumed
-  yes) or need a discriminator beyond the funnel's existing Direct/Setter/Reactivation
-  split.
-- Exact OnceHub webhook payload field names + host attribution — from the discovery call.

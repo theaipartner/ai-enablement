@@ -40,7 +40,7 @@ An internal **sales analytics** dashboard. Three surfaces, flat nav:
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.
 - **Talent** (route `/people`) — per-rep setter/closer activity, scheduled tables,
-  bookings (Calendly + OnceHub), Cash, and the Digital College drilldown. Its **Roster** sub-page
+  bookings (Calendly), Cash, and the Digital College drilldown. Its **Roster** sub-page
   (`/people/by-rep`) is the by-person re-presentation — one block per rep, hide-inactive
   by default — a candidate replacement for the by-call-type Talent page.
 
@@ -56,7 +56,7 @@ subdomain plan). Nothing in here should reference Ella, Clients, CSM, or Gregory
 | [`ingestion.md`](./ingestion.md) | Every data source, its webhook/cron model, and the **ops traps** (the env gotcha, the migration apply path). |
 | [`surfaces.md`](./surfaces.md) | The page-by-page UI map — routes, what each shows, what was removed. |
 | [`landing-pages.md`](./landing-pages.md) | How landing pages work + **the checklist for adding a new one** (the 5 things to collect, what's deferred). |
-| [`booking-to-close.md`](./booking-to-close.md) | **(OnceHub integration shipped 2026-06-20; `booking_cycles` spine SHELVED.)** OnceHub replaced Calendly as the scheduling platform (additive — every surface reads both); the booking→close linkage is handled by read-time reconstruction + `lead_cycles`. Records the decision to shelve the persisted spine + the revisit trigger. Ingestion detail in `ingestion.md` § OnceHub. |
+| [`booking-to-close.md`](./booking-to-close.md) | **(`booking_cycles` spine SHELVED; OnceHub trialed + removed.)** Calendly is the scheduling platform; the booking→close linkage is handled by read-time reconstruction (`funnel-closing.ts`) + `lead_cycles`. Records the decision to shelve the persisted spine + the revisit trigger. |
 
 Per-table column detail stays in `docs/schema/<table>.md` (kept as-is; the manifest
 in `data-model.md` says which of those are sales).

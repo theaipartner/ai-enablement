@@ -36,65 +36,14 @@ backfill → `calendly_scheduled_events`, `calendly_invitees`, `calendly_event_t
 Filter closer bookings by **event `name` ILIKE** `CLOSER_EVENT_TYPE_NAMES` — **don't**
 join `event_type_uri` (retired URIs). See `logic.md` § call typing.
 
-### OnceHub — `ingestion/oncehub/` ▶ LIVE & dashboard-integrated (2026-06-20)
-Webhook `api/oncehub_events.py` (real-time primary) + API backstop
-(`scripts/backfill_oncehub.py`) → `oncehub_bookings` (migration 0092, raw booking
-mirror). **OnceHub replaces Calendly** as the scheduling platform — **additive**:
-Calendly stays for history, every sales surface reads Calendly + OnceHub. We do NOT
-backfill Calendly into the OnceHub mirror. The persisted `booking_cycles` spine is
-**shelved** (read-time reconstruction + lead_cycles cover the booking→close linkage) —
-see [`booking-to-close.md`](./booking-to-close.md).
-
-**Dashboard integration.** Surfaces read OnceHub through `lib/db/oncehub-bookings.ts`
-(classify role → resolve booking→lead → resolve `owner`→closer). The tagger
-(`shared/lead_tagging.py`) feeds **direct** bookings into the lead_cycles "booked" signal
-(**setter** bookings ride the triage-form path, unchanged); `funnel-closing.ts` injects
-OnceHub into the Talent booking tiles + per-closer scheduled tables; `lead-detail.ts` +
-`ceo-missing-forms.ts` fold them in. So the funnel, roster, per-lead journey, Talent, and
-missing-form flagger all reflect OnceHub. Both **direct** and **partnership/setter** flows
-are wired.
-
-**Live + verified** — real bookings land and parse; webhook `WHK-9JXMFZKAH5` is registered
-→ the production endpoint; `ONCEHUB_WEBHOOK_SECRET` is set in Vercel **Production** (Preview
-intentionally skipped — OnceHub delivers to the prod domain only; the v52 CLI can't set
-Preview anyway). `form_submission` confirmed against real bookings: it carries
-`name`/`email`/`phone`/`mobile_phone` — the parser's `phone or mobile_phone` fallback is
-load-bearing (real bookings put the number in `mobile_phone`, top-level `phone` null).
-
-- **Account is v2 ("Booking Calendars")** — gates signed webhooks + the
-  `custom_fields` passthrough. Auth: header `API-Key` (NOT Bearer), base
-  `api.oncehub.com/v2`. Rate limit 5 req/s.
-- **Live config (Zain's):** team **Closers** (`TM-LHNGDXC42R59`: Cobe, Aman); a
-  team-hosted **"Ai Partner Strategy Call"** booking calendar (`BKC-0NJDVMLVJK`,
-  45-min, **round-robins** between the closers); public master page
-  **"AI Partner - FB"** (`go.oncehub.com/AIPartner-FB`); per-closer **"Partnership Call w/
-  {Aman,Cobe}"** booking pages (`BP-UBK4DVGWFX` / `BP-182H3QCWET`, setter-led).
-- **Classification (direct vs setter — the discriminator, verified live 2026-06-20):**
-  a **direct** FB-funnel booking carries `master_page` (`BP-MVKDFLP85W`) *and* a partnership
-  `booking_page` underneath, so `master_page`/calendar are matched **FIRST**. A **partnership/
-  setter** booking carries only `booking_page` (`BP-UBK4DVGWFX`/`BP-182H3QCWET`) with
-  `master_page` NULL → setter. Internal 1:1 "Meeting with X" calendars are dropped. The map
-  lives in **two** places kept in sync: `lib/db/oncehub-bookings.ts` (TS, the read layer) +
-  `shared/lead_tagging.py` (Python, the tagger). **Digital College has no OnceHub link** (DC
-  is phone-based) — add it to both maps if that ever changes.
-- **`owner` on each booking = the rep the round-robin landed on** — the per-closer
-  Books attribution that had no reliable source pre-OnceHub.
-- **Signature:** header `Oncehub-Signature: t=<ts>,s=<hex>`, HMAC-SHA256 over
-  `<ts>.<body>`, per-endpoint secret. Same scheme as Calendly bar `s=` vs `v1=`.
-  Dedup keys on the envelope `id` (`EVNT-…`, a stable per-delivery id).
-- **A second webhook already exists** → make.com (`WHK-L0WXHC9Z2D`, Zain's
-  automation). Ours is a **separate** subscription (`POST /v2/webhooks` via
-  `scripts/register_oncehub_webhook.py`); the two coexist. The signing secret is
-  readable from `/v2/webhooks`.
-- **lead_id carriage NOT live yet:** bookings return `custom_fields: []` — the
-  hidden field is unconfigured, so lead→booking match is **email/phone fallback**
-  for now. `parser._extract_lead_id` accepts `lead_id`/`close_lead_id`/etc. for
-  when Zain adds the hidden field + personalized `?lead_id=` links.
-- **Env:** `ONCEHUB_API_KEY` (read + webhook mgmt) lives in `.env.local` only —
-  the deployed **receiver doesn't call the API**, so it's NOT needed in Vercel
-  (add it there only when a reconciliation cron lands). `ONCEHUB_WEBHOOK_SECRET`
-  (per-endpoint signing secret) **is set in Vercel Production**. New `api/*.py`
-  needs the `excludeFiles` line (250 MB cap, below).
+### OnceHub — removed (2026-06-22)
+A OnceHub scheduling integration (webhook `api/oncehub_events.py`, backfill +
+`ingestion/oncehub/`, `oncehub_bookings` mirror, read layer + tagger wiring) was built and
+briefly shipped, then **removed — we're not going with OnceHub**. Calendly is the scheduling
+platform. The `oncehub_bookings` table (migration 0092) is left inert (nothing reads it); a
+registered OnceHub webhook (`WHK-9JXMFZKAH5`) + the `ONCEHUB_WEBHOOK_SECRET` Vercel var may
+still exist on the provider side and can be deactivated. See
+[`booking-to-close.md`](./booking-to-close.md).
 
 ### Typeform — `ingestion/typeform/`
 Webhook (real-time primary) + cron backstop (`typeform_sync_cron`, `*/15`) + insights

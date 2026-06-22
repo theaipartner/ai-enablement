@@ -102,11 +102,6 @@
       "maxDuration": 60,
       "excludeFiles": "{.next,node_modules}/**"
     },
-    "api/oncehub_events.py": {
-      "runtime": "@vercel/python@4.3.1",
-      "maxDuration": 60,
-      "excludeFiles": "{.next,node_modules}/**"
-    },
     "api/typeform_events.py": {
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 60,
