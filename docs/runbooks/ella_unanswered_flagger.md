@@ -263,5 +263,5 @@ Knobs in `api/ella_unanswered_flagger_cron.py`:
 - `_MAX_PER_TICK` (default `50`). Rows handled per 15-min tick.
 
 Upstream: the flagging decision itself (`digest_flag=true`) is the
-decision Haiku's call — see `docs/agents/ella/ella.md`. This cron only
+decision Haiku's call — see `docs/agents/ella.md`. This cron only
 acts on rows the decision layer already flagged.

@@ -54,12 +54,12 @@ This decision is a direct application of the operational pattern documented in �
 ### Negative / accepted
 
 - **The @ dispatch is currently gated behind `passive_monitoring_enabled`.** A channel that has the passive flag OFF won't fire the @ handler either, because the realtime-ingest fork that routes to either path checks the channel toggle first. Accepted: passive is now left on for every Ella-monitored channel (the per-channel toggle exists for explicit opt-out, not default-off), so the gating is a non-issue in practice. If a channel ever needs @ but not passive, the dispatch fork needs a small rework — flagged but not built.
-- **Two prompts to keep in sync** — `_AT_MENTION_EXTENSION` in `agents/ella/agent.py` and `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py`. Any future tightening of the four escalation categories or any addition of a new "don't answer this" rule has to land in both. Mitigated by the `docs/agents/ella/followups.md` reminder; harder mitigation (extract shared escalation-categories constant) is deferred — would require restructuring both system prompts and isn't worth the churn yet.
+- **Two prompts to keep in sync** — `_AT_MENTION_EXTENSION` in `agents/ella/agent.py` and `_HAIKU_SYSTEM_PROMPT` in `agents/ella/passive_monitor.py`. Any future tightening of the four escalation categories or any addition of a new "don't answer this" rule has to land in both. Mitigated by the `docs/archive/historical/ella-followups.md` reminder; harder mitigation (extract shared escalation-categories constant) is deferred — would require restructuring both system prompts and isn't worth the churn yet.
 - **The split doubled the agent-code surface for @ vs passive.** What was one path is now two — more code, more tests, more places to drift. Accepted: the alternative (one shared decision surface) was the design that broke. Structural correctness is worth the surface-area cost.
 
 ## Known deviations + status
 
-None at decision time. Future drift would look like: a new "escalate on X" rule landing in only one of the two prompts (mention-side vs passive-side). The grep-the-other-and-reconcile reminder in `docs/agents/ella/followups.md` is the current mitigation.
+None at decision time. Future drift would look like: a new "escalate on X" rule landing in only one of the two prompts (mention-side vs passive-side). The grep-the-other-and-reconcile reminder in `docs/archive/historical/ella-followups.md` is the current mitigation.
 
 ## Implementation pointers
 
@@ -70,7 +70,7 @@ None at decision time. Future drift would look like: a new "escalate on X" rule 
 - **Slack identity routing:** `shared/slack_post.py:post_message_as_user_first` (user-token first, bot fallback, fire-and-forget on a transport exception or Slack `ok=false`).
 - **Daily digest consumer:** `api/ella_daily_digest_cron.py` (reads `pending_digest_items` populated by the passive path).
 - **Operational runbook:** `docs/runbooks/ella_passive_monitoring.md` (passive-side ops; SQL-only post `/ella/runs` removal).
-- **Agent doc:** `docs/agents/ella/ella.md` (behavior spec, both paths, status-honesty + identity-routing sections).
+- **Agent doc:** `docs/agents/ella.md` (behavior spec, both paths, status-honesty + identity-routing sections).
 - **Source specs (deleted EOD 2026-05-23):** `ella-at-mention-passive-split` + `ella-at-mention-recent-context` + `ella-reply-as-human`. Recover from git history: `git log --diff-filter=D -- docs/specs/ella-at-mention-passive-split.md`.
 
 ## Review

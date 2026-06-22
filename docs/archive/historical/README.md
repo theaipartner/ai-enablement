@@ -15,6 +15,14 @@ for history:
 - `ella_user_token.md` — discovery output for Ella's user-token posting (shipped; design rationale only).
 - `fathom_webhook.md` — the pre-implementation Fathom webhook spec; current behavior is in `docs/fulfillment/architecture.md`.
 
+## Superseded by the 2026-06-22 agent-doc rewrite
+`docs/agents/gregory.md` and `docs/agents/ella.md` were rewritten from current code (git history holds
+the prior versions). These Ella side-docs were archived rather than carried forward:
+
+- `ella-v1-scope.md` — the April 2026 V1 team-testing scope/commitment.
+- `ella-followups.md` — operational reminders + known gaps (mostly resolved); originally `docs/agents/ella/followups.md`.
+- `ella-future-ideas.md` — the dated Ella V2 deferred-work backlog; originally `docs/agents/ella/future-ideas.md`.
+
 ## Earlier point-in-time artifacts
 - `m5_*.md` — M5 client-cleanup diffs and notes (2026-05).
 - `gregory-redesign-compiled.md` — compiled redesign working notes.

@@ -189,7 +189,7 @@ def post_message_as_user_first(
     each call site.
 
     The M1.4 two-token strategy is what this restores
-    (`docs/agents/ella/followups.md` § Ella user-token posting). The
+    (`docs/archive/historical/ella-followups.md` § Ella user-token posting). The
     previous home was `api/slack_events.py:_post_to_slack` (now deleted
     — was dead code after the 2026-05-18 unified-path collapse made
     `app_mention` a no-op). The pattern is the same; this lives in

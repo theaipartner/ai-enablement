@@ -259,7 +259,7 @@ def fetch_recent_at_mention_exchanges(
     mention. Pairing is by Ella's resolved `slack_user_id`, NOT by
     `author_type`, because of the open issue where Ella's posts are
     sometimes tagged `author_type='bot'` instead of `'ella'`
-    (`docs/agents/ella/followups.md`). If Ella hasn't replied to the
+    (`docs/archive/historical/ella-followups.md`). If Ella hasn't replied to the
     mention yet (or the reply isn't in the lookback window), the
     mention is included alone. Tolerates missing replies.
 

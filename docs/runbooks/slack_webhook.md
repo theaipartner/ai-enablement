@@ -100,7 +100,7 @@ Same pattern: update `.env.local` for parity, update Vercel env var, redeploy. `
 V1 does not consult `slack_channels.ella_enabled` — the enabled-channel list is the set of channels the Slack app is installed in. To add a channel:
 
 1. Invite the Ella bot to the new channel (`/invite @Ella`).
-2. Verify / create the `slack_channels` row with the channel's `C...` id and `client_id` set to the pilot client's UUID. Reference `docs/agents/ella/ella-v1-scope.md` for how `client_id` drives retrieval scoping.
+2. Verify / create the `slack_channels` row with the channel's `C...` id and `client_id` set to the pilot client's UUID. Reference `docs/archive/historical/ella-v1-scope.md` for how `client_id` drives retrieval scoping.
 3. No code change; no redeploy needed.
 
 ## User-token posting (M1.4) — deploy + rollback

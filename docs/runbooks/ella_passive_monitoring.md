@@ -6,7 +6,7 @@ Operational guide for Ella's passive observation path. Covers what it is, how to
 
 Passive monitoring after the **2026-05-23 split** is **observation-only in client channels**. Ella's decision Haiku still evaluates every non-@-mention client message and tags it for the daily digest signal, but the dispatch layer NO LONGER posts in-channel and NO LONGER fires escalation DMs from the passive path. The product rule: **in client channels, Ella speaks only when @-mentioned.** Passive feeds internal-channel surfaces (digest, unanswered-flagger); it does not interject in client conversations.
 
-@-mention handling is its own path (`agents.ella.agent.handle_at_mention`) and is documented in `docs/agents/ella/ella.md` § @-Mention Handling. This runbook is only the passive (non-@-mention) observation pipeline.
+@-mention handling is its own path (`agents.ella.agent.handle_at_mention`) and is documented in `docs/agents/ella.md` § @-Mention Handling. This runbook is only the passive (non-@-mention) observation pipeline.
 
 Pipeline (one entry per non-@-mention client-authored message):
 

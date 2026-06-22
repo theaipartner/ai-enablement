@@ -81,7 +81,7 @@ Specs are how Director hands work to Builder. Builder reads the spec blind in a 
 - **Hard-numerical thresholds.** When a meaningful failure mode is "we won't notice until it gets out of hand," include a concrete threshold (e.g., "if affected count exceeds N, stop and surface"). The M5.6 silent-toggle case is the working example: 17 clients exceeded the single-digit threshold, Builder stopped, surfaced (a)/(b)/(c)/(d), the (a)+(d) decision closed an audit-recovery gap that would otherwise have shipped silently.
 - **"What could go wrong" framing.** Phrase as interrogative: "think this through yourself, what could go wrong." Forces Builder to surface risks the spec didn't anticipate.
 - **Mandatory doc-update list.** Explicit list of which docs Builder updates at end of work. Don't say "if needed" — make the calls explicit. If a doc doesn't need updating, Builder says so explicitly in the report.
-- **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Update `docs/agents/ella/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
+- **Senior-engineer level of context, not wish-granter level.** Bad: "Build the Slack bot." Good: "We're building Slack Bot V1 per `docs/agents/ella.md`. Ingest from the `documents` and `slack_messages` tables via `shared/kb_query.py`. Follow the HITL pattern in `shared/hitl.py`. Start with the incoming Slack event handler. Update `docs/agents/ella.md` as you go, add at least 10 golden examples to `evals/ella/`."
 
 Director does NOT need to restate the report structure in the spec — Builder's CLAUDE.md-loaded behavior already specifies the six-section end-of-turn report (§ Director / Builder System § Builder behavior). Only mention it in the spec if the work needs an additional field beyond the standard six (rare).
 
@@ -451,12 +451,12 @@ The 39 migrations + 11 Python serverless functions + 6-tab TopNav (Clients / Cal
 
 ## Ella (active focus)
 
-Ella V2 is the active multi-batch focus alongside Gregory. **Full surface area — behavior spec, retrieval strategy, batch-by-batch state, build log — lives in `docs/agents/ella/ella.md`.** Read on demand when a spec touches Ella. Per-batch shipped detail also in `docs/archive/historical/state.md`.
+Ella V2 is the active multi-batch focus alongside Gregory. **Full surface area — behavior spec, retrieval strategy, batch-by-batch state, build log — lives in `docs/agents/ella.md`.** Read on demand when a spec touches Ella. Per-batch shipped detail also in `docs/archive/historical/state.md`.
 
 ## Other agents / future
 
 - **CSM Co-Pilot V1** — Batch C territory. Lives at `agents/csm_copilot/` (placeholder). The action-item HITL flow + transcript-driven CSM-facing reasoning is its surface area.
-- **Internal "Scout" assistant** — second agent on the shared Ella layer with team-wide retrieval scope. Sidelined; revisit-context in `docs/agents/ella/future-ideas.md`.
+- **Internal "Scout" assistant** — second agent on the shared Ella layer with team-wide retrieval scope. Sidelined; revisit-context in `docs/archive/historical/ella-future-ideas.md`.
 
 ## Update Policy for This File
 
