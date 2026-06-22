@@ -1421,7 +1421,7 @@ def render_scott_notes_md(
         lines.append("")
         lines.append(
             "_(CSV email differs from Gregory primary AND not in `alternate_emails`. "
-            "Handle per `docs/runbooks/backfill_nps_from_airtable.md` § Failure modes — "
+            "Handle per `docs/archive/historical/backfill_nps_from_airtable.md` § Failure modes — "
             "per-client triage to alternate_emails. Don't bulk-apply.)_"
         )
         lines.append("")

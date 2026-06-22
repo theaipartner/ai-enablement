@@ -272,12 +272,10 @@ ingests it through the same adapter + pipeline the webhook uses.
 
 ### Status
 
-**As of 2026-04-27 (M1.2 paused):** handler at `api/fathom_backfill.py` built
-and locally tested for auth-only paths (no auth → 401, wrong bearer → 401,
-missing `FATHOM_API_KEY` → 500). NOT YET deployed. NOT YET exercised against
-real Fathom data — that requires `FATHOM_API_KEY` in `.env.local` for the
-local test, OR M1.2.5 deploy + manual cron trigger. The "Deploy" section of
-this runbook below covers M1.2.5.
+**Live.** `api/fathom_backfill.py` is deployed and runs daily on the
+`0 8 * * *` cron in `vercel.json`, with `FATHOM_API_KEY` and `CRON_SECRET` set
+in Vercel Production. It is the safety net behind the live webhook. The Deploy
+section below is kept as a reference for re-provisioning.
 
 ### Schedule
 
@@ -299,7 +297,7 @@ because:
 | `CRON_SECRET` | Bearer token Vercel Cron sends in `Authorization`; the handler validates against this same env var. Shared across all cron endpoints in this project (consolidated to single-var pattern in M6.2). | Generate with `openssl rand -hex 32` |
 | Existing | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` | Already in Vercel env from earlier sessions |
 
-### Deploy (M1.2.5 — not yet done)
+### Deploy (reference — already provisioned)
 
 1. **Generate `CRON_SECRET`:**
    ```bash

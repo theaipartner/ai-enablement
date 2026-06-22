@@ -23,6 +23,12 @@ the prior versions). These Ella side-docs were archived rather than carried forw
 - `ella-followups.md` — operational reminders + known gaps (mostly resolved); originally `docs/agents/ella/followups.md`.
 - `ella-future-ideas.md` — the dated Ella V2 deferred-work backlog; originally `docs/agents/ella/future-ideas.md`.
 
+## Runbooks retired/superseded (2026-06-22 runbook freshness pass)
+- `design-handoff.md` — the Drake→Director→Design→Builder visual workflow; retired with the Director/Builder system.
+- `master_sheet_import.md` — the completed one-shot M4 client-page schema import; `scripts/seed_clients.py` + the dashboard are the current path.
+- `backfill_nps_from_airtable.md` — runbook for an already-archived one-shot script.
+- `monday-onboarding-notes.md` — dated 2026-05-04 dashboard onboarding notes.
+
 ## Earlier point-in-time artifacts
 - `m5_*.md` — M5 client-cleanup diffs and notes (2026-05).
 - `gregory-redesign-compiled.md` — compiled redesign working notes.

@@ -1,7 +1,7 @@
 """Add alternate emails to Gregory clients in batch.
 
 Per the M5.4 NPS backfill runbook
-(`docs/runbooks/backfill_nps_from_airtable.md` § Failure modes):
+(`docs/archive/historical/backfill_nps_from_airtable.md` § Failure modes):
 when an external system's email (Airtable NPS, master sheet, etc.)
 doesn't match Gregory's primary `clients.email`, the canonical fix
 is to add the external email to the Gregory client's

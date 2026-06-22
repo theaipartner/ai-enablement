@@ -82,6 +82,7 @@ human dev needs orientation that doesn't assume that workflow.
 
 - [ ] **`docs/onboarding/FIRST-DAY.md`** — clone → `.env.local` (point at the Session-3 credential doc) → `npm install` → run tests (`pytest tests/` + whatever the TS test cmd is) → `npm run dev` → load the dashboard → "where to find X" table.
 - [ ] **`docs/onboarding/ARCHITECTURE-101.md`** (or extend `docs/architecture.md`) — the one-page data-flow story: *external tools → ingestion pipelines → Supabase (source of truth) → agents read from Supabase → Next.js dashboard + Slack surfaces*. State the 4 core principles plainly. A diagram beats paragraphs.
+- [ ] **State coverage honestly** (in FIRST-DAY and the docs index): the runbooks are kept accurate but there isn't one for every subsystem, and the docs overall are fairly — not fully — comprehensive. Absence of a doc does not mean absence of the system; the code is the source of truth. (Drake's explicit ask.)
 - [ ] **`docs/onboarding/README.md`** — index: getting started, the runbooks (~40), schema docs (per table), ADRs, known-issues.
 - [ ] **Add a note at the top of CLAUDE.md** (via the project's spec process if you want to be strict, or directly — Drake's call) clarifying: "the Director/Builder/Drake process below is the AI-assisted workflow Drake used; a human engineer doesn't need to follow it to work on the code. Start at `docs/onboarding/FIRST-DAY.md`."
 
