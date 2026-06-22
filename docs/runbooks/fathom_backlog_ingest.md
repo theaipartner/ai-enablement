@@ -2,7 +2,7 @@
 
 **When to use.** A new Fathom TXT export arrives (old one replaced, or additional history fetched) and needs to land in cloud Supabase. The pipeline is idempotent, so re-running over calls already ingested is safe — it won't duplicate rows and won't re-embed existing chunks.
 
-**When NOT to use.** Live (per-call) Fathom ingestion. That's a separate, still-deferred webhook path (see `docs/fulfillment/future-ideas.md` § "Fathom webhook integration"). This runbook is only for the batch/backlog export workflow.
+**When NOT to use.** Live (per-call) Fathom ingestion. That's a separate, still-deferred webhook path (see `docs/archive/historical/future-ideas.md` § "Fathom webhook integration"). This runbook is only for the batch/backlog export workflow.
 
 First actual application of this runbook: session F1.4 on 2026-04-24, which landed 516 transcripts.
 
@@ -175,7 +175,7 @@ where 'needs_review' = any(tags)
 order by created;
 ```
 
-Grouped against the dry-run's auto-create prediction — count should match exactly. Any pilot-name/email collision in this list is a bug; see `docs/fulfillment/known-issues.md` § "Auto-created client review workflow" for the hand-merge process.
+Grouped against the dry-run's auto-create prediction — count should match exactly. Any pilot-name/email collision in this list is a bug; see `docs/archive/historical/known-issues.md` § "Auto-created client review workflow" for the hand-merge process.
 
 ### 11. Retrieval spot-check via `shared/kb_query.py`
 
@@ -213,7 +213,7 @@ If you see a large `calls updated` count on what was supposed to be a first run,
 
 ## Deferrals this runbook intentionally doesn't cover
 
-- Live webhook ingestion — different payload shape, different entry point, documented in `docs/fulfillment/future-ideas.md`.
+- Live webhook ingestion — different payload shape, different entry point, documented in `docs/archive/historical/future-ideas.md`.
 - `call_summary` document creation — TXT exports don't carry summaries; the webhook path will. Until then `call_summary` stays empty.
 - `call_action_items` rows — same deferral reason.
 - Fuzzy / cross-name client matching for the `needs_review` queue — manual review via the Gregory dashboard ("Merge into…" on each `needs_review` client's detail page) today.

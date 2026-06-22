@@ -1,7 +1,7 @@
 """Master sheet CSV → cloud Supabase import (M4 Chunk C).
 
 Reads the Financial Master Sheet CSV and applies the column
-transformations specified in `docs/fulfillment/client-page-schema-spec.md` § Part 5.
+transformations specified in `docs/archive/historical/client-page-schema-spec.md` § Part 5.
 
 Default mode is dry-run (no writes; produces a report). The --apply
 flag is required to actually write to the database.
@@ -556,7 +556,7 @@ def build_plan_for_row(
     # confirmed they're genuinely absent from cloud (0/20 sampled emails
     # found anywhere). Drake's call: auto-create them too, with sheet-side
     # status, accept manual cleanup later. Followup logged in
-    # docs/fulfillment/known-issues.md (master sheet auto-creates need cross-check).
+    # docs/archive/historical/known-issues.md (master sheet auto-creates need cross-check).
     is_auto_create = matched_id is None and parsed.status is not None
 
     plan = RowPlan(

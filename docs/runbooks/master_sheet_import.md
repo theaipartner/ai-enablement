@@ -4,7 +4,7 @@ Operational runbook for `scripts/import_master_sheet.py` — the
 one-shot CSV → Supabase import that brings the dashboard's new fields
 (M4 Chunk A schema additions) up to real data.
 
-Full design: `docs/fulfillment/client-page-schema-spec.md` § Part 5. This runbook
+Full design: `docs/archive/historical/client-page-schema-spec.md` § Part 5. This runbook
 covers the operator's flow, not the transformation rules — those are
 the spec's job.
 
@@ -124,7 +124,7 @@ The four match methods correspond to the spec's match ladder:
   confirmed they were genuinely absent from cloud (0/20 sampled emails
   found anywhere). Auto-creating them surfaces them in the dashboard
   for CSM onboarding; manual cleanup later is acceptable. Followup
-  logged in `docs/fulfillment/known-issues.md` § "Master sheet importer — three
+  logged in `docs/archive/historical/known-issues.md` § "Master sheet importer — three
   carry-overs".
 
 `unmatched` should be 0 after the M4-C amendment — any non-zero count
@@ -204,7 +204,7 @@ or accept the null assignment.
 For the M4 Chunk C apply: Aleks is no longer at the company per
 Drake; the 4 rows with `Owner=Aleks` land with `primary_csm = NULL`
 and Drake reassigns them manually via the dashboard. See
-`docs/fulfillment/known-issues.md` § "Master sheet importer — three carry-overs"
+`docs/archive/historical/known-issues.md` § "Master sheet importer — three carry-overs"
 point (b).
 
 ---
@@ -258,6 +258,6 @@ There's no built-in rollback. Manual options:
 ## References
 
 - `scripts/import_master_sheet.py` — the script.
-- `docs/fulfillment/client-page-schema-spec.md` § Part 5 — column transformation rules.
-- `docs/fulfillment/known-issues.md` § "Master sheet importer — three carry-overs" — known cleanup items post-apply.
+- `docs/archive/historical/client-page-schema-spec.md` § Part 5 — column transformation rules.
+- `docs/archive/historical/known-issues.md` § "Master sheet importer — three carry-overs" — known cleanup items post-apply.
 - `data/master_sheet/import_report_*.txt` — log of past runs.

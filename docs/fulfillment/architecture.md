@@ -1,158 +1,161 @@
-# Architecture
+# Fulfillment architecture
 
-How the pieces of this system fit together. Read this before working on any component.
+How the CSM-side pieces fit together. Read this before working on any fulfillment component. For the
+goal and principles, see [README.md](README.md); for the rules, [conventions.md](conventions.md).
 
-## One-Sentence Summary
+## One-sentence summary
 
-External tools feed data into a central Supabase knowledge base; agents read from the knowledge base, reason with Claude, and either act directly or escalate to a human through a shared HITL layer; interfaces (Slack, web dashboards) are thin clients that trigger agents and surface their output.
+External tools (Fathom, Slack, Google Calendar, Airtable) feed data into Supabase through dedicated
+ingestion paths; agents read from Supabase, reason with Claude, and either write derived data (health
+scores, call reviews) or assist in Slack (Ella); the Next.js dashboard and Slack are thin surfaces over
+that data.
 
-## The Layers
+## The layers (durable shape)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  INTERFACES  (Slack, Next.js dashboards, email, future web) │
-│                                                             │
-│  Thin clients. No business logic.                           │
-│  Trigger agents via API. Render agent output.               │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ API calls / webhooks
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  AGENTS  (slack_bot, csm_copilot, etc.)                     │
-│                                                             │
-│  The brain. Reason, synthesize, generate.                   │
-│  Query the KB, call Claude, produce output or escalate.     │
-└──────────┬──────────────────────────────────┬───────────────┘
-           │ read                             │ escalate
-           ▼                                  ▼
-┌────────────────────────┐       ┌────────────────────────────┐
-│  KNOWLEDGE BASE        │       │  HITL ESCALATION           │
-│  (Supabase)            │       │                            │
-│                        │       │  Slack notification +      │
-│  Source of truth.      │       │  approval UI.              │
-│  Postgres + pgvector.  │       │  Logs decision back.       │
-└──────────▲─────────────┘       └────────────────────────────┘
-           │ write
-           │
-┌──────────┴──────────────────────────────────────────────────┐
-│  INGESTION PIPELINES                                        │
-│                                                             │
-│  Fathom → transcripts, summaries, action items              │
-│  Slack  → messages, threads                                 │
-│  Drive  → docs, SOPs, course content                        │
-│  CRM    → contacts, pipeline, activity                      │
-│                                                             │
-│  Run on schedule via n8n or triggered by webhooks.          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ pulls from
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  EXTERNAL TOOLS                                             │
-│  Fathom, Slack, Google Drive, CRM (GHL or similar)          │
-│                                                             │
-│  Accessed only by ingestion layer. Replaceable.             │
-└─────────────────────────────────────────────────────────────┘
+INTERFACES        Next.js dashboard + Slack. Thin. Trigger agents, render output.
+     ▲
+AGENTS            gregory (health), ella (Slack), call_reviewer. Read the KB, call Claude,
+     │            write derived data or post to Slack. Escalate when uncertain.
+     ▼
+KNOWLEDGE BASE    Supabase (Postgres + pgvector). Source of truth. Everything mirrored here.
+     ▲
+INGESTION         One module per source. Pulls from the external tool, writes canonical rows.
+     ▼
+EXTERNAL TOOLS    Fathom, Slack, Google Calendar, Airtable. Accessed only by ingestion. Replaceable.
 ```
 
-## Current Implementation Status
+## Subsystems (what the code actually does today)
 
-The diagram above is the architectural shape. What's actually shipped as of 2026-04-22:
+### 1. Call ingestion — `ingestion/fathom/`
+Fathom calls land two ways, both converging on `pipeline.ingest_call()`:
+- **Live webhook** `api/fathom_events.py` — Fathom fires `new-meeting-content-ready`; the handler
+  verifies the HMAC signature, dedupes via `webhook_deliveries`, adapts the payload, and ingests.
+- **Daily backfill cron** `api/fathom_backfill.py` (`0 8 * * *`) — safety net that pages recent
+  meetings from the Fathom API and ingests any the webhook missed. Idempotent on `(source, external_id)`.
 
-- **Ingestion — three pipelines live, all applied against local Supabase:**
-  - `ingestion/fathom/` — 389-call backlog ingested (Feb–Apr 2026). Chunks + embeddings for client calls; action items and summaries deferred (Fathom `.txt` exports don't carry them; see `docs/fulfillment/future-ideas.md`).
-  - `ingestion/slack/` — 90-day history backfill for 8 pilot channels via Slack Web API. The one-shot post-seed `team_members.email → slack_user_id` resolver lives at `scripts/archive/backfill_team_slack_ids.py` (already run; archived).
-  - `ingestion/content/` — filesystem-sourced HTML lessons (297 files). Drive API integration is deferred; today the pipeline reads `data/course_content/` directly.
-  - `ingestion/crm/` — not started; data flows through the clients importer (`scripts/seed_clients.py`) instead for V1.
-- **Knowledge base — Supabase local stack populated.** See `docs/schema/schema-v1.md` for the per-table row counts.
-- **Shared utilities — all shipped:** `shared/db.py`, `shared/claude_client.py`, `shared/kb_query.py`, `shared/hitl.py`, `shared/logging.py`, `shared/ingestion/validate.py`.
-- **Agents — three live:**
-  - `agents/ella/` — Slack Bot V1, live in `#ella-test-drakeonly`, awaiting pilot rollout (M1.4.5).
-  - Fathom ingestion path (`ingestion/fathom/` + `api/fathom_events.py` webhook + `api/fathom_backfill.py` daily cron) — not a "thinking" agent but functions as the calls-data agent end-to-end.
-  - `agents/gregory/` — Gregory brain V1.1 (M3.4). Computes per-client health scores + tier + concerns and writes to `client_health_scores`. Weekly cron at `api/gregory_brain_cron.py`; manual trigger at `scripts/run_gregory_brain.py`. Concerns generation gated behind `GREGORY_CONCERNS_ENABLED` env var.
-  - CSM Co-Pilot is the next planned agent; not yet started.
-- **Interfaces — Gregory dashboard live; Slack live for Ella.** Next.js 14 dashboard at repo root, deployed to `ai-enablement-sigma.vercel.app` — Clients list/detail, Calls list/detail with edit-mode classification, "Merge into…" flow for auto-created client review. Slack app live for Ella.
+Ingestion runs a **classification cascade** (`classifier.py`) to set `call_category` /
+`primary_client_id` / `is_retrievable_by_client_agents`, then writes `calls`, `call_participants`,
+`documents` (summary + transcript chunks), `document_chunks` (embedded), and `call_action_items`. The
+cascade and the retrievability gate are specified in [metadata-conventions.md](metadata-conventions.md)
+§5–7. Unmatched 1:1-with-Scott participants get an auto-created `clients` row tagged `needs_review`.
 
-## The Four Layers in Detail
+### 2. Call reviews — `agents/call_reviewer/`
+On each client-category call, `reviewer.py` makes a single Sonnet (`claude-sonnet-4-6`) pass over the
+transcript and produces a structured review (`pain_points`, `wins`, `dodged_questions`, `sentiment_arc`,
+`questions_asked`). Stored as a `documents` row (`document_type='call_review'`, **`is_active=false`** so
+it never enters retrieval — it's a display artifact). A sentiment tier (green/yellow/red) is derived and
+shown on call-adjacent surfaces. The review feeds two things: the Gregory health brain and the Calls
+detail page.
 
-### 1. External Tools
-Fathom (call recordings + transcripts), Slack (messages), Google Drive (docs), CRM (contacts + pipeline). These are where data originates but not where we keep it. Any external tool is replaceable without touching agents.
+### 3. Health scoring — `agents/gregory/`
+`api/gregory_brain_cron.py` (`0 9 * * *`, daily) sweeps active clients and writes one
+`client_health_scores` row each. The score is a transparent weighted sum of signals (`scoring.py`,
+`signals.py`):
 
-### 2. Ingestion Pipelines
-One module per external tool, in `ingestion/`. Each pipeline knows how to pull data from one external source and write it to the knowledge base in our canonical schema. Scheduled runs via n8n (or webhook-triggered for real-time sources like Slack). If an external tool changes, only its ingestion module changes.
+| Signal | Weight | Source |
+|---|---|---|
+| `ai_call_signal` | 0.50 | Sonnet over the client's recent `call_review` documents — dominant signal; also emits the qualitative concerns |
+| `call_cadence` | 0.20 | deterministic, from call recency |
+| `overdue_action_items` | 0.10 | deterministic, from `call_action_items` |
+| `latest_nps` | 0.20 | deterministic, from `clients.nps_standing` |
 
-### 3. Knowledge Base (Supabase)
-Central Postgres database with pgvector for embeddings. Every piece of data the system uses lives here. Agents read from it. Dashboards render from it. Evals run against it. If a data source isn't here yet, the fix is to build or extend an ingestion pipeline — not to reach out to the external tool from an agent.
+Final score is `0–100`; tiers are `green ≥70`, `yellow 40–69`, `red <40`. If every signal returns its
+neutral value (no data), the client lands at 50/yellow — never green by accident. Concerns are not a
+separate gate; they flow out of `ai_call_signal`.
 
-### 4. Agents
-Python modules in `agents/`. Each agent has a clearly defined purpose, reads from the KB via `shared/kb_query.py`, calls Claude via `shared/claude_client.py`, and either produces output (a response, a score, a summary, an alert) or escalates via `shared/hitl.py`.
+### 4. Ella — `agents/ella/` (split-path since 2026-05-23)
+Two independent paths:
+- **Reactive @-mention** (`agent.handle_at_mention`) — synchronous. One Sonnet (`claude-sonnet-4-6`)
+  call with KB chunks + recent channel context visible; returns structured JSON
+  `{response_text, escalate, handoff_reasoning}`; posts the answer, or an in-channel acknowledgement plus
+  an escalation when one of the four categories fires (judgment-call / emotional / money / no-good-context).
+  No classifier, no Haiku enum. Triggered by `api/slack_events.py`.
+- **Passive observation** (`passive_monitor.evaluate_passive_trigger`) — **observation-only**. For every
+  non-mention client message in a `passive_monitoring_enabled` channel, a decision Haiku
+  (`claude-haiku-4-5`) picks `respond` / `acknowledge_and_escalate` / `skip` and tags a digest category.
+  Post-split it **does not post in channels or send DMs** — its only output is feeding the daily digest
+  (`pending_digest_items`). `api/passive_ella_cron.py` (`* * * * *`) drains the legacy
+  `pending_ella_responses` queue, which nothing new enters (effectively a no-op kept for safety).
 
-### 5. HITL (Human-In-The-Loop)
-Shared escalation layer. When an agent is uncertain or an action needs human approval, the agent calls `hitl.escalate(...)` with context. This sends a Slack notification with an approval UI and logs the human's decision back to the KB. Every agent uses the same pattern.
+Ella's surfacing is three Slack channels (no DMs, per the 2026-05-28 redesign):
+- `#cs-call-summaries` — per-call summary + sentiment pill on ingest (`cs_call_summary_post.py`); plus
+  `api/cs_missed_recording_cron.py` (`*/15`) posts "recording not available" for calendar meetings with
+  no matching call.
+- `#daily-digest` — `api/ella_daily_digest_cron.py` (`30 20 * * *`) drains 24h of digest items, Haiku-ranks
+  the top 25, posts a numbered list.
+- `#unanswered-channels` — `api/ella_unanswered_flagger_cron.py` (`*/15`) flags `open_ended` client
+  messages aging past 2h with no CSM reply.
 
-### 6. Interfaces
-Slack workspace app, Next.js dashboards, email notifications. These are *thin* — they trigger agents and render results. No reasoning or business logic lives here. Swapping Slack for Discord or adding a web portal is a matter of adding a new interface module; the agents don't change.
+### 5. Client data + ops
+- **Clients** (`clients` table) — Active++ from the master sheet is canonical; see
+  [conventions.md](conventions.md) § Data hygiene. State changes are audited in `client_status_history`,
+  `client_journey_stage_history`, `client_standing_history`.
+- **NPS** — Airtable → Make.com → `api/airtable_nps_webhook.py`; the latest segment auto-derives
+  `clients.csm_standing` via an RPC.
+- **Client meetings** — `api/client_meetings_sync_cron.py` (`30 4 * * *`) reads CSM Google Calendars
+  through one OAuth token, matches client emails to external-attendee events, and upserts `client_meetings`
+  on a rolling 14-day window (older months frozen). Drives "meetings this month" on the client list.
+  *(The older `/teams` tracker and its `teams_calendar_sync_cron` share this mechanism and are slated for
+  retirement; `client_meetings_sync_cron` is the durable path.)*
+- **Accountability** — `api/accountability_notification_cron.py` (`0 12 * * *`) compares yesterday's
+  Airtable accountability submissions against active clients and posts the missing list per CSM.
+- **FAQ digest** — `api/faq_digest_cron.py` (`0 19 * * 5`, Fridays) extracts `questions_asked` from the
+  week's call reviews and DMs Scott a deduped digest.
 
-## Data Flow Example: Slack Bot Answering a Client Question
+### 6. Dashboard surfaces (`app/`)
+| Route | Shows | Backed by |
+|---|---|---|
+| `/dashboard` | notification hub: sentiment flags, missed recordings, needs-review/ghost clients, digest flags | `lib/db/fulfillment-dashboard.ts` |
+| `/clients`, `/clients/[id]` | client list (inline-editable) + per-client detail | `lib/db/clients.ts` |
+| `/calls`, `/calls/[id]` | call list + per-call transcript/summary/review/classification | `lib/db/calls.ts` |
+| `/teams` | per-CSM meeting tracker for the week *(being retired)* | `lib/db/teams.ts` |
+| `/cost-hub` | Anthropic LLM spend by bucket + subscriptions (admin) | `lib/db/cost-hub.ts` |
 
-1. **Client** posts a question in their Slack channel
-2. **Slack interface** (thin client) receives the event, extracts message + context, calls the Slack Bot agent via API
-3. **Slack Bot agent**:
-   - Queries the KB (`shared/kb_query.py`) for relevant course content, past CSM conversations, FAQs
-   - Calls Claude (`shared/claude_client.py`) with the question + retrieved context
-   - Evaluates confidence in the response
-4. **If confident:** agent returns response; Slack interface posts it in the thread
-5. **If uncertain:** agent calls `hitl.escalate(...)`; CSM gets a Slack notification; CSM's approval/edit is captured and sent as the response
-6. **Every step logged** to `agent_runs` table for analytics and eval
+### 7. Cost hub
+`/cost-hub` rolls up `agent_runs` LLM cost/token columns into five buckets (Gregory brain, Ella @,
+Ella passive, call reviewer, FAQ digest) across recent periods, plus manually-entered subscriptions.
 
-## Data Flow Example: CSM Co-Pilot Computing Health Scores
+## Cron inventory (fulfillment, from `vercel.json`)
 
-1. **Scheduler** (n8n) triggers the CSM Co-Pilot nightly
-2. **CSM Co-Pilot agent**:
-   - Queries the KB for each active client: recent calls, accountability submissions, NPS, message volume
-   - For each client, calls Claude with the data + health-score rubric
-   - Writes computed scores + factors to `client_health_scores` table
-   - Checks thresholds; creates alerts in `alerts` table for flagged clients
-3. **Dashboard** (Next.js frontend) reads `client_health_scores` and renders per-CSM and agency-wide views
-4. **Alerts interface** posts high-severity alerts to the relevant CSM's Slack
+| Cron | Schedule (UTC) | Purpose |
+|---|---|---|
+| `fathom_backfill` | `0 8 * * *` | safety-net Fathom ingest |
+| `gregory_brain_cron` | `0 9 * * *` | recompute health scores |
+| `accountability_notification_cron` | `0 12 * * *` | missing-accountability post (7am EST) |
+| `client_meetings_sync_cron` | `30 4 * * *` | Google Calendar → client_meetings |
+| `teams_calendar_sync_cron` | `*/30 * * * *` | /teams calendar sync *(retiring)* |
+| `passive_ella_cron` | `* * * * *` | drain legacy passive queue (no-op) |
+| `ella_daily_digest_cron` | `30 20 * * *` | post #daily-digest |
+| `ella_unanswered_flagger_cron` | `*/15 * * * *` | post #unanswered-channels |
+| `cs_missed_recording_cron` | `*/15 * * * *` | post missing-recording notices |
+| `faq_digest_cron` | `0 19 * * 5` | Friday FAQ digest to Scott |
 
-## Portability Guarantees
+Webhooks: `fathom_events` (Fathom), `slack_events` (Slack — message ingest + Ella @), `airtable_nps_webhook`
+and `airtable_onboarding_webhook` (Make.com).
 
-The architecture above guarantees:
+## Two data-flow examples
 
-- **CRM swap:** rewrite `ingestion/crm/`, change nothing else
-- **Call tool swap:** rewrite `ingestion/fathom/` (or add `ingestion/gong/`), change nothing else
-- **Interface swap:** add a new interface in `frontend/` or equivalent; agents don't change
-- **Host swap:** the code is portable; only deployment config changes
-- **Database swap:** this is the hardest one, but because all data lives in standard Postgres, migration to another Postgres host is straightforward. Moving off Postgres entirely would be a real project — but that's by design. The database is the one thing we're committing to.
+**A client asks Ella a question.** Slack delivers the `app_mention` to `api/slack_events.py` →
+`agent.handle_at_mention` retrieves client-scoped KB chunks + recent channel context → one Sonnet call →
+posts the answer, or an ack + escalation if a category fires. Every step is logged to `agent_runs`.
 
-## What Lives Where
+**Nightly health recompute.** `gregory_brain_cron` fires at 09:00 UTC → for each active client,
+`ai_call_signal` reads recent `call_review` docs and calls Sonnet, the deterministic signals read
+cadence/overdue/NPS → `scoring.py` combines them → a `client_health_scores` row is written → the
+`/clients` list and `/clients/[id]` detail render it.
+
+## What lives where
 
 | Thing | Location |
-|-------|----------|
-| Database schema | `supabase/migrations/` |
-| Schema docs | `docs/schema/` |
-| Agent code | `agents/<agent_name>/` |
-| Agent docs | `docs/agents/<agent_name>.md` |
+|---|---|
+| Migrations | `supabase/migrations/` |
+| Per-table schema docs | `docs/schema/` |
+| Agent code / per-agent docs | `agents/<name>/` · `docs/agents/<name>.md` |
 | Ingestion code | `ingestion/<source>/` |
-| Ingestion runbooks | `docs/runbooks/ingest_<source>.md` |
-| Ingestion metadata conventions | `docs/fulfillment/metadata-conventions.md` |
-| Data hygiene rules | `docs/fulfillment/data-hygiene.md` |
-| Shared utilities | `shared/` |
-| n8n workflows | `orchestration/` (JSON exports) |
-| Frontend | `frontend/` |
-| Eval datasets | `evals/<agent_name>/` |
+| Runbooks | `docs/runbooks/` |
+| Conventions | `docs/fulfillment/conventions.md` + `metadata-conventions.md` |
 | ADRs | `docs/decisions/` |
-| Deferred ideas (not yet decisions) | `docs/fulfillment/future-ideas.md` |
 
-## Environments
-
-- **Local:** Full stack runs on developer's WSL2. Supabase local via `supabase start`. n8n local via Docker. Next.js via `npm run dev`.
-- **Production:** Supabase cloud project, Vercel for frontend + functions, n8n self-hosted or cloud TBD, Anthropic API for Claude.
-
-## Open Architectural Questions
-
-Track open questions here as they arise. Resolve them via ADRs in `docs/decisions/`.
-
-- n8n self-hosted vs. n8n cloud for production?
-- Do we deploy one Supabase project or two (staging + prod) for the internal system?
-- At what point do we extract the agent layer into a standalone FastAPI service vs. keeping it as library code called from n8n?
+This doc describes current behavior. For the history of what shipped when, use git history and
+`docs/archive/`.

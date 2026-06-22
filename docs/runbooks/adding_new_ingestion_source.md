@@ -249,7 +249,7 @@ Cleanup semantics:
 ## Case studies
 
 - **F2.3 Fathom webhook** — the template this runbook is built from. See
-  `docs/fulfillment/fathom_webhook.md`, `ingestion/fathom/webhook_adapter.py`,
+  `docs/archive/historical/fathom_webhook.md`, `ingestion/fathom/webhook_adapter.py`,
   `tests/ingestion/fathom/test_webhook_adapter.py`,
   `supabase/migrations/0011_webhook_deliveries_and_doc_type_unique.sql`.
 - Future: CRM, Drive, Calendar — apply the same pattern, log the deltas

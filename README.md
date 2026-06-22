@@ -16,8 +16,8 @@ Internal AI enablement system for a coaching/consulting agency. Agents across cu
 - `CLAUDE.md` — project context, conventions, working norms, Director / Builder system, and current state
 - `docs/fulfillment/architecture.md` — how the system fits together
 - `docs/archive/legacy-workflow/collaboration.md` — how work is divided
-- `docs/fulfillment/known-issues.md` — open bugs and ops gaps with concrete next actions
-- `docs/fulfillment/future-ideas.md` — Gregory V2 batches A–E (deferred features)
+- `docs/archive/historical/known-issues.md` — open bugs and ops gaps with concrete next actions
+- `docs/archive/historical/future-ideas.md` — Gregory V2 batches A–E (deferred features)
 - `docs/decisions/` — architecture decision records (when populated)
 
 ## Project Status

@@ -234,7 +234,7 @@ export async function changeClientPrimaryCsm(
 //
 // p_changed_by is null in V1 — auth context isn't wired through the
 // (authenticated) layout to Server Actions yet. Followup logged in
-// docs/fulfillment/known-issues.md.
+// docs/archive/historical/known-issues.md.
 
 export async function updateClientStatusAction(
   client_id: string,

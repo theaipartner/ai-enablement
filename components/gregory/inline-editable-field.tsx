@@ -22,7 +22,7 @@
 // canonical going forward. A Part 2 spec will migrate the clients list
 // to this primitive.
 //
-// Conventions: docs/fulfillment/gregory-conventions.md § Inline-editable contract.
+// Conventions: docs/fulfillment/conventions.md § Inline-editable contract.
 // Slot owner: any glance-row or configuration-slot cell.
 // Tokens consumed: --color-geg-bg-elev, --color-geg-text,
 //   --color-geg-text-3, --color-geg-border-strong, --color-geg-accent,

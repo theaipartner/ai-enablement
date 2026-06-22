@@ -73,7 +73,7 @@ If Scott or Zain reports "today's automation didn't include client X" or "the co
    ```
    If `channel_id IS NULL` or `slack_user_id IS NULL`, that's why they're filtered.
 
-4. **If `slack_user_id` is missing on an active client,** they're part of the broader Slack-identity coverage gap (see `docs/fulfillment/known-issues.md` § "Client→Slack-identity coverage gap"). Fix: lookup via Slack `users.lookupByEmail` and populate the column.
+4. **If `slack_user_id` is missing on an active client,** they're part of the broader Slack-identity coverage gap (see `docs/archive/historical/known-issues.md` § "Client→Slack-identity coverage gap"). Fix: lookup via Slack `users.lookupByEmail` and populate the column.
 
 ---
 
@@ -89,7 +89,7 @@ Make.com's pull schedule lives in their scenario, not on our side. To verify pul
 
 2. **If no recent logs:** Make.com isn't pulling. Could be: scenario disabled, scenario errored at a prior step, Make.com auth using a stale secret (see "Rotate the shared secret"). Drake or Zain checks the scenario's run history on Make.com's side.
 
-3. **Vercel function logs persist for ~7 days.** Beyond that, no record exists on our side — outbound-pull audit log is intentionally not implemented (see `docs/fulfillment/known-issues.md` § "Path 2 outbound roster — outbound-pull audit log not implemented").
+3. **Vercel function logs persist for ~7 days.** Beyond that, no record exists on our side — outbound-pull audit log is intentionally not implemented (see `docs/archive/historical/known-issues.md` § "Path 2 outbound roster — outbound-pull audit log not implemented").
 
 ---
 

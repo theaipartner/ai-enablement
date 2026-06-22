@@ -12,7 +12,7 @@
 // persistence layer. Same primitive contract (optimistic + revert on
 // failure) applies per-cell via InlineEditableField.
 //
-// Conventions: docs/fulfillment/gregory-conventions.md § Inline-editable contract.
+// Conventions: docs/fulfillment/conventions.md § Inline-editable contract.
 // Slot owner: Workflow content slot on /clients/[id] action-items list.
 // Tokens consumed: --color-geg-text-3, --color-geg-border,
 //   --color-geg-accent.

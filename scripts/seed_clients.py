@@ -106,7 +106,7 @@ def derive_tags(
 
     Only NPS-derived signals and stable attributes (country, status)
     are used. The Standing column was previously a source but its
-    reliability is unclear — see docs/fulfillment/data-hygiene.md. The `owing_money`
+    reliability is unclear — see docs/fulfillment/conventions.md. The `owing_money`
     tag is gone for the same reason.
 
     Note: under the Active++ filter, churned rows are not imported at
@@ -224,7 +224,7 @@ def build_client_payload(
     # sheet values are stale; Standing because its reliability is unclear
     # and its downstream tag effects (owing_money, at_risk) would have
     # carried that uncertainty into agent behavior.
-    # See docs/fulfillment/data-hygiene.md.
+    # See docs/fulfillment/conventions.md.
     metadata = {
         "seed_source": "financial_master_jan26",
         "seeded_at": seeded_at_iso,

@@ -7,7 +7,7 @@ import type { Database } from './types'
 // dashboard. Bypasses Row-Level Security — required because Gregory V1
 // ships with RLS enabled but no policies on data tables, which makes
 // every anon-key query return an empty result set (deny-default). See
-// docs/fulfillment/known-issues.md § "RLS revisit trigger for Gregory dashboard" for
+// docs/archive/historical/known-issues.md § "RLS revisit trigger for Gregory dashboard" for
 // the V2 plan that re-enables per-CSM scoping.
 //
 // Hard rules:

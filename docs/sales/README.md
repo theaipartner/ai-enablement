@@ -102,7 +102,7 @@ still-true detail, then delete once their content lives in the docs above:
 - `docs/runbooks/sales_dashboard.md` — the older v1/v2 metric-catalog surface
   (`/[section]`, `/states`, "~30 of ~140 LIVE"). A legacy layer the funnel/leads/talent
   product grew over, not the current product.
-- `docs/fulfillment/high-ticket-funnel-explained.md`, `docs/fulfillment/data-hygiene.md` — folded into
+- `docs/sales/high-ticket-funnel-explained.md`, `docs/fulfillment/conventions.md` — folded into
   `data-model.md` / `logic.md`.
 - `docs/sales/sales-sql-aggregation-plan.md` — the live **performance** plan (push
   aggregation into Postgres). Still active; will move under this folder.

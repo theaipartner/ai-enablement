@@ -29,7 +29,7 @@ for the smoke-test result that pinned this):
      return 500 so Fathom retries.
   8. Mark row `processed`, return 200.
 
-Spec: docs/fulfillment/fathom_webhook.md.
+Spec: docs/archive/historical/fathom_webhook.md.
 
 Env vars required (set in the Vercel project — NOT committed):
   FATHOM_WEBHOOK_SECRET        — `whsec_<base64>` from Fathom's
@@ -279,7 +279,7 @@ class handler(BaseHTTPRequestHandler):
 def _verify_signature(body: bytes, headers: Any, secret: str) -> bool:
     """Verify a Standard Webhooks signature. Returns False on any failure.
 
-    Algorithm (per docs/fulfillment/fathom_webhook.md §b):
+    Algorithm (per docs/archive/historical/fathom_webhook.md §b):
       1. Concatenate `f"{webhook-id}.{webhook-timestamp}.".encode() + body`.
       2. HMAC-SHA256 that with the base64-decoded secret (strip `whsec_`).
       3. Base64-encode the digest.

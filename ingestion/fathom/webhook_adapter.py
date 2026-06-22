@@ -6,7 +6,7 @@ webhook feed converge on the same `FathomCallRecord` shape and then the same
 
 Payload shape follows Fathom's OpenAPI `Meeting` component —
 see https://developers.fathom.ai/api-reference/openapi.yaml and the
-field-by-field mapping table in docs/fulfillment/fathom_webhook.md §d.1.
+field-by-field mapping table in docs/archive/historical/fathom_webhook.md §d.1.
 
 Design notes:
   - Missing REQUIRED top-level fields raise `AdapterError`. The handler
@@ -122,7 +122,7 @@ def _require_top_level(payload: dict[str, Any]) -> None:
     if missing:
         raise AdapterError(
             f"webhook payload missing required fields: {missing}. "
-            "See docs/fulfillment/fathom_webhook.md §d.1."
+            "See docs/archive/historical/fathom_webhook.md §d.1."
         )
 
 

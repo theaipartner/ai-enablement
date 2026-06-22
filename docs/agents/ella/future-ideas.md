@@ -2,7 +2,7 @@
 
 Ella-specific deferred work. Active focus is Gregory; Ella's V2 polish + ingestion-layer + retrieval-layer ideas live here. Per the agency's V2 priorities, Ella resumes once Gregory's CSM-focus pivot stabilizes.
 
-For Gregory's V2 batches see `docs/fulfillment/future-ideas.md`. For Ella's known bugs and ops gaps see `docs/agents/ella/followups.md`.
+For Gregory's V2 batches see `docs/archive/historical/future-ideas.md`. For Ella's known bugs and ops gaps see `docs/agents/ella/followups.md`.
 
 **Entry format.** Short. Four lines:
 
@@ -211,7 +211,7 @@ Completed in Batch 1.5 Tasks 1 + 2. New `agents/ella/identity.py:resolve_speaker
 
 - **What:** dedicated synthetic "Test Client" row in `clients` with Drake (or Scott) as primary advisor, plus team-only test channels (`#ella-test-drakeonly`, and a newly-set-up `#ella-test`) mapped to that client's UUID via `slack_channels.client_id`. Alternative shape: a `slack_channels.team_test_channel` boolean that teaches the handler to run without a client mapping at all — pick one, not both. Replaces the current workaround of pointing `#ella-test-drakeonly` at Javi Pena's UUID.
 - **Why deferred:** the workaround (Javi Pena's UUID) muddies the team's mental model of what a pilot channel is and what a test channel is, but doesn't break behavior. Was promoted to "active" 2026-04-24; sidelined during the Gregory CS-focus pivot. Resumes when Ella V2 work begins.
-- **Revisit trigger:** Ella V2 cycles begin (after Gregory V2 batches A–C stabilize per the canonical batch ordering in `docs/fulfillment/future-ideas.md`), OR the Javi-Pena-as-test-fixture confusion causes a real misclassification or wrong-fact incident.
+- **Revisit trigger:** Ella V2 cycles begin (after Gregory V2 batches A–C stabilize per the canonical batch ordering in `docs/archive/historical/future-ideas.md`), OR the Javi-Pena-as-test-fixture confusion causes a real misclassification or wrong-fact incident.
 - **Logged:** 2026-04-23.
 
 ## ~~Slack real-time ingestion via Events API~~ — SUPERSEDED 2026-05-09

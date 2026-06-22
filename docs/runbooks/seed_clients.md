@@ -6,7 +6,7 @@ How to populate `clients`, `slack_channels`, and `client_team_assignments` from 
 
 **The owner's working view is the filter.** The importer does not status-filter rows. Instead, the sheet owner exports the rows visible under their `Active++` (USA) and `Aus Active++` (AUS) saved views and drops the XLSX at `data/client_seed/`. Every row the owner exports is imported; rows they excluded from their view do not show up here in the first place.
 
-This is the "trust the source's working view" principle from `docs/fulfillment/data-hygiene.md` §1. The owner's saved filter encodes real business logic we shouldn't try to re-derive.
+This is the "trust the source's working view" principle from `docs/fulfillment/conventions.md` §1. The owner's saved filter encodes real business logic we shouldn't try to re-derive.
 
 What the importer still skips:
 - Rows with a blank `Customer Name` (entirely empty rows).
@@ -62,7 +62,7 @@ Five keys, exactly:
 - `phone`, `slack_user_id`, `slack_channel_id` — from the sheet when present.
 - `journey_stage` — left null, CSM Co-Pilot populates later.
 
-**Excluded by design:** revenue columns (stale — source of truth is Scott's head), the `Standing` column (reliability unclear). See `docs/fulfillment/data-hygiene.md`.
+**Excluded by design:** revenue columns (stale — source of truth is Scott's head), the `Standing` column (reliability unclear). See `docs/fulfillment/conventions.md`.
 
 ## Tag derivation
 
@@ -129,6 +129,6 @@ Everything under `data/` is gitignored.
 
 ## Future
 
-- `scripts/churn_client.py` — atomic "set churned + archived_at" helper for hand actions. See `docs/fulfillment/future-ideas.md`.
-- `scripts/add_client.py` — one-off adds between sheet exports. See `docs/fulfillment/future-ideas.md`.
-- Automated cloud seed application. See `docs/fulfillment/future-ideas.md`.
+- `scripts/churn_client.py` — atomic "set churned + archived_at" helper for hand actions. See `docs/archive/historical/future-ideas.md`.
+- `scripts/add_client.py` — one-off adds between sheet exports. See `docs/archive/historical/future-ideas.md`.
+- Automated cloud seed application. See `docs/archive/historical/future-ideas.md`.

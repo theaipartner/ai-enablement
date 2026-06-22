@@ -25,7 +25,7 @@ Per-call flow:
      the same retrievability value that `calls.is_retrievable_by_
      client_agents` carries — medium-confidence (auto-created) calls
      land with `is_active=false` so chunks exist but don't surface in
-     `match_document_chunks`. See `docs/fulfillment/future-ideas.md` →
+     `match_document_chunks`. See `docs/archive/historical/future-ideas.md` →
      "match_document_chunks: enforce calls retrievability via SQL
      join" for the eventual function-side upgrade. Re-ingest that
      already has chunks skips re-chunking (conventions §6) but syncs
@@ -39,7 +39,7 @@ PostgREST one request at a time; cross-request transactions aren't
 available. Every write in this module is upsert-shaped and keyed on
 stable identifiers, so a partial failure recovers on re-run without
 leaving duplicate rows. See the "Atomic per-call ingest via Postgres
-RPC" entry in docs/fulfillment/future-ideas.md for the eventual upgrade path.
+RPC" entry in docs/archive/historical/future-ideas.md for the eventual upgrade path.
 
 Validators (`shared.ingestion.validate`) run before every `documents`
 or `document_chunks` write. A validation failure is logged to the
@@ -360,7 +360,7 @@ def _lookup_or_create_auto_client(
     row rather than double-insert.
 
     Metadata carries a breadcrumb back to the triggering call — the
-    reviewer workflow (see `docs/fulfillment/future-ideas.md` → "Auto-created
+    reviewer workflow (see `docs/archive/historical/future-ideas.md` → "Auto-created
     client review workflow") uses these fields to find the recording
     that prompted the auto-create.
     """
@@ -575,7 +575,7 @@ def _ensure_transcript_chunks(
     the parent `calls` row. It maps 1:1 to `documents.is_active` for the
     transcript_chunk document — today's invariant is "a transcript_chunk
     document surfaces via `match_document_chunks` iff its call is
-    retrievable." Option (b) in `docs/fulfillment/future-ideas.md` moves the same
+    retrievable." Option (b) in `docs/archive/historical/future-ideas.md` moves the same
     check into the SQL function via a join; until then the pipeline
     enforces it at write time.
 

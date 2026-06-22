@@ -149,7 +149,7 @@ A zero count on the first query over a week of meaningful traffic =
 probably broken (Slack does retry occasionally; with the post-parse
 key, edits also count as dupes and should show up here).
 
-**Closes** the 2026-05-19 EOD `docs/fulfillment/known-issues.md` entry
+**Closes** the 2026-05-19 EOD `docs/archive/historical/known-issues.md` entry
 "Passive dispatch has no idempotency check against duplicate Slack
 message delivery" — the misfire that produced two ack posts + four DMs
 from a single Slack delivery would no longer fire. The prior 2026-05-20
@@ -212,7 +212,7 @@ debugging "did we ingest user X's message?" without joining tables.
 
 ### Symptom: a message I sent isn't in `slack_messages`
 
-0. **First check (private channels).** If you're testing in a private channel (🔒) and no row appears in `webhook_deliveries`: verify both `message.channels` AND `message.groups` event subscriptions exist on the Slack app, and that `channels:history` AND `groups:history` scopes are granted on the bot token. Missing `message.groups` is a silent failure mode — Slack accepts the subscription save without complaint, the URL stays verified, but no events fire for private channels. This was the 2026-05-10 root cause for "live ingestion not operational" — see `docs/fulfillment/known-issues.md` § ~~Ella V2 Batch 1 — realtime live ingestion not operational~~ for the full diagnostic signature.
+0. **First check (private channels).** If you're testing in a private channel (🔒) and no row appears in `webhook_deliveries`: verify both `message.channels` AND `message.groups` event subscriptions exist on the Slack app, and that `channels:history` AND `groups:history` scopes are granted on the bot token. Missing `message.groups` is a silent failure mode — Slack accepts the subscription save without complaint, the URL stays verified, but no events fire for private channels. This was the 2026-05-10 root cause for "live ingestion not operational" — see `docs/archive/historical/known-issues.md` § ~~Ella V2 Batch 1 — realtime live ingestion not operational~~ for the full diagnostic signature.
 1. Check `webhook_deliveries WHERE source='slack_message_ingest'
    AND payload->>'slack_channel_id'='<channel_id>' AND processed_at >
    now() - interval '5 minutes'`. If no row exists, the event never

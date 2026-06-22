@@ -33,7 +33,7 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 
 ## Bulk imports: trust the source's working view
 
-Bulk imports (`scripts/seed_clients.py` today) trust the source system's working view as the definition of "active client." The owner pre-filters their saved view (`Active++`, `Aus Active++`) before export; the importer takes every row that's in the file. Any non-archived DB client whose email isn't in the export gets soft-archived via the cascade. See `docs/runbooks/seed_clients.md` and `docs/fulfillment/data-hygiene.md`.
+Bulk imports (`scripts/seed_clients.py` today) trust the source system's working view as the definition of "active client." The owner pre-filters their saved view (`Active++`, `Aus Active++`) before export; the importer takes every row that's in the file. Any non-archived DB client whose email isn't in the export gets soft-archived via the cascade. See `docs/runbooks/seed_clients.md` and `docs/fulfillment/conventions.md`.
 
 ## Metadata keys written by ingestion
 
@@ -49,7 +49,7 @@ The `metadata` jsonb is open-ended, but current ingestion sources are pinned:
 | `nps_standing` | `text` or null | Raw trimmed NPS Standing cell (e.g. `"Promoter"`, `"Detractor / At Risk"`) |
 | `owner_raw` | `text` or null | Raw Owner cell, preserved for audit |
 
-**Excluded by design:** revenue fields (stale) and `Standing` (reliability unclear). See `docs/fulfillment/data-hygiene.md`.
+**Excluded by design:** revenue fields (stale) and `Standing` (reliability unclear). See `docs/fulfillment/conventions.md`.
 
 Extension is cheap: add keys to future rows freely. Renaming or reshaping existing keys is expensive — per the `docs/fulfillment/metadata-conventions.md` principle.
 

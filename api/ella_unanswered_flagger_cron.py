@@ -357,7 +357,7 @@ def _filter_to_client_authored(
     rows.
 
     Side benefit (2026-05-21): the open `author_type='bot'` known issue
-    (Ella's posts misclassifying as bot — see docs/fulfillment/known-issues.md) is
+    (Ella's posts misclassifying as bot — see docs/archive/historical/known-issues.md) is
     also handled implicitly here. Bot-classified messages won't pass
     the `== 'client'` check either, so this filter prevents the
     unanswered flagger from accidentally surfacing Ella's own posts

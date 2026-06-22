@@ -111,7 +111,7 @@ it's a wider-net awareness surface ("here's everything Ella flagged
 in the last 24h").
 
 **Side benefit:** the open `author_type='bot'` known issue (Ella's
-posts misclassifying as `bot` — see `docs/fulfillment/known-issues.md`) is
+posts misclassifying as `bot` — see `docs/archive/historical/known-issues.md`) is
 handled implicitly by this filter. Bot-tagged rows fail the
 `== 'client'` check, so Ella's own posts can't accidentally surface
 here as "unanswered" while the parser bug stays open.
