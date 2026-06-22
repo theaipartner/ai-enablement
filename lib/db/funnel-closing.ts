@@ -1,12 +1,12 @@
 import 'server-only'
 
+import { cache } from 'react'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
 import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
-import { loadOnceHubBookings, oncehubOwnerEmail } from './oncehub-bookings'
 import { addPlan, emptyPlans, dcPlanUnits, DC_PLAN_PRICE_USD } from './funnel-dc'
-import { fetchChunked } from './query-parallel'
+import { fetchChunked, withRetry } from './query-parallel'
 
 // Funnel · Closing stage — activity-in-period view, trimmed shape.
 //
@@ -189,7 +189,11 @@ function effectiveTsIso(r: { date_time_of_call: string | null; airtable_created_
   return r.date_time_of_call ?? r.airtable_created_at
 }
 
-async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]> {
+// cache(): the roster/rep page's loaders call this up to 4× concurrently with the
+// same `range` reference (getClosingActivity, getCloserFormMetricsByRep,
+// getCloserFormsForRep, …). Request-memoizing collapses those into one paginated
+// read per render — cutting the concurrent fan-out that was saturating Supabase.
+const loadCloserReportRows = cache(async (range: DateRange): Promise<CloserReportRow[]> => {
   const sb = createAdminClient()
   // Pull rows whose form-fill time is in a generous superset of the
   // requested range (range expanded back 14 days). Then client-side
@@ -202,16 +206,18 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
   let rows: CloserReportRow[] = []
   let from = 0
   for (;;) {
-    const { data, error } = await sb
-      .from('airtable_full_closer_report' as never)
-      .select(
-        'record_id, lead_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
-        'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, closer_record_ids, prospect_name, ' +
-        'form_type, call_outcome, amount_paid_today_number, deposit_amount, dc_plans',
-      )
-      .gte('airtable_created_at', widenStartIso)
-      .order('airtable_created_at', { ascending: false })
-      .range(from, from + 999)
+    const { data, error } = await withRetry(() =>
+      sb
+        .from('airtable_full_closer_report' as never)
+        .select(
+          'record_id, lead_id, airtable_created_at, date_time_of_call, call_type, showed, closed, no_show_reason, ' +
+          'payment_plan_type, amount_paid_today_currency, total_contract_amount, closer_names, closer_record_ids, prospect_name, ' +
+          'form_type, call_outcome, amount_paid_today_number, deposit_amount, dc_plans',
+        )
+        .gte('airtable_created_at', widenStartIso)
+        .order('airtable_created_at', { ascending: false })
+        .range(from, from + 999) as never,
+    )
     if (error) throw new Error(`airtable_full_closer_report read failed: ${error.message}`)
     const page = (data ?? []) as unknown as CloserReportRow[]
     if (page.length === 0) break
@@ -254,7 +260,7 @@ async function loadCloserReportRows(range: DateRange): Promise<CloserReportRow[]
     if ((r.prospect_name ?? '').trim().toLowerCase() === 'test') return false
     return true
   })
-}
+})
 
 // Provisional cash field — see schema-doc ambiguity #3.
 function pickUpfront(r: CloserReportRow): number | null {
@@ -367,21 +373,15 @@ function buildMoney(rows: CloserReportRow[]): ClosingMoney {
 // ---------------------------------------------------------------------------
 
 export async function getClosingActivity(range: DateRange): Promise<ClosingActivity> {
-  const [calBookings, rows, ohBookings] = await Promise.all([
+  const [calBookings, rows] = await Promise.all([
     loadCalendlyBookings(range),
     loadCloserReportRows(range),
-    // OnceHub bookings join the booking-activity tiles ADDITIVELY (OnceHub
-    // replaces Calendly going forward; both shown through the transition).
-    // Counted by booked_at — same "when the booking was made" grain Calendly
-    // uses (invitee_created_at). Each OnceHub booking is one attempt; reschedule
-    // new-legs are their own rows, so the grain matches Calendly's per-invitee.
-    loadOnceHubBookings(range, { dateField: 'booked_at' }),
   ])
 
   const bookings: CalendlyBookingActivity = {
-    total: calBookings.total + ohBookings.length,
-    rescheduled: calBookings.rescheduled + ohBookings.filter((b) => b.isRescheduled).length,
-    canceled: calBookings.canceled + ohBookings.filter((b) => b.isCanceled).length,
+    total: calBookings.total,
+    rescheduled: calBookings.rescheduled,
+    canceled: calBookings.canceled,
   }
 
   const { closers, aggregate } = buildLeaderboard(rows)
@@ -430,7 +430,7 @@ export async function getCloserCallsForCloser(range: DateRange, closerName: stri
 //
 // Each rep's closer EOC forms (`airtable_full_closer_report`) in range, attributed
 // by `closer_record_ids` → `close_user_id` (the same identity the scheduled tables
-// use). NO booking-platform data (Calendly/OnceHub) — strictly forms (Drake
+// use). NO booking-platform data (Calendly) — strictly forms (Drake
 // 2026-06-20). `meetings` = forms with a SHOWED outcome; `closerForms` = all forms
 // filed; `closes` = full closes; `cash` = upfront collected.
 
@@ -440,14 +440,18 @@ export type RepCloserFormMetrics = { closerForms: number; meetings: number; clos
 // ALL reps (ANY sales_role) — not just sales_role='closer'. buildCloserIdentityResolver
 // is closer-only, which silently zeroed DC closers (Robby/Bradley/Joshua) + setters
 // (Connor) who file EOC forms (Drake 2026-06-20: Robby had 39 closes / $17.9k hidden).
-async function buildRepFormAttributor(
-  sb: ReturnType<typeof createAdminClient>,
-): Promise<(ids: string[] | null) => string | null> {
-  const { data, error } = await sb
-    .from('team_members' as never)
-    .select('airtable_user_id, close_user_id')
-    .not('close_user_id', 'is', null)
-    .is('archived_at', null)
+// cache(): both getCloserFormMetricsByRep (card) and getCloserFormsForRep (detail)
+// build this concurrently per render; argless + request-memoized so the
+// team_members read runs once instead of twice.
+const buildRepFormAttributor = cache(async (): Promise<(ids: string[] | null) => string | null> => {
+  const sb = createAdminClient()
+  const { data, error } = await withRetry(() =>
+    sb
+      .from('team_members' as never)
+      .select('airtable_user_id, close_user_id')
+      .not('close_user_id', 'is', null)
+      .is('archived_at', null) as never,
+  )
   if (error) throw new Error(`team_members (rep-form attribution) read failed: ${error.message}`)
   const ridToUser = new Map<string, string>()
   for (const t of (data ?? []) as unknown as Array<{ airtable_user_id: string | null; close_user_id: string | null }>) {
@@ -460,7 +464,7 @@ async function buildRepFormAttributor(
     }
     return null
   }
-}
+})
 
 // The FORMS-ONLY per-form outcome — the single source of truth behind both the rep
 // card aggregate and the per-rep form list. DC uses the canonical plan logic
@@ -502,8 +506,7 @@ function repFormOutcome(r: CloserReportRow): {
 }
 
 export async function getCloserFormMetricsByRep(range: DateRange): Promise<Map<string, RepCloserFormMetrics>> {
-  const sb = createAdminClient()
-  const [rows, attribute] = await Promise.all([loadCloserReportRows(range), buildRepFormAttributor(sb)])
+  const [rows, attribute] = await Promise.all([loadCloserReportRows(range), buildRepFormAttributor()])
   const out = new Map<string, RepCloserFormMetrics>()
   for (const r of rows) {
     const userId = attribute(r.closer_record_ids)
@@ -539,8 +542,7 @@ export type RepCloserFormRow = {
 }
 
 export async function getCloserFormsForRep(range: DateRange, userId: string): Promise<RepCloserFormRow[]> {
-  const sb = createAdminClient()
-  const [rows, attribute] = await Promise.all([loadCloserReportRows(range), buildRepFormAttributor(sb)])
+  const [rows, attribute] = await Promise.all([loadCloserReportRows(range), buildRepFormAttributor()])
   const out: RepCloserFormRow[] = []
   for (const r of rows) {
     if (attribute(r.closer_record_ids) !== userId) continue
@@ -1073,19 +1075,7 @@ export async function getClosingScheduledList(
     .map((e) => ({ e, callType: categorizeEvent(e.event_type_uri, e.name) }))
     .filter((x): x is { e: typeof rawEvents[number]; callType: CloserCallType } => x.callType !== null)
 
-  // OnceHub bookings since the floor (by meeting time), additive to Calendly.
-  // Injected into the SAME pipeline below (typed + inviteeByEvent) so they get
-  // form-matched, per-lead-collapsed, and closer-attributed identically — the
-  // win being OnceHub's reliable `owner` instead of read-time host guessing.
-  // ht_consultation → 'direct', partnership → 'setter' (both live). Open-ended
-  // upper bound so future-scheduled bookings count (mirrors the Calendly load's
-  // floor-only gate).
-  const oncehubBks = await loadOnceHubBookings(
-    { ...range, startUtcIso: floorIso, endUtcIso: '2999-01-01T00:00:00.000Z' },
-    { dateField: 'scheduled_at', roles: ['ht_consultation', 'partnership'] },
-  )
-
-  if (typed.length === 0 && oncehubBks.length === 0) {
+  if (typed.length === 0) {
     return { closers: [], aggregate: emptyAggregate('', 'All closers'), drillByCloser: {} }
   }
 
@@ -1171,37 +1161,6 @@ export async function getClosingScheduledList(
       if (inv.leadId || !inv.email) return
       const lid = emailToLeadId.get(inv.email.toLowerCase().trim())
       if (lid) inviteeByEvent.set(uri, { ...inv, leadId: lid })
-    })
-  }
-
-  // 2e. Inject OnceHub bookings as synthetic events into the same structures.
-  //     host_user_email = the closer's team_member email (from OnceHub's owner),
-  //     so closerIdentity.byHost resolves them to the SAME canonical closer as a
-  //     Calendly host. invitee carries the resolved Close lead_id + email/name so
-  //     form-matching + per-lead collapse work unchanged. callType: ht_consultation
-  //     → 'direct', partnership → 'setter'.
-  for (const b of oncehubBks) {
-    if (!b.scheduledAt) continue // can't place on the timeline
-    const uri = b.bookingId
-    typed.push({
-      e: {
-        uri,
-        name: b.subject ?? '',
-        start_time: b.scheduledAt,
-        host_user_name: b.closer?.name ?? null,
-        host_user_email: oncehubOwnerEmail(b.ownerUserId),
-        status: b.status, // 'canceled' → dead downstream; no_show stays live (form drives it)
-        event_type_uri: null,
-      },
-      callType: b.role === 'partnership' ? 'setter' : 'direct',
-    })
-    const phone = normalizePhone(b.inviteePhone)
-    inviteeByEvent.set(uri, {
-      name: b.inviteeName,
-      email: b.inviteeEmail,
-      phones: phone ? [phone] : [],
-      noShow: b.isNoShow,
-      leadId: b.leadId,
     })
   }
 
