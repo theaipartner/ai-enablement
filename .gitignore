@@ -62,6 +62,13 @@ supabase/snippets/
 .claude/builder_session.txt
 .preview-cookie
 
+# Transient scheduler lock — regenerated at runtime, never source.
+.claude/scheduled_tasks.lock
+
+# Ad-hoc screenshot dumps from exploratory/verification runs — snapshots,
+# not source. Regenerate by re-running the capturing script.
+screenshots/
+
 # Visual-verification screenshots from scripts/verify-ella-preview.mjs.
 # Snapshots of the live preview at run time — not source. Regenerate by
 # re-running the script.
