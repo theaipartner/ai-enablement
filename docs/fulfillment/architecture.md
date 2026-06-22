@@ -96,8 +96,8 @@ Ella's surfacing is three Slack channels (no DMs, per the 2026-05-28 redesign):
 - **Client meetings** — `api/client_meetings_sync_cron.py` (`30 4 * * *`) reads CSM Google Calendars
   through one OAuth token, matches client emails to external-attendee events, and upserts `client_meetings`
   on a rolling 14-day window (older months frozen). Drives "meetings this month" on the client list.
-  *(The older `/teams` tracker and its `teams_calendar_sync_cron` share this mechanism and are slated for
-  retirement; `client_meetings_sync_cron` is the durable path.)*
+  *(The `/teams` Meeting Tracker page reads the same Google Calendars via `teams_calendar_sync_cron`;
+  `client_meetings_sync_cron` is the separate per-client feed. Both are live.)*
 - **Accountability** — `api/accountability_notification_cron.py` (`0 12 * * *`) compares yesterday's
   Airtable accountability submissions against active clients and posts the missing list per CSM.
 - **FAQ digest** — `api/faq_digest_cron.py` (`0 19 * * 5`, Fridays) extracts `questions_asked` from the
@@ -109,7 +109,7 @@ Ella's surfacing is three Slack channels (no DMs, per the 2026-05-28 redesign):
 | `/dashboard` | notification hub: sentiment flags, missed recordings, needs-review/ghost clients, digest flags | `lib/db/fulfillment-dashboard.ts` |
 | `/clients`, `/clients/[id]` | client list (inline-editable) + per-client detail | `lib/db/clients.ts` |
 | `/calls`, `/calls/[id]` | call list + per-call transcript/summary/review/classification | `lib/db/calls.ts` |
-| `/teams` | per-CSM meeting tracker for the week *(being retired)* | `lib/db/teams.ts` |
+| `/teams` | per-CSM meeting tracker for the week | `lib/db/teams.ts` |
 | `/cost-hub` | Anthropic LLM spend by bucket + subscriptions (admin) | `lib/db/cost-hub.ts` |
 
 ### 7. Cost hub
@@ -124,7 +124,7 @@ Ella passive, call reviewer, FAQ digest) across recent periods, plus manually-en
 | `gregory_brain_cron` | `0 9 * * *` | recompute health scores |
 | `accountability_notification_cron` | `0 12 * * *` | missing-accountability post (7am EST) |
 | `client_meetings_sync_cron` | `30 4 * * *` | Google Calendar → client_meetings |
-| `teams_calendar_sync_cron` | `*/30 * * * *` | /teams calendar sync *(retiring)* |
+| `teams_calendar_sync_cron` | `*/30 * * * *` | /teams calendar sync |
 | `passive_ella_cron` | `* * * * *` | drain legacy passive queue (no-op) |
 | `ella_daily_digest_cron` | `30 20 * * *` | post #daily-digest |
 | `ella_unanswered_flagger_cron` | `*/15 * * * *` | post #unanswered-channels |

@@ -69,7 +69,8 @@ clients_matched, errors}`.
 ## Notes
 
 - The cron is self-contained (duplicates a few helpers from
-  `teams_calendar_sync_cron.py`) on purpose: the `/teams` Meeting Tracker and
-  its 30-minute cron are slated for removal, and this job must survive that.
+  `teams_calendar_sync_cron.py`) on purpose: the per-client meetings sync is
+  kept independent of the `/teams` Meeting Tracker code path so the two can
+  evolve separately.
 - Read layer + EST month bucketing: `lib/db/client-meetings.ts`. Schema:
   `docs/schema/client_meetings.md`.
