@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { compactUsd } from '@/lib/db/sales-dashboard-shared'
 import type { RosterPerson, SalesRole } from './roster-data'
@@ -120,18 +121,38 @@ function crucialStats(person: RosterPerson): { label: string; value: string | nu
   ]
 }
 
-function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: string }) {
+function PersonCard({
+  person,
+  windowQs,
+  onSelect,
+}: {
+  person: RosterPerson
+  windowQs: string
+  onSelect: (href: string, name: string) => void
+}) {
   const role = effectiveRole(person)
   const fam = role === 'setter' ? 'setter' : 'closer'
   const qs = [windowQs, `rep=${encodeURIComponent(person.userId)}`, `repfam=${fam}`]
     .filter(Boolean)
     .join('&')
+  const href = `?${qs}`
 
   const stats = crucialStats(person)
 
+  // Left-click navigates through a transition (so the page shows a loading state
+  // — a ?rep= change is a same-route searchParam nav, which never triggers
+  // loading.tsx). Modifier / middle clicks fall through to the native Link so
+  // "open in new tab" still works.
+  const onClick = (e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+    e.preventDefault()
+    onSelect(href, person.name)
+  }
+
   return (
     <Link
-      href={`?${qs}`}
+      href={href}
+      onClick={onClick}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -201,10 +222,26 @@ function PersonCard({ person, windowQs }: { person: RosterPerson; windowQs: stri
 
 export function RosterGrid({ people, windowQs }: { people: RosterPerson[]; windowQs: string }) {
   const [showInactive, setShowInactive] = useState(false)
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  const [pendingName, setPendingName] = useState<string | null>(null)
 
   const activeCount = people.filter((p) => p.active).length
   const inactiveCount = people.length - activeCount
   const shown = showInactive ? people : people.filter((p) => p.active)
+
+  // Navigate to a rep's detail through a transition. `pending` stays true until
+  // the server finishes rendering the detail, so we can show a loading skeleton
+  // in the meantime — a ?rep= change is a same-route searchParam nav, which the
+  // App Router does NOT cover with loading.tsx.
+  const onSelect = (href: string, name: string) => {
+    setPendingName(name)
+    startTransition(() => router.push(href))
+  }
+
+  // While the detail is loading, swap the whole grid for a skeleton that mirrors
+  // the per-rep detail layout (same idea as the route-level sales skeletons).
+  if (pending) return <RepDetailSkeleton name={pendingName} />
 
   return (
     <div>
@@ -283,10 +320,63 @@ export function RosterGrid({ people, windowQs }: { people: RosterPerson[]; windo
           }}
         >
           {shown.map((p) => (
-            <PersonCard key={p.userId} person={p} windowQs={windowQs} />
+            <PersonCard key={p.userId} person={p} windowQs={windowQs} onSelect={onSelect} />
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// Shown in place of the grid while a rep's detail is loading. Mirrors the
+// PersonDetail shape (back link → CASH tiles → a couple of section boxes) using
+// the shared `geg-skeleton` shimmer, so a click gives immediate "it's loading"
+// feedback instead of a frozen page.
+function RepDetailSkeleton({ name }: { name: string | null }) {
+  const box: React.CSSProperties = {
+    background: 'var(--color-geg-bg-elev)',
+    border: '1px solid var(--color-geg-border)',
+    borderRadius: 10,
+    padding: '22px 26px 24px',
+  }
+  return (
+    <div style={{ marginTop: 20 }} aria-busy="true" aria-live="polite">
+      <div
+        className="geg-mono"
+        style={{
+          marginBottom: 18,
+          fontSize: 11,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          color: 'var(--color-geg-text-3)',
+        }}
+      >
+        {name ? `Loading ${name}…` : 'Loading…'}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* CASH tiles */}
+        <div style={box}>
+          <div className="geg-skeleton" style={{ width: 120, height: 12, marginBottom: 16 }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="geg-skeleton" style={{ height: 64, borderRadius: 8 }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Section boxes */}
+        {[0, 1].map((i) => (
+          <div key={i} style={box}>
+            <div className="geg-skeleton" style={{ width: 180, height: 12, marginBottom: 16 }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {Array.from({ length: 5 }).map((_, j) => (
+                <div key={j} className="geg-skeleton" style={{ height: 28 }} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
