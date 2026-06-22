@@ -39,7 +39,7 @@ truth.** Before any transfer:
 - [ ] Re-link the GitHub integration to the org repo (auto-deploy on push to `main`).
 - [ ] Re-create all env vars in the company team's Production scope (from STEP 0).
 - [ ] Confirm all **19 cron jobs** carry over (they're declared in `vercel.json`, so a redeploy re-registers them — verify in the dashboard).
-- [ ] Remove dead env vars while you're here: `ONCEHUB_API_KEY`, the 3 legacy cron tokens, `AIRTABLE_API_KEY` (if confirmed dead in Session 2), `ESCALATION_RECIPIENT_SLACK_USER_ID`, `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`.
+- [ ] Remove dead env vars while you're here (all confirmed 0 code refs on 2026-06-22): `ONCEHUB_API_KEY` (OnceHub removed), the 3 legacy per-cron tokens `FATHOM_BACKFILL_AUTH_TOKEN` / `GREGORY_BRAIN_CRON_AUTH_TOKEN` / `ACCOUNTABILITY_NOTIFICATION_CRON_AUTH_TOKEN` (superseded by the single `CRON_SECRET`), and `ESCALATION_RECIPIENT_SLACK_USER_ID` + `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`. **`AIRTABLE_API_KEY` is NOT dead** — it's a legacy single key read only by `scripts/explore_airtable_api.py`; production reads Airtable via the scoped PATs. Drop it from Vercel only if the explore script won't be run.
 
 ### Supabase
 - **Current:** Drake's project `sjjovsjcfffrftnraocu` (region us-east-2 / Ohio). Source of truth.

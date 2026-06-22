@@ -57,6 +57,11 @@ What handoff requires (pick per Drake decision #2):
 `.env.example` has drifted from what the code reads. This is critical for handoff: a new owner
 deploying from `.env.example` would ship a subtly broken system.
 
+**Status: DONE 2026-06-22.** `.env.example` reconciled against a full code sweep — 38 → 58 documented
+vars. Added Cortana, Deepgram, Make-roster, Airtable-NPS, Ella passive kill switch, Slack extras, the
+sales engagement-pinger config, the direct-DB-connection vars, the sales-dashboard flags, and the local
+dev flag. Original checklist below.
+
 **Add (live, currently undocumented):**
 - [ ] `DEEPGRAM_API_KEY` — transcription (setter-call transcripts via `ingestion/setter_calls/`). Document the service, where to mint the key, who owns the account.
 - [ ] `CORTANA_API_KEY` + `CORTANA_BUSINESS_ID` — Meta ad attribution (`ingestion/cortana/`, `api/cortana_sync_cron.py`).
@@ -67,7 +72,7 @@ deploying from `.env.example` would ship a subtly broken system.
 **Remove / mark dead:**
 - [ ] `ONCEHUB_API_KEY` — service removed (commit `44af239`). Remove from `.env.local` and Vercel (Session 3).
 - [ ] Legacy per-cron tokens superseded by `CRON_SECRET` (M6.2): `FATHOM_BACKFILL_AUTH_TOKEN`, `GREGORY_BRAIN_CRON_AUTH_TOKEN`, `ACCOUNTABILITY_NOTIFICATION_CRON_AUTH_TOKEN`. **Verify** they're truly unused (`grep -r` each across `api/`) before removing.
-- [ ] `AIRTABLE_API_KEY` — verify superseded by `AIRTABLE_SALES_PAT` + `AIRTABLE_ACCOUNTABILITY_PAT`; remove if dead.
+- [x] `AIRTABLE_API_KEY` — CONFIRMED legacy: production reads Airtable via the scoped PATs (`AIRTABLE_SALES_PAT` + `AIRTABLE_ACCOUNTABILITY_PAT`); the bare key is read only by `scripts/explore_airtable_api.py`. Left out of `.env.example`; Vercel cleanup deferred to Session 3.
 - [ ] Dead Vercel vars already flagged in `docs/state.md`: `ESCALATION_RECIPIENT_SLACK_USER_ID`, `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`.
 
 > The authoritative env set is **Vercel Production**, not `.env.local`. The reconcile here makes
