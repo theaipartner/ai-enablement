@@ -150,6 +150,9 @@ logic.
   flip one boolean to change the roster — no deploy). Today's active set: Aman, Cobe
   Heydinger, Connor Malewicz, Yasmine Manno, Bradley, Joshua.
 - **Cards are equal-height** (grid-auto-rows), active reps sorted first.
+- **Click feedback.** Opening a rep is a `?rep=` searchParam nav (same route → no
+  `loading.tsx`), so the card navigates through a `useTransition` and the grid swaps for a
+  shimmer skeleton ("Loading <name>…") until the detail renders (`roster-grid.tsx`).
 
 The closer card's funnel reads the read-time loaders (`getClosingScheduledList` etc.),
 which reconstruct booking→closer-form from **Calendly** at read time (the per-closer

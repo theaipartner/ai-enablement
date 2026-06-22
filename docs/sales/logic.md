@@ -204,6 +204,18 @@ funnel (63 opt-ins shown for a period that should have been ~331). Fix: paginate
 `typeform_responses`. **Known open:** `getLeadCycleRows`' first query
 (`lib/db/lead-tags.ts`) is still unpaginated — safe only while in-window cycles < 1000.
 
+## The `.in()` URL-length cap — chunk by length, not count (2026-06-22)
+
+A `.in(col, ids)` read puts every id in the request **URL**. Supabase's gateway drops an
+over-long URL as a bare `TypeError: fetch failed` (no clean error). This crashed the
+roster/rep page: `calendly_invitees` keyed on 78-char Calendly URLs at a fixed 200/batch
+→ ~18k-char URL → dropped, once the event count crossed 200 (a data-growth trip-wire, not
+a code change). Fix: `fetchChunked` / `fetchChunkedPaged` (`lib/db/query-parallel.ts`) now
+size each chunk by **encoded query-string length** (6 KB budget) as well as count — long
+keys auto-split smaller. The same helpers retry transient `fetch failed` and cap how many
+chunks fire at once. **Rule:** never hard-set a large chunk count on a long-string key
+column; let the length budget do it.
+
 ---
 
 ## Timezone (ADR 0003)
