@@ -71,9 +71,11 @@ one-time secrets. Transferring the existing project avoids that entirely.
 These block parts of Sessions 2–3. Capture answers here as they're made:
 
 1. **Keep the Vercel URL?** (Strongly recommended yes.) → _answer:_ TBD
-2. **Google-Calendar OAuth coupling** — the Teams/client-meetings calendar sync is pinned to Drake's
-   identity (`_DRAKE_EMAIL = "drake@theaipartner.io"`, one OAuth token reads all CSM calendars because
-   they're shared with Drake). Successor identity, or move to a shared service account? → _answer:_ TBD
+2. **Google-Calendar OAuth coupling** — Teams/client-meetings sync is pinned to `drake@theaipartner.io`
+   (one OAuth token reads all CSM calendars). → _answer (2026-06-22):_ **keep it on that work account, no
+   code change** — it's a company-controlled work account. **Dependency:** the account + its OAuth token
+   must stay active through Drake's offboarding or both calendar syncs break. See Session 2 §A.1 + the
+   Session 3 Google Cloud row.
 3. **OnceHub table** — `0092_oncehub_bookings` migration + table are inert. Drop, or leave for archaeology? → _answer:_ TBD
 4. **`docs/state.md` (686 lines)** — keep as historical log, or distill into a lean status page? → _answer:_ TBD
 

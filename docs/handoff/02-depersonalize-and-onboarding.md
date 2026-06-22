@@ -25,16 +25,20 @@ Hardcoded locations:
 - `api/client_meetings_sync_cron.py:72` — `_DRAKE_EMAIL = "drake@theaipartner.io"` (+ usage ~line 412)
 - `lib/db/teams.ts` — `getDrakeOAuthState()` queries Drake's token row
 
-What handoff requires (pick per Drake decision #2):
-- **Option A — successor person:** new operator becomes the `creator`-tier team member; CSMs re-share
-  calendars to them; new operator runs the OAuth connect flow (`/api/auth/google/connect`) to mint a
-  fresh `oauth_tokens` row; replace `_DRAKE_EMAIL` with the successor's email (or read it from an env
-  var like `CALENDAR_SYNC_OPERATOR_EMAIL`).
-- **Option B — shared service account (recommended for durability):** a non-personal Google account
-  owns the OAuth token; CSMs share calendars to it; survives any future personnel change.
-  - [ ] Replace the hardcoded `_DRAKE_EMAIL` constant with an env var in both cron files.
-  - [ ] Update `getDrakeOAuthState()` (and rename it, e.g. `getCalendarSyncOAuthState()`).
-- [ ] **Test on preview** before prod: confirm the calendar sync cron still resolves a token and pulls events. This is gate (c) — Drake eyeballs the live result.
+**DECISION (2026-06-22): keep it as-is — no code change.** `drake@theaipartner.io` is a **work** account
+the company controls, so the calendar OAuth coupling stays pinned to it rather than moving to a successor
+person or a service account. The hardcoded `_DRAKE_EMAIL` and `getDrakeOAuthState()` stay.
+
+**Dependency this creates (load-bearing for Session 3 / IT offboarding):** both calendar syncs
+(`client_meetings_sync_cron` and `/teams`) run on the `oauth_tokens` row keyed to that account, and the
+CSMs share their calendars *with that account*. So `drake@theaipartner.io` and its OAuth token **must stay
+active through Drake's departure** — do NOT deactivate/delete it as a normal departing-employee account, or
+both calendar syncs silently break (the cron writes an `oauth_token_unavailable` audit row). Recovery if
+it's ever lost: a `creator`-tier operator re-runs `/api/auth/google/connect` to mint a fresh token and the
+CSMs re-share calendars to that identity.
+
+*(The de-personalization alternatives — successor person, or a shared service account, swapping
+`_DRAKE_EMAIL` for an env var — remain available if the company later wants them; not needed for the handoff.)*
 
 > NOTE: `/teams` is being retired and the Fulfillment dashboard reworked (per project memory), but
 > `client_meetings_sync_cron` (per-client "meetings this mo." from Google Calendar) is **live** and
