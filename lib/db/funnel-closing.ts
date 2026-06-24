@@ -4,7 +4,7 @@ import { cache } from 'react'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
-import { buildCalendlyLeadResolver, inviteeUtmTerm } from './calendly-lead-match'
+import { buildCalendlyLeadResolver, inviteeUtmTerm, resolveLeadEmails } from './calendly-lead-match'
 import { addPlan, emptyPlans, dcPlanUnits, DC_PLAN_PRICE_USD } from './funnel-dc'
 import { fetchChunked, withRetry } from './query-parallel'
 
@@ -1137,26 +1137,8 @@ export async function getClosingScheduledList(
     if (!inv.leadId && inv.email) needEmails.add(inv.email.toLowerCase().trim())
   })
   if (needEmails.size > 0) {
-    const emailToLeadId = new Map<string, string>()
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb
-        .from('close_leads' as never)
-        .select('close_id, contacts')
-        .range(from, from + 999)
-      if (error) throw new Error(`close_leads email-resolve read failed: ${error.message}`)
-      const rows = (data ?? []) as unknown as Array<{ close_id: string; contacts: unknown }>
-      if (rows.length === 0) break
-      for (const r of rows) {
-        if (!Array.isArray(r.contacts)) continue
-        for (const c of r.contacts as Array<{ emails?: Array<{ email?: string }> }>) {
-          for (const e of c.emails ?? []) {
-            const em = (e?.email ?? '').toLowerCase().trim()
-            if (em && needEmails.has(em) && !emailToLeadId.has(em)) emailToLeadId.set(em, r.close_id)
-          }
-        }
-      }
-      if (rows.length < 1000) break
-    }
+    // GIN-indexed lookup (migration 0096) — was a full scan of close_leads.contacts.
+    const emailToLeadId = await resolveLeadEmails(sb, Array.from(needEmails))
     inviteeByEvent.forEach((inv, uri) => {
       if (inv.leadId || !inv.email) return
       const lid = emailToLeadId.get(inv.email.toLowerCase().trim())

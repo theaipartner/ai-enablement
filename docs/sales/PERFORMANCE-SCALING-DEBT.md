@@ -158,6 +158,14 @@ one funnel/people render re-scans `airtable_full_closer_report` ~3× and
 This is distinct from item 5 (which is about the volume of calendly rows pulled);
 item 6 is about the *number of times* the same table is rescanned per render.
 
+**DONE (2026-06-24) — the email half:** the `close_leads.contacts` email-resolution
+full scan (the ~3s scan duplicated in `funnel-digital-college.ts` + `funnel-closing.ts`)
+is replaced by a GIN index + `resolve_close_lead_emails()` (migration 0096), called via
+`resolveLeadEmails()` in `calendly-lead-match.ts` — ~0.13s for the handful of emails
+actually needed, verified identical. **Still open:** the `utm_term` half of
+`buildCalendlyLeadResolver` (pages all `close_leads.utm_term`) and the
+`airtable_full_closer_report` name resolvers — date-bound / targetize those next.
+
 ---
 
 ## 📐 Methodology — build-alongside-and-diff (Drake's rule)

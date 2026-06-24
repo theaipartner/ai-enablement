@@ -58,3 +58,23 @@ export function inviteeUtmTerm(
 ): string | null {
   return rawPayload?.tracking?.utm_term ?? null
 }
+
+// Resolve invitee emails → close lead id via the GIN-indexed
+// resolve_close_lead_emails() RPC (migration 0096), the email fallback when the
+// utm_term token didn't resolve. Replaces a full scan of close_leads.contacts in
+// the DC + closing loaders. Stored contact emails are lowercased; we lowercase +
+// trim the inputs to match. First lead wins per email.
+export async function resolveLeadEmails(
+  sb: ReturnType<typeof createAdminClient>,
+  emails: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const uniq = Array.from(new Set(emails.map((e) => e.toLowerCase().trim()).filter(Boolean)))
+  if (uniq.length === 0) return out
+  const { data, error } = await sb.rpc('resolve_close_lead_emails' as never, { p_emails: uniq } as never)
+  if (error) throw new Error(`resolve_close_lead_emails failed: ${error.message}`)
+  for (const r of (data ?? []) as Array<{ email: string; close_id: string }>) {
+    if (!out.has(r.email)) out.set(r.email, r.close_id)
+  }
+  return out
+}
