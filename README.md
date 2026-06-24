@@ -2,11 +2,8 @@
 
 Internal AI system for a coaching/consulting agency. It turns the raw signals of the business — calls,
 Slack, CRM, ad/funnel data — into a knowledge base in Supabase, runs agents on top of it, and surfaces the
-results in a Next.js dashboard and in Slack. It runs in production on Vercel + Supabase.
-
-> **Status: mid-handoff.** Ownership is transferring from the original solo developer to the company. The
-> transfer audit + step-by-step plan live in [`docs/handoff/`](docs/handoff/00-overview.md) — read that
-> first if you're picking the system up.
+results in a Next.js dashboard and in Slack. It runs in production on Vercel + Supabase, all on
+company-owned infrastructure.
 
 ## What it does
 
@@ -48,7 +45,7 @@ npm install                     # Next.js dashboard deps
 ```
 
 **Credentials.** `.env.example` is the template. The authoritative inventory of every account, key, and who
-owns it (for the handoff) is in [`docs/handoff/03-ownership-transfer.md`](docs/handoff/03-ownership-transfer.md).
+owns it is in [`docs/runbooks/credentials-and-accounts.md`](docs/runbooks/credentials-and-accounts.md).
 Never commit `.env.local`.
 
 ## Running it
@@ -76,7 +73,7 @@ app + the Python serverless functions in `api/`. Cron schedules live in `vercel.
 | a specific agent's behavior | [`docs/agents/`](docs/agents/) (gregory, ella, call_reviewer) |
 | how to run/operate a task | [`docs/runbooks/`](docs/runbooks/) (its README explains coverage) |
 | why a design call was made | [`docs/decisions/`](docs/decisions/) (ADRs) |
-| the ownership handoff | [`docs/handoff/`](docs/handoff/00-overview.md) |
+| accounts, keys, and how to rotate them | [`docs/runbooks/credentials-and-accounts.md`](docs/runbooks/credentials-and-accounts.md) |
 | conventions + critical rules for editing code | [`CLAUDE.md`](CLAUDE.md) |
 
 **Coverage is intentional, not exhaustive.** The docs are kept accurate but there isn't a doc for every
@@ -98,7 +95,7 @@ is the source of truth**: start from the relevant `api/` handler, `ingestion/<so
 `CLAUDE.md` § Folder Structure has the authoritative tree. In brief:
 
 ```
-docs/        fulfillment, sales, schema, runbooks, decisions, agents, handoff, archive
+docs/        fulfillment, sales, schema, runbooks, decisions, agents, archive
 supabase/    numbered SQL migrations (source of truth for the schema)
 ingestion/   one module per external source
 api/         Vercel Python serverless functions (webhooks + crons; see vercel.json)

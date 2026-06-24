@@ -12,3 +12,4 @@ is the source of truth: start from the relevant `api/` handler, `ingestion/<sour
 
 For the cron inventory, see [`cron_schedule.md`](cron_schedule.md) (kept in sync with `vercel.json`).
 For adding a brand-new ingestion source, see [`adding_new_ingestion_source.md`](adding_new_ingestion_source.md).
+For every account/key the system uses — owner + rotation path — see [`credentials-and-accounts.md`](credentials-and-accounts.md).

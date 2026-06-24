@@ -12,9 +12,9 @@ across customer success and sales. Two product sides:
 - **Sales side** — the funnel-analytics mirrors (Close, Cortana/Meta, Wistia, Calendly, Typeform,
   Clarity, Airtable) and the sales dashboard. See `docs/sales/`.
 
-It runs in production on Vercel + Supabase. **Status:** the system is mid-handoff — ownership is
-transferring from the original solo developer to the company. The transfer audit + plan live in
-`docs/handoff/` (start at `00-overview.md`).
+It runs in production on Vercel + Supabase, all on company-owned infrastructure (GitHub, Vercel,
+Supabase). The account/credential inventory — every key, who owns it, and how to rotate it — is in
+`docs/runbooks/credentials-and-accounts.md`.
 
 ## Core Principles (Non-Negotiable)
 
@@ -38,7 +38,7 @@ These four protect the system from lock-in and rebuilds. Apply them to every dec
 | Hosting | Vercel | Next.js frontend + Python serverless functions (`api/`). Crons in `vercel.json`. |
 | Voice | ElevenLabs | Course audio. |
 | Dev environment | WSL2 Ubuntu on Windows | All dev happens inside WSL. |
-| Secrets | `.env.local` (local) + Vercel env vars (prod) | `.env.example` is the template; the full account/credential inventory for the handoff is in `docs/handoff/03-ownership-transfer.md`. `SUPABASE_DB_PASSWORD` in `.env.local` lets ops scripts connect via psycopg2 (migrations, seeds, diagnostics). |
+| Secrets | `.env.local` (local) + Vercel env vars (prod) | `.env.example` is the template; the full account/credential inventory is in `docs/runbooks/credentials-and-accounts.md`. `SUPABASE_DB_PASSWORD` in `.env.local` lets ops scripts connect via psycopg2 (migrations, seeds, diagnostics). |
 
 ## Language Policy
 
@@ -59,7 +59,6 @@ ai-enablement/
 │   ├── agents/                 # per-agent specs: gregory.md, ella.md, call_reviewer.md
 │   ├── runbooks/               # how to run recurring tasks (README explains coverage)
 │   ├── decisions/              # ADRs
-│   ├── handoff/                # ownership-transfer audit + plan (active)
 │   └── archive/                # historical / superseded docs
 ├── supabase/migrations/        # numbered SQL migrations — source of truth for the schema
 ├── ingestion/                  # one module per external source
@@ -142,10 +141,7 @@ Hard-won patterns. They hold regardless of who's operating the repo:
 - **Deploys go out via `git push` to `main`** (Vercel GitHub-integration auto-deploy). If a deploy ships a bad bundle (cache contamination), recover with a dashboard "Redeploy" with **Use existing Build Cache unchecked**; subsequent pushes restore the clean cache.
 - **Secrets: read from `.env.local` when a task needs them; never write them to committed code, logs, or persistent files.** For a secret that must survive across stateless tool calls, use a mode-600 `/tmp` file shredded after use — not `argv`.
 
-## A note on history
+## Getting started
 
-This repo was built under a now-retired "Director/Builder" workflow (a chat-Claude wrote specs to
-`docs/specs/`, a Claude Code session executed them and wrote reports to `docs/reports/`). **That workflow
-is no longer used** — there are no specs/reports, and you don't need to follow it. The full original
-CLAUDE.md describing it is preserved at `docs/archive/historical/CLAUDE-full-2026-06-22.md` for context.
-A new contributor should start at `README.md` → `docs/fulfillment/architecture.md` (or `docs/sales/`).
+A new contributor should start at `README.md` → `docs/fulfillment/architecture.md` (for the CSM
+side) or `docs/sales/README.md` (for the sales side).

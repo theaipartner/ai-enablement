@@ -5,10 +5,6 @@ for everything else. Budget ~30–60 minutes. For the bird's-eye view first, ski
 and [`docs/fulfillment/architecture.md`](../fulfillment/architecture.md); this doc is the do-it-step-by-step
 companion.
 
-> The repo is **mid-handoff** — ownership is moving to the company. If you're the person taking it over,
-> read [`docs/handoff/00-overview.md`](../handoff/00-overview.md) before anything else; it explains what's
-> transferring and what's already done.
-
 ## 0. Prerequisites
 
 - **WSL2** if you're on Windows — work *inside* the WSL filesystem, not the Windows mount (`/mnt/c/...`).
@@ -45,8 +41,8 @@ npm run dev                       # → http://localhost:3000
 
 - **Credentials:** `.env.example` lists every variable with a comment. You'll need at least the Supabase
   keys for the dashboard to show data. The authoritative inventory of every account/key and who owns it is
-  [`docs/handoff/03-ownership-transfer.md`](../handoff/03-ownership-transfer.md) — get the real values from
-  the credential owner; never commit `.env.local`.
+  [`docs/runbooks/credentials-and-accounts.md`](../runbooks/credentials-and-accounts.md) — get the real
+  values from the credential owner; never commit `.env.local`.
 - **Local auth:** set `NEXT_PUBLIC_DISABLE_AUTH=true` in `.env.local` so the dashboard's login gate is
   bypassed locally. (Never set this in production.)
 - Type-check + lint the dashboard with `npm run build` and `npm run lint`.
