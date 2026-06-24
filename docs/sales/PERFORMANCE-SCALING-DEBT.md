@@ -158,13 +158,18 @@ one funnel/people render re-scans `airtable_full_closer_report` ~3× and
 This is distinct from item 5 (which is about the volume of calendly rows pulled);
 item 6 is about the *number of times* the same table is rescanned per render.
 
-**DONE (2026-06-24) — the email half:** the `close_leads.contacts` email-resolution
-full scan (the ~3s scan duplicated in `funnel-digital-college.ts` + `funnel-closing.ts`)
-is replaced by a GIN index + `resolve_close_lead_emails()` (migration 0096), called via
-`resolveLeadEmails()` in `calendly-lead-match.ts` — ~0.13s for the handful of emails
-actually needed, verified identical. **Still open:** the `utm_term` half of
-`buildCalendlyLeadResolver` (pages all `close_leads.utm_term`) and the
-`airtable_full_closer_report` name resolvers — date-bound / targetize those next.
+**DONE (2026-06-24) — the close_leads scans:** both halves of the Calendly
+lead-resolution full scan are now indexed RPCs that resolve only the keys needed,
+called from `funnel-digital-college.ts` + `funnel-closing.ts`:
+- **email half** — GIN index + `resolve_close_lead_emails()` (migration 0096), via
+  `resolveLeadEmails()`. ~0.13s vs ~3s, verified identical.
+- **utm_term half** — `(utm_term)` index + `resolve_close_lead_utm_terms()` (migration
+  0097), via `resolveLeadsByUtmTerms()`. ~0.1s, ambiguity (`having count(distinct)=1`)
+  done server-side so a generic shared term can't starve others. Verified identical.
+
+`buildCalendlyLeadResolver` (the old full-scan resolver) now survives only on the
+flag-gated live roster path (`leads.ts`, `SALES_ROSTER_USE_JS=1`). **Still open:** the
+`airtable_full_closer_report` name resolvers (small table, ~718 rows — low priority).
 
 ---
 

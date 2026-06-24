@@ -4,7 +4,7 @@ import { cache } from 'react'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
 import { DIRECT_BOOKING_EVENT_TYPE_URI } from './funnel-calendly'
-import { buildCalendlyLeadResolver, inviteeUtmTerm, resolveLeadEmails } from './calendly-lead-match'
+import { inviteeUtmTerm, resolveLeadEmails, resolveLeadsByUtmTerms } from './calendly-lead-match'
 import { addPlan, emptyPlans, dcPlanUnits, DC_PLAN_PRICE_USD } from './funnel-dc'
 import { fetchChunked, withRetry } from './query-parallel'
 
@@ -1082,7 +1082,6 @@ export async function getClosingScheduledList(
   // 2. Invitees for those events (identity for lead-keying + form /
   //    booked-by match). Phone lives in raw_payload; the utm_term token
   //    resolves the Close lead_id (the strong key, tried before identity).
-  const leadResolver = await buildCalendlyLeadResolver(sb)
   const eventUris = typed.map((t) => t.e.uri)
   const inviteeByEvent = new Map<string, { name: string | null; email: string | null; phones: string[]; noShow: boolean; leadId: string | null }>()
   {
@@ -1107,6 +1106,9 @@ export async function getClosingScheduledList(
       'calendly_invitees read failed',
       200,
     )
+    // Resolve only the utm_terms these invitees carry (indexed RPC, migration
+    // 0097) — was a full close_leads.utm_term scan.
+    const termMap = await resolveLeadsByUtmTerms(sb, rows.map((r) => inviteeUtmTerm(r.raw_payload) ?? ''))
     for (const r of rows) {
       if (!inviteeByEvent.has(r.event_uri)) {
         const rawPhones: string[] = []
@@ -1120,7 +1122,8 @@ export async function getClosingScheduledList(
         const phones = rawPhones
           .map(normalizePhone)
           .filter((p): p is string => p !== null)
-        const leadId = leadResolver(inviteeUtmTerm(r.raw_payload))
+        const term = inviteeUtmTerm(r.raw_payload)
+        const leadId = term ? termMap.get(term) ?? null : null
         inviteeByEvent.set(r.event_uri, { name: r.name, email: r.email, phones, noShow: r.no_show === true, leadId })
       }
     }

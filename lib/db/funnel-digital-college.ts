@@ -2,7 +2,7 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { DateRange } from './funnel-window'
-import { buildCalendlyLeadResolver, inviteeUtmTerm, resolveLeadEmails } from './calendly-lead-match'
+import { inviteeUtmTerm, resolveLeadEmails, resolveLeadsByUtmTerms } from './calendly-lead-match'
 import { fetchChunked } from './query-parallel'
 
 // Funnel · Digital College (low-ticket) — the dedicated DC closers' per-rep view.
@@ -320,7 +320,6 @@ async function loadDcEvents(range: DateRange, closers: DcCloser[]): Promise<DcEv
   // is the fallback below). A DC link often has no utm_term, so without the
   // email fallback a form (keyed by lead_id) and its booking (keyed by name)
   // don't merge — the lead surfaces twice (Tasha Garza, Drake 2026-05-31).
-  const leadResolver = await buildCalendlyLeadResolver(sb)
   const byEvent = new Map<string, { name: string | null; email: string | null; leadId: string | null }>()
   const uris = inScope.map((e) => e.uri)
   {
@@ -339,12 +338,16 @@ async function loadDcEvents(range: DateRange, closers: DcCloser[]): Promise<DcEv
       'calendly_invitees (DC) read failed',
       200,
     )
+    // Resolve only the utm_terms these invitees carry (indexed RPC, migration
+    // 0097) — was a full close_leads.utm_term scan.
+    const termMap = await resolveLeadsByUtmTerms(sb, rows.map((r) => inviteeUtmTerm(r.raw_payload) ?? ''))
     for (const r of rows) {
       if (byEvent.has(r.event_uri)) continue
+      const term = inviteeUtmTerm(r.raw_payload)
       byEvent.set(r.event_uri, {
         name: r.name,
         email: r.email,
-        leadId: leadResolver(inviteeUtmTerm(r.raw_payload)),
+        leadId: term ? termMap.get(term) ?? null : null,
       })
     }
   }

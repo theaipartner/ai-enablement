@@ -78,3 +78,24 @@ export async function resolveLeadEmails(
   }
   return out
 }
+
+// Resolve Calendly utm_term tokens → close lead id via the indexed
+// resolve_close_lead_utm_terms() RPC (migration 0097) — the PRIMARY key, tried
+// before email/identity. Replaces the full close_leads.utm_term scan in
+// buildCalendlyLeadResolver. A term is returned ONLY when exactly one lead
+// carries it; generic shared terms ("Broad", dated labels) are omitted (= null
+// on lookup), same safety rule as the resolver. Targeted to the terms requested.
+export async function resolveLeadsByUtmTerms(
+  sb: ReturnType<typeof createAdminClient>,
+  terms: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const uniq = Array.from(new Set(terms.filter(Boolean)))
+  if (uniq.length === 0) return out
+  const { data, error } = await sb.rpc('resolve_close_lead_utm_terms' as never, { p_terms: uniq } as never)
+  if (error) throw new Error(`resolve_close_lead_utm_terms failed: ${error.message}`)
+  for (const r of (data ?? []) as Array<{ utm_term: string; close_id: string }>) {
+    out.set(r.utm_term, r.close_id)
+  }
+  return out
+}
