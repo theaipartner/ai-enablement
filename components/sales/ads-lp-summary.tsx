@@ -68,9 +68,9 @@ export function AdsLpSummarySection({ summary }: { summary: AdsLpSummary }) {
 
         {/* Videos */}
         <Block title="Videos">
-          <Divider label="VSL on LP" />
+          <Divider label="VSL on LP" name={vsl.label} />
           <VideoRows v={vsl} />
-          <Divider label="Confirmation video" />
+          <Divider label="Confirmation video" name={typVideo.label} />
           <VideoRows v={typVideo} />
         </Block>
       </div>
@@ -137,13 +137,19 @@ function Row({ label, value, hint }: { label: string; value: string; hint?: stri
   )
 }
 
-function Divider({ label }: { label: string }) {
+function Divider({ label, name }: { label: string; name?: string }) {
+  // `name` is the actual video title (Wistia label); render it in natural case
+  // beside the uppercased category so the row reads e.g. "VSL ON LP · V2 precall".
+  const showName = name != null && name !== '' && name !== 'VSL'
   return (
     <div
       className="geg-mono"
       style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginTop: 10, marginBottom: 2 }}
     >
       {label}
+      {showName ? (
+        <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--color-geg-text-faint)' }}> · {name}</span>
+      ) : null}
     </div>
   )
 }
