@@ -1,7 +1,7 @@
 import type { AdsLpSummary } from '@/lib/db/funnel-summary'
 import type { VideoMetrics } from '@/lib/db/funnel-lp'
 
-// Marketing page — inline Ads + Landing-Page summary, shown as plain lists under
+// Advertising Hub page — inline Ads + Landing-Page summary, shown as plain lists under
 // the daily table. Replaces the two click-through detail pages (/funnel/ads and
 // /funnel/landing-pages). Window-scoped to the funnel's current date range. No
 // sparklines — just labelled rows.

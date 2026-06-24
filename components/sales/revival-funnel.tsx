@@ -22,8 +22,8 @@ function PlanChip({ label, count }: { label: string; count: number }) {
   )
 }
 
-// Revival funnel — the DC re-engagement campaign, on its own sub-page under
-// Funnel. all revival leads → responded → connected → booked → showed → closed,
+// Outbound funnel — the DC re-engagement campaign, on its own top-level Outbound
+// page. all revival leads → responded → connected → booked → showed → closed,
 // plus a cash row ($300 per DC plan unit). Monotonic (each stage ⊆ the prior),
 // so the conversion % between stages is always 0–100. See lib/db/funnel-revival.ts.
 
@@ -82,7 +82,7 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--color-geg-bg-elev)', borderBottom: '1px solid var(--color-geg-border)' }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT }} />
         <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)' }}>
-          Revival
+          Outbound
         </span>
         <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
           · DC re-engagement · all-time
@@ -91,7 +91,7 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
 
       {/* The funnel */}
       <div style={{ display: 'flex', alignItems: 'stretch', padding: '4px 10px' }}>
-        <Stage label="Revival leads" value={f.leads} accent />
+        <Stage label="Outbound leads" value={f.leads} accent />
         <Conv from={f.leads} to={f.responded} />
         <Stage label="Responded" value={f.responded} />
         <Conv from={f.responded} to={f.called} />

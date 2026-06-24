@@ -1,6 +1,6 @@
 import type { DailyFunnelRow } from '@/lib/db/funnel-daily'
 
-// Marketing page — the rolling last-5-days daily cohort table. Pinned to the
+// Advertising Hub page — the rolling last-5-days daily cohort table. Pinned to the
 // bottom of the page, independent of the date picker. Each row is the cohort
 // that opted in that day and how far it has since progressed. See
 // lib/db/funnel-daily.ts for the cohort-vs-activity rationale.

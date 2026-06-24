@@ -2,11 +2,12 @@
 
 // Sales Dashboard — sales-only left sidebar.
 //
-// Four flat views (no sub-bars): Funnel (the stacked top-of-funnel overview;
-// its stage nodes link to pre-filtered Leads, adspend → Ads, and a header link
-// → Landing Pages, so Ads/LP no longer need sidebar entries), Leads, People,
-// Calls. Revenue moved to the CEO tab; Appointment Setting + Closing are folded
-// into People + the Funnel→Leads drill.
+// Flat top-level views (no sub-bars): Advertising Hub (the stacked top-of-funnel
+// overview; its stage nodes link to pre-filtered Leads, adspend → Ads, and a
+// header link → Landing Pages, so Ads/LP no longer need sidebar entries),
+// Outbound (the DC re-engagement campaign — its own page, not nested), Leads,
+// and Talent (with Roster nested). Revenue moved to the CEO tab; Appointment
+// Setting + Closing are folded into Talent + the Advertising Hub→Leads drill.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -20,16 +21,17 @@ type NavItem = {
 }
 
 const NAV: NavItem[] = [
-  // Funnel = the stacked Total/Direct/Setter/Reactivation overview. Stage nodes
-  // drill into the pre-filtered Leads roster; Ads + Landing Pages are reached
-  // from within the page, not the sidebar. Revival (the DC re-engagement
-  // campaign) is a dedicated sub-page — revival leads are excluded from every
-  // other funnel, so they get their own surface.
+  // Advertising Hub = the stacked Total/Direct/Setter/Reactivation overview (paid
+  // acquisition). Stage nodes drill into the pre-filtered Leads roster; Ads +
+  // Landing Pages are reached from within the page, not the sidebar.
   {
     href: '/sales-dashboard/funnel',
-    label: 'Marketing',
-    children: [{ href: '/sales-dashboard/funnel/revival', label: 'Revival' }],
+    label: 'Advertising Hub',
   },
+  // Outbound = the DC re-engagement (outbound SMS) campaign's own funnel. Its
+  // leads are excluded from every other funnel, so it gets its own top-level
+  // page (route /outbound; internally "revival").
+  { href: '/sales-dashboard/outbound', label: 'Outbound' },
   // Leads = the roster of every lead opted-in in the window (new + re-opt-in),
   // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },

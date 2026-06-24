@@ -3,28 +3,28 @@ import { RevivalCalledSection } from '@/components/sales/revival-called'
 import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
 import { RevivalTimeOfDaySection } from '@/components/sales/revival-time-of-day'
 import { getRevivalCalled, getRevivalFunnel, getRevivalTimeOfDay } from '@/lib/db/funnel-revival'
-import { PersonPill } from '../../header-pills'
+import { PersonPill } from '../header-pills'
 
-// Sales Dashboard — Revival (a sub-page under Funnel).
+// Sales Dashboard — Outbound (top-level page).
 //
-// The DC re-engagement campaign's own funnel: every revival-tagged lead through
-// responded → connected → booked → showed → closed, with a cash row. Revival
-// leads are excluded from every other funnel/roster (they're SMS auto-creates,
+// The DC re-engagement (outbound SMS) campaign's own funnel: every revival-tagged
+// lead through responded → connected → booked → showed → closed, with a cash row.
+// These leads are excluded from every other funnel/roster (they're SMS auto-creates,
 // not real opt-ins), so this is the only surface that counts them. All-time —
-// per-lead activity is anchored to the revival-campaign start (see
-// lib/db/funnel-revival.ts), there is no date window.
+// per-lead activity is anchored to the campaign start (see lib/db/funnel-revival.ts),
+// there is no date window. (Internally still "revival"; the user-facing name is Outbound.)
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-export default async function RevivalFunnelPage() {
+export default async function OutboundPage() {
   const [funnel, called, timeOfDay] = await Promise.all([getRevivalFunnel(), getRevivalCalled(), getRevivalTimeOfDay()])
 
   return (
     <div>
       <HeaderBand
-        eyebrow="SALES · FUNNEL"
-        title="Revival."
+        eyebrow="SALES · OUTBOUND"
+        title="Outbound."
         actions={<PersonPill label="EST · Nabeel" />}
       />
 

@@ -3,15 +3,15 @@
 Every sales page, what it shows, and what was removed. All routes currently live under
 `app/(authenticated)/sales-dashboard/` (server components, `force-dynamic`) — they move
 under a dedicated `(sales)` route group + subdomain as part of the fulfillment/sales
-split. Nav is **flat: Marketing · Leads · Talent**, with Revival nested under Marketing
-and Roster nested under Talent.
+split. Nav is **flat: Advertising Hub · Outbound · Leads · Talent**, with Roster nested under Talent.
+Outbound is its own top-level page (no longer nested under the Advertising Hub).
 
 ---
 
-## Marketing — `/funnel` (was "Funnel" / "Pulse")
+## Advertising Hub — `/funnel` (was "Marketing" / "Funnel" / "Pulse")
 
-> Renamed to **Marketing** 2026-06-18 (sidebar label + page header `SALES · MARKETING` /
-> "Marketing."). The route stays `/sales-dashboard/funnel`.
+> Renamed to **Advertising Hub** 2026-06-24 (sidebar label + page header `SALES · ADVERTISING HUB` /
+> "Advertising Hub."). The route stays `/sales-dashboard/funnel`. (Was "Marketing" 2026-06-18.)
 
 The stacked cohort funnel: **Total / Direct / Setter / Reactivation** boxes (opt-ins →
 connected → booked → confirmed → showed → closed; `confirmed` only on Direct/Total;
@@ -44,19 +44,24 @@ The old in-page **navigation links were removed** (2026-06-18): the adspend node
 links to the Ads page and the "Landing pages →" header link is gone, now that the data is
 inline. The `/funnel/ads` and `/funnel/landing-pages` routes still exist (reachable by URL).
 
-### `/funnel/revival`
-The DC Revival re-engagement funnel — its **own** funnel, reading raw signals with **no
-tagger**. The only surface that counts revival leads. See `data-model.md` § Revival.
-
 ### `/funnel/ads`
 Meta / Cortana ad metrics. **No longer linked** from the funnel (the adspend node's link
-was removed); the same window-scoped numbers now render inline on the Marketing page.
+was removed); the same window-scoped numbers now render inline on the Advertising Hub page.
 Still reachable by URL.
 
 ### `/funnel/landing-pages`
 Landing-page + Wistia video + Typeform metrics. **No longer linked** (the "Landing pages →"
-header link was removed); those numbers now render inline on the Marketing page. Still
+header link was removed); those numbers now render inline on the Advertising Hub page. Still
 reachable by URL.
+
+---
+
+## Outbound — `/outbound` (was `/funnel/revival`, "Revival")
+
+The DC Revival re-engagement (outbound SMS) funnel — its **own** funnel, reading raw signals with **no
+tagger**. The only surface that counts revival leads. Moved out from under the Advertising Hub to its
+own top-level page + renamed **Outbound** 2026-06-24 (route `/sales-dashboard/outbound`; internally
+still "revival" — components/data keep the `revival` name). See `data-model.md` § Revival.
 
 ---
 
