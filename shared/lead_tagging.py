@@ -25,12 +25,15 @@ Rules (authoritative — mirror docs/sales/sales-dashboard-architecture.md):
              "High Ticket booking". BLOCKED if a dq/close happened at/before it.
   dq       = earliest DQ output (triage / confirmation / closer-EOC / DC Follow
              Up?=No). Stored always; HT-close suppression is read-time only.
-  stages   = HT-only, per phase (primary / reactive). Setter-led booked comes from
-             the triage FORM ("High Ticket booking"; "Digital College booking" and
-             confirmation "Downsold" => connected only). Direct booked = the
-             Calendly self-book. A confirm auto-lights connected (incl. direct); a
-             pure unconfirmed direct-primary booking does NOT (the skip). DC sales
-             never enter the HT stages (DQ tag + reactivation block only).
+  stages   = HT-only, per phase (primary / reactive). CONNECTED = a >=90s call
+             (either direction) ONLY (Drake 2026-06-24) — a triage/confirmation FORM
+             no longer lights connected; it back-fills from confirmed/showed/closed.
+             Setter-led booked comes from the triage FORM ("High Ticket booking");
+             direct booked = the Calendly self-book. A confirm still lights connected
+             (via the confirmed->connected back-fill); a pure unconfirmed direct-primary
+             booking does NOT (booked does not back-fill connected — so a self-booked
+             direct lead is booked-but-not-connected). DC sales never enter the HT
+             stages (DQ tag + reactivation block only).
 """
 from __future__ import annotations
 
@@ -504,9 +507,11 @@ def _compute(cur, lead_ids):
                 if not in_cycle(filed):
                     continue
                 p = phase_of(filed, filed)
-                reached = bool(cs) and "unresponsive" not in cs and "handover" not in cs
-                if reached:
-                    ph[p]["conn"].append(filed)
+                # Connected = a >=90s CALL only (Drake 2026-06-24). A triage form
+                # "reaching" a lead no longer lights connected — a text-DQ or a
+                # sub-90s touch is not a conversation. The >=90s-call path (calls90,
+                # above) is the sole DIRECT connect signal; connected still
+                # back-fills from confirmed/showed/closed in the phase rollup below.
                 if ft == "Closer Triage Form":
                     # A confirmation form is a CONFIRM when it records the HT
                     # booking itself ("High Ticket booking") OR an explicit

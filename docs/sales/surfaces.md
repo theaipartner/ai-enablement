@@ -74,10 +74,10 @@ moved to `/funnel`.)
 
 The **Connected rate** box is `connected ÷ leads worked`, where *worked* = leads
 **dialed OR connected** (not the whole cohort) — a true connection rate that
-never-touched leads don't dilute (Drake 2026-06-18). "Connected" is the broad
-form-OR-≥90s-call signal (`reachedStage`), so a form/text reach counts even with no
-dial; those form-no-dial leads sit in both the numerator and the denominator (so the
-rate can't exceed 100%). A bare SMS reply with **no form** is *not* connected.
+never-touched leads don't dilute (Drake 2026-06-18). "Connected" is a **≥90s call
+only** (`reachedStage`, back-filled from confirmed/showed/closed) — a triage/confirmation
+form no longer counts (Drake 2026-06-24). A form/text reach with no qualifying call is
+**not** connected.
 
 ### `/leads/[close_id]` — per-lead page
 A facts strip (qualified, opt-in dates, **Stage** chip-funnel, dials, connected

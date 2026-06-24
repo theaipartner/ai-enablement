@@ -55,9 +55,12 @@ opt-ins → connected → booked → confirmed → showed → closed
   meaningful node there). `books` is still computed and still drives the integrity guard +
   the Direct / Setter / Reactivation boxes; it's only hidden from the Total box's bars.
 - The **closed** node is split `(N HT / N DC)`.
-- `books ≥ connected ≥ confirms ≥ shows ≥ closes` — enforced as an integrity guard.
-  **Exception:** in the **Total** funnel, Books *can* exceed Connected, because a pure
-  self-booked direct booking is not a "connection" (intended).
+- Within each box a later stage can't exceed an earlier one — enforced as an integrity
+  guard (`validateFunnel`). **Direct & Total are books-first:** Books *can* exceed Connected
+  — a self-booked direct lead (or any lead booked with no ≥90s call) is booked-but-not-connected;
+  intended, and now common since connected = a ≥90s call only (Drake 2026-06-24). **Setter &
+  Reactivation expect Connected ≥ Books** and flag a violation otherwise (a setter booking
+  should have a real conversation behind it).
 
 `reachedStage(row, type, stage)` in `lib/db/leads-funnel.ts` is the single source of
 truth — the **funnel box count** and the **roster filter** both call it, so a bar's
@@ -93,9 +96,9 @@ books/shows until the bound moved onto the tag.
   last pre-anchor dial is a stale primary-phase dial 2–3 days earlier.
 
 Both the SQL (`sales_funnel_counts`) and the JS fallback (`leads-funnel.ts`
-`scanDialWindows`) apply this. Note the bracket can still be < Connected, because
-**Connected counts a setter triage form that reached, not just a dial** — a
-form-based reach has no countable dial behind it.
+`scanDialWindows`) apply this. Note the bracket (outbound dials) can still be < Connected,
+because **Connected counts a ≥90s call in EITHER direction** — an inbound ≥90s call has no
+outbound dial behind it (Drake 2026-06-24: a triage-form reach no longer counts as connected).
 
 ### Qualified — from Typeform, per cycle (2026-06-15)
 

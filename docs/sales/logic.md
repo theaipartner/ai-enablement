@@ -9,19 +9,25 @@ can find the implementation.
 
 ## The connected signal
 
-`connected` = a **≥90s call** (any direction; `FMR_DIAL_CONNECTED_SEC = 90`) **OR** a
-triage/confirmation form that *reached* the lead (any `call_status` except
-`Unresponsive – Setter Handover`) **OR** showed/closed (monotonic back-fill).
+`connected` = a **≥90s call** (any direction; `FMR_DIAL_CONNECTED_SEC = 90`), back-filled
+from confirmed/showed/closed (monotonic). **A triage/confirmation form no longer counts**
+(Drake 2026-06-24, the boss's call: connected means a real ≥90s conversation, not a form
+reach). The tagger materializes this into `lead_cycle_stages.connected_at`; the read layer
+(`lib/db/leads.ts`) mirrors it for cycle-less leads.
 
 - A no-show closer form ("Client Ghosted") is **not** a connect.
-- A pure self-booked direct booking is **not** a connection → in the Total funnel,
-  Books can exceed Connected (intended). Setter/reactivation bookings *do* count.
-- `connectedEffective = connected || hasPartnership || showed || closed` — read by the
-  Total funnel, the speed box, the roster Connected column, and the per-lead header.
-- Per-type: **Total** = `connectedEffective`; **Direct** = `connected || confirmed ||
-  showed || closed` (no booking back-fill); **Setter** = `connectedEffective`;
-  **Reactivation** = `reactConnected` only (≥90s dial OR setter-triage form *after*
-  `reactivated_at`; a confirmation does not count as a reactive connect).
+- A booking is **not** a connection without a ≥90s call. So **Direct** (self-bookers) and
+  **Total** can show Books > Connected (intended — the integrity guard treats Direct as
+  books-first and doesn't compare the two on Total). In the **Setter** funnel the guard
+  expects Connected ≥ Books and **flags** a violation — a setter booking should have a real
+  conversation behind it.
+- `connectedEffective = connected || showed || closed` — read by the Total funnel fallback,
+  the speed box, the roster Connected column, and the per-lead header (a booking no longer
+  back-fills it).
+- Per-type live fallback (cycle-less leads only): **Total/Setter** = `connectedEffective`;
+  **Direct** = `connected || confirmed || showed || closed`; **Reactivation** =
+  `reactConnected` (a ≥90s dial *after* `reactivated_at`). Cycle-having leads read the
+  tagger's `connected_at` (same definition).
 
 > Note: `getAppointmentSettingMetrics` uses `close_calls.duration > 0` for its "Calls
 > Connected" tile; everywhere else uses ≥90s. **Don't unify them** — they answer

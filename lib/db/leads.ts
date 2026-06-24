@@ -388,21 +388,9 @@ export async function getLeadsForRangeLive(
   //    NOT "Confirmed Booking", which is the Confirmed stage, direct only). Any
   //    "DQ" status on either, after the lead's opt-in, flags DQ.
   const confirmedLeadIds = new Set<string>()
-  // Confirmation forms where the closer actually REACHED the lead (confirmed,
-  // DQ, or follow-up) — a real conversation = connected. The bare no-answer
-  // "Setter pipeline" handoff is excluded (they weren't reached).
-  const confirmReachedIds = new Set<string>()
   const setterConnectedIds = new Set<string>()
   const setterBookedIds = new Set<string>()
   const dqLeadIds = new Set<string>()
-  // Triage-form "connected" evidence: a setter actually filed a triage form
-  // (= a real conversation), even when close_calls logged no ≥90s dial (a call
-  // on another system / sub-90s-logged). The funnel "connected" stage is a
-  // ≥90s dial OR this. No-answer CONFIRMATION forms don't count here — only the
-  // confirmed-confirmation does (via confirmedLeadIds). postReactTriagedIds is
-  // the post-handover subset, for the reactive-phase connect signal.
-  const setterTriagedIds = new Set<string>()
-  const postReactTriagedIds = new Set<string>()
   // Blocks 4 / 5 / 5b / 6 are mutually independent (each reads leadIds/reactIds
   // and writes its own Sets/Maps; the few shared targets — dqLeadIds,
   // showed/closed, closeTime, closeType — merge order-independently). They run
@@ -429,21 +417,10 @@ export async function getLeadsForRangeLive(
         // Closer Triage = confirmation: "Confirmed Booking" is the Confirmed
         // stage (direct only), not a Booked signal.
         if (cs.startsWith('confirmed')) confirmedLeadIds.add(r.lead_id)
-        // Reached = every confirmation Call Status counts as a real conversation
-        // EXCEPT "Unresponsive – Setter Handover" (the only no-answer outcome).
-        // NB: "Setter pipeline / Follow up" DOES count — they answered.
-        if (cs && !cs.includes('unresponsive') && !cs.includes('handover')) confirmReachedIds.add(r.lead_id)
       } else {
-        // Setter triage: a filed triage form = the setter triaged them
-        // (connected). Any booking status → Booked, including the old-sheet
-        // "Confirmed Booking" (a setter-side booking, not a Confirmed stage —
-        // there's one legacy row; the form no longer emits it).
-        setterTriagedIds.add(r.lead_id)
-        const reactAt = leadReactivatedAt.get(r.lead_id) ?? null
-        if (reactAt && r.airtable_created_at != null &&
-            new Date(r.airtable_created_at).getTime() >= new Date(reactAt).getTime()) {
-          postReactTriagedIds.add(r.lead_id)
-        }
+        // Setter triage: a filed triage form marks a Booked signal (any booking
+        // status). It no longer marks "connected" (Drake 2026-06-24 — connected
+        // is a ≥90s call only).
         if (cs.includes('setter pipeline') || cs.includes('follow up')) setterConnectedIds.add(r.lead_id)
         if (cs.includes('booking')) setterBookedIds.add(r.lead_id)
       }
@@ -645,19 +622,19 @@ export async function getLeadsForRangeLive(
           ? 'direct'
           : 'optin'
     const booked = hasPartnership || setterBookedIds.has(r.leadId)
-    // Raw connect evidence: a ≥90s dial, a setter triage form, or a confirmation
-    // that reached the lead (any status except Unresponsive – Setter Handover).
-    const connected = r.anyCallConnected || setterTriagedIds.has(r.leadId) || confirmReachedIds.has(r.leadId)
+    // Connected = a ≥90s call ONLY (Drake 2026-06-24, mirrors the tagger) — a
+    // triage/confirmation form no longer counts as a connect.
+    const connected = r.anyCallConnected
     // Effective "connected" = the general "did we reach them", used by the Total
-    // funnel, the speed box, the roster column, and the per-lead page. A
-    // setter/reactive booking (hasPartnership) counts — booking it required a
-    // conversation — as does a show/close. A PURE DIRECT booking does NOT count:
-    // a self-booked strat call is not a connection. (So the Total funnel's Books
-    // can exceed its Connected — that's intended.)
-    const connectedEffective = connected || hasPartnership || showed || closed
-    // Reactive-phase connected — the same form-OR-call signal, but post-handover:
-    // a ≥90s dial or a setter triage form filed after reactivated_at.
-    const reactConnected = postReactConnectedIds.has(r.leadId) || postReactTriagedIds.has(r.leadId)
+    // funnel fallback, the speed box, the roster column, and the per-lead page.
+    // Back-fills from a show/close (a closed lead was obviously reached). A
+    // booking does NOT count (Drake 2026-06-24: connected is a ≥90s call only — a
+    // self-booked OR setter-booked lead with no ≥90s call is booked-not-connected,
+    // so Books can exceed Connected).
+    const connectedEffective = connected || showed || closed
+    // Reactive-phase connected — a ≥90s dial filed after reactivated_at (Drake
+    // 2026-06-24: a setter triage form no longer counts as a connect).
+    const reactConnected = postReactConnectedIds.has(r.leadId)
     const closeType = closeTypeByLead.get(r.leadId) ?? null
     // Once closed, the Journey "Closed" stage reads the offer ("High Ticket" /
     // "Digital College") rather than a bare "Closed" (Drake 2026-05-31).
