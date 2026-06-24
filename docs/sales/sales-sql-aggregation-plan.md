@@ -197,12 +197,17 @@ diff to zero, switch callers, delete V1. Each is independently shippable.
 ### Iteration 5 — Trend / time-of-day surfaces (per-ET-day GROUP BY)
 - **DONE — Outbound (revival):** `getRevivalFunnel` / `getRevivalCalled` /
   `getRevivalTimeOfDay` are replaced by one `outbound_funnel(p_campaign_key)` RPC
-  (migrations 0093 + 0094) returning `{funnel, called, timeOfDay}`. `funnel-revival.ts`
-  is now a thin wrapper (`getOutboundFunnel`). Connected folded to **≥90s call only**.
-  Parameterized by the `outbound_campaigns` registry for the future tag-type dropdown.
-  Verified cell-by-cell; the SQL also fixed a 1000-row page-cap undercount on the
-  reply/dial counts. **Remaining in this iteration:** `getTypeformMetrics`,
-  `pulse-history.ts`.
+  returning `{funnel, called, timeOfDay}`; `funnel-revival.ts` is now a thin wrapper
+  (`getOutboundFunnel`). Connected folded to **≥90s call only**. Parameterized by the
+  `outbound_campaigns` registry for the future tag-type dropdown. Verified cell-by-cell;
+  also fixed a 1000-row page-cap undercount on reply/dial counts.
+  **Materialized (migration 0095) — NOT a live aggregation:** the per-lead work
+  (`refresh_outbound_facts()`, ≈15s) runs off-page via `outbound_facts_refresh_cron`
+  (every 15 min) into `outbound_lead_facts`; `outbound_funnel()` reads that table
+  (sub-second). The live version (0093/0094) scanned 66k SMS + 20k calls per load → 23s
+  → past the 8s API timeout → crashed. The lesson: **all-time aggregations over raw
+  signal tables must materialize, not aggregate live.** **Remaining in this iteration:**
+  `getTypeformMetrics`, `pulse-history.ts`.
 - **Convert (remaining):** `getTypeformMetrics` (the dual raw-response loop), and
   `pulse-history.ts` (`getPulseHistory` + `fetchFmrDaily`). These bucket per ET
   day / 2-hour block — the natural fit for `GROUP BY sales.et_day(...)` /

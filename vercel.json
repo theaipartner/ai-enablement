@@ -141,6 +141,11 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 300,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/outbound_facts_refresh_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [
@@ -162,6 +167,7 @@
     { "path": "/api/airtable_sync_cron", "schedule": "*/15 * * * *" },
     { "path": "/api/close_users_sync_cron", "schedule": "30 11 * * *" },
     { "path": "/api/setter_calls_sweep_cron", "schedule": "*/15 * * * *" },
-    { "path": "/api/engagement_ping_cron", "schedule": "*/5 * * * *" }
+    { "path": "/api/engagement_ping_cron", "schedule": "*/5 * * * *" },
+    { "path": "/api/outbound_facts_refresh_cron", "schedule": "*/15 * * * *" }
   ]
 }

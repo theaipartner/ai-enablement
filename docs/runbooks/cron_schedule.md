@@ -35,6 +35,7 @@ the UTC instant is fixed (a deliberate, accepted trade-off — see ADR 0003).
 | `/api/setter_calls_sweep_cron` | `*/15 * * * *` | every 15 min | Setter-call sweep |
 | `/api/typeform_insights_cron` | `7,22,37,52 * * * *` | every 15 min (offset +7) | Snapshot Typeform lifetime insight totals |
 | `/api/engagement_ping_cron` | `*/5 * * * *` | every 5 min | Engagement / missing-form pinger |
+| `/api/outbound_facts_refresh_cron` | `*/15 * * * *` | every 15 min | Rebuild `outbound_lead_facts` for the Outbound funnel (off-page; the page reads the precomputed table) |
 
 ## Adding or rescheduling a cron
 
