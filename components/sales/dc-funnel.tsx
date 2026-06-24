@@ -66,7 +66,6 @@ function PlanLine({ label, plans }: { label: string; plans: DcPlanCounts }) {
 }
 
 export function DcFunnelSection({ dc }: { dc: DcFunnel }) {
-  const downsellTotal = dc.downsellHtMeeting + dc.downsellConfirmation
   return (
     <div style={{ marginTop: 20, border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
       {/* Header */}
@@ -76,38 +75,19 @@ export function DcFunnelSection({ dc }: { dc: DcFunnel }) {
           Digital College
         </span>
         <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
-          · DC closer
+          · conversations → closes
         </span>
       </div>
 
-      {/* Main DC funnel */}
+      {/* DC funnel — Connects → Closed (downsells included) */}
       <div style={{ display: 'flex', alignItems: 'stretch', padding: '4px 14px' }}>
-        <Stage label="Booked" value={dc.booked} dim />
-        <Arrow />
-        <Stage label="Showed" value={dc.showed} dim />
+        <Stage label="Connects" value={dc.connects} />
         <Arrow />
         <Stage label="Closed" value={dc.closed} />
       </div>
 
       {/* Plan breakdown of the closes */}
       <PlanLine label="Plans closed" plans={dc.closedPlans} />
-
-      {/* Downsell line */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: '1px solid var(--color-geg-border)', background: 'var(--color-geg-bg)' }}>
-        <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}>
-          HT-closer downsells
-        </span>
-        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-2)' }}>
-          confirmation <b className="geg-numeric-serif" style={{ color: dc.downsellConfirmation ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)' }}>{dc.downsellConfirmation}</b>
-        </span>
-        <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-2)' }}>
-          · HT meeting <b className="geg-numeric-serif" style={{ color: dc.downsellHtMeeting ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)' }}>{dc.downsellHtMeeting}</b>
-        </span>
-        <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', marginLeft: 'auto' }}>
-          {downsellTotal} total · credited to the HT closer
-        </span>
-      </div>
-      {downsellTotal > 0 ? <PlanLine label="Downsell plans" plans={dc.downsellPlans} /> : null}
     </div>
   )
 }

@@ -41,6 +41,11 @@ sibling `lead_cycle_stages` (one row per `phase` = `primary` | `reactive`).
 
 ## Digital College — closer-identity routing (Drake 2026-06-05)
 
+> **DC funnel surfacing (Drake 2026-06-24):** the DC funnel (`getDcFunnel` / the Advertising-Hub
+> block) now reads **`digital_college_at`** as *Connects* and **`dc_closed_at`** (any origin) as
+> *Closed* — Booked/Showed are no longer displayed and downsells are merged into the close cohort.
+> The columns below still populate exactly as described; only what's surfaced changed.
+
 A form's funnel is decided by **who the closer is**: DC closers (`DC_CLOSER_NAMES`
 = `robby`, +Adam later) → DC funnel; everyone else (Aman) → HT funnel. An HT
 closer can dip into DC via a downsell; a DC closer never touches HT. Sourced from

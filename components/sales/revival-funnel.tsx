@@ -73,8 +73,9 @@ function Conv({ from, to }: { from: number; to: number }) {
 
 export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
   const f = funnel
-  const bookedBracket =
-    f.booked > 0 ? `${f.bookedDc} DC${f.bookedHt > 0 ? ` / ${f.bookedHt} HT` : ''}` : undefined
+  // Booked + Showed stages are HIDDEN (Drake 2026-06-24) — DC is modeled as
+  // Connected (conversation) → Closed. The data still computes booked/showed
+  // (RevivalFunnel + the SQL fn), so un-hiding is just adding the nodes back.
 
   return (
     <div style={{ marginTop: 14, border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
@@ -98,11 +99,7 @@ export function RevivalFunnelSection({ funnel }: { funnel: RevivalFunnel }) {
         <Stage label="Called" value={f.called} />
         <Conv from={f.called} to={f.connected} />
         <Stage label="Connected" value={f.connected} />
-        <Conv from={f.connected} to={f.booked} />
-        <Stage label="Booked" value={f.booked} bracket={bookedBracket} />
-        <Conv from={f.booked} to={f.showed} />
-        <Stage label="Showed" value={f.showed} />
-        <Conv from={f.showed} to={f.closed} />
+        <Conv from={f.connected} to={f.closed} />
         <Stage label="Closed" value={f.closed} accent />
       </div>
 

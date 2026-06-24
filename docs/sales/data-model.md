@@ -131,13 +131,16 @@ box's read the same `lead_cycles.qualified`.
 (Adam later) → DC funnel; everyone else (Aman = HT closer) → HT. Routing is read from
 the **main closer EOC form** (`airtable_full_closer_report`), not the dedicated DC form.
 
-- **DC showed** = a DC-closer form is *present* (Robby over-marks "Digital College
-  Closed", so presence = showed; the outcome value is ignored).
-- **DC closed** = a real plan is selected (`dc_plans`), origin `dc_closer`.
-- **Downsells** (HT closer selling DC): `dc_close_origin = downsell_ht_meeting` (HT EOC
-  with a DC plan) or `downsell_confirmation` (Closer Triage `call_status='Downsold'`).
-  A downsell sets `dc_closed_at` but not `dc_booked_at`/`dc_showed_at`, stays
-  HT-showed-not-HT-closed, and is credited to the **HT** closer.
+**Surfaced as Connects → Closed** (Drake 2026-06-24; `getDcFunnel` / `DcFunnelSection`).
+Booked/Showed are no longer displayed (the `dc_booked_at`/`dc_showed_at` columns stay):
+
+- **DC connects** (a DC conversation) = `digital_college_at` is set — any DC engagement.
+- **DC closed** = `dc_closed_at` is set (a real `dc_plans` plan was sold), **any origin**.
+- **Downsells are merged in** (HT closer selling DC: `dc_close_origin = downsell_ht_meeting`
+  or `downsell_confirmation`) — they count as a connect **and** a close, no longer split out.
+- The tagger's per-stage detail still exists: `dc_showed_at` = a DC-closer form present;
+  `dc_closed_at` origin distinguishes `dc_closer` vs the two downsell kinds. The funnel just
+  reads `digital_college_at` + `dc_closed_at` and ignores the split.
 - The tagger's `closed_at` / `close_type` are **HT-only**. **Robby's EOC forms are
   fully excluded from HT show/close** (not just his closes).
 - `lead_cycles` DC columns (0076): `digital_college_at`, `dc_booked_at`, `dc_showed_at`,

@@ -19,7 +19,8 @@ the **Total box hides the Books node** — Confirms is the meaningful one there;
 `closed` split HT/DC). Stage nodes are `<Link>`s into the filtered **Leads** roster
 (type + stage), so a box's number equals the roster it opens. The page also hosts:
 
-- the **Digital College funnel** block (closer-identity-routed — see `data-model.md`),
+- the **Digital College funnel** block — modeled **Connects → Closed** (connects =
+  `lead_cycles.digital_college_at`; closed = `dc_closed_at`, downsells merged; see `data-model.md`),
 - the **Cash Collected / ROAS** block,
 - the **integrity-guard banner** (flags `books ≥ connected ≥ confirms ≥ shows ≥ closes`
   violations),
@@ -67,6 +68,10 @@ still "revival" — components/data keep the `revival` name). See `data-model.md
 RPC (funnel + called + timeOfDay), replacing the old ~600-round-trip JS. **Connected = a ≥90s call only.**
 Parameterized by the **`outbound_campaigns`** registry — a future "tag type" dropdown (other outbound
 campaigns / lead tags) is a registry row + a dropdown option, no function change.
+
+The funnel displays **leads → responded → called → connected → closed** — the **Booked and Showed
+stages are hidden** (Drake 2026-06-24; the SQL still computes them, so un-hiding is a display-only change).
+The Called (speed-to-dial) + time-of-day sections are unchanged.
 
 ---
 
