@@ -13,6 +13,30 @@ gates (a) irreversible and (d) credentials. Do the cleanup (Session 1) and de-pe
 
 ---
 
+## ⏳ LIVE STATUS — RESUME HERE (as of 2026-06-24)
+
+Session 3 is mid-execution. **Done: credentials, GitHub, Supabase. Remaining: Vercel** (the last big step).
+
+**DONE:**
+- **Credentials** → company Bitwarden, one secure note holding the full prod env set. Local master file shredded. Recovery used: 38 pulled from Vercel + 13 from `.env.local` + Fathom×2 from Drake's personal Bitwarden + `SALES_FORM_NOTIFY_SLACK_CHANNEL` looked up; `ONCEHUB_WEBHOOK_SECRET` dropped (dead); **`CRON_SECRET` freshly generated** (`openssl rand -hex 32`) — now lives only in the Bitwarden note.
+- **GitHub** → transferred `drakeynes/ai-enablement` → **`theaipartner/ai-enablement`** (company USER account, *not* an org — Drake's call; can convert later). Local remote re-pointed; all session commits pushed; company repo is at the clean state.
+- **Supabase** → project `sjjovsjcfffrftnraocu` transferred to the company org; verified alive (60 public tables; same ref/URL/keys, so Vercel is unaffected). Follow-ups: put a card on the company org + **upgrade it to Pro**, then **downgrade Drake's personal org** (stop paying).
+
+**STATE TO KNOW:** Vercel **auto-deploy is PAUSED** (the repo moved; the Vercel GitHub App isn't yet authorized on `theaipartner`). **No downtime** — the live deployment keeps serving. Auto-deploy resumes when Git is re-linked in the Vercel step.
+
+**NEXT — Vercel transfer (do in ONE low-traffic sitting; it's the only step with a brief gap):**
+- *Prereqs:* add Drake's Vercel account (`drakeynes`) as a **member of the company Vercel team**; company team on **Pro + card** (19 crons incl. per-minute → Hobby won't support it). Billing moves to the company.
+1. Project `ai-enablement` (projectId `prj_EeWPd4k8agIsq90BILpxnTX24JB8`) → **Settings → Transfer Project** → company team.
+2. **RE-ADD env vars from the Bitwarden note** — Vercel does NOT carry env vars across a transfer. **DROP the dead ones:** `ONCEHUB_API_KEY`, `ONCEHUB_WEBHOOK_SECRET`, `FATHOM_BACKFILL_AUTH_TOKEN`, `GREGORY_BRAIN_CRON_AUTH_TOKEN`, `ACCOUNTABILITY_NOTIFICATION_CRON_AUTH_TOKEN`, `ESCALATION_RECIPIENT_SLACK_USER_ID`, `ELLA_DAILY_DIGEST_CC_SLACK_USER_ID`. Use the fresh `CRON_SECRET`. Skip `VERCEL_*` system vars. (`AIRTABLE_API_KEY` is legacy/explore-only — optional.)
+3. **Re-connect Git** to `theaipartner/ai-enablement` (authorize the Vercel GitHub App on the company GitHub) → restores auto-deploy.
+4. **Verify the URL is still `ai-enablement-sigma.vercel.app`** (keeps the 5 webhooks working). If it changed → re-register via `scripts/register_*.py`.
+5. **Redeploy**, then verify end-to-end: push a trivial commit → auto-deploys; a cron fires (`webhook_deliveries` audit rows); edit an Airtable record → row updates.
+- *Why one sitting:* between the transfer and finishing the env re-add, functions have no config and will error — paste fast, redeploy.
+
+**AFTER Vercel:** downgrade Drake's personal Supabase + Vercel orgs. Non-code IT item (already flagged in §C Google Cloud + Session 2 §A.1): **keep the `drake@theaipartner.io` work account ACTIVE through offboarding** — the calendar OAuth depends on it. Drake hands over his Google account login later.
+
+---
+
 ## STEP 0 — Export the authoritative credential set (Drake, gate d) — DO THIS FIRST
 
 `.env.local` has drifted (dead OnceHub key, legacy cron tokens). **Vercel Production is the source of
