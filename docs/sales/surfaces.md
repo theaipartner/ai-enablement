@@ -63,6 +63,11 @@ tagger**. The only surface that counts revival leads. Moved out from under the A
 own top-level page + renamed **Outbound** 2026-06-24 (route `/sales-dashboard/outbound`; internally
 still "revival" — components/data keep the `revival` name). See `data-model.md` § Revival.
 
+**SQL-aggregated** (2026-06-24, migrations 0093/0094): the page is one `outbound_funnel(p_campaign_key)`
+RPC (funnel + called + timeOfDay), replacing the old ~600-round-trip JS. **Connected = a ≥90s call only.**
+Parameterized by the **`outbound_campaigns`** registry — a future "tag type" dropdown (other outbound
+campaigns / lead tags) is a registry row + a dropdown option, no function change.
+
 ---
 
 ## Leads — `/leads`

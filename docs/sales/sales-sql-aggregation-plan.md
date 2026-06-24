@@ -195,8 +195,15 @@ diff to zero, switch callers, delete V1. Each is independently shippable.
   client-filter on `effectiveTsIso`.
 
 ### Iteration 5 — Trend / time-of-day surfaces (per-ET-day GROUP BY)
-- **Convert:** `getRevivalFunnel` / `getRevivalCalled` / `getRevivalTimeOfDay`
-  (funnel-revival.ts), `getTypeformMetrics` (the dual raw-response loop), and
+- **DONE — Outbound (revival):** `getRevivalFunnel` / `getRevivalCalled` /
+  `getRevivalTimeOfDay` are replaced by one `outbound_funnel(p_campaign_key)` RPC
+  (migrations 0093 + 0094) returning `{funnel, called, timeOfDay}`. `funnel-revival.ts`
+  is now a thin wrapper (`getOutboundFunnel`). Connected folded to **≥90s call only**.
+  Parameterized by the `outbound_campaigns` registry for the future tag-type dropdown.
+  Verified cell-by-cell; the SQL also fixed a 1000-row page-cap undercount on the
+  reply/dial counts. **Remaining in this iteration:** `getTypeformMetrics`,
+  `pulse-history.ts`.
+- **Convert (remaining):** `getTypeformMetrics` (the dual raw-response loop), and
   `pulse-history.ts` (`getPulseHistory` + `fetchFmrDaily`). These bucket per ET
   day / 2-hour block — the natural fit for `GROUP BY sales.et_day(...)` /
   `sales.et_hour(...)` with `count(*) filter (...)`.

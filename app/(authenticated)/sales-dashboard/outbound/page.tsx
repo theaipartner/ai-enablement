@@ -2,7 +2,7 @@ import { HeaderBand } from '@/components/gregory/header-band'
 import { RevivalCalledSection } from '@/components/sales/revival-called'
 import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
 import { RevivalTimeOfDaySection } from '@/components/sales/revival-time-of-day'
-import { getRevivalCalled, getRevivalFunnel, getRevivalTimeOfDay } from '@/lib/db/funnel-revival'
+import { getOutboundFunnel } from '@/lib/db/funnel-revival'
 import { PersonPill } from '../header-pills'
 
 // Sales Dashboard — Outbound (top-level page).
@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 export default async function OutboundPage() {
-  const [funnel, called, timeOfDay] = await Promise.all([getRevivalFunnel(), getRevivalCalled(), getRevivalTimeOfDay()])
+  const { funnel, called, timeOfDay } = await getOutboundFunnel('revival')
 
   return (
     <div>
