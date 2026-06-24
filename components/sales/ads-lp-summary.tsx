@@ -33,6 +33,9 @@ function fmtWatch(sec: number): string {
 
 export function AdsLpSummarySection({ summary }: { summary: AdsLpSummary }) {
   const { ads, typeform, vsl, typVideo } = summary
+  // Cost per <thing> = adspend ÷ count (blank when there's no spend or a zero count).
+  const costPer = (n: number | null | undefined): string | undefined =>
+    ads.adspend == null || n == null || n <= 0 ? undefined : fmtUsd(ads.adspend / n)
   return (
     <div style={{ marginTop: 28 }}>
       <div
@@ -56,14 +59,14 @@ export function AdsLpSummarySection({ summary }: { summary: AdsLpSummary }) {
 
         {/* Landing page + Typeform */}
         <Block title={`Landing page · ${summary.lpLabel}`}>
-          <Row label="LP visits" value={fmtCount(summary.lpVisits)} hint="Meta unique link clicks" />
+          <Row label="LP visits" value={fmtCount(summary.lpVisits)} hint="Meta unique link clicks" cost={costPer(summary.lpVisits)} />
           <Row label="LP conversion" value={fmtPct(summary.lpConversionPct)} hint="submits ÷ visits" />
           <Divider label="Typeform" />
-          <Row label="Starts" value={typeform.starts == null ? '—' : fmtCount(typeform.starts)} />
-          <Row label="Completions" value={fmtCount(typeform.submits)} />
+          <Row label="Starts" value={typeform.starts == null ? '—' : fmtCount(typeform.starts)} cost={costPer(typeform.starts)} />
+          <Row label="Completions" value={fmtCount(typeform.submits)} cost={costPer(typeform.submits)} />
           <Row label="Completion rate" value={fmtPct(typeform.completionRate)} />
-          <Row label="Qualified" value={fmtCount(typeform.qualified)} />
-          <Row label="Non-qualified" value={fmtCount(typeform.nonQualified)} />
+          <Row label="Qualified" value={fmtCount(typeform.qualified)} cost={costPer(typeform.qualified)} />
+          <Row label="Non-qualified" value={fmtCount(typeform.nonQualified)} cost={costPer(typeform.nonQualified)} />
         </Block>
 
         {/* Videos */}
@@ -112,7 +115,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   )
 }
 
-function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Row({ label, value, hint, cost }: { label: string; value: string; hint?: string; cost?: string }) {
   return (
     <div
       style={{
@@ -132,6 +135,9 @@ function Row({ label, value, hint }: { label: string; value: string; hint?: stri
       </span>
       <span className="geg-numeric-serif" style={{ fontSize: 14, color: 'var(--color-geg-text)', letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>
         {value}
+        {cost ? (
+          <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-faint)', marginLeft: 5 }}>({cost})</span>
+        ) : null}
       </span>
     </div>
   )

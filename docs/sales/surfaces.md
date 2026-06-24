@@ -37,8 +37,10 @@ the **Total box hides the Books node** — Confirms is the meaningful one there;
   live on the click-through Ads and Landing-Pages pages, now plain labelled lists (no
   sparklines): Meta ad delivery (spend / impressions / unique clicks / CTR / CPM /
   cost-per-click / frequency), LP visits + conversion, Typeform starts / completions /
-  qualified, and the VSL + confirmation-video metrics. The **ads block scopes to the ad
-  cascade**; the **landing-page block scopes to the LP selector + window** (separate
+  qualified, and the VSL + confirmation-video metrics. LP visits + the Typeform counts
+  (starts / completions / qualified / non-qualified) each carry a **cost-per bracket**
+  (adspend ÷ count). The **ads block scopes to the ad cascade**; the **landing-page block
+  scopes to the LP selector + window** (separate
   dimensions) — `lib/db/funnel-summary.ts`, `components/sales/ads-lp-summary.tsx`.
 
 The old in-page **navigation links were removed** (2026-06-18): the adspend node no longer
