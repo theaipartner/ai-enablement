@@ -31,6 +31,7 @@ Mirror every Slack channel we care about so agents can reason about scope (clien
 
 - Slack ingestion: bulk load on bot install, plus periodic refresh and `channel_created` / `channel_rename` / `channel_archive` event handlers
 - `scripts/seed_clients.py` and the onboarding RPC `create_or_update_client_from_onboarding` populate fresh rows with `passive_monitoring_enabled=false`
+- Dashboard: the `/clients/[id]` Details box "Slack channel ID" cell (`setClientSlackChannel` in `lib/db/clients.ts`). It updates the client's active channel row's `slack_channel_id` **in place** (never deletes the old row), or inserts a new row (`name` seeded with the id as a placeholder Slack sync later overwrites, `is_private=true`) when the client has none. Empty input unlinks (`client_id` → null), it does not delete
 
 ## Read By
 

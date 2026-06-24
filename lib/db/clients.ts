@@ -13,7 +13,7 @@ type ClientRow = Database['public']['Tables']['clients']['Row']
 // Allowed fields for inline-save on the Clients detail page. The
 // dashboard sections funnel through updateClient; anything outside this
 // list is rejected to keep the editing surface tight (no accidental
-// writes to metadata, slack_user_id, archived_at, etc.).
+// writes to metadata, archived_at, etc.).
 //
 // Three columns are deliberately NOT in this list because they're
 // edited via dedicated history-writing RPCs (M4 Chunk B2):
@@ -35,6 +35,11 @@ const UPDATABLE_FIELDS = [
   'arrears_note',
   'program_type',
   'notes',
+  // Slack identity — the Slack USER id is a plain column here (editable
+  // from the Details box on /clients/[id]). The Slack CHANNEL id lives in
+  // the separate slack_channels table, NOT here — it's edited via
+  // setClientSlackChannel, not this whitelist.
+  'slack_user_id',
   // Dates
   'start_date',
   // Numerics
@@ -72,6 +77,7 @@ export const FIELD_TYPES: Record<UpdatableField, FieldType> = {
   arrears_note: 'text',
   program_type: 'text',
   notes: 'text',
+  slack_user_id: 'text',
   start_date: 'date',
   birth_year: 'integer',
   contracted_revenue: 'numeric',
@@ -657,6 +663,163 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
     meetings_by_month: meetingsByMonth,
     inactive,
   }
+}
+
+// ----------------------------------------------------------------------
+// getClientByEmail — email → full client record (read-only lookup API)
+// ----------------------------------------------------------------------
+//
+// Backs the GET /api/clients endpoint (Zane's email→client lookup).
+// Resolves by primary email first (case-insensitive), then falls back to
+// the metadata.alternate_emails surface, mirroring the system's identity
+// resolution (CLAUDE.md § Client Identity Resolution). Archived rows are
+// excluded. Returns the whole clients row — the caller decides what to
+// expose.
+export async function getClientByEmail(
+  email: string,
+): Promise<ClientRow | null> {
+  const trimmed = email.trim()
+  if (trimmed === '') return null
+
+  const supabase = createAdminClient()
+
+  // Primary email — case-insensitive exact match. Escape LIKE
+  // metacharacters so an address containing % or _ can't widen the match.
+  // .limit(1) (not .maybeSingle) so two case-variant rows can't 500 it.
+  const escaped = trimmed.replace(/[\\%_]/g, '\\$&')
+  const { data: primary, error: primaryErr } = await supabase
+    .from('clients')
+    .select('*')
+    .ilike('email', escaped)
+    .is('archived_at', null)
+    .limit(1)
+  if (primaryErr) throw primaryErr
+  if (primary && primary.length > 0) return primary[0] as ClientRow
+
+  // Fallback: metadata.alternate_emails. Only clients carrying the key
+  // are scanned (a small set), then matched in JS — PostgREST can't
+  // case-fold inside a jsonb-array containment check.
+  const needle = trimmed.toLowerCase()
+  const { data: alts, error: altErr } = await supabase
+    .from('clients')
+    .select('*')
+    .is('archived_at', null)
+    .not('metadata->alternate_emails', 'is', null)
+  if (altErr) throw altErr
+  const match = (alts ?? []).find((row) => {
+    const list = (row.metadata as { alternate_emails?: unknown } | null)
+      ?.alternate_emails
+    return (
+      Array.isArray(list) &&
+      list.some(
+        (e) => typeof e === 'string' && e.trim().toLowerCase() === needle,
+      )
+    )
+  })
+  return (match as ClientRow | undefined) ?? null
+}
+
+// ----------------------------------------------------------------------
+// setClientSlackChannel — set / change / unlink the client's Slack channel
+// ----------------------------------------------------------------------
+//
+// The Slack channel id is NOT a column on `clients` — it lives in the
+// separate `slack_channels` table (one row per channel, client_id FK),
+// populated by Slack ingestion. The Details box on /clients/[id] surfaces
+// it (most-recent non-archived row) and lets a CSM correct it.
+//
+// Behaviour (Drake's call): find the client's active channel row and
+// UPDATE its slack_channel_id in place — never delete the old row. If the
+// client has no channel row yet, INSERT one (name defaults to the id as a
+// placeholder that Slack sync auto-corrects on its next refresh;
+// is_private=true — client channels are private/Connect). An empty value
+// unlinks (clears client_id on the active row) rather than deleting it.
+//
+// slack_channels.slack_channel_id is UNIQUE — a collision with another
+// row (e.g. the same channel already mapped elsewhere) surfaces as a
+// friendly error instead of a raw constraint message.
+export async function setClientSlackChannel(
+  client_id: string,
+  channelId: string | null,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const supabase = createAdminClient()
+  const trimmed = (channelId ?? '').trim()
+
+  // Resolve the client's active channel row the same way the detail page
+  // derives slack_channel_id: most-recently-created non-archived row.
+  const { data: rows, error: readErr } = await supabase
+    .from('slack_channels')
+    .select('id, slack_channel_id, is_archived, created_at')
+    .eq('client_id', client_id)
+  if (readErr) return { success: false, error: readErr.message }
+  const activeRow =
+    ((rows ?? []) as Array<{
+      id: string
+      slack_channel_id: string
+      is_archived: boolean
+      created_at: string
+    }>)
+      .filter((c) => !c.is_archived)
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0] ?? null
+
+  // Empty input → unlink (non-destructive: keep the row, drop the link).
+  if (trimmed === '') {
+    if (!activeRow) return { success: true }
+    const { error } = await supabase
+      .from('slack_channels')
+      .update({ client_id: null })
+      .eq('id', activeRow.id)
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  }
+
+  // No-op if already set to this value.
+  if (activeRow && activeRow.slack_channel_id === trimmed) {
+    return { success: true }
+  }
+
+  // Guard the UNIQUE constraint with a clear message before the write.
+  const { data: clashes, error: clashErr } = await supabase
+    .from('slack_channels')
+    .select('id, client_id')
+    .eq('slack_channel_id', trimmed)
+  if (clashErr) return { success: false, error: clashErr.message }
+  const clash = (clashes ?? []).find(
+    (c) => !activeRow || c.id !== activeRow.id,
+  ) as { id: string; client_id: string | null } | undefined
+  if (clash) {
+    return {
+      success: false,
+      error:
+        clash.client_id && clash.client_id !== client_id
+          ? 'That Slack channel id is already mapped to another client.'
+          : 'That Slack channel id already exists on another channel row.',
+    }
+  }
+
+  if (activeRow) {
+    const { error } = await supabase
+      .from('slack_channels')
+      .update({ slack_channel_id: trimmed })
+      .eq('id', activeRow.id)
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  }
+
+  // No channel row yet — create the mapping. name is NOT NULL, so seed it
+  // with the id; Slack ingestion's rename/refresh handlers overwrite it
+  // with the real channel name on the next sync.
+  const { error } = await supabase.from('slack_channels').insert({
+    slack_channel_id: trimmed,
+    name: trimmed,
+    client_id,
+    is_private: true,
+  })
+  if (error) return { success: false, error: error.message }
+  return { success: true }
 }
 
 // ----------------------------------------------------------------------

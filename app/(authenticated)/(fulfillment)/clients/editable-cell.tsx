@@ -31,6 +31,7 @@ import {
   updateClientField,
   updateClientJourneyStageAction,
   updateClientNpsEnabledAction,
+  updateClientSlackChannelAction,
   updateClientStatusAction,
 } from './[id]/actions'
 import {
@@ -277,6 +278,74 @@ export function EditablePrimaryCsmCell({
         const result = await changeClientPrimaryCsm(
           clientId,
           newValue as string,
+        )
+        if (result.success) {
+          startTransition(() => router.refresh())
+        }
+        return result
+      }}
+    />
+  )
+}
+
+// Slack identity cells for the /clients/[id] Details box. Both are plain
+// text, compact (to match the Primary CSM row rhythm) and mono (ids read
+// better fixed-width). The USER id is a clients column routed through the
+// generic updateClientField; the CHANNEL id lives in slack_channels and
+// routes through its dedicated action (setClientSlackChannel).
+export function EditableSlackUserIdCell({
+  clientId,
+  value,
+}: {
+  clientId: string
+  value: string | null
+}) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  return (
+    <EditableField
+      label=""
+      value={value}
+      variant="text"
+      compact
+      mono
+      placeholder="U0123ABC…"
+      onSave={async (newValue) => {
+        const result = await updateClientField(
+          clientId,
+          'slack_user_id',
+          newValue,
+        )
+        if (result.success) {
+          startTransition(() => router.refresh())
+        }
+        return result
+      }}
+    />
+  )
+}
+
+export function EditableSlackChannelIdCell({
+  clientId,
+  value,
+}: {
+  clientId: string
+  value: string | null
+}) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  return (
+    <EditableField
+      label=""
+      value={value}
+      variant="text"
+      compact
+      mono
+      placeholder="C0123ABC…"
+      onSave={async (newValue) => {
+        const result = await updateClientSlackChannelAction(
+          clientId,
+          newValue as string | null,
         )
         if (result.success) {
           startTransition(() => router.refresh())

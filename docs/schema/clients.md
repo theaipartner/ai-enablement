@@ -13,7 +13,7 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 | `id` | `uuid` | PK |
 | `email` | `text` | Not null. Partial-unique where `archived_at is null`. Primary join key for Fathom participants and Slack Connect users |
 | `full_name` | `text` | Not null |
-| `slack_user_id` | `text` | Partial-unique where `archived_at is null`. Slack `U...` id when the client is in our Slack |
+| `slack_user_id` | `text` | Partial-unique where `archived_at is null`. Slack `U...` id when the client is in our Slack. Editable from the `/clients/[id]` Details box (inline text cell → `updateClientField`). A duplicate surfaces the partial-unique violation as the save error |
 | `phone` | `text` | Optional |
 | `timezone` | `text` | IANA tz name. Used for scheduling and display |
 | `journey_stage` | `text` | Funnel position. Six values via 0028 CHECK constraint (or null): `business_setup`, `business_setup_activation_done`, `prospecting`, `first_closing_call_taken`, `first_closed_deal`, `ten_k_month`. Pre-0028 was free-text per 0017 design; 0028 pinned the taxonomy with all 192 active clients still NULL (zero backfill). Display labels live in `lib/client-vocab.ts` `JOURNEY_STAGE_OPTIONS`. |
@@ -120,6 +120,7 @@ The Slack-hygiene badges on the same surfaces (`Missing Slack channel`, `Missing
 - Ella (to scope retrieval and route HITL to the right CSM)
 - CSM Co-Pilot (health scoring, alerts, scorecards)
 - Dashboards
+- `GET /api/clients?email=` — read-only email→full-record lookup (matches primary email then `metadata.alternate_emails`; `getClientByEmail` in `lib/db/clients.ts`). See `docs/runbooks/client_lookup_api.md`
 
 ## Example Queries
 

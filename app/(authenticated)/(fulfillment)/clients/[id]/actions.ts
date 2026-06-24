@@ -5,6 +5,7 @@ import {
   changePrimaryCsm,
   insertNpsSubmission,
   isProfilePath,
+  setClientSlackChannel,
   updateClient,
   updateClientAlternateEmails,
   updateClientCsmStandingWithHistory,
@@ -397,6 +398,27 @@ export async function updateClientAlternateEmailsAction(
   const result = await updateClientAlternateEmails(client_id, emails)
   if (result.success) {
     revalidatePath(`/clients/${client_id}`)
+  }
+  return result
+}
+
+// ----------------------------------------------------------------------
+// updateClientSlackChannelAction — Details box Slack channel id edit
+// ----------------------------------------------------------------------
+//
+// The Slack channel id is NOT a clients column (it lives in
+// slack_channels), so it can't route through updateClientField like the
+// Slack user id does. This thin wrapper hands the raw input to
+// setClientSlackChannel, which updates the client's active channel row in
+// place (or creates / unlinks one). Empty input unlinks.
+export async function updateClientSlackChannelAction(
+  client_id: string,
+  raw: string | null,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const result = await setClientSlackChannel(client_id, raw)
+  if (result.success) {
+    revalidatePath(`/clients/${client_id}`)
+    revalidatePath('/clients')
   }
   return result
 }

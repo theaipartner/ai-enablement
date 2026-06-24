@@ -16,6 +16,8 @@ import {
   EditableJourneyStageCell,
   EditableNpsEnabledToggle,
   EditablePrimaryCsmCell,
+  EditableSlackChannelIdCell,
+  EditableSlackUserIdCell,
   EditableStatusCell,
   EditableTrustpilotCell,
 } from '../editable-cell'
@@ -322,6 +324,24 @@ export default async function ClientDetailPage({
                     value={client.active_primary_csm?.team_member_id ?? null}
                     options={csmOptions}
                     compact
+                  />
+                }
+              />
+              <DataRow
+                k="Slack user ID"
+                v={
+                  <EditableSlackUserIdCell
+                    clientId={client.id}
+                    value={client.slack_user_id}
+                  />
+                }
+              />
+              <DataRow
+                k="Slack channel ID"
+                v={
+                  <EditableSlackChannelIdCell
+                    clientId={client.id}
+                    value={client.slack_channel_id}
                   />
                 }
               />

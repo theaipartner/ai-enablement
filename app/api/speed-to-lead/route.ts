@@ -1,6 +1,6 @@
-import { timingSafeEqual } from 'crypto'
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { bearerOk } from '@/lib/api/bearer-auth'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { dateRangeFromExplicit, parseEtDateString, todayEtDate } from '@/lib/db/funnel-window'
 
@@ -21,18 +21,6 @@ import { dateRangeFromExplicit, parseEtDateString, todayEtDate } from '@/lib/db/
 // Runbook: docs/runbooks/speed_to_lead_api.md.
 
 export const dynamic = 'force-dynamic'
-
-function bearerOk(req: NextRequest, expected: string): boolean {
-  const header = req.headers.get('authorization') ?? ''
-  const prefix = 'Bearer '
-  if (!header.startsWith(prefix)) return false
-  const provided = Buffer.from(header.slice(prefix.length))
-  const secret = Buffer.from(expected)
-  // timingSafeEqual throws on length mismatch — guard first so a wrong
-  // length is a normal 401, not a 500.
-  if (provided.length !== secret.length) return false
-  return timingSafeEqual(provided, secret)
-}
 
 function toMinutes(sec: number | null): number | null {
   return sec == null ? null : Math.round(sec / 60)
