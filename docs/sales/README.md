@@ -66,9 +66,8 @@ in `data-model.md` says which of those are sales).
 
 ## How we work on sales
 
-We **disregard the CLAUDE.md Director/Builder machinery** for this work (specs,
-reports, ADRs, the four-gate ceremony, EOD cleanup). Drake describes what he wants —
-often refining mid-stream — and we work directly and iteratively:
+Drake describes what he wants — often refining mid-stream — and we work directly and
+iteratively:
 
 - Build → verify with `npx tsc --noEmit`, `npx next lint --file <paths>`, `npm run build`
   → `git commit` → `git push origin main` (Vercel auto-deploys).
