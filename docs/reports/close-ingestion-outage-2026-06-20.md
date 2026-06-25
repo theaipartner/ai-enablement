@@ -1,6 +1,6 @@
 # Incident — Close ingestion outage (started 2026-06-20)
 
-**Status:** OPEN — ongoing as of 2026-06-24. Needs Close admin action (credential/access restore); not fixable from this repo alone.
+**Status:** ✅ RESOLVED 2026-06-25. New API key (seat with org access) + paused webhook resumed + windowed backfill; mirror cross-checked exact against Close. See § Resolution.
 
 **Discovered:** 2026-06-24, while scoping the "Jacob / ECJ outbound campaign" task — the CSV's 11k leads were almost entirely absent from `close_leads`, which led to the freshness check below.
 
@@ -54,6 +54,30 @@ Anything keyed on Close data is undercounting post-June-20:
 2. **Re-register the webhook** — the subscription may have been removed with the seat. `scripts/register_close_webhook.py`; confirm a fresh delivery lands in `webhook_deliveries`.
 3. **Backfill the gap** (June 20 → now) — `scripts/backfill_close.py` / `pipeline.sync_all_leads` + activities. Idempotent upserts on Close ids, so safe to over-scan.
 4. **Verify** the freshness table above is current again, then resume dependent work.
+
+## Resolution (2026-06-25)
+
+1. **New API key** — Drake added a Close seat with org access and issued a fresh
+   `CLOSE_API_KEY` (verified `/me/` returns org "AI Partner"). Set in `.env.local`.
+2. **Webhook** — the subscription wasn't deleted, it was **paused** (`whsub_165…`, our
+   receiver, all 14 events). Resumed it to `active` via the Close API (`PUT
+   /webhook/{id}/ {status:active}`). **No secret rotation / redeploy** — the existing
+   `CLOSE_WEBHOOK_SECRET` still matched (it processed fine until the outage). Confirmed
+   live: first post-resume delivery `2026-06-25T04:38:33`, `status=processed`.
+3. **Backfill** — windowed catch-up `sync_recently_updated_leads(since 2026-06-19)`
+   (activity bumps a lead's `date_updated`, so old leads with gap-period calls/SMS are
+   included — verified). 8,429 leads / 4,227 calls / 17,736 SMS / 1,565 status changes,
+   1 lead failed (self-heals via webhook). ~3.4 h.
+4. **Cross-check** — exact: leads-updated-since-06-20 Close 7766 = mirror 7766; 8/8
+   sampled leads have identical call+SMS counts Close-vs-mirror; mirror now current
+   (latest 2026-06-25).
+
+**Recurrence guard still applies:** the key + webhook now live on a seat that must not
+be reclaimed. If that seat is removed again, both die together — same failure.
+
+> Note: a small pre-existing discrepancy remains (mirror ~20.4k vs Close ~21k leads) —
+> old leads that predate the original mirror, **not** outage-related; the June-20 gap is
+> 100% recovered.
 
 ## Relationship to the Jacob / ECJ task
 
