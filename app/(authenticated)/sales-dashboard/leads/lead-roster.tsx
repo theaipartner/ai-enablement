@@ -29,7 +29,7 @@ const HEADERS: { label: string; key: SortKey }[] = [
 // lead-tags.ts); the three closed labels (offer names) all rank top.
 const STAGE_RANK: Record<string, number> = {
   'Opted in': 0, Connected: 1, Booked: 2, 'No-show': 3, Confirmed: 4,
-  Showed: 5, 'Follow-up': 6, Dequeued: 7,
+  Showed: 5, 'Follow-up': 6, DQ: 7,
   Closed: 8, 'High Ticket': 8, 'Digital College': 8,
 }
 
@@ -170,11 +170,13 @@ function MultiCallTag({ count }: { count: number }) {
 // All stages render white: yellow/green are reserved for other meanings
 // elsewhere on the page, so colour-coding the stage here read as confusing.
 function LatestStageCell({ word }: { word: string }) {
+  // DQ reads red (a negative disposition); everything else stays neutral.
+  const color = word === 'DQ' ? 'var(--color-geg-neg)' : 'var(--color-geg-text)'
   return (
     <span
       className="geg-mono"
-      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)', border: '1px solid var(--color-geg-text)', borderRadius: 4, padding: '1px 5px' }}
-      title="Furthest funnel stage reached (any phase) — independent of current status"
+      style={{ fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase', color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px' }}
+      title="Latest disposition — the most recent state across the lead's journey"
     >
       {word}
     </span>

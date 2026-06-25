@@ -178,10 +178,10 @@ timestamps (`connected_at`/`booked_at`/`confirmed_at`/`showed_at`/`closed_at`), 
 cycle's `dq_at`, the opt-in baseline, and two disposition timestamps added in
 **migration 0098** (`lead_cycle_stages.no_show_at` / `follow_up_at`). The **latest
 timestamp wins**; equal instants (the tagger back-fills connected/booked/confirmed to the
-show/close moment) break by ladder rank — Closed/HT/DC > Dequeued > Follow-up > Showed >
+show/close moment) break by ladder rank — Closed/HT/DC > DQ > Follow-up > Showed >
 No-show > Confirmed > Booked > Connected > Opted in — so a closed lead reads its close,
 not a back-filled "Connected". A later event changes it (a booking after a DQ → Booked;
-a DQ after a follow-up → Dequeued).
+a DQ after a follow-up → DQ).
 
 The two new signals are **form-primary, Calendly-backup**, materialized by the tagger
 (`shared/lead_tagging.py`), HT-track closer forms only (DC-closer forms stay excluded):

@@ -170,7 +170,7 @@ function statusWord(c: LeadCycle): string {
 // not a back-filled "Connected". Display-only; never feeds the funnel.
 const DISPOSITION_RANK: Record<string, number> = {
   'Opted in': 0, Connected: 1, Booked: 2, 'No-show': 3, Confirmed: 4,
-  Showed: 5, 'Follow-up': 6, Dequeued: 7,
+  Showed: 5, 'Follow-up': 6, DQ: 7,
   Closed: 8, 'High Ticket': 8, 'Digital College': 8,
 }
 function latestStageWord(c: LeadCycle): string {
@@ -186,7 +186,7 @@ function latestStageWord(c: LeadCycle): string {
     add(s.bookedAt, 'Booked')
     add(s.connectedAt, 'Connected')
   }
-  add(c.dqAt, 'Dequeued')
+  add(c.dqAt, 'DQ')
   add(c.optInAt, 'Opted in')
   // Latest timestamp wins; equal timestamps break by ladder rank (more advanced).
   events.sort((a, b) =>
