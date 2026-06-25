@@ -59,11 +59,17 @@ Anything keyed on Close data is undercounting post-June-20:
 
 1. **New API key** — Drake added a Close seat with org access and issued a fresh
    `CLOSE_API_KEY` (verified `/me/` returns org "AI Partner"). Set in `.env.local`.
-2. **Webhook** — the subscription wasn't deleted, it was **paused** (`whsub_165…`, our
-   receiver, all 14 events). Resumed it to `active` via the Close API (`PUT
-   /webhook/{id}/ {status:active}`). **No secret rotation / redeploy** — the existing
-   `CLOSE_WEBHOOK_SECRET` still matched (it processed fine until the outage). Confirmed
-   live: first post-resume delivery `2026-06-25T04:38:33`, `status=processed`.
+2. **Webhook** — *first attempt didn't hold:* the subscription was **paused** (`whsub_165…`,
+   created 2026-05-24 by the removed `success@` seat). Resuming it to `active` worked
+   briefly (delivered through 12:04 next day) then Close **re-paused it** —
+   `pause_reason: permission_revoked`, `health_status: healthy`, 0 failures. A
+   subscription's **owner (`created_by`) is immutable**, so resuming an orphaned sub with a
+   different key can't save it; Close keeps revoking it. **Durable fix:** deleted the
+   orphaned sub and **created a fresh subscription** (`whsub_1NQUp7…`, 14 events) under the
+   active **Nabil owner** account. New subscription ⇒ new signing secret, so **rotated
+   `CLOSE_WEBHOOK_SECRET`** in `.env.local` + Vercel prod (PATCH the existing env id, not a
+   POST-upsert) + redeploy. Confirmed live: delivery `2026-06-25T20:22:27`, `status=processed`;
+   the 12:04→20:22 re-pause gap was caught up + cross-checked exact.
 3. **Backfill** — windowed catch-up `sync_recently_updated_leads(since 2026-06-19)`
    (activity bumps a lead's `date_updated`, so old leads with gap-period calls/SMS are
    included — verified). 8,429 leads / 4,227 calls / 17,736 SMS / 1,565 status changes,
