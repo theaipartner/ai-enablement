@@ -79,15 +79,8 @@ matter how big the campaign gets. The heavy per-lead aggregation runs OFF the pa
 `refresh_outbound_facts()` (≈15s) is called by the **`outbound_facts_refresh_cron`** every 15 min, and
 `outbound_funnel()` just reads the facts. (The original live-aggregation function scanned 66k SMS + 20k
 calls every load → 23s → past the 8s API timeout → the page crashed; this is the fix, mirroring
-`lead_cycles`.) **Connected = a ≥90s call only.** Parameterized by the **`outbound_campaigns`** registry,
-now surfaced as a **campaign switcher** (`?campaign=` — Revival | Jacob); each pool is a registry row, so
-adding a campaign is a row + tagging its leads. `refresh_outbound_facts` runs for **every active campaign**.
-
-**Jacob (ECJ Reactivation)** — the 2nd pool (migration 0099). Membership = the **"Jacob Lead"** Close
-custom field (`cf_m0ooi…`), set on `close_leads` matching the ECJ CSV roster (`outbound_campaign_roster`,
-by email **or** phone). Future leads auto-tag via the close webhook (`shared/outbound_campaign_tag.py`,
-hooked in `api/close_events.py`): any new lead matching the roster gets the field set in Close. Floor =
-2026-06-20 (the batch load start).
+`lead_cycles`.) **Connected = a ≥90s call only.** Parameterized by the **`outbound_campaigns`** registry —
+a future "tag type" dropdown (other outbound campaigns / lead tags) is a registry row + a dropdown option.
 
 The funnel displays **leads → responded → called → connected → closed** — the **Booked and Showed
 stages are hidden** (Drake 2026-06-24; the SQL still computes them, so un-hiding is a display-only change).

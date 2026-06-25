@@ -252,23 +252,6 @@ class handler(BaseHTTPRequestHandler):
                     "close_webhook: lead retag failed lead=%s: %s", lead_id, exc,
                 )
 
-        # Auto-tag the lead into any roster-based outbound campaign (Jacob/ECJ): if
-        # its email/phone matches the campaign roster and it isn't already tagged,
-        # set that campaign's Close custom field. Only on lead events (a new/updated
-        # lead is the trigger); idempotent (skips already-tagged → no loop).
-        # Fail-soft like retag.
-        if object_type == "lead" and lead_id:
-            try:
-                from shared.outbound_campaign_tag import tag_lead_outbound_campaigns
-
-                newly = tag_lead_outbound_campaigns(lead_id)
-                if newly:
-                    logger.info("close_webhook: outbound-tagged lead=%s campaigns=%s", lead_id, newly)
-            except Exception as exc:  # noqa: BLE001 — fail-soft by design
-                logger.warning(
-                    "close_webhook: outbound campaign tag failed lead=%s: %s", lead_id, exc,
-                )
-
         # Engagement open/grow (missing-form pinger). A >=90s outbound call opens
         # an engagement; later calls within 45 min join it. Fail-soft like retag.
         if route == "close_calls" and upserted_id:

@@ -60,19 +60,6 @@ type RawOutbound = {
   timeOfDay: { replies: number; dials: number; connects: number }[]
 }
 
-// Active outbound campaigns for the page's switcher (Revival, Jacob, …), in
-// sort order. Each is a registry row in outbound_campaigns (migration 0093+).
-export async function getOutboundCampaigns(): Promise<Array<{ key: string; label: string }>> {
-  const sb = createAdminClient()
-  const { data, error } = await sb
-    .from('outbound_campaigns' as never)
-    .select('key, label, sort_order, is_active')
-    .eq('is_active', true)
-    .order('sort_order')
-  if (error) throw new Error(`getOutboundCampaigns failed: ${error.message}`)
-  return ((data ?? []) as Array<{ key: string; label: string }>).map((c) => ({ key: c.key, label: c.label }))
-}
-
 export async function getOutboundFunnel(campaignKey = 'revival'): Promise<{
   funnel: RevivalFunnel
   called: RevivalCalled
