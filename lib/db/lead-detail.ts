@@ -43,7 +43,7 @@ export type LeadCallEntry = {
 // would be guesswork.
 export type LeadTimelineEvent =
   | { kind: 'optin'; at: string; reopt: boolean }   // reopt = the latest re-opt-in divider
-  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; label: string; by: string | null }
+  | { kind: 'form'; at: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; label: string; by: string | null; notes: string | null }
   | { kind: 'followup'; at: string; name: string }
 
 // Close details surfaced on the per-lead page when the lead has closed.
@@ -460,7 +460,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // FILED (airtable_created_at) — used for the lifecycle window so a form filed
   // in the current journey shows even if its event time slightly predates the
   // latest opt-in (Israel Lopez: DQ filed 19:13, event 18:12, opt-in 19:00).
-  const formEvents: Array<{ at: string; winAt: string | null; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null }> = []
+  const formEvents: Array<{ at: string; winAt: string | null; label: string; source: 'triage' | 'confirmation' | 'closer' | 'dc'; by: string | null; notes: string | null }> = []
+  // The rep's free-text notes off each form (triage `notes`, closer
+  // `call_notes`/`call_notes_lost`, DC `call_notes`). Surfaced on the
+  // per-lead lifecycle. Trim + drop empties so a blank field renders nothing.
+  const cleanNote = (s: string | null | undefined): string | null => {
+    const t = (s ?? '').trim()
+    return t === '' ? null : t
+  }
   // The three form sources are fetched CONCURRENTLY here, then processed in their
   // original order (triage → closer → dc) in the blocks below — preserving the
   // order-dependent shared writes (formEvents push order, considerClose's
@@ -468,16 +475,16 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   const [triageRes, closerRes, dcRes] = await Promise.all([
     sb
       .from('airtable_setter_triage_calls' as never)
-      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names, airtable_created_at')
+      .select('call_status, form_type, event_date_time, confirmed_call_date_time, booked_at, submitted_at, setter_names, airtable_created_at, notes')
       .eq('lead_id', closeId),
     sb
       .from('airtable_full_closer_report' as never)
-      .select('call_outcome, date_time_of_call, airtable_created_at, closer_names')
+      .select('call_outcome, date_time_of_call, airtable_created_at, closer_names, call_notes, call_notes_lost')
       .eq('form_type', 'New')
       .eq('lead_id', closeId),
     sb
       .from('airtable_digital_college_sales' as never)
-      .select('closed, follow_up, plans, closer_names, date_time_of_call, airtable_created_at')
+      .select('closed, follow_up, plans, closer_names, date_time_of_call, airtable_created_at, call_notes')
       .is('excluded_at', null)
       .eq('lead_id', closeId),
   ])
@@ -489,6 +496,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       event_date_time: string | null; confirmed_call_date_time: string | null
       booked_at: string | null; submitted_at: string | null
       setter_names: string[] | null; airtable_created_at: string | null
+      notes: string | null
     }>) {
       const isConfirmation = r.form_type === 'Closer Triage Form'
       const cs = norm(r.call_status)
@@ -516,12 +524,12 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
         // Filler: setter_names holds the form's author for both the setter
         // triage and the confirmation (the confirming closer, e.g. "Aman Ali").
         const by = (r.setter_names ?? []).find((n) => typeof n === 'string' && n.trim() && n.trim().toLowerCase() !== 'no setter') ?? null
-        formEvents.push({ at, winAt: r.airtable_created_at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage', by })
+        formEvents.push({ at, winAt: r.airtable_created_at, label: r.call_status, source: isConfirmation ? 'confirmation' : 'triage', by, notes: cleanNote(r.notes) })
       }
     }
   }
   {
-    type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null; closer_names: string[] | null }
+    type CForm = { call_outcome: string | null; date_time_of_call: string | null; airtable_created_at: string | null; closer_names: string[] | null; call_notes: string | null; call_notes_lost: string | null }
     const { data, error } = closerRes
     if (error) throw new Error(`lead-detail: closer forms read failed: ${error.message}`)
     const forms = ((data ?? []) as unknown as CForm[]).filter((r) => r.call_outcome)
@@ -561,7 +569,14 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     for (const group of clusters) {
       const latest = group.reduce((best, r) => ((r.airtable_created_at ?? '') > (best.airtable_created_at ?? '') ? r : best))
       const by = (latest.closer_names ?? []).find((n) => typeof n === 'string' && n.trim()) ?? null
-      formEvents.push({ at: latest.date_time_of_call, winAt: latest.airtable_created_at, label: latest.call_outcome as string, source: 'closer', by })
+      // Closer EOC carries two free-text fields: general call_notes and the
+      // lost-call objection notes. Merge both (non-empty, blank-line joined)
+      // into one notes block for the lifecycle.
+      const closerNotes =
+        [cleanNote(latest.call_notes), cleanNote(latest.call_notes_lost)]
+          .filter((n): n is string => n !== null)
+          .join('\n\n') || null
+      formEvents.push({ at: latest.date_time_of_call, winAt: latest.airtable_created_at, label: latest.call_outcome as string, source: 'closer', by, notes: closerNotes })
       const ct = outcomeCloseType(latest.call_outcome)
       // Only the current journey's close drives closeType/closeDetail.
       if (ct && inCycle(latest.date_time_of_call, latest.airtable_created_at)) {
@@ -578,6 +593,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
     type DcForm = {
       closed: string | null; follow_up: string | null; plans: string[] | null
       closer_names: string[] | null; date_time_of_call: string | null; airtable_created_at: string | null
+      call_notes: string | null
     }
     const { data, error } = dcRes
     if (error) throw new Error(`lead-detail: digital college sales read failed: ${error.message}`)
@@ -609,7 +625,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
       }
       // Timeline label: the DC disposition.
       const label = isClosed ? 'Digital College closed' : isDqForm ? 'Digital College DQ' : 'Digital College follow-up'
-      if (at) formEvents.push({ at, winAt: r.airtable_created_at, label, source: 'dc', by: closer })
+      if (at) formEvents.push({ at, winAt: r.airtable_created_at, label, source: 'dc', by: closer, notes: cleanNote(r.call_notes) })
     }
   }
 
@@ -632,7 +648,7 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
   // Latest opt-in marker — flagged as the re-opt-in when the lead opted in >1×.
   if (sinceIso) timeline.push({ kind: 'optin', at: sinceIso, reopt: reopted })
   for (const f of formEvents) {
-    timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by })
+    timeline.push({ kind: 'form', at: f.at, source: f.source, label: f.label, by: f.by, notes: f.notes })
   }
   for (const b of bookings) {
     if (b.link === 'sync') timeline.push({ kind: 'followup', at: b.at, name: b.name })

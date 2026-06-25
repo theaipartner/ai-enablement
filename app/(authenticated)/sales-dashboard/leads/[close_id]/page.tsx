@@ -501,6 +501,27 @@ function FormRow({ ev }: { ev: FormEvt }) {
       <span className="geg-serif" style={{ fontSize: 13, color }}>{ev.label}</span>
       <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', border: '1px solid var(--color-geg-border)', borderRadius: 4, padding: '1px 5px' }}>{sourceLabel(ev.source)}</span>
       {ev.by ? <span className="geg-mono" style={{ fontSize: 10, color: 'var(--color-geg-text-3)' }}>by {ev.by}</span> : null}
+      {ev.notes ? (
+        // The rep's free-text notes off the form. flexBasis 100% wraps it
+        // onto its own line below the disposition (the Row content area is
+        // a wrapping flex). whiteSpace pre-wrap preserves the rep's line
+        // breaks; the left margin aligns it under the label, past the dot.
+        <span
+          style={{
+            flexBasis: '100%',
+            marginLeft: 15,
+            marginTop: 2,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: 'var(--color-geg-text-2)',
+            whiteSpace: 'pre-wrap',
+            borderLeft: '2px solid var(--color-geg-border)',
+            paddingLeft: 10,
+          }}
+        >
+          {ev.notes}
+        </span>
+      ) : null}
     </Row>
   )
 }

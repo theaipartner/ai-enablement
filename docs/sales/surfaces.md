@@ -102,7 +102,9 @@ count+duration, reschedules, follow-ups) + a **Notes** section (one free-text
 scratchpad per lead — type + save, overwrites; `lead_notes`, migration 0090;
 any team member can edit) + a **two-phase Journey** (Direct → Reactivation)
 + a **day-grouped Lifecycle** (full history, newest-first, opt-in dividers) + a Close-
-details section. Bookings are matched to the lead by email + name + unique utm_term token.
+details section. Each Lifecycle **form row carries the rep's free-text notes off that
+form** (triage `notes`, closer `call_notes` + `call_notes_lost` merged, DC `call_notes`),
+rendered under the disposition — distinct from the per-lead `lead_notes` scratchpad above. Bookings are matched to the lead by email + name + unique utm_term token.
 The journey **resets on re-opt-in**. There is a lead search bar (`?q=`) that resolves a
 name → this page.
 
