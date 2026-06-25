@@ -13,6 +13,8 @@ import { getDailyFunnelTable } from '@/lib/db/funnel-daily'
 import { DailyFunnelTable } from '@/components/sales/daily-funnel-table'
 import { getAdsLpSummary } from '@/lib/db/funnel-summary'
 import { AdsLpSummarySection } from '@/components/sales/ads-lp-summary'
+import { LeadRoster } from '../leads/lead-roster'
+import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
 import { getSpeedToLeadCohort } from '@/lib/db/funnel-appointment-setting'
 import { resolveFunnelRange } from '@/lib/db/funnel-stages'
 import { todayEtDate } from '@/lib/db/funnel-window'
@@ -63,7 +65,7 @@ export default async function SalesDashboardFunnelPage({
   // funnel re-scopes for free — getLeadsFunnel counts only the leads passed in,
   // so filtering the rows filters every box + the rosters they link to. Cash
   // needs both funnels, so it follows.
-  const [allRows, dcFunnel] = await Promise.all([
+  const [allRows, dcFunnel, access] = await Promise.all([
     (async () => {
       // Same cohort spine as the Leads roster, so the funnel and the rosters it
       // links to can't drift.
@@ -72,7 +74,10 @@ export default async function SalesDashboardFunnelPage({
     })(),
     // Digital College funnel — tag-driven, unique leads only, same window as HT.
     getDcFunnel(range),
+    // Access tier gates the per-lead delete affordance on the inline roster.
+    getCurrentUserAccessTier(),
   ])
+  const canDelete = access?.tier === 'creator'
   // Ad-set names (cortana_adset_daily) for the cascade's Ad Set dropdown —
   // scoped to the ids present in the cohort so the read stays small.
   const adsetNames = await getAdsetNameMap(
@@ -119,14 +124,35 @@ export default async function SalesDashboardFunnelPage({
 
       <AdsLpSummarySection summary={adsLp} />
 
-      <div
-        className="geg-mono"
-        style={{ marginTop: 20, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', textAlign: 'center' }}
-      >
-        Click any stage to open the matching leads
+      {/* Inline leads roster — the same list (and columns) you'd see by clicking
+          the Total funnel's opt-ins stage, surfaced in-page so there's no
+          click-through. `rows` is already the cohort scoped to the active ad
+          cascade, so this re-scopes for free with the funnel boxes above.
+          backQuery carries the window + cascade so a row → per-lead → "Back to
+          leads" lands on the matching scoped roster. */}
+      <div style={{ marginTop: 30 }}>
+        <div
+          className="geg-mono"
+          style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 2 }}
+        >
+          Leads · {rows.length} {filterActive ? 'in this selection' : 'opted in this window'}
+        </div>
+        <LeadRoster rows={rows} canDelete={canDelete} backQuery={buildBackQuery(searchParams)} />
       </div>
     </div>
   )
+}
+
+// Serialize the funnel page's window + cascade params so an inline-roster row
+// click carries them as `ret` — the per-lead "Back to leads" then returns to
+// the matching scoped roster. Mirrors the Leads page's buildLeadsQuery.
+function buildBackQuery(sp?: { [key: string]: string | string[] | undefined }): string {
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(sp ?? {})) {
+    if (k === 'ret' || v == null) continue
+    for (const val of Array.isArray(v) ? v : [v]) params.append(k, val)
+  }
+  return params.toString()
 }
 
 // Campaign + ad names start with a launch date (`M/D/YY | …` for campaigns,

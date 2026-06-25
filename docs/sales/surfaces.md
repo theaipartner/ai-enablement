@@ -43,6 +43,12 @@ the **Total box hides the Books node** — Confirms is the meaningful one there;
   (adspend ÷ count). The **ads block scopes to the ad cascade**; the **landing-page block
   scopes to the LP selector + window** (separate
   dimensions) — `lib/db/funnel-summary.ts`, `components/sales/ads-lp-summary.tsx`.
+- the **inline leads roster** at the very bottom — the same list + columns (Prospect /
+  Opted in / Latest stage / Time to call / Connected / Intensity) you'd reach by clicking
+  the Total funnel's opt-ins stage, surfaced in-page so there's no click-through. Reuses
+  the Leads page's `LeadRoster` over the page's already-loaded cohort `rows`, so it
+  **re-scopes with the ad cascade for free** (no extra query — the roster fetch is already
+  paid). Rows still link to the per-lead page. LP scoping is pending per-lead LP attribution.
 
 The old in-page **navigation links were removed** (2026-06-18): the adspend node no longer
 links to the Ads page and the "Landing pages →" header link is gone, now that the data is
