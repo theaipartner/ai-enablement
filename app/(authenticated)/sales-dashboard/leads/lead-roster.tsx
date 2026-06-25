@@ -18,17 +18,19 @@ type SortDir = 'asc' | 'desc' | null
 const HEADERS: { label: string; key: SortKey }[] = [
   { label: 'Prospect', key: 'prospect' },
   { label: 'Opted in (ET)', key: 'optInAt' },
-  { label: 'Latest stage', key: 'latestStage' },
+  { label: 'Disposition', key: 'latestStage' },
   { label: 'Time to call', key: 'speed' },
   { label: 'Connected', key: 'connected' },
   { label: 'Intensity', key: 'intensity' },
   { label: '', key: '' },
 ]
 
-// Stage order for sorting; the three closed labels (offer names) all rank top.
+// Disposition order for sorting (mirrors the latest-by-timestamp ladder in
+// lead-tags.ts); the three closed labels (offer names) all rank top.
 const STAGE_RANK: Record<string, number> = {
-  'Opted in': 0, Connected: 1, Booked: 2, Confirmed: 3, Showed: 4,
-  Closed: 5, 'High Ticket': 5, 'Digital College': 5,
+  'Opted in': 0, Connected: 1, Booked: 2, 'No-show': 3, Confirmed: 4,
+  Showed: 5, 'Follow-up': 6, Dequeued: 7,
+  Closed: 8, 'High Ticket': 8, 'Digital College': 8,
 }
 
 function sortValue(r: LeadRow, key: SortKey): number | string | null {

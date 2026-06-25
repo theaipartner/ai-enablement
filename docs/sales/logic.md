@@ -169,6 +169,39 @@ close).
 
 ---
 
+## Disposition — the roster's "Disposition" column (latest-by-timestamp)
+
+The roster column (`latestStageWord` in `lib/db/lead-tags.ts`, rendered on the Leads
+page **and** the Advertising Hub inline roster) is the lead's **latest disposition by
+timestamp**, not the furthest stage. The candidate events are the tag's stage
+timestamps (`connected_at`/`booked_at`/`confirmed_at`/`showed_at`/`closed_at`), the
+cycle's `dq_at`, the opt-in baseline, and two disposition timestamps added in
+**migration 0098** (`lead_cycle_stages.no_show_at` / `follow_up_at`). The **latest
+timestamp wins**; equal instants (the tagger back-fills connected/booked/confirmed to the
+show/close moment) break by ladder rank — Closed/HT/DC > Dequeued > Follow-up > Showed >
+No-show > Confirmed > Booked > Connected > Opted in — so a closed lead reads its close,
+not a back-filled "Connected". A later event changes it (a booking after a DQ → Booked;
+a DQ after a follow-up → Dequeued).
+
+The two new signals are **form-primary, Calendly-backup**, materialized by the tagger
+(`shared/lead_tagging.py`), HT-track closer forms only (DC-closer forms stay excluded):
+- **No-show** = a closer "Client Ghosted (no show)" (New) / `Showed?=No` (Old) form;
+  backup = a booked direct/partnership Calendly call whose start passed **>4h** with no
+  closer form filed.
+- **Follow-up** = a closer "Short/Long-Term Follow Up" form; backup = an **"AI Partner
+  Sync"** Calendly booking with no follow-up form.
+
+These two columns are **display-only** — read by the disposition word, never the funnel.
+The monotonic stage hits, `sales_funnel_counts`, and `reachedStage` are untouched (the
+0098 retag is verified to leave every existing stage timestamp + funnel count identical).
+
+> **Known refinement (Drake 2026-06-24):** a "Long-Term Follow Up" arguably should *stick*
+> over a later Confirmed (follow-up is an ongoing-positive state), whereas a booking after
+> a DQ correctly revives the lead. Currently pure latest-by-timestamp, so a confirmed
+> re-booking after a follow-up reads "Confirmed". Left as-is; an easy rank tweak if wanted.
+
+---
+
 ## Direct vs setter call typing — from the booking platform (Calendly)
 
 The call type comes from the **booking** (a Calendly event), never the form:

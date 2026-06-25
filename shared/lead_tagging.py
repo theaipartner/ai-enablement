@@ -312,15 +312,24 @@ def _compute(cur, lead_ids):
                   i.email, i.name, i.raw_payload
            from calendly_scheduled_events e
            join calendly_invitees i on i.event_uri = e.uri
-           where (e.event_type_uri = any(%s) or e.name ilike 'Partnership Call w/%%') and e.excluded_at is null""",
+           where (e.event_type_uri = any(%s) or e.name ilike 'Partnership Call w/%%'
+                  or e.name ilike 'AI Partner Sync%%') and e.excluded_at is null""",
         ([DIRECT_URI, ROBBY_DC_URI],),
     )
     bookings = defaultdict(list)
+    # "AI Partner Sync" follow-up calls, kept SEPARATE from `bookings` so the
+    # existing direct/dc_robby/partnership logic (nearest_event_kind, direct-book)
+    # is untouched — these only feed the follow-up disposition backup.
+    sync_bookings = defaultdict(list)
     for etype, ename, start, status, created, iemail, iname, raw in cur.fetchall():
         utm = (raw or {}).get("tracking", {}).get("utm_term") if isinstance(raw, dict) else None
         phone = raw.get("text_reminder_number") if isinstance(raw, dict) else None
         cid = resolve(utm, iemail, phone, iname)
-        if cid in cycles_by_lead:
+        if cid not in cycles_by_lead:
+            continue
+        if ename and "ai partner sync" in norm(ename):
+            sync_bookings[cid].append((start, norm(status), created))
+        else:
             kind = "direct" if etype == DIRECT_URI else "dc_robby" if etype == ROBBY_DC_URI else "partnership"
             bookings[cid].append((kind, start, norm(status), created))
 
@@ -495,8 +504,8 @@ def _compute(cur, lead_ids):
                     return "reactive"
                 return "primary"
 
-            ph = {"primary": dict(conn=[], book=[], confirm=[], show=[], close=[]),
-                  "reactive": dict(conn=[], book=[], confirm=[], show=[], close=[])}
+            ph = {"primary": dict(conn=[], book=[], confirm=[], show=[], close=[], no_show=[], follow_up=[]),
+                  "reactive": dict(conn=[], book=[], confirm=[], show=[], close=[], no_show=[], follow_up=[])}
             for kind, start, status, created in cyc_bk:
                 if kind == "direct":
                     ph[phase_of(created)]["book"].append(created)
@@ -536,6 +545,7 @@ def _compute(cur, lead_ids):
                 )
                 return cands[0][1] if cands and cands[0][0] <= 2 * 86400 else None
 
+            had_ht_closer_form = False
             for ft, co, sh, cl, pl, dcpl, ev, filed, cnames in closer.get(cid, []):
                 t = ev or filed
                 if not in_cycle(t):
@@ -552,7 +562,18 @@ def _compute(cur, lead_ids):
                 if is_dc_closer(cnames):
                     continue
                 p = phase_of(ev, filed)
+                had_ht_closer_form = True
                 showed_b, ct, _is_dq = closer_form_outcome(ft, co, sh, cl, pl)
+                # Disposition overlays (no-show / follow-up) off the SAME closer
+                # form — independent of the stage flags below; the disposition
+                # column reads the latest-timestamp event, these don't back-fill
+                # and don't touch the funnel. Form-primary (Calendly is a backup
+                # added after this loop). New → Call Outcome; Old → Showed?=No.
+                co_n = norm(co)
+                if (ft == "New" and ("ghost" in co_n or "no show" in co_n)) or (ft != "New" and norm(sh) == "no"):
+                    ph[p]["no_show"].append(t)
+                if ft == "New" and "follow" in co_n:
+                    ph[p]["follow_up"].append(t)
                 # A "Digital College Closed" EOC by a NON-Robby closer = Aman's
                 # downsell on an HT strat/partnership call → an HT SHOW. Still drop
                 # it if it sat on a "Call with Robby" Calendly event.
@@ -564,6 +585,24 @@ def _compute(cur, lead_ids):
                     ph[p]["show"].append(t)
                 if ct == "ht":
                     ph[p]["close"].append(t)
+
+            # No-show backup (Calendly): the call was booked but NO closer form was
+            # filed — a direct/partnership booking whose start passed >4h with no
+            # EOC form and no show. Form-primary, so this only fills that gap.
+            if not had_ht_closer_form:
+                for bkind, bstart, bstatus, bcreated in cyc_bk:
+                    if bkind in ("direct", "partnership") and bstart is not None \
+                       and bstatus != "canceled" and bstart < now - timedelta(hours=4):
+                        bp = phase_of(bstart, bcreated)
+                        if not ph[bp]["show"] and not ph[bp]["close"]:
+                            ph[bp]["no_show"].append(bstart)
+            # Follow-up backup (Calendly): an "AI Partner Sync" booking with no
+            # follow-up FORM. Form-primary, so only when no form follow-up exists.
+            if not (ph["primary"]["follow_up"] or ph["reactive"]["follow_up"]):
+                for sstart, sstatus, screated in sync_bookings.get(cid, []):
+                    anchor = screated or sstart
+                    if anchor is not None and sstatus != "canceled" and in_cycle(anchor):
+                        ph[phase_of(sstart, screated)]["follow_up"].append(sstart or anchor)
 
             row_ad_id, row_ad_name, row_campaign_id = lead_ad.get(cid, (None, None, None))
             # Speed-to-lead + FMR facts for this cycle, anchored at opt_in_at (counted
@@ -604,8 +643,13 @@ def _compute(cur, lead_ids):
                 confirmed_at = raw_confirm or showed_at or closed_at
                 booked_at = raw_book or confirmed_at or showed_at or closed_at
                 connected_at = raw_conn or confirmed_at or showed_at or closed_at
-                if any([connected_at, booked_at, confirmed_at, showed_at, closed_at]):
-                    stage_rows.append((cid, opt_in_at, p, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type))
+                # Disposition events — the LATEST occurrence. Read only by the
+                # disposition column (not the monotonic ladder), so they don't
+                # back-fill and don't feed the funnel.
+                no_show_at = max(e["no_show"]) if e["no_show"] else None
+                follow_up_at = max(e["follow_up"]) if e["follow_up"] else None
+                if any([connected_at, booked_at, confirmed_at, showed_at, closed_at, no_show_at, follow_up_at]):
+                    stage_rows.append((cid, opt_in_at, p, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type, no_show_at, follow_up_at))
 
     return cycle_rows, stage_rows
 
@@ -735,9 +779,9 @@ def retag(lead_ids=None, trigger="manual", active_only=False, log=True):
                 template="(%s,%s::timestamptz,%s,%s,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s,%s,%s,%s::timestamptz,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz,%s)")
         if stage_rows:
             execute_values(cur,
-                "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type) values %s",
+                "insert into lead_cycle_stages (close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type, no_show_at, follow_up_at) values %s",
                 stage_rows,
-                template="(%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s)")
+                template="(%s,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s::timestamptz,%s,%s::timestamptz,%s::timestamptz)")
         conn.commit()
         summary["ok"] = True
     except Exception:

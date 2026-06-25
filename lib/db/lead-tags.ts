@@ -29,6 +29,10 @@ export type CycleStages = {
   showedAt: string | null
   closedAt: string | null
   closeType: 'ht' | 'dc' | null
+  // Disposition events (migration 0098) — independent of the monotonic ladder
+  // above; read ONLY by the Disposition column, never the funnel.
+  noShowAt: string | null
+  followUpAt: string | null
 }
 
 export type LeadCycle = {
@@ -157,16 +161,38 @@ function statusWord(c: LeadCycle): string {
   return phaseFurthest(c.primary) ?? '—'
 }
 
-// Latest = furthest across BOTH phases of the cycle (ignores floor/DQ).
+// Disposition = the LATEST disposition by timestamp across both phases, plus the
+// cycle-level DQ and the opt-in baseline (Drake 2026-06-24: a later DQ / booking /
+// no-show changes how the lead reads — it's the most-recent state, not the
+// furthest stage). No-show + follow-up (migration 0098) slot in by their own
+// event time. Ties — the tagger back-fills connected/booked/confirmed to the
+// show/close instant — break by ladder rank, so a closed lead reads its close,
+// not a back-filled "Connected". Display-only; never feeds the funnel.
+const DISPOSITION_RANK: Record<string, number> = {
+  'Opted in': 0, Connected: 1, Booked: 2, 'No-show': 3, Confirmed: 4,
+  Showed: 5, 'Follow-up': 6, Dequeued: 7,
+  Closed: 8, 'High Ticket': 8, 'Digital College': 8,
+}
 function latestStageWord(c: LeadCycle): string {
-  const order = ['Connected', 'Booked', 'Confirmed', 'Showed']
-  const words = [phaseFurthest(c.primary), phaseFurthest(c.reactive)].filter(Boolean) as string[]
-  if (words.some((w) => w === 'High Ticket' || w === 'Digital College' || w === 'Closed')) {
-    return closedWord(c.primary?.closeType || c.reactive?.closeType || null)
+  const events: Array<[string, string]> = []
+  const add = (t: string | null, word: string) => { if (t) events.push([t, word]) }
+  for (const s of [c.primary, c.reactive]) {
+    if (!s) continue
+    add(s.closedAt, closedWord(s.closeType))
+    add(s.followUpAt, 'Follow-up')
+    add(s.showedAt, 'Showed')
+    add(s.noShowAt, 'No-show')
+    add(s.confirmedAt, 'Confirmed')
+    add(s.bookedAt, 'Booked')
+    add(s.connectedAt, 'Connected')
   }
-  let best = -1
-  for (const w of words) best = Math.max(best, order.indexOf(w))
-  return best >= 0 ? order[best] : 'Opted in'
+  add(c.dqAt, 'Dequeued')
+  add(c.optInAt, 'Opted in')
+  // Latest timestamp wins; equal timestamps break by ladder rank (more advanced).
+  events.sort((a, b) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (DISPOSITION_RANK[a[1]] ?? 0) - (DISPOSITION_RANK[b[1]] ?? 0),
+  )
+  return events.length ? events[events.length - 1][1] : 'Opted in'
 }
 
 function isConnected(c: LeadCycle): boolean {
@@ -176,7 +202,7 @@ function isConnected(c: LeadCycle): boolean {
 const CYCLE_COLS =
   'close_id, opt_in_at, opt_in_seq, source, qualified, became_direct_at, reactive_at, reactive_source, dq_at, dq_source, dc_closed_at'
 const STAGE_COLS =
-  'close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type'
+  'close_id, opt_in_at, phase, connected_at, booked_at, confirmed_at, showed_at, closed_at, close_type, no_show_at, follow_up_at'
 // IN-list chunk size. Keeps the PostgREST GET URL well under length limits
 // (~200 close_ids ≈ 5 KB) while collapsing the old per-lead round-trips.
 const ID_CHUNK = 200
@@ -193,6 +219,7 @@ function buildCycles(cycleRows: RawCycle[], stageRows: RawStage[]): LeadCycle[] 
     byCyclePhase.set(`${s.opt_in_at}|${s.phase}`, {
       connectedAt: s.connected_at, bookedAt: s.booked_at, confirmedAt: s.confirmed_at,
       showedAt: s.showed_at, closedAt: s.closed_at, closeType: s.close_type as 'ht' | 'dc' | null,
+      noShowAt: s.no_show_at, followUpAt: s.follow_up_at,
     })
   }
   return cycleRows.map((c) => ({

@@ -44,7 +44,7 @@ the **Total box hides the Books node** — Confirms is the meaningful one there;
   scopes to the LP selector + window** (separate
   dimensions) — `lib/db/funnel-summary.ts`, `components/sales/ads-lp-summary.tsx`.
 - the **inline leads roster** at the very bottom — the same list + columns (Prospect /
-  Opted in / Latest stage / Time to call / Connected / Intensity) you'd reach by clicking
+  Opted in / Disposition / Time to call / Connected / Intensity) you'd reach by clicking
   the Total funnel's opt-ins stage, surfaced in-page so there's no click-through. Reuses
   the Leads page's `LeadRoster` over the page's already-loaded cohort `rows`, so it
   **re-scopes with the ad cascade for free** (no extra query — the roster fetch is already

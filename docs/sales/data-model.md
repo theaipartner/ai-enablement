@@ -251,7 +251,7 @@ This is the list the upcoming table audit works from.
 | `close_opportunities` | workflow markers ($1 placeholders, **not** money) | coarse signal, mostly unused |
 | `close_custom_field_definitions` | `cf_*` id → name reference | reference |
 | `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |
-| `lead_cycle_stages` | per-stage timestamps within a cycle (the funnel ladder) | funnel stage attribution, per-lead journey |
+| `lead_cycle_stages` | per-stage timestamps within a cycle (the funnel ladder) + `no_show_at`/`follow_up_at` disposition stamps (0098, display-only) | funnel stage attribution, per-lead journey, the roster Disposition column |
 | `lead_tag_runs` | audit log of every tagger run (~69k rows) | tagger diagnostics, lead-tag-log page |
 | `engagements` | call↔form match unit (0086) — sticky open/overdue/final tags per rep+lead | missing-form pinger (logic.md § Engagements, ingestion.md § Engagement pinger) |
 | `calendly_scheduled_events` | event mirror (filter by `name`) | closer drill, booking funnels, call typing |
