@@ -8,13 +8,7 @@ import { dateRangeFromExplicit, todayEtDate } from '@/lib/db/funnel-window'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
 
-// YYYY-MM-DD (ET) → "Jun 3"; a UTC ISO timestamp → its ET YYYY-MM-DD.
-function etYmd(iso: string | null): string | null {
-  if (!iso) return null
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(iso))
-}
+// YYYY-MM-DD (ET) → "Jun 3".
 function monthDay(ymd: string): string {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' })
     .format(new Date(`${ymd}T12:00:00Z`))
@@ -27,11 +21,22 @@ function monthDay(ymd: string): string {
 // tagged in Close with that campaign's custom field and excluded from every
 // other funnel/roster — the only surface that counts them. Per-lead activity is
 // anchored to campaign entry (greatest(date_created, floor)); the date range
-// scopes by that anchor (migration 0102), and the "Active …" label shows the
-// campaign's full span. See lib/db/funnel-revival.ts.
+// scopes by that anchor (migration 0102), and the "Started …" label shows the
+// campaign's launch date (hard-quoted, see CAMPAIGN_START below). See
+// lib/db/funnel-revival.ts.
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
+
+// Each campaign's launch date (ET, YYYY-MM-DD). These are fixed historical
+// facts and never change, so we hard-quote them rather than deriving the floor
+// from the data — that derivation only ever resolved once a date range was
+// active, so the "Started …" label wasn't persistent. Fallback is the campaign
+// floor for unknown keys.
+const CAMPAIGN_START: Record<string, string> = {
+  revival: '2026-06-03',
+  jacob: '2026-06-20',
+}
 
 function CampaignIntro({ campaignKey }: { campaignKey: string }) {
   if (campaignKey === 'jacob') {
@@ -66,14 +71,14 @@ export default async function OutboundPage({
   const startP = param(searchParams?.start)
   const endP = param(searchParams?.end)
   const range = startP && endP ? dateRangeFromExplicit(startP, endP) : undefined
-  const { funnel, called, timeOfDay, activeFrom } = await getOutboundFunnel(
+  const { funnel, called, timeOfDay } = await getOutboundFunnel(
     active,
     range ? { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso } : undefined,
   )
 
   const todayEt = todayEtDate()
-  const activeFromEt = etYmd(activeFrom)
-  const startEt = startP ?? activeFromEt ?? todayEt
+  const campaignStartEt = CAMPAIGN_START[active] ?? null
+  const startEt = startP ?? campaignStartEt ?? todayEt
   const endEt = endP ?? todayEt
 
   return (
@@ -87,13 +92,13 @@ export default async function OutboundPage({
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <OutboundCampaignSwitcher campaigns={campaigns} active={active} />
         <DateRangePicker startEtDate={startEt} endEtDate={endEt} todayEt={todayEt} />
-        {activeFromEt ? (
+        {campaignStartEt ? (
           <span
             className="geg-mono"
             title="When this campaign started (its floor) — independent of the date range"
             style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}
           >
-            Started {monthDay(activeFromEt)}
+            Started {monthDay(campaignStartEt)}
           </span>
         ) : null}
       </div>
