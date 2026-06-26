@@ -58,6 +58,18 @@ export type OutboundRepRow = {
   cash: number
 }
 
+// Activity-window totals for the per-rep header: total closes + the unit mix
+// actually sold (same plan classification as the funnel's closedPlans).
+export type OutboundRepTotals = {
+  closes: number
+  base44Monthly: number
+  base44Yearly: number
+  wixMonthly: number
+  wixYearly: number
+}
+
+export type OutboundByRep = { reps: OutboundRepRow[]; totals: OutboundRepTotals }
+
 // The SQL returns the 12 two-hour ET buckets in order; their labels live here.
 const TOD_LABELS = ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', '10p']
 
@@ -141,7 +153,7 @@ export async function getOutboundFunnel(
 export async function getOutboundByRep(
   campaignKey: string,
   range: { startUtcIso: string; endUtcIso: string },
-): Promise<OutboundRepRow[]> {
+): Promise<OutboundByRep> {
   const sb = createAdminClient()
   const { data, error } = await sb.rpc('outbound_funnel_by_rep' as never, {
     p_campaign_key: campaignKey,
@@ -149,5 +161,9 @@ export async function getOutboundByRep(
     p_end: range.endUtcIso,
   } as never)
   if (error) throw new Error(`outbound_funnel_by_rep RPC failed: ${error.message}`)
-  return (data as unknown as OutboundRepRow[]) ?? []
+  const d = data as unknown as OutboundByRep | null
+  return {
+    reps: d?.reps ?? [],
+    totals: d?.totals ?? { closes: 0, base44Monthly: 0, base44Yearly: 0, wixMonthly: 0, wixYearly: 0 },
+  }
 }

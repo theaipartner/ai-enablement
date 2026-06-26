@@ -119,7 +119,7 @@ export default async function OutboundPage({
 
       <RevivalFunnelSection funnel={funnel} />
 
-      <OutboundByRepSection rows={byRep} />
+      <OutboundByRepSection rows={byRep.reps} totals={byRep.totals} />
 
       <RevivalCalledSection called={called} />
 

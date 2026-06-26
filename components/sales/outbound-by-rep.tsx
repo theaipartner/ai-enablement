@@ -1,4 +1,11 @@
-import type { OutboundRepRow } from '@/lib/db/funnel-revival'
+import type { OutboundRepRow, OutboundRepTotals } from '@/lib/db/funnel-revival'
+
+const PLAN_COLS: { key: keyof Omit<OutboundRepTotals, 'closes'>; label: string }[] = [
+  { key: 'base44Monthly', label: 'Base44·Mo' },
+  { key: 'base44Yearly', label: 'Base44·Yr' },
+  { key: 'wixMonthly', label: 'Wix·Mo' },
+  { key: 'wixYearly', label: 'Wix·Yr' },
+]
 
 // Per-rep Outbound breakdown — sits under the funnel on the Outbound page. One
 // combined row per rep across Dials / Connections / Closes / Cash, bridging the
@@ -31,6 +38,20 @@ function Cell({ value, strong = false, muted = false }: { value: string; strong?
   )
 }
 
+function PlanChip({ label, count }: { label: string; count: number }) {
+  const zero = count === 0
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+      <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.04em', color: zero ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text-3)' }}>
+        {label}
+      </span>
+      <span className="geg-numeric-serif" style={{ fontSize: 13, color: zero ? 'var(--color-geg-text-faint)' : 'var(--color-geg-text)' }}>
+        {count}
+      </span>
+    </span>
+  )
+}
+
 function HeadCell({ label, first = false }: { label: string; first?: boolean }) {
   return (
     <th
@@ -51,8 +72,8 @@ function HeadCell({ label, first = false }: { label: string; first?: boolean }) 
   )
 }
 
-export function OutboundByRepSection({ rows }: { rows: OutboundRepRow[] }) {
-  const totals = rows.reduce(
+export function OutboundByRepSection({ rows, totals }: { rows: OutboundRepRow[]; totals: OutboundRepTotals }) {
+  const colTotals = rows.reduce(
     (a, r) => ({
       dials: a.dials + r.dials,
       connections: a.connections + r.connections,
@@ -64,14 +85,30 @@ export function OutboundByRepSection({ rows }: { rows: OutboundRepRow[] }) {
 
   return (
     <div style={{ marginTop: 14, border: '1px solid var(--color-geg-border)', borderRadius: 8, overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--color-geg-bg-elev)', borderBottom: '1px solid var(--color-geg-border)' }}>
+      {/* Header — total closes + the unit mix sold in the window */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--color-geg-bg-elev)', borderBottom: '1px solid var(--color-geg-border)', flexWrap: 'wrap' }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT }} />
         <span className="geg-mono" style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-geg-text)' }}>
           By rep
         </span>
         <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}>
           · activity in the selected dates
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, marginLeft: 'auto', paddingLeft: 10, borderLeft: '1px solid var(--color-geg-border)' }}>
+          <span className="geg-mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)' }}>
+            Closes
+          </span>
+          <span className="geg-numeric-serif" style={{ fontSize: 16, color: totals.closes > 0 ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)' }}>
+            {totals.closes}
+          </span>
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 14, paddingLeft: 10, borderLeft: '1px solid var(--color-geg-border)' }}>
+          {PLAN_COLS.map((c) => (
+            <PlanChip key={c.key} label={c.label} count={totals[c.key]} />
+          ))}
+        </span>
+        <span className="geg-mono" style={{ fontSize: 9, color: 'var(--color-geg-text-faint)' }}>
+          · units sold
         </span>
       </div>
 
@@ -108,10 +145,10 @@ export function OutboundByRepSection({ rows }: { rows: OutboundRepRow[] }) {
                 <td className="geg-mono" style={{ padding: '9px 14px', fontSize: 9.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)', whiteSpace: 'nowrap' }}>
                   Total
                 </td>
-                <Cell value={totals.dials.toLocaleString('en-US')} muted />
-                <Cell value={totals.connections.toLocaleString('en-US')} muted />
-                <Cell value={totals.closes.toLocaleString('en-US')} strong />
-                <Cell value={fmtCash(totals.cash)} strong />
+                <Cell value={colTotals.dials.toLocaleString('en-US')} muted />
+                <Cell value={colTotals.connections.toLocaleString('en-US')} muted />
+                <Cell value={colTotals.closes.toLocaleString('en-US')} strong />
+                <Cell value={fmtCash(colTotals.cash)} strong />
               </tr>
             </tbody>
           </table>

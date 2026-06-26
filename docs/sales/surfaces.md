@@ -110,8 +110,11 @@ The funnel displays **leads → responded → called → connected → closed** 
 stages are hidden** (Drake 2026-06-24; the SQL still computes them, so un-hiding is a display-only change).
 The Called (speed-to-dial) + time-of-day sections are unchanged.
 
-**By-rep block** (migration 0104, `outbound_funnel_by_rep` RPC → `OutboundByRepSection`). Under the funnel,
-a per-rep table: **Dials · Connections · Closes · Cash**. Unlike the funnel it is **activity-scoped** — it
+**By-rep block** (migrations 0104 + 0105, `outbound_funnel_by_rep` RPC → `OutboundByRepSection`). Under the
+funnel, a per-rep table: **Dials · Connections · Closes · Cash**. Its header summarizes the window's
+**total closes + unit mix sold** (Base/Wix × Monthly/Yearly chips, same classification as the funnel's
+`closedPlans`) — the daily-activity counterpart to the cohort funnel's plan chips. The RPC returns
+`{ reps, totals }`. Unlike the funnel it is **activity-scoped** — it
 counts what each rep *did* in the calendar window (calls by `activity_at`, closes by form date), not the
 entry cohort. One combined row per rep bridges Close calls (`close_calls.user_id` → `team_members.close_user_id`)
 and Airtable closer reports (`closer_record_ids` → `team_members.airtable_user_id`); reps absent from
