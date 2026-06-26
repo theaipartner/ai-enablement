@@ -81,38 +81,63 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(encoded)
 
 
+# Guards added after the 2026-06-26 saturation incident (refreshes stacked on a
+# nano instance until the DB maxed out):
+#   - statement_timeout caps EACH campaign's refresh, so a runaway is killed
+#     instead of pegging the DB and holding the lock forever.
+#   - pg_try_advisory_lock means a tick whose predecessor is still running just
+#     SKIPS — refreshes can never stack across */15 ticks.
+#   - per-campaign error handling + autocommit: one slow/failed campaign doesn't
+#     roll back or block the others.
+_REFRESH_LOCK_KEY = 824113          # app-specific advisory-lock id
+_REFRESH_TIMEOUT_MS = 240_000       # 4 min per campaign (2 campaigns × 4 < the 15-min tick)
+
+
 def run_refresh() -> dict[str, Any]:
     """One cron tick: refresh each active campaign's facts. Returns a summary."""
     refreshed: dict[str, int] = {}
-    error: str | None = None
+    errors: dict[str, str] = {}
+    skipped = False
     conn = None
     try:
         conn = _connect()
+        conn.autocommit = True  # advisory lock + each refresh commit independently
         cur = conn.cursor()
-        cur.execute("select key from outbound_campaigns where is_active order by sort_order")
-        keys = [r[0] for r in cur.fetchall()]
-        for key in keys:
-            cur.execute("select refresh_outbound_facts(%s)", (key,))
-            refreshed[key] = cur.fetchone()[0]
-        conn.commit()
+        cur.execute("select pg_try_advisory_lock(%s)", (_REFRESH_LOCK_KEY,))
+        if not cur.fetchone()[0]:
+            skipped = True
+            logger.info("outbound_facts_refresh_cron: prior refresh still running — skipping tick")
+        else:
+            try:
+                cur.execute(f"set statement_timeout = {_REFRESH_TIMEOUT_MS}")
+                cur.execute("select key from outbound_campaigns where is_active order by sort_order")
+                for (key,) in cur.fetchall():
+                    try:
+                        cur.execute("select refresh_outbound_facts(%s)", (key,))
+                        refreshed[key] = cur.fetchone()[0]
+                    except Exception as exc:  # noqa: BLE001 — one campaign can't sink the rest
+                        errors[key] = str(exc)[:300]
+                        logger.warning("refresh_outbound_facts(%s) failed: %s", key, exc)
+            finally:
+                cur.execute("select pg_advisory_unlock(%s)", (_REFRESH_LOCK_KEY,))
         cur.close()
     except Exception as exc:  # noqa: BLE001
-        error = str(exc)[:2000]
-        logger.exception("outbound_facts_refresh_cron: refresh failed: %s", exc)
-        if conn is not None:
-            conn.rollback()
+        errors["_run"] = str(exc)[:2000]
+        logger.exception("outbound_facts_refresh_cron: run failed: %s", exc)
     finally:
         if conn is not None:
             conn.close()
 
-    payload = {"refreshed": refreshed, "campaigns": len(refreshed)}
+    payload: dict[str, Any] = {"refreshed": refreshed, "campaigns": len(refreshed), "skipped": skipped}
+    if errors:
+        payload["errors"] = errors
     _insert_audit(
-        status="failed" if error else "processed",
+        status="failed" if errors else "processed",
         payload=payload,
-        error=error,
+        error="; ".join(f"{k}:{v}" for k, v in errors.items()) or None,
     )
-    logger.info("outbound_facts_refresh_cron: refreshed=%s", refreshed)
-    return {**payload, **({"error": error} if error else {})}
+    logger.info("outbound_facts_refresh_cron: refreshed=%s skipped=%s errors=%s", refreshed, skipped, errors)
+    return payload
 
 
 def _insert_audit(*, status: str, payload: dict[str, Any], error: str | None) -> None:
