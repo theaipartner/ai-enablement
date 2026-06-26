@@ -14,8 +14,9 @@ one**. If you're picking this up cold (new chat, time has passed): start at
   **Visits, Plays, Play rate, Time played, Engagement** — plus the **Average
   view duration** we derive. (Clarity + Calendly were removed.)
 - **Landing-page registry** — `lib/db/landing-pages.ts`. One entry per landing
-  page is the single source of truth for that page's assets. Today: one entry
-  (`main` = the high-ticket LP).
+  page is the single source of truth for that page's assets. Today: two entries
+  — `main` (`/lp-vsl`, form `SFedWelr`) and `training` (`/training`, form
+  `Os4c0q6V`, VSL `t05pq6ra0u`; live 2026-06-20).
 - **Landing-page dropdown** on the Funnel page filter row — a separate control
   from the Campaign → Ad Set → Ad cascade. It's **composable** with the ad
   filter (selecting both scopes the funnel to the intersection cohort). Picking
@@ -28,10 +29,13 @@ one**. If you're picking this up cold (new chat, time has passed): start at
 
 **Two deferred items, both unblocking when the second LP is real:**
 
-1. **Funnel-box re-scope by landing page.** The dropdown doesn't yet re-scope
-   the funnel boxes — it can't until every lead is tagged with *which landing
-   page's form* it came through, and right now our pipeline only ingests one
-   Typeform (`SFedWelr`), so there's nothing to filter on.
+1. **Funnel-box re-scope by landing page.** The lead tagger now accepts **both**
+   high-ticket forms (`SFedWelr` + `Os4c0q6V`), so `/training` opt-ins enter
+   `lead_cycles` and the funnel boxes — but **combined**, not per-LP. The dropdown
+   re-scopes the ads / LP / VSL / Typeform summary, not the cohort boxes; the boxes
+   still can't filter per-LP because `lead_cycles` doesn't record *which* form each
+   cycle came through. Per-LP boxes would need a `source_form_id` on `lead_cycles`
+   (the `source` column is just `'typeform'` for all forms).
 
 2. **Per-landing-page video metrics for *shared* videos.** Each LP has its own
    Typeform, but the **VSL / thank-you videos may be shared** across LPs. We
@@ -82,10 +86,13 @@ page + form will have them:
 
 1. Add the entry to `lib/db/landing-pages.ts` (the 5 things above). → LP detail
    page works immediately for the new page.
-2. Teach the lead tagger to **ingest the new form** and stamp each lead with its
-   source `form_id` (small migration + tagger change in `lib/db/lead-tags.ts`).
-3. Add the `form_id` filter to the funnel SQL (`sales_funnel_counts`). → the
-   dropdown now **re-scopes the funnel boxes**, composable with the ad filter.
+2. Add the new form to `OPT_IN_FORMS` (`shared/lead_tagging.py`) and
+   `HIGH_TICKET_TYPEFORM_FORM_IDS` (`funnel-assets.ts`), then run a full
+   backfill-retag (`scripts/backfill_lead_tags.py --apply`). → its opt-ins enter
+   `lead_cycles` and the (combined) funnel boxes. *(Done for `Os4c0q6V` 2026-06-26.)*
+3. **Optional, for per-LP box scoping:** add a `source_form_id` to `lead_cycles`,
+   stamp it in the tagger, and add the filter to the funnel SQL so the dropdown
+   re-scopes the boxes per LP. Not yet done — boxes are combined across LPs.
 4. **If the new LP would share a VSL or thank-you video with another LP**, have
    the team **duplicate the video** so each LP has its own Wistia hashed_id
    (see deferred item 2 — the per-embed API route was investigated and rejected

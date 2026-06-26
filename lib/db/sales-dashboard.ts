@@ -13,7 +13,7 @@ import {
 import {
   HIGH_TICKET_VSL_HASHED_IDS,
   HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
-  HIGH_TICKET_TYPEFORM_FORM_ID,
+  HIGH_TICKET_TYPEFORM_FORM_IDS,
 } from './funnel-assets'
 
 // Server-side data layer for /sales-dashboard.
@@ -294,7 +294,7 @@ const typeformSubmits: Fetcher = async (w) => {
   const { count, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id', { count: 'exact', head: true })
-    .eq('form_id', HIGH_TICKET_TYPEFORM_FORM_ID)
+    .in('form_id', HIGH_TICKET_TYPEFORM_FORM_IDS as unknown as string[])
     .gte('submitted_at', getWindowStartIso(w))
   if (error) throw new Error(`typeform_responses count failed: ${error.message}`)
   return count ?? 0

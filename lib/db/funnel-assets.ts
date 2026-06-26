@@ -14,11 +14,27 @@
 // non-high-ticket id here — that's exactly the cross-funnel contamination
 // this lock exists to prevent.
 
-// Typeform: the high-ticket Closer Funnel application form
-// ("US TF Funnel -> CF (go.theaipartner.io/lp) -> Closer Funnel").
-// The Setter Funnel (PWSNd0h2), YouTube (vYPmrq5V), and any future
-// (e.g. Digital College) form are deliberately excluded.
-export const HIGH_TICKET_TYPEFORM_FORM_ID = 'SFedWelr'
+// Typeform: the high-ticket Closer Funnel application forms. The funnel now
+// spans more than one landing page, each with its own form, all high-ticket:
+//   - SFedWelr  — "US TF Funnel -> CF (go.theaipartner.io/lp)" — the original LP.
+//   - Os4c0q6V  — "6/20 | Longer Form | Call Funnel" — the /training LP (live
+//                 2026-06-20). Same qualification question/field ref (5138f17b).
+// The Setter Funnel (PWSNd0h2), YouTube (vYPmrq5V), and any non-high-ticket
+// (e.g. Digital College) form remain deliberately excluded.
+export const HIGH_TICKET_TYPEFORM_FORM_IDS = ['SFedWelr', 'Os4c0q6V'] as const
+
+// The PRIMARY form. Used where a single id is required — the LP registry's
+// original "main" entry and the Typeform Insights snapshots (which exist only
+// for this form). Aggregate reads should use HIGH_TICKET_TYPEFORM_FORM_IDS.
+export const HIGH_TICKET_TYPEFORM_FORM_ID = HIGH_TICKET_TYPEFORM_FORM_IDS[0]
+
+// True iff the form_id is one of the locked high-ticket Typeform forms.
+export function isHighTicketForm(formId: string | null | undefined): boolean {
+  return (
+    formId != null &&
+    (HIGH_TICKET_TYPEFORM_FORM_IDS as readonly string[]).includes(formId)
+  )
+}
 
 // Wistia: the LP VSL for the high-ticket funnel.
 //   i1173gx76b — "VSL Vídeo Motion - Nabeel (Horizontal) Direct Closer Funnel"

@@ -1,7 +1,7 @@
 """Lead tagging — the single source of truth for lead_cycles + lead_cycle_stages.
 
-Reconstructs opt-in cycles (Typeform SFedWelr matched by email/phone, with a
-close_leads.latest_opt_in_date fallback) and computes identity tags (direct /
+Reconstructs opt-in cycles (high-ticket Typeform — any OPT_IN_FORMS — matched by
+email/phone) and computes identity tags (direct /
 reactive / dq) + HT-only journey stages. ONE place for all the rules.
 
 Callers:
@@ -50,10 +50,17 @@ import psycopg2
 from psycopg2.extras import Json, execute_values
 
 EFFECTIVE_DATE = "2026-05-24"
-OPT_IN_FORM = "SFedWelr"
-# Typeform SFedWelr "how much are you willing to invest" choice field. Drives
-# per-cycle qualification (>= $2,000 = qualified), replacing the stale
-# close_leads.marketing_qualified flag.
+# High-ticket opt-in Typeform forms — a lead is a unique high-ticket lead if it
+# matches a response on ANY of these (by email/phone). Multiple landing pages
+# each have their own form; all are high-ticket and feed lead_cycles:
+#   - SFedWelr  — original LP (go.theaipartner.io/lp).
+#   - Os4c0q6V  — "6/20 | Longer Form | Call Funnel", the /training LP (live
+#                 2026-06-20). Same qualification field ref (5138f17b).
+# Keep in sync with lib/db/funnel-assets.ts HIGH_TICKET_TYPEFORM_FORM_IDS.
+OPT_IN_FORMS = ["SFedWelr", "Os4c0q6V"]
+# Typeform "how much are you willing to invest" choice field — SHARED across the
+# forms above (same ref). Drives per-cycle qualification (>= $2,000 = qualified),
+# replacing the stale close_leads.marketing_qualified flag.
 INVEST_FIELD_REF = "5138f17b-eb31-4d36-bacb-88a8c83326ed"
 
 
@@ -241,14 +248,16 @@ def _compute(cur, lead_ids):
     if not ids:
         return [], []
 
-    # 2. Cycle reconstruction — Typeform SFedWelr by email/phone (REQUIRED).
+    # 2. Cycle reconstruction — high-ticket Typeform (any OPT_IN_FORMS) by
+    # email/phone (REQUIRED). Forms are merged: a lead matching either form's
+    # response gets a cycle; submissions are deduped per-minute below.
     cur.execute(
         """select submitted_at,
              lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
              (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1),
              (select a->'choice'->>'label' from jsonb_array_elements(answers) a where a->'field'->>'ref' = %s limit 1)
-           from typeform_responses where form_id = %s and submitted_at >= %s""",
-        (INVEST_FIELD_REF, OPT_IN_FORM, EFFECTIVE_DATE),
+           from typeform_responses where form_id = ANY(%s) and submitted_at >= %s""",
+        (INVEST_FIELD_REF, OPT_IN_FORMS, EFFECTIVE_DATE),
     )
     tf_by_email, tf_by_phone = defaultdict(list), defaultdict(list)
     for submitted_at, email, phone, investment in cur.fetchall():
@@ -275,8 +284,8 @@ def _compute(cur, lead_ids):
         times = [ts for ts, _ in pairs]
         for ts, inv in pairs:
             cycle_qual[(cid, ts)] = qual_from_investment(inv)
-        # Unique leads only: a lead with NO Typeform SFedWelr match is not a
-        # high-ticket opt-in, so it gets NO cycle (the old `close_fallback` path
+        # Unique leads only: a lead with NO high-ticket Typeform match (any
+        # OPT_IN_FORMS) is not a high-ticket opt-in, so it gets NO cycle (the old `close_fallback` path
         # is removed). Combined with the date_first_opted_in universe filter,
         # lead_cycles now IS exactly the unique leads list (Drake 2026-06-05).
         if times:

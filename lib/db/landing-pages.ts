@@ -7,19 +7,29 @@
 //
 // ⚠️ Adding a landing page is (almost) just a new entry here: a label,
 // the Typeform form_id (the lead-attribution key), the VSL hashed_id(s),
-// and the thank-you/confirmation video hashed_id. The ONE extra step —
-// the part that makes the funnel BOXES re-scope to that LP — is teaching
-// the lead tagger to ingest the new form and stamp each lead_cycle with
-// its source form_id. Until that lands, a new entry shows correct VSL /
-// thank-you / Typeform stats on its detail page, but the funnel boxes
-// can't yet filter to it. See docs/sales/data-model.md § The lead
-// definition (the cohort is currently form-gated on a single form).
+// and the thank-you/confirmation video hashed_id. ALSO add the form to
+// the lead tagger's OPT_IN_FORMS (shared/lead_tagging.py) + funnel-assets'
+// HIGH_TICKET_TYPEFORM_FORM_IDS so its opt-ins enter lead_cycles and the
+// aggregate funnel. The LP detail page (VSL / thank-you / Typeform stats)
+// is driven entirely by this entry. NOTE: the lead tagger merges all
+// OPT_IN_FORMS into one combined cohort — lead_cycles does NOT yet record
+// which form/LP each cycle came from, so the funnel BOXES are combined
+// across LPs (the LP dropdown scopes the ads/LP/VSL/Typeform summary, not
+// the cohort boxes). Per-LP box filtering would need a source_form_id on
+// lead_cycles. See docs/sales/data-model.md § The lead definition.
 
 import {
   HIGH_TICKET_TYPEFORM_FORM_ID,
   HIGH_TICKET_VSL_HASHED_IDS,
   HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
 } from './funnel-assets'
+
+// The /training LP (live 2026-06-20): its own VSL + Typeform, same high-ticket
+// funnel. VSL "6/20 | New Vsl | Call Funnel" (t05pq6ra0u) — confirmed via the
+// Wistia embed_url join.theaipartner.io/training. Reuses the shared confirm
+// video. Its form Os4c0q6V is in the asset lock + the lead tagger.
+const TRAINING_VSL_HASHED_ID = 't05pq6ra0u'
+const TRAINING_TYPEFORM_FORM_ID = 'Os4c0q6V'
 
 export type LandingPageVsl = { hashedId: string; label: string }
 
@@ -45,6 +55,7 @@ export type LandingPage = {
 // Display labels for the high-ticket VSL(s).
 const HT_VSL_LABELS: Record<string, string> = {
   i1173gx76b: 'Vídeo Motion · Nabeel (Horizontal) · Direct Closer Funnel',
+  t05pq6ra0u: '6/20 · New VSL · Call Funnel',
 }
 
 export const LANDING_PAGES: LandingPage[] = [
@@ -58,6 +69,16 @@ export const LANDING_PAGES: LandingPage[] = [
       hashedId,
       label: HT_VSL_LABELS[hashedId] ?? 'VSL',
     })),
+    confirmVideoHashedId: HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
+    confirmVideoLabel: 'V2 precall shortened',
+  },
+  {
+    slug: 'training',
+    label: 'Training LP · /training',
+    lpPath: '/training',
+    typeformFormId: TRAINING_TYPEFORM_FORM_ID,
+    typeformLabel: '6/20 Longer Form · Call Funnel',
+    vsl: [{ hashedId: TRAINING_VSL_HASHED_ID, label: HT_VSL_LABELS[TRAINING_VSL_HASHED_ID] }],
     confirmVideoHashedId: HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
     confirmVideoLabel: 'V2 precall shortened',
   },

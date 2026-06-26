@@ -3,7 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
-import { HIGH_TICKET_TYPEFORM_FORM_ID } from './funnel-assets'
+import { HIGH_TICKET_TYPEFORM_FORM_ID, HIGH_TICKET_TYPEFORM_FORM_IDS } from './funnel-assets'
 
 // Funnel · Typeform metrics — used by the consolidated LP detail page.
 //
@@ -16,17 +16,25 @@ import { HIGH_TICKET_TYPEFORM_FORM_ID } from './funnel-assets'
 // / completion rate are NOT here — those require Typeform's Insights
 // API which we don't mirror.
 
-// Form_id for the main coaching application form. All qualification
-// parsing assumes this form's schema (the budget question's field ref
-// is form-specific). Other forms in the mirror are ignored — they belong
-// to other funnels. Sourced from the high-ticket funnel asset lock so
-// every Typeform read here is pinned to the same form.
-const MAIN_FORM_ID = HIGH_TICKET_TYPEFORM_FORM_ID
+// The high-ticket coaching-application forms. Reads default to ALL of them
+// (aggregate across landing pages); per-LP callers pass a single form_id.
+// Qualification parsing relies on the budget question's field ref, which is the
+// SAME across these forms (5138f17b). Other forms in the mirror are ignored —
+// they belong to other funnels. Sourced from the asset lock.
+const HT_FORM_IDS = HIGH_TICKET_TYPEFORM_FORM_IDS as unknown as string[]
+// Primary form — used for Typeform Insights snapshots, which exist only for it.
+const PRIMARY_FORM_ID = HIGH_TICKET_TYPEFORM_FORM_ID
 
-// Field ref of the qualification question (3rd field on the SFedWelr
-// form): "Imagine... 6 months from today... how much are you willing
-// to invest into starting your successful online business and
-// receiving world-class coaching and mentorship?"
+// Normalize a one-or-many form arg to an id array.
+function formIds(formId: string | string[]): string[] {
+  return Array.isArray(formId) ? formId : [formId]
+}
+
+// Field ref of the qualification question — the budget question
+// ("Imagine... 6 months from today... how much are you willing to invest
+// into starting your successful online business...?"). The SAME ref is
+// used on every high-ticket form (SFedWelr + Os4c0q6V), so qualification
+// parsing is uniform across landing pages.
 //
 // Qualifying answers: any choice that does NOT start with "Under"
 // (i.e. the budget is $2,000 or above). The label set Drake's team
@@ -97,14 +105,14 @@ export function classifyResponse(row: TfRow): 'qualified' | 'non-qualified' | 'u
   return 'qualified'
 }
 
-async function loadResponses(range: DateRange, formId: string): Promise<TfRow[]> {
+async function loadResponses(range: DateRange, formId: string | string[]): Promise<TfRow[]> {
   const sb = createAdminClient()
   // submitted_at is timestamptz (UTC) — filter against the UTC ISO
   // boundaries derived from the ET calendar range.
   const { data, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id, form_id, landed_at, submitted_at, answers')
-    .eq('form_id', formId)
+    .in('form_id', formIds(formId))
     .gte('submitted_at', range.startUtcIso)
     .lt('submitted_at', range.endUtcIso)
   if (error) throw new Error(`typeform_responses read failed: ${error.message}`)
@@ -209,11 +217,15 @@ async function deriveStartsForRange(formId: string, range: DateRange): Promise<{
 
 export async function getTypeformMetrics(
   arg: Window | DateRange,
-  formId: string = MAIN_FORM_ID,
+  formId: string | string[] = HT_FORM_IDS,
 ): Promise<TypeformMetrics> {
   const range = resolveRange(arg)
-  const rows = await loadResponses(range, formId)
-  const startsResult = await deriveStartsForRange(formId, range)
+  const ids = formIds(formId)
+  const rows = await loadResponses(range, ids)
+  // Insights snapshots exist only for the primary form; when this read spans
+  // multiple forms, anchor starts/completion to the primary one.
+  const insightsFormId = ids.length === 1 ? ids[0] : PRIMARY_FORM_ID
+  const startsResult = await deriveStartsForRange(insightsFormId, range)
 
   let qualified = 0
   let nonQualified = 0
@@ -246,7 +258,7 @@ export async function getTypeformMetrics(
   const { data: trendData, error: trendErr } = await sb
     .from('typeform_responses' as never)
     .select('submitted_at, answers')
-    .eq('form_id', formId)
+    .in('form_id', ids)
     .gte('submitted_at', trendStart)
   if (trendErr) throw new Error(`typeform trend read failed: ${trendErr.message}`)
   const trendRows = (trendData ?? []) as unknown as { submitted_at: string; answers: unknown }[]
@@ -294,13 +306,16 @@ export async function getTypeformMetrics(
 
 // Lightweight count-only fetch for callers that don't need the full
 // metrics breakdown (e.g. the funnel-strip LP→submit cascade math).
-export async function getSubmitsCount(arg: Window | DateRange): Promise<number> {
+export async function getSubmitsCount(
+  arg: Window | DateRange,
+  formId: string | string[] = HT_FORM_IDS,
+): Promise<number> {
   const range = resolveRange(arg)
   const sb = createAdminClient()
   const { count, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id', { count: 'exact', head: true })
-    .eq('form_id', MAIN_FORM_ID)
+    .in('form_id', formIds(formId))
     .gte('submitted_at', range.startUtcIso)
     .lt('submitted_at', range.endUtcIso)
   if (error) throw new Error(`typeform_responses count failed: ${error.message}`)

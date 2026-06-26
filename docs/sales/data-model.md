@@ -12,7 +12,12 @@ person who:
 
 1. is **non-revival** — the `REVIVAL_CF` custom field is empty (revival leads are a
    separate campaign, see below) — and not soft-hidden (`close_leads.excluded_at IS NULL`);
-2. has a **Typeform `SFedWelr` match** by email/phone — the high-ticket opt-in gate;
+2. has a **high-ticket Typeform match** by email/phone — the opt-in gate. The accepted
+   forms (`OPT_IN_FORMS` in `shared/lead_tagging.py`, mirrored in `funnel-assets.ts`
+   `HIGH_TICKET_TYPEFORM_FORM_IDS`) are **`SFedWelr`** (original LP) and **`Os4c0q6V`**
+   (the `/training` LP, live 2026-06-20). Both share the same investment/qualification
+   field ref (`5138f17b`). A lead matching *either* form qualifies; submissions across
+   forms merge into one per-person cycle history (deduped per minute);
 3. **first opted in on or after 2026-05-24** — `close_leads.date_first_opted_in >= '2026-05-24'`.
 
 **Returning leads** (first opted in *before* May 24, re-opted after) are **excluded
@@ -21,9 +26,9 @@ still render a per-lead page, but it shows "No opt-in cycle yet".
 
 ### `lead_cycles` IS the unique leads list
 
-The tagger (`lib/db/lead-tags.ts`) writes one row per opt-in cycle to `lead_cycles`,
+The tagger (`shared/lead_tagging.py`) writes one row per opt-in cycle to `lead_cycles`,
 and its universe is exactly the unique-leads predicate above. There is **no
-`close_fallback`** — no Typeform match means no cycle. A full `--apply` retag **wipes
+`close_fallback`** — no high-ticket Typeform match (any `OPT_IN_FORMS`) means no cycle. A full `--apply` retag **wipes
 and rebuilds** `lead_cycles`. `lead_cycles` is the aggregation substrate for the
 funnel, roster, per-lead page, DC funnel, and Cash.
 
