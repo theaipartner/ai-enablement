@@ -66,20 +66,25 @@ export default async function OutboundPage({
   const campaigns = await getOutboundCampaigns()
   const active = campaigns.find((c) => c.key === param(searchParams?.campaign))?.key ?? campaigns[0]?.key ?? 'revival'
 
-  // Optional date range (calendar). Absent → all-time; the picker then defaults
-  // to [campaign start … today]. dateRangeFromExplicit gives ET-anchored UTC bounds.
+  // Date range (calendar). The funnel is ALWAYS scoped to an explicit range —
+  // there is no "all-time" mode. When the calendar is untouched the range
+  // defaults to [campaign start → today], so the funnel and the calendar always
+  // agree and the number reflects everything since launch. (The old all-time
+  // default disagreed with the ranged view and didn't reliably pick up new
+  // closes.) dateRangeFromExplicit gives ET-anchored UTC bounds.
   const startP = param(searchParams?.start)
   const endP = param(searchParams?.end)
-  const range = startP && endP ? dateRangeFromExplicit(startP, endP) : undefined
-  const { funnel, called, timeOfDay } = await getOutboundFunnel(
-    active,
-    range ? { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso } : undefined,
-  )
 
   const todayEt = todayEtDate()
   const campaignStartEt = CAMPAIGN_START[active] ?? null
   const startEt = startP ?? campaignStartEt ?? todayEt
   const endEt = endP ?? todayEt
+
+  const range = dateRangeFromExplicit(startEt, endEt)
+  const { funnel, called, timeOfDay } = await getOutboundFunnel(active, {
+    startUtcIso: range.startUtcIso,
+    endUtcIso: range.endUtcIso,
+  })
 
   return (
     <div>

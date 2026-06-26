@@ -82,10 +82,18 @@ calls every load → 23s → past the 8s API timeout → the page crashed; this 
 `lead_cycles`.) **Connected = a ≥90s call only.** Parameterized by the **`outbound_campaigns`** registry,
 now surfaced as a **campaign switcher** (`?campaign=` — Revival | Jacob); each pool is a registry row, so
 adding a campaign is a row + tagging its leads. `refresh_outbound_facts` runs for **every active campaign**.
-An optional **date range** (calendar, `?start=&end=`, migration 0102) scopes the funnel by each lead's
+A **date range** (calendar, `?start=&end=`, migration 0102) scopes the funnel by each lead's
 **anchor** (campaign entry = `greatest(date_created, floor)`) — a fast filter over the materialized facts,
-no re-aggregation; absent → all-time. An **"Active … – …"** label shows the campaign's full anchor span
-(when it started → latest), independent of the range.
+no re-aggregation. There is **no all-time mode**: when the calendar is untouched the page defaults the
+range to **[campaign start → today]** (start dates are hard-quoted per campaign in the page — Revival
+Jun 3, Jacob Jun 20), so the funnel and the calendar always agree. A **"Started …"** label shows the
+campaign's launch date.
+
+**Pools are mutually exclusive** (migration 0103). The ECJ "Jacob" batch runs through the same Close SMS
+reactivation workflow that stamps every lead with the **"DC Revival Lead"** CF, so all Jacob leads also
+carry the Revival tag. To honor "counted in exactly one place," `refresh_outbound_facts` assigns each lead
+to the **most specific** campaign it carries (highest `outbound_campaigns.sort_order`) and excludes it from
+the rest — so Jacob leads/closes are dropped from Revival, never double-counted.
 
 > **2026-06-26 incident:** `refresh_outbound_facts` ran ~3s/campaign on micro but minutes on nano under
 > load, and the `*/15` cron **stacked** overlapping runs → DB saturation. Fixed: nano→micro **and** the
