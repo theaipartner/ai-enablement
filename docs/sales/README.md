@@ -36,9 +36,11 @@ An internal **sales analytics** dashboard. Four surfaces, flat nav:
   the Digital College funnel, a Cash Collected / ROAS block, a **last-5-days daily table**,
   and an **inline Ads + Landing-Page summary** (the old Ads / Landing-Pages detail pages,
   now surfaced in-page).
-- **Outbound** (route `/outbound`, was "Revival" nested under Marketing) — the DC re-engagement
-  (outbound SMS) campaign's own funnel; its leads are excluded from every other surface, so it's the
-  only place they're counted. Its own top-level page.
+- **Outbound** (route `/outbound`, was "Revival" nested under Marketing) — the outbound-SMS campaign
+  funnels, one per pool via a **campaign switcher** (Revival, Jacob); each pool's leads are mutually
+  exclusive and excluded from every other surface, so it's the only place they're counted. A calendar
+  scopes the funnel by lead-entry cohort, plus an activity-scoped **By rep** table (dials / connections /
+  closes / cash). Its own top-level page.
 - **Leads** — the lead roster + filters + speed-to-lead + first-meaningful-response
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.

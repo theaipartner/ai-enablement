@@ -68,10 +68,12 @@ reachable by URL.
 
 ## Outbound — `/outbound` (was `/funnel/revival`, "Revival")
 
-The DC Revival re-engagement (outbound SMS) funnel — its **own** funnel, reading raw signals with **no
-tagger**. The only surface that counts revival leads. Moved out from under the Advertising Hub to its
-own top-level page + renamed **Outbound** 2026-06-24 (route `/sales-dashboard/outbound`; internally
-still "revival" — components/data keep the `revival` name). See `data-model.md` § Revival.
+The outbound-SMS funnels — one per campaign pool (**Revival**, **Jacob**, …), the only surfaces that count
+those leads. Membership is a Close custom field per campaign: the **Revival** CF (`DC Revival Lead`) is set
+by the external Close SMS re-engagement workflow (no tagger of ours); the **Jacob** CF is set by our
+roster tagger (`shared/outbound_campaign_tag.py`). Moved out from under the Advertising Hub to its own
+top-level page + renamed **Outbound** 2026-06-24 (route `/sales-dashboard/outbound`; internally still
+"revival" — the shared components/data keep the `revival` name). See `data-model.md` § Revival.
 
 **Materialized** (2026-06-24, migrations 0093/0094/0095). The page reads one `outbound_funnel(p_campaign_key)`
 RPC (funnel + called + timeOfDay) **over the precomputed `outbound_lead_facts` table** — sub-second, no

@@ -147,8 +147,8 @@ export default async function OutboundPage({
         className="geg-mono"
         style={{ marginTop: 16, fontSize: 9, letterSpacing: '0.06em', color: 'var(--color-geg-text-faint)', lineHeight: 1.8 }}
       >
-        Called = ≥1 call (inbound or outbound, any length) · Connected = a <b>call</b> backed by a form{' '}
-        <b>or</b> a call ≥90s (so a text-DQ with no call is not a connect) · Booked = a DC or HT booking ·
+        Called = ≥1 call (inbound or outbound, any length) · Connected = a <b>call ≥90s</b> (either
+        direction; so a text-DQ with no call is not a connect) · Booked = a DC or HT booking ·
         Showed = a closer-report show · Closed = a DC close <b>with an explicit plan</b> (a &ldquo;DC
         Closed&rdquo; form with no plan is counted as a show, not a close) · Cash = $300 per Digital College
         plan unit. Activity is counted from each lead&apos;s campaign start (created date, floored at the

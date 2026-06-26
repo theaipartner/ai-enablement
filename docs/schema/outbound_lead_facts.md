@@ -19,7 +19,7 @@ sub-second and stay that way as outbound grows.
 | Column | Type | Notes |
 |--------|------|-------|
 | `campaign_key` | `text` | PK part. FK-ish to `outbound_campaigns.key` (e.g. `'revival'`). |
-| `close_id` | `text` | PK part. The Close lead id. |
+| `close_id` | `text` | PK part. The Close lead id. A lead double-tagged across campaigns is materialized only under its **most specific** campaign (see § What populates it), so the campaigns are mutually exclusive — no `close_id` appears under two `campaign_key`s. |
 | `anchor` | `timestamptz` | `greatest(date_created, campaign floor)` — only activity at/after this counts. |
 | `first_reply` | `timestamptz` | First inbound SMS since anchor (null = no reply). |
 | `has_inbound` | `boolean` | Responded (an inbound SMS since anchor). |
@@ -41,9 +41,13 @@ small table).
 
 ## What populates it
 
-- `refresh_outbound_facts(p_campaign_key)` (migration 0095) — full recompute for one campaign: a
-  `DELETE` + `INSERT` of all that campaign's leads, in one transaction (concurrent reads see the prior
-  snapshot until commit). ≈15s for the `revival` campaign.
+- `refresh_outbound_facts(p_campaign_key)` (migration 0095; mutual-exclusivity added in 0103) — full
+  recompute for one campaign: a `DELETE` + `INSERT` of all that campaign's leads, in one transaction
+  (concurrent reads see the prior snapshot until commit). ≈15s for the `revival` campaign. **Exclusivity
+  (0103):** the `leads` CTE drops any lead that also carries the Close CF of a *more specific* campaign
+  (one with a higher `outbound_campaigns.sort_order`). This is why all of Jacob's leads — which the SMS
+  tool also stamps with the `DC Revival Lead` CF — are counted under `jacob` only, never double-counted in
+  `revival`.
 - `api/outbound_facts_refresh_cron.py` — Vercel cron (`*/15 * * * *`) that calls
   `refresh_outbound_facts()` for every active `outbound_campaigns` row, via a psycopg2 pooler connection
   (the 15s refresh exceeds PostgREST's 8s timeout). Audits to `webhook_deliveries`
@@ -51,5 +55,12 @@ small table).
 
 ## What reads it
 
-- `outbound_funnel(p_campaign_key)` (0095) — aggregates this table into `{funnel, called, timeOfDay}`.
-  Read by `lib/db/funnel-revival.ts` (`getOutboundFunnel`) → the `/sales-dashboard/outbound` page.
+- `outbound_funnel(p_campaign_key, p_start default null, p_end default null)` (0095; date range added in
+  0102) — aggregates this table into `{funnel, called, timeOfDay, activeFrom, activeTo}`. With `p_start`/
+  `p_end` it filters by `anchor` (a lead's campaign-entry date) — the **cohort** scope. Read by
+  `lib/db/funnel-revival.ts` (`getOutboundFunnel`) → the `/sales-dashboard/outbound` page, which always
+  passes a range (default `[campaign start → today]`).
+- `outbound_funnel_by_rep(p_campaign_key, p_start, p_end)` (0104; totals added in 0105) — uses this table
+  as the campaign's lead universe, then joins `close_calls` (dials/connections) and the Airtable closer
+  reports (closes/cash) for the per-rep "By rep" block. Returns `{ reps, totals }`. Unlike the funnel it is
+  **activity-scoped** (calls by `activity_at`, closes by form date in the window), not anchor/cohort-scoped.
