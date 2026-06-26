@@ -66,14 +66,13 @@ export default async function OutboundPage({
   const startP = param(searchParams?.start)
   const endP = param(searchParams?.end)
   const range = startP && endP ? dateRangeFromExplicit(startP, endP) : undefined
-  const { funnel, called, timeOfDay, activeFrom, activeTo } = await getOutboundFunnel(
+  const { funnel, called, timeOfDay, activeFrom } = await getOutboundFunnel(
     active,
     range ? { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso } : undefined,
   )
 
   const todayEt = todayEtDate()
   const activeFromEt = etYmd(activeFrom)
-  const activeToEt = etYmd(activeTo)
   const startEt = startP ?? activeFromEt ?? todayEt
   const endEt = endP ?? todayEt
 
@@ -88,13 +87,13 @@ export default async function OutboundPage({
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <OutboundCampaignSwitcher campaigns={campaigns} active={active} />
         <DateRangePicker startEtDate={startEt} endEtDate={endEt} todayEt={todayEt} />
-        {activeFromEt && activeToEt ? (
+        {activeFromEt ? (
           <span
             className="geg-mono"
-            title="When this campaign's leads first entered (its floor) through the most recent — independent of the date range above"
+            title="When this campaign started (its floor) — independent of the date range"
             style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}
           >
-            Active {monthDay(activeFromEt)} – {monthDay(activeToEt)}
+            Started {monthDay(activeFromEt)}
           </span>
         ) : null}
       </div>
