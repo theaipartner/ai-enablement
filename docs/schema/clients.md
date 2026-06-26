@@ -33,13 +33,13 @@ Canonical record for each client. Kept deliberately lightweight for V1 — the l
 | `birth_year` | `integer` | Profile field (migration 0017) |
 | `location` | `text` | Profile field |
 | `occupation` | `text` | Profile field |
-| `csm_standing` | `text` | CSM-relationship health: `happy` / `neutral` / `at_risk` / `problem` (or null). Auto-derived from `nps_standing` on every NPS write (0027 NPS-is-gospel) except `problem` (manual-only). Drives the M5.6 negative-status cascade and the M5.7 Trustpilot cascade. Indexed |
+| `csm_standing` | `text` | CSM-relationship health: `happy` / `content` / `at_risk` / `problem` (or null). Auto-derived from `nps_standing` on every NPS write (0027 NPS-is-gospel; promoter→happy, neutral→content, at_risk→at_risk) except `problem` (manual-only). Drives the M5.6 negative-status cascade and the Trustpilot cascade in both directions (→`happy` flips Trustpilot to `ask` per M5.7; →`content`/`at_risk`/`problem` flips it to `no` per 0101). Indexed |
 | `archetype` | `text` | Client archetype / persona label |
 | `contracted_revenue` | `numeric` | Financial field (0017). NOT written by `seed_clients.py` — revenue is dropped at ingestion (§ data hygiene); editable in the dashboard |
 | `upfront_cash_collected` | `numeric` | Financial field; same not-from-import caveat as `contracted_revenue` |
 | `arrears` | `numeric` | Not null, default 0. Outstanding balance owed |
 | `arrears_note` | `text` | Free-text note on `arrears` |
-| `trustpilot_status` | `text` | Trustpilot review state: `given` / `declined` / `ask` / `asked` (0020 vocab; labels in `lib/client-vocab.ts`). Auto-flipped to `ask` when `csm_standing` → `happy` (M5.7), with a first-month carve-out (0037). Indexed |
+| `trustpilot_status` | `text` | Trustpilot review state: `yes` (review given) / `no` (don't ask) / `ask` (not given, should ask) / `asked` (ask pending) (vocab in `lib/client-vocab.ts`). Auto-flipped to `ask` when `csm_standing` → `happy` (M5.7), with a first-month carve-out (0037); auto-flipped to `no` when `csm_standing` → any non-happy tier (`content`/`at_risk`/`problem`) per 0101 — i.e. only happy clients get the ask. The `no` cascade never overwrites an existing `yes` (a given review is permanent). Indexed |
 | `ghl_adoption` | `text` | GoHighLevel adoption status. Indexed |
 | `sales_group_candidate` | `boolean` | Whether the client is a sales-group candidate |
 | `dfy_setting` | `boolean` | Done-for-you setting flag |
