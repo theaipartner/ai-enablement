@@ -58,6 +58,8 @@ type RawOutbound = {
   funnel: RevivalFunnel
   called: Omit<RevivalCalled, 'speed'> & { buckets: RevivalSpeedBucket[] }
   timeOfDay: { replies: number; dials: number; connects: number }[]
+  activeFrom: string | null
+  activeTo: string | null
 }
 
 // Active outbound campaigns for the page's switcher (Revival, Jacob, …), in
@@ -73,13 +75,28 @@ export async function getOutboundCampaigns(): Promise<Array<{ key: string; label
   return ((data ?? []) as Array<{ key: string; label: string }>).map((c) => ({ key: c.key, label: c.label }))
 }
 
-export async function getOutboundFunnel(campaignKey = 'revival'): Promise<{
+// `range` (optional) scopes the funnel by each lead's anchor (when it entered
+// the campaign = greatest(date_created, floor)) — a fast in-memory filter over
+// the materialized facts (migration 0102). Omitted → all-time. activeFrom/
+// activeTo are the campaign's full anchor span (independent of range), for the
+// "active dates" label.
+export async function getOutboundFunnel(
+  campaignKey = 'revival',
+  range?: { startUtcIso: string; endUtcIso: string },
+): Promise<{
   funnel: RevivalFunnel
   called: RevivalCalled
   timeOfDay: { buckets: RevivalHourBucket[] }
+  activeFrom: string | null
+  activeTo: string | null
 }> {
   const sb = createAdminClient()
-  const { data, error } = await sb.rpc('outbound_funnel' as never, { p_campaign_key: campaignKey } as never)
+  const args: Record<string, unknown> = { p_campaign_key: campaignKey }
+  if (range) {
+    args.p_start = range.startUtcIso
+    args.p_end = range.endUtcIso
+  }
+  const { data, error } = await sb.rpc('outbound_funnel' as never, args as never)
   if (error) throw new Error(`outbound_funnel RPC failed: ${error.message}`)
   const r = data as unknown as RawOutbound
 
@@ -102,5 +119,7 @@ export async function getOutboundFunnel(campaignKey = 'revival'): Promise<{
         connects: b.connects,
       })),
     },
+    activeFrom: r.activeFrom ?? null,
+    activeTo: r.activeTo ?? null,
   }
 }

@@ -4,15 +4,31 @@ import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
 import { RevivalTimeOfDaySection } from '@/components/sales/revival-time-of-day'
 import { OutboundCampaignSwitcher } from '@/components/sales/outbound-campaign-switcher'
 import { getOutboundFunnel, getOutboundCampaigns } from '@/lib/db/funnel-revival'
+import { dateRangeFromExplicit, todayEtDate } from '@/lib/db/funnel-window'
+import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
+
+// YYYY-MM-DD (ET) → "Jun 3"; a UTC ISO timestamp → its ET YYYY-MM-DD.
+function etYmd(iso: string | null): string | null {
+  if (!iso) return null
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(iso))
+}
+function monthDay(ymd: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' })
+    .format(new Date(`${ymd}T12:00:00Z`))
+}
 
 // Sales Dashboard — Outbound (top-level page).
 //
 // One funnel per outbound campaign pool (Revival, Jacob, …), switched by a
-// segmented control. Each pool's leads are tagged in Close with that campaign's
-// custom field and excluded from every other funnel/roster — this is the only
-// surface that counts them. All-time: per-lead activity is anchored to the
-// campaign start (greatest(date_created, floor); see lib/db/funnel-revival.ts).
+// segmented control + an optional date range (calendar). Each pool's leads are
+// tagged in Close with that campaign's custom field and excluded from every
+// other funnel/roster — the only surface that counts them. Per-lead activity is
+// anchored to campaign entry (greatest(date_created, floor)); the date range
+// scopes by that anchor (migration 0102), and the "Active …" label shows the
+// campaign's full span. See lib/db/funnel-revival.ts.
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -39,12 +55,27 @@ function CampaignIntro({ campaignKey }: { campaignKey: string }) {
 export default async function OutboundPage({
   searchParams,
 }: {
-  searchParams?: { campaign?: string | string[] }
+  searchParams?: { campaign?: string | string[]; start?: string | string[]; end?: string | string[] }
 }) {
+  const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)?.trim() || null
   const campaigns = await getOutboundCampaigns()
-  const raw = Array.isArray(searchParams?.campaign) ? searchParams?.campaign[0] : searchParams?.campaign
-  const active = campaigns.find((c) => c.key === raw)?.key ?? campaigns[0]?.key ?? 'revival'
-  const { funnel, called, timeOfDay } = await getOutboundFunnel(active)
+  const active = campaigns.find((c) => c.key === param(searchParams?.campaign))?.key ?? campaigns[0]?.key ?? 'revival'
+
+  // Optional date range (calendar). Absent → all-time; the picker then defaults
+  // to [campaign start … today]. dateRangeFromExplicit gives ET-anchored UTC bounds.
+  const startP = param(searchParams?.start)
+  const endP = param(searchParams?.end)
+  const range = startP && endP ? dateRangeFromExplicit(startP, endP) : undefined
+  const { funnel, called, timeOfDay, activeFrom, activeTo } = await getOutboundFunnel(
+    active,
+    range ? { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso } : undefined,
+  )
+
+  const todayEt = todayEtDate()
+  const activeFromEt = etYmd(activeFrom)
+  const activeToEt = etYmd(activeTo)
+  const startEt = startP ?? activeFromEt ?? todayEt
+  const endEt = endP ?? todayEt
 
   return (
     <div>
@@ -54,8 +85,18 @@ export default async function OutboundPage({
         actions={<PersonPill label="EST · Nabeel" />}
       />
 
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <OutboundCampaignSwitcher campaigns={campaigns} active={active} />
+        <DateRangePicker startEtDate={startEt} endEtDate={endEt} todayEt={todayEt} />
+        {activeFromEt && activeToEt ? (
+          <span
+            className="geg-mono"
+            title="When this campaign's leads first entered (its floor) through the most recent — independent of the date range above"
+            style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-geg-text-faint)' }}
+          >
+            Active {monthDay(activeFromEt)} – {monthDay(activeToEt)}
+          </span>
+        ) : null}
       </div>
 
       <div
