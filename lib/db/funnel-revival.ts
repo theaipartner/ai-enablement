@@ -49,6 +49,15 @@ export type RevivalCalled = {
 
 export type RevivalHourBucket = { label: string; replies: number; dials: number; connects: number }
 
+// One row of the per-rep breakdown (Dials / Connections / Closes / Cash).
+export type OutboundRepRow = {
+  rep: string
+  dials: number
+  connections: number
+  closes: number
+  cash: number
+}
+
 // The SQL returns the 12 two-hour ET buckets in order; their labels live here.
 const TOD_LABELS = ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', '10p']
 
@@ -122,4 +131,23 @@ export async function getOutboundFunnel(
     activeFrom: r.activeFrom ?? null,
     activeTo: r.activeTo ?? null,
   }
+}
+
+// Per-rep Outbound breakdown (migration 0104). ACTIVITY-scoped — unlike the
+// cohort funnel, this counts what each rep DID in [start, end): calls by their
+// activity_at, closes by their form date, regardless of when the lead entered.
+// Only reps who actually closed are returned (sorted by closes, then cash). The
+// range is required; the page always passes its calendar range.
+export async function getOutboundByRep(
+  campaignKey: string,
+  range: { startUtcIso: string; endUtcIso: string },
+): Promise<OutboundRepRow[]> {
+  const sb = createAdminClient()
+  const { data, error } = await sb.rpc('outbound_funnel_by_rep' as never, {
+    p_campaign_key: campaignKey,
+    p_start: range.startUtcIso,
+    p_end: range.endUtcIso,
+  } as never)
+  if (error) throw new Error(`outbound_funnel_by_rep RPC failed: ${error.message}`)
+  return (data as unknown as OutboundRepRow[]) ?? []
 }

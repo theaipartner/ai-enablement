@@ -2,8 +2,9 @@ import { HeaderBand } from '@/components/gregory/header-band'
 import { RevivalCalledSection } from '@/components/sales/revival-called'
 import { RevivalFunnelSection } from '@/components/sales/revival-funnel'
 import { RevivalTimeOfDaySection } from '@/components/sales/revival-time-of-day'
+import { OutboundByRepSection } from '@/components/sales/outbound-by-rep'
 import { OutboundCampaignSwitcher } from '@/components/sales/outbound-campaign-switcher'
-import { getOutboundFunnel, getOutboundCampaigns } from '@/lib/db/funnel-revival'
+import { getOutboundFunnel, getOutboundCampaigns, getOutboundByRep } from '@/lib/db/funnel-revival'
 import { dateRangeFromExplicit, todayEtDate } from '@/lib/db/funnel-window'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
@@ -81,10 +82,11 @@ export default async function OutboundPage({
   const endEt = endP ?? todayEt
 
   const range = dateRangeFromExplicit(startEt, endEt)
-  const { funnel, called, timeOfDay } = await getOutboundFunnel(active, {
-    startUtcIso: range.startUtcIso,
-    endUtcIso: range.endUtcIso,
-  })
+  const rangeBounds = { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso }
+  const [{ funnel, called, timeOfDay }, byRep] = await Promise.all([
+    getOutboundFunnel(active, rangeBounds),
+    getOutboundByRep(active, rangeBounds),
+  ])
 
   return (
     <div>
@@ -116,6 +118,8 @@ export default async function OutboundPage({
       </div>
 
       <RevivalFunnelSection funnel={funnel} />
+
+      <OutboundByRepSection rows={byRep} />
 
       <RevivalCalledSection called={called} />
 
