@@ -75,7 +75,8 @@ export default async function SalesDashboardFunnelPage({
       return getLeadsForRange(range, cohort)
     })(),
     // Digital College funnel — tag-driven, unique leads only, same window as HT.
-    getDcFunnel(range),
+    // Scoped to the selected landing page (null = all).
+    getDcFunnel(range, lpFormId),
     // Access tier gates the per-lead delete affordance on the inline roster.
     getCurrentUserAccessTier(),
   ])

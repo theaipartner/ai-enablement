@@ -4,7 +4,8 @@ import type { DateRange } from './funnel-window'
 import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 import { getVslMetrics, getTypVideoMetrics, type VideoMetrics } from './funnel-lp'
 import { getTypeformMetrics, type TypeformMetrics } from './funnel-typeform'
-import { getLandingPage } from './landing-pages'
+import { getLandingPage, LANDING_PAGES } from './landing-pages'
+import { HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID } from './funnel-assets'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 // Marketing page — the inline Ads + Landing-Page summary that replaced the two
@@ -103,8 +104,21 @@ export async function getAdsLpSummary(
   lpSlug: string | null,
   adsFilter: AdsCascadeFilter = {},
 ): Promise<AdsLpSummary> {
-  const lp = getLandingPage(lpSlug)
+  // "All landing pages" = no lp slug → aggregate every LP, NOT a fall-back to
+  // Main (getLandingPage(null) would return the first LP and the section would
+  // get "stuck" on Main). When a slug is set, scope to that LP.
+  const isAll = !lpSlug
+  const lp = isAll ? null : getLandingPage(lpSlug)
   const filterActive = !!(adsFilter.adId || adsFilter.adsetId || adsFilter.campaignId)
+
+  // Assets for the selected LP, or the all-LP aggregate. Typeform: undefined →
+  // every high-ticket form (getTypeformMetrics default). VSL: all LPs' videos
+  // (the chart still shows one — the primary — since per-video engagement can't
+  // be summed). Confirmation video is shared across LPs.
+  const vslOptions = isAll ? LANDING_PAGES.flatMap((p) => p.vsl) : lp!.vsl
+  const confirmId = isAll ? HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID : lp!.confirmVideoHashedId
+  const confirmLabel = isAll ? 'V2 precall shortened' : lp!.confirmVideoLabel
+  const typeformForm = isAll ? undefined : lp!.typeformFormId
 
   // wholeFunnel drives the LP block (LP visits = whole-funnel Meta unique link
   // clicks) — the landing-page section scopes to the LP dropdown + window only,
@@ -113,9 +127,9 @@ export async function getAdsLpSummary(
   const [wholeFunnel, entityAds, vsl, typVideo, typeform] = await Promise.all([
     adsSummaryWholeFunnel(range),
     filterActive ? getAdsSummary(range, adsFilter) : Promise.resolve(null),
-    getVslMetrics(range, lp.vsl),
-    getTypVideoMetrics(range, lp.confirmVideoHashedId, lp.confirmVideoLabel),
-    getTypeformMetrics(range, lp.typeformFormId),
+    getVslMetrics(range, vslOptions),
+    getTypVideoMetrics(range, confirmId, confirmLabel),
+    getTypeformMetrics(range, typeformForm),
   ])
 
   const ads = entityAds ?? wholeFunnel
@@ -124,7 +138,7 @@ export async function getAdsLpSummary(
 
   return {
     ads,
-    lpLabel: lp.label,
+    lpLabel: isAll ? 'All landing pages' : lp!.label,
     lpVisits,
     lpConversionPct,
     vsl,

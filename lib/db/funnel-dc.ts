@@ -54,18 +54,22 @@ export function addPlan(counts: DcPlanCounts, plans: string[] | null) {
   }
 }
 
-export async function getDcFunnel(range: DateRange): Promise<DcFunnel> {
+export async function getDcFunnel(range: DateRange, formId?: string | null): Promise<DcFunnel> {
   const sb = createAdminClient()
 
   // DC stage flags from the tags (lead_cycles = unique leads), in window.
   // Connects (a DC conversation) = digital_college_at is set; Closed = a DC plan
   // was sold (dc_closed_at, ANY origin — downsell closes merged in, Drake
   // 2026-06-24). Booked/Showed are no longer surfaced (the columns remain).
-  const { data: cycles, error } = await sb
+  // formId scopes to the selected landing page (lead_cycles.source_form_id);
+  // null = all landing pages.
+  let q = sb
     .from('lead_cycles' as never)
     .select('close_id, digital_college_at, dc_closed_at')
     .gte('opt_in_at', range.startUtcIso)
     .lt('opt_in_at', range.endUtcIso)
+  if (formId) q = q.eq('source_form_id', formId)
+  const { data: cycles, error } = await q
   if (error) throw new Error(`lead_cycles DC read failed: ${error.message}`)
   const rows = (cycles ?? []) as unknown as Array<{
     close_id: string
