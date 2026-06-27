@@ -284,7 +284,7 @@ async function scanDialWindows(
 export async function getLeadsFunnel(
   rows: LeadRow[],
   range: DateRange,
-  opts?: { adId?: string | null; campaignId?: string | null; adsetId?: string | null },
+  opts?: { adId?: string | null; campaignId?: string | null; adsetId?: string | null; sourceFormId?: string | null },
 ): Promise<LeadsFunnel> {
   // Adspend / clicks — used by BOTH paths. Per-ad and per-campaign views show
   // that entity's own spend (cortana_ad_daily / cortana_campaign_daily); ad-set
@@ -344,6 +344,7 @@ export async function getLeadsFunnel(
         p_ad: opts?.adId ?? null,
         p_campaign: opts?.campaignId ?? null,
         p_adset: opts?.adsetId ?? null,
+        p_source_form_id: opts?.sourceFormId ?? null,
       } as never)
       if (error) throw new Error(error.message)
       const f = data as unknown as { total: TotalBox; direct: DirectBox; setter: PoolFunnelBox; reactivation: PoolFunnelBox }

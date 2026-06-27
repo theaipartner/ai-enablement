@@ -94,7 +94,10 @@ export default async function SalesDashboardFunnelPage({
       : campaign
         ? allRows.filter((r) => r.campaignId === campaign)
         : allRows
-  const filterOpts = ad ? { adId: ad } : adset ? { adsetId: adset } : campaign ? { campaignId: campaign } : {}
+  const filterOpts = {
+    ...(ad ? { adId: ad } : adset ? { adsetId: adset } : campaign ? { campaignId: campaign } : {}),
+    sourceFormId: lpFormId, // landing-page scope (orthogonal to the ad cascade)
+  }
   const filterActive = !!(ad || adset || campaign)
   const funnel = await getLeadsFunnel(rows, range, filterOpts)
   // Per-funnel cash collected. `rows` is already view/ad-filtered, so HT cash
