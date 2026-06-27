@@ -3,7 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
-import { HIGH_TICKET_TYPEFORM_FORM_ID, HIGH_TICKET_TYPEFORM_FORM_IDS } from './funnel-assets'
+import { HIGH_TICKET_TYPEFORM_FORM_IDS } from './funnel-assets'
 
 // Funnel · Typeform metrics — used by the consolidated LP detail page.
 //
@@ -22,8 +22,6 @@ import { HIGH_TICKET_TYPEFORM_FORM_ID, HIGH_TICKET_TYPEFORM_FORM_IDS } from './f
 // SAME across these forms (5138f17b). Other forms in the mirror are ignored —
 // they belong to other funnels. Sourced from the asset lock.
 const HT_FORM_IDS = HIGH_TICKET_TYPEFORM_FORM_IDS as unknown as string[]
-// Primary form — used for Typeform Insights snapshots, which exist only for it.
-const PRIMARY_FORM_ID = HIGH_TICKET_TYPEFORM_FORM_ID
 
 // Normalize a one-or-many form arg to an id array.
 function formIds(formId: string | string[]): string[] {
@@ -222,10 +220,21 @@ export async function getTypeformMetrics(
   const range = resolveRange(arg)
   const ids = formIds(formId)
   const rows = await loadResponses(range, ids)
-  // Insights snapshots exist only for the primary form; when this read spans
-  // multiple forms, anchor starts/completion to the primary one.
-  const insightsFormId = ids.length === 1 ? ids[0] : PRIMARY_FORM_ID
-  const startsResult = await deriveStartsForRange(insightsFormId, range)
+  // Starts come from per-form Insights snapshots. Aggregate across ALL counted
+  // forms so starts and completions cover the SAME set. If any counted form has
+  // no snapshot coverage (e.g. a newly-added form before the insights cron has
+  // built a baseline — Os4c0q6V/Training), we can't form a trustworthy total, so
+  // starts + completion rate render as "—" instead of mixing one form's starts
+  // with every form's completions (which produced impossible >100% rates).
+  const perForm = await Promise.all(ids.map((id) => deriveStartsForRange(id, range)))
+  const startsResult: { starts: number | null; partial: boolean; anchorAt: string | null } =
+    perForm.some((s) => s.starts === null)
+      ? { starts: null, partial: true, anchorAt: null }
+      : {
+          starts: perForm.reduce((a, s) => a + (s.starts ?? 0), 0),
+          partial: perForm.some((s) => s.partial),
+          anchorAt: perForm.map((s) => s.anchorAt).filter(Boolean).sort()[0] ?? null,
+        }
 
   let qualified = 0
   let nonQualified = 0

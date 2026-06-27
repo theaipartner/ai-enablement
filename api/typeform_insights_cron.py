@@ -56,10 +56,13 @@ logger.setLevel(logging.INFO)
 
 _AUDIT_SOURCE = "typeform_insights"
 
-# Forms to snapshot. Today only SFedWelr (the main coaching
-# application) is wired into the LP page. Adding a form here makes
-# its snapshots flow automatically.
-FORM_IDS: list[str] = ["SFedWelr"]
+# Forms to snapshot — one per high-ticket landing page, so each LP's "starts"
+# (and completion rate) populate. Keep in sync with funnel-assets.ts
+# HIGH_TICKET_TYPEFORM_FORM_IDS + lead_tagging.py OPT_IN_FORMS.
+#   SFedWelr  — Main LP
+#   Os4c0q6V  — Training LP (/training)
+# Adding a form here makes its snapshots flow automatically.
+FORM_IDS: list[str] = ["SFedWelr", "Os4c0q6V"]
 
 _INSIGHTS_URL = "https://api.typeform.com/insights/{form_id}/summary"
 _REQUEST_TIMEOUT_SECONDS = 20
