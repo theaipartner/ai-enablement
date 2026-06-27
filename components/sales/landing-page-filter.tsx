@@ -13,10 +13,10 @@ import type { ChangeEvent } from 'react'
 // ad cascade); persisted by PersistPageState. The deepest ad selection +
 // the landing page both apply.
 //
-// NOTE: the funnel-box re-scope by landing page activates once the lead
-// tagger stamps each lead_cycle with its source form_id (lands with the
-// second LP). Until then this drives which LP the "Landing pages →"
-// button opens; the boxes don't yet filter by LP.
+// Funnel boxes re-scope by landing page via lead_cycles.source_form_id
+// (migration 0106): the tagger stamps each cycle with its source Typeform form,
+// and getSpeedToLeadCohort filters to the selected LP's form. "All landing
+// pages" (no lp param) shows the combined cohort.
 
 export type LandingPageOption = { slug: string; label: string }
 

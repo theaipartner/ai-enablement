@@ -1196,6 +1196,10 @@ export function summarizeCohortRows(rows: SpeedToLeadCohortRow[]): CohortStats {
 export async function getSpeedToLeadCohort(
   arg: Window | DateRange,
   callerFilter?: string | null,
+  // Landing-page scope: when set, only count opt-in cycles whose source Typeform
+  // form matches (lead_cycles.source_form_id) — e.g. SFedWelr (Main) or Os4c0q6V
+  // (Training). null/undefined → all forms (combined, the "All landing pages" view).
+  formId?: string | null,
 ): Promise<SpeedToLeadCohortResult> {
   const range = resolveRange(arg)
   const sb = createAdminClient()
@@ -1255,13 +1259,16 @@ export async function getSpeedToLeadCohort(
   // (a) and (b) are independent reads — fetch concurrently, then assemble.
   const [tfCycles, candidates] = await Promise.all([
     fetchAllPaged<{ close_id: string; opt_in_at: string }>(
-      (f, t) => sb
-        .from('lead_cycles' as never)
-        .select('close_id, opt_in_at')
-        .eq('source', 'typeform')
-        .gte('opt_in_at', range.startUtcIso)
-        .lt('opt_in_at', range.endUtcIso)
-        .range(f, t),
+      (f, t) => {
+        let q = sb
+          .from('lead_cycles' as never)
+          .select('close_id, opt_in_at')
+          .eq('source', 'typeform')
+          .gte('opt_in_at', range.startUtcIso)
+          .lt('opt_in_at', range.endUtcIso)
+        if (formId) q = q.eq('source_form_id', formId) // landing-page scope
+        return q.range(f, t)
+      },
       'lead_cycles typeform',
     ),
     fetchAllPaged<{

@@ -23,6 +23,11 @@ import type { Database } from './types'
 //   identity is enforced one layer up (the (authenticated) route
 //   group's layout calls getUser() and redirects unauthenticated
 //   users before any data layer call runs).
+// How long dashboard reads stay cached (Next Data Cache TTL). Short enough that
+// staleness is invisible on a sales dashboard, long enough to restore the speed
+// the cache gave us. Bounded TTL = self-healing, so stale data can't persist.
+const ADMIN_READ_TTL_SEC = 60
+
 export function createAdminClient() {
   return createSupabaseClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,19 +40,21 @@ export function createAdminClient() {
         autoRefreshToken: false,
       },
       global: {
-        // Force every read live. Next.js wraps the runtime `fetch` with its
-        // Data Cache; supabase-js calls aren't reliably opted out by a page's
-        // `export const dynamic = 'force-dynamic'`, so server reads were being
-        // served from Next's Data Cache — which PERSISTS ACROSS DEPLOYMENTS.
-        // That made the dashboard render stale data (e.g. the Outbound funnel
-        // stuck at 24k revival, the HT funnel frozen at an old date) even
-        // though the page rendered fresh (x-vercel-cache: MISS) and the DB +
-        // PostgREST returned current values. `cache: 'no-store'` on the
-        // client's fetch bypasses the Data Cache for all admin reads, so the
-        // dashboard always reflects live Supabase data. (unstable_cache call
-        // sites that WANT caching are unaffected — they cache their own
-        // result, not this fetch.)
-        fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }),
+        // BOUNDED, self-healing cache for dashboard reads. Next.js wraps the
+        // runtime `fetch` with its Data Cache; supabase-js calls aren't reliably
+        // opted out by a page's `export const dynamic = 'force-dynamic'`. The
+        // original failure mode wasn't caching itself — it was that the default
+        // cache never expired (it PERSISTS ACROSS DEPLOYMENTS), so the dashboard
+        // froze on stale data (Outbound stuck at 24k revival, HT funnel frozen
+        // at an old date). We pin an explicit short TTL instead: every read is
+        // cached for `revalidate` seconds, so repeated loads are fast, but data
+        // is never more than that stale and the cache SELF-HEALS — the
+        // "frozen forever" failure can't recur. Strip any caller `cache` option
+        // first (Next forbids `cache` + `next.revalidate` together).
+        fetch: (input, init) => {
+          const { cache: _ignored, ...rest } = (init ?? {}) as RequestInit
+          return fetch(input, { ...rest, next: { revalidate: ADMIN_READ_TTL_SEC } })
+        },
       },
     },
   )

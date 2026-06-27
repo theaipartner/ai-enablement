@@ -4,7 +4,7 @@ import { DcFunnelSection } from '@/components/sales/dc-funnel'
 import { getLeadsForRange, type LeadRow } from '@/lib/db/leads'
 import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '@/components/sales/ad-cascade-filter'
 import { LandingPageFilter } from '@/components/sales/landing-page-filter'
-import { LANDING_PAGES } from '@/lib/db/landing-pages'
+import { LANDING_PAGES, getLandingPage } from '@/lib/db/landing-pages'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getAdsetNameMap } from '@/lib/db/cortana-adset-names'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
@@ -45,15 +45,17 @@ export default async function SalesDashboardFunnelPage({
   const campaign = param(searchParams?.campaign)
   const adset = param(searchParams?.adset)
   const ad = param(searchParams?.ad)
-  // Landing-page selection (orthogonal to the ad cascade). Drives which LP
-  // the "Landing pages →" button opens; the funnel-box re-scope by LP is
-  // pending per-lead form attribution (see landing-page-filter.tsx).
+  // Landing-page selection (orthogonal to the ad cascade). Scopes the funnel
+  // boxes to that LP's Typeform form via lead_cycles.source_form_id (migration
+  // 0106); null = "All landing pages" (combined). getLandingPage falls back to
+  // the default LP for a null slug, so only resolve a form when lp is set.
   const lp = param(searchParams?.lp)
+  const lpFormId = lp ? getLandingPage(lp).typeformFormId : null
 
   // Last-5-days daily table (bottom of page) — independent of the date picker,
-  // scoped to the active ad-cascade selection. Kicked off here so it overlaps
-  // with the funnel's own fetches; awaited at render.
-  const dailyTablePromise = getDailyFunnelTable({ adId: ad, adsetId: adset, campaignId: campaign })
+  // scoped to the active ad-cascade selection AND the landing-page selection.
+  // Kicked off here so it overlaps with the funnel's own fetches; awaited at render.
+  const dailyTablePromise = getDailyFunnelTable({ adId: ad, adsetId: adset, campaignId: campaign }, lpFormId)
 
   // Inline Ads + Landing-Page summary (replaces the two click-through pages).
   // Window-scoped to the funnel range. The ads block follows the ad cascade;
@@ -69,7 +71,7 @@ export default async function SalesDashboardFunnelPage({
     (async () => {
       // Same cohort spine as the Leads roster, so the funnel and the rosters it
       // links to can't drift.
-      const cohort = await getSpeedToLeadCohort(range)
+      const cohort = await getSpeedToLeadCohort(range, null, lpFormId)
       return getLeadsForRange(range, cohort)
     })(),
     // Digital College funnel — tag-driven, unique leads only, same window as HT.

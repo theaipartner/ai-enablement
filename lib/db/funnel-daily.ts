@@ -76,11 +76,12 @@ function funnelFilterOpts(f: DailyFunnelFilter) {
   return {}
 }
 
-async function computeDay(etDate: string, filter: DailyFunnelFilter, filterActive: boolean): Promise<DailyFunnelRow> {
+async function computeDay(etDate: string, filter: DailyFunnelFilter, filterActive: boolean, lpFormId: string | null): Promise<DailyFunnelRow> {
   const range = dateRangeFromExplicit(etDate, etDate)
   // Cohort + roster for this single day (cohort feeds Sp2L; rows feed cash and
   // the ad filter). Same spine the Funnel uses, so the leads can't drift.
-  const cohort = await getSpeedToLeadCohort(range)
+  // lpFormId scopes the cohort to the selected landing page (null = all LPs).
+  const cohort = await getSpeedToLeadCohort(range, null, lpFormId)
   const allRows = await getLeadsForRange(range, cohort)
   const rows = filterRows(allRows, filter)
 
@@ -115,8 +116,11 @@ async function computeDay(etDate: string, filter: DailyFunnelFilter, filterActiv
 // The last-N-days daily cohort funnel, newest first. `filter` carries the
 // Marketing page's active ad-cascade selection so the strip scopes to the same
 // entity as the funnel above (no selection → whole cohort).
-export async function getDailyFunnelTable(filter: DailyFunnelFilter = {}): Promise<DailyFunnelRow[]> {
+export async function getDailyFunnelTable(
+  filter: DailyFunnelFilter = {},
+  lpFormId: string | null = null,
+): Promise<DailyFunnelRow[]> {
   const days = lastNEtDates(todayEtDate(), DAILY_TABLE_DAYS)
   const filterActive = !!(filter.adId || filter.adsetId || filter.campaignId)
-  return Promise.all(days.map((d) => computeDay(d, filter, filterActive)))
+  return Promise.all(days.map((d) => computeDay(d, filter, filterActive, lpFormId)))
 }
