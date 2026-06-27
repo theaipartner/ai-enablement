@@ -34,6 +34,21 @@ export function createAdminClient() {
         persistSession: false,
         autoRefreshToken: false,
       },
+      global: {
+        // Force every read live. Next.js wraps the runtime `fetch` with its
+        // Data Cache; supabase-js calls aren't reliably opted out by a page's
+        // `export const dynamic = 'force-dynamic'`, so server reads were being
+        // served from Next's Data Cache — which PERSISTS ACROSS DEPLOYMENTS.
+        // That made the dashboard render stale data (e.g. the Outbound funnel
+        // stuck at 24k revival, the HT funnel frozen at an old date) even
+        // though the page rendered fresh (x-vercel-cache: MISS) and the DB +
+        // PostgREST returned current values. `cache: 'no-store'` on the
+        // client's fetch bypasses the Data Cache for all admin reads, so the
+        // dashboard always reflects live Supabase data. (unstable_cache call
+        // sites that WANT caching are unaffected — they cache their own
+        // result, not this fetch.)
+        fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }),
+      },
     },
   )
 }
