@@ -35,11 +35,21 @@ export const maxDuration = 60
 // active, so the "Started …" label wasn't persistent. Fallback is the campaign
 // floor for unknown keys.
 const CAMPAIGN_START: Record<string, string> = {
+  all: '2026-06-03', // earliest campaign start (Revival) — the combined view's floor
   revival: '2026-06-03',
   jacob: '2026-06-20',
 }
 
 function CampaignIntro({ campaignKey }: { campaignKey: string }) {
+  if (campaignKey === 'all') {
+    return (
+      <>
+        <b>All outbound SMS campaigns</b> combined (Revival + Jacob). Each lead belongs to exactly one
+        campaign pool, so this view is their clean union — every outbound lead, from the outreach through
+        to the sale. Pick a campaign from the dropdown to scope to just that pool.
+      </>
+    )
+  }
   if (campaignKey === 'jacob') {
     return (
       <>
@@ -65,7 +75,8 @@ export default async function OutboundPage({
 }) {
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)?.trim() || null
   const campaigns = await getOutboundCampaigns()
-  const active = campaigns.find((c) => c.key === param(searchParams?.campaign))?.key ?? campaigns[0]?.key ?? 'revival'
+  // Default to the combined "All" view; ?campaign=<key> scopes to one pool.
+  const active = campaigns.find((c) => c.key === param(searchParams?.campaign))?.key ?? 'all'
 
   // Date range (calendar). The funnel is ALWAYS scoped to an explicit range —
   // there is no "all-time" mode. When the calendar is untouched the range

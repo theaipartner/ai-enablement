@@ -1,11 +1,25 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useTransition } from 'react'
+import { useTransition, type ChangeEvent } from 'react'
 
-// Segmented switcher for the Outbound page's campaign pools (Revival, Jacob, …).
-// Each option is a registry row (outbound_campaigns); selecting one sets
-// ?campaign=<key> and re-renders the funnel for that pool.
+// Campaign dropdown for the Outbound page. Options: "All" (default — aggregates
+// every campaign's pool) + one per registry row (Revival, Jacob, …). Selecting
+// one sets ?campaign=<key> (or clears it for All) and re-renders the funnel for
+// that pool. Switching resets the date window to the selected campaign's default.
+const selectStyle = {
+  fontSize: 11,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--color-geg-text)',
+  background: 'var(--color-geg-bg-elev)',
+  border: '1px solid var(--color-geg-border-strong)',
+  borderRadius: 6,
+  padding: '6px 12px',
+  cursor: 'pointer',
+  fontWeight: 600,
+} as const
+
 export function OutboundCampaignSwitcher({
   campaigns,
   active,
@@ -16,49 +30,29 @@ export function OutboundCampaignSwitcher({
   const router = useRouter()
   const [pending, startTransition] = useTransition()
 
-  if (campaigns.length < 2) return null
+  function onChange(e: ChangeEvent<HTMLSelectElement>) {
+    const key = e.target.value
+    const href =
+      key === 'all'
+        ? '/sales-dashboard/outbound'
+        : `/sales-dashboard/outbound?campaign=${encodeURIComponent(key)}`
+    startTransition(() => router.push(href))
+  }
 
   return (
-    <div
-      style={{
-        display: 'inline-flex',
-        gap: 2,
-        padding: 3,
-        borderRadius: 8,
-        border: '1px solid var(--color-geg-border)',
-        background: 'var(--color-geg-bg-elev)',
-        opacity: pending ? 0.6 : 1,
-      }}
+    <select
+      value={active}
+      onChange={onChange}
+      className="geg-mono"
+      aria-label="Outbound campaign"
+      style={{ ...selectStyle, opacity: pending ? 0.6 : 1 }}
     >
-      {campaigns.map((c) => {
-        const isActive = c.key === active
-        return (
-          <button
-            key={c.key}
-            type="button"
-            onClick={() =>
-              startTransition(() =>
-                router.push(`/sales-dashboard/outbound?campaign=${encodeURIComponent(c.key)}`),
-              )
-            }
-            className="geg-mono"
-            style={{
-              cursor: 'pointer',
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              padding: '6px 14px',
-              borderRadius: 6,
-              border: 'none',
-              background: isActive ? 'var(--color-geg-accent-fill)' : 'transparent',
-              color: isActive ? 'var(--color-geg-text)' : 'var(--color-geg-text-3)',
-              fontWeight: isActive ? 600 : 400,
-            }}
-          >
-            {c.label}
-          </button>
-        )
-      })}
-    </div>
+      <option value="all">All campaigns</option>
+      {campaigns.map((c) => (
+        <option key={c.key} value={c.key}>
+          {c.label}
+        </option>
+      ))}
+    </select>
   )
 }

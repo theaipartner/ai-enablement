@@ -112,7 +112,8 @@ export async function getOutboundFunnel(
   activeTo: string | null
 }> {
   const sb = createAdminClient()
-  const args: Record<string, unknown> = { p_campaign_key: campaignKey }
+  // 'all' → null = aggregate every campaign (the page's "All" view, migration 0108).
+  const args: Record<string, unknown> = { p_campaign_key: campaignKey === 'all' ? null : campaignKey }
   if (range) {
     args.p_start = range.startUtcIso
     args.p_end = range.endUtcIso
@@ -156,7 +157,7 @@ export async function getOutboundByRep(
 ): Promise<OutboundByRep> {
   const sb = createAdminClient()
   const { data, error } = await sb.rpc('outbound_funnel_by_rep' as never, {
-    p_campaign_key: campaignKey,
+    p_campaign_key: campaignKey === 'all' ? null : campaignKey, // 'all' = every campaign
     p_start: range.startUtcIso,
     p_end: range.endUtcIso,
   } as never)

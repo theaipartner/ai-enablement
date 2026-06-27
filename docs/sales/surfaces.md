@@ -82,8 +82,11 @@ matter how big the campaign gets. The heavy per-lead aggregation runs OFF the pa
 `outbound_funnel()` just reads the facts. (The original live-aggregation function scanned 66k SMS + 20k
 calls every load → 23s → past the 8s API timeout → the page crashed; this is the fix, mirroring
 `lead_cycles`.) **Connected = a ≥90s call only.** Parameterized by the **`outbound_campaigns`** registry,
-now surfaced as a **campaign switcher** (`?campaign=` — Revival | Jacob); each pool is a registry row, so
-adding a campaign is a row + tagging its leads. `refresh_outbound_facts` runs for **every active campaign**.
+now surfaced as a **campaign dropdown** (`?campaign=`) with an **"All" default** + one option per registry
+row (Revival, Jacob, …). "All" passes `p_campaign_key = NULL`, so both funnel RPCs aggregate across every
+campaign's leads (a clean union — the pools are mutually exclusive, so no double-counting; migration 0108).
+Each pool is a registry row, so adding a campaign is a row + tagging its leads. `refresh_outbound_facts`
+runs for **every active campaign**.
 A **date range** (calendar, `?start=&end=`, migration 0102) scopes the funnel by each lead's
 **anchor** (campaign entry = `greatest(date_created, floor)`) — a fast filter over the materialized facts,
 no re-aggregation. There is **no all-time mode**: when the calendar is untouched the page defaults the
