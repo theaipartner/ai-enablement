@@ -265,11 +265,15 @@ export type VideoMetrics = {
 }
 
 async function getVideoMetrics(
-  hashedId: string,
+  hashedId: string | string[],
   label: string,
   range: DateRange,
 ): Promise<VideoMetrics> {
-  const windowRows = await loadWistiaRows([hashedId], range)
+  // One or many videos. Many → the "All landing pages" combined VSL: visits /
+  // plays / time sum across the videos and the rates re-derive from the combined
+  // base (engagementRate/playRate are already volume-weighted, so this is exact).
+  const ids = Array.isArray(hashedId) ? hashedId : [hashedId]
+  const windowRows = await loadWistiaRows(ids, range)
   const playsTotal = sumW(windowRows, 'plays_filtered')
   const playedTotal = sumW(windowRows, 'played_time_seconds')
   const visitsTotal = sumW(windowRows, 'unique_visitors')
@@ -294,20 +298,22 @@ async function getVideoMetrics(
   const { data, error } = await sb
     .from('wistia_media_daily' as never)
     .select('day, plays_filtered')
-    .eq('hashed_id', hashedId)
+    .in('hashed_id', ids)
     .gte('day', trendStart)
   if (error) throw new Error(`wistia trend read failed: ${error.message}`)
   const trendRows = (data ?? []) as unknown as { day: string; plays_filtered: number | null }[]
+  // Sum plays per day across all ids (one row per (id, day)).
+  const playsByDay = new Map<string, number>()
+  for (const r of trendRows) playsByDay.set(r.day, (playsByDay.get(r.day) ?? 0) + (r.plays_filtered ?? 0))
   const trend: number[] = []
   for (let i = 13; i >= 0; i--) {
     const key = addDaysToEtDateStr(todayEt, -i)
-    const row = trendRows.find((r) => r.day === key)
-    trend.push(row?.plays_filtered ?? 0)
+    trend.push(playsByDay.get(key) ?? 0)
   }
 
   return {
     label,
-    hashedId,
+    hashedId: ids.length === 1 ? ids[0] : ids.join(','),
     visits: visitsTotal,
     playRate,
     timePlayedSec: playedTotal,
@@ -494,7 +500,15 @@ export async function getVslMetrics(
   arg: Window | DateRange,
   vslOptions: LandingPageVsl[],
   selected?: string,
+  // "All landing pages" → combine every LP's VSL into one set of metrics, with a
+  // count label ("2 VSLs") instead of a single video's name.
+  combined = false,
 ): Promise<VideoMetrics> {
+  if (combined) {
+    const ids = Array.from(new Set(vslOptions.map((o) => o.hashedId)))
+    const label = `${ids.length} VSLs`
+    return getVideoMetrics(ids, label, resolveRange(arg))
+  }
   const match = vslOptions.find((o) => o.hashedId === selected)
   const chosen = match ?? vslOptions[0]
   return getVideoMetrics(chosen.hashedId, chosen.label, resolveRange(arg))

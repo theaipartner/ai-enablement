@@ -127,7 +127,7 @@ export async function getAdsLpSummary(
   const [wholeFunnel, entityAds, vsl, typVideo, typeform] = await Promise.all([
     adsSummaryWholeFunnel(range),
     filterActive ? getAdsSummary(range, adsFilter) : Promise.resolve(null),
-    getVslMetrics(range, vslOptions),
+    getVslMetrics(range, vslOptions, undefined, isAll),
     getTypVideoMetrics(range, confirmId, confirmLabel),
     getTypeformMetrics(range, typeformForm),
   ])
