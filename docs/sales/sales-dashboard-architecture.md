@@ -262,6 +262,16 @@ All under `app/(authenticated)/sales-dashboard/`. Server components by default;
 `force-dynamic`. The left sidebar (`sidebar.tsx`, a client component for
 `usePathname()`) renders only under `/sales-dashboard/*`.
 
+> **Data freshness gotcha (fixed 2026-06-27).** `force-dynamic` does NOT reliably
+> opt supabase-js reads out of Next's **Data Cache**, which **persists across
+> deployments** — so the dashboard rendered stale data (Outbound stuck at 24k
+> revival, the HT funnel frozen at an old date) even though the page rendered
+> fresh (`x-vercel-cache: MISS`) and the DB returned current values. No redeploy
+> fixed it (Build Cache ≠ Data Cache). Fix: `createAdminClient` (`lib/supabase/
+> admin.ts`) pins an explicit short TTL on every read (`next: { revalidate: 60 }`)
+> — fast, but bounded and self-healing, so stale data can't persist. Don't remove
+> it; if you need a read live-to-the-second, that's the one place to change.
+
 **2026-05-31 restructure.** The sidebar is now four flat items, no sub-bars:
 **Funnel · Leads · Talent** ("Talent" = the People page, route still /people). The Calls list page is gone. The stacked Total/Direct/Setter/Reactivation
 funnel moved off `/leads` onto the **Funnel page** (`/sales-dashboard/funnel`);

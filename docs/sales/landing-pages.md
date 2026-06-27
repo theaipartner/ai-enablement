@@ -25,19 +25,34 @@ one**. If you're picking this up cold (new chat, time has passed): start at
 
 ---
 
-## The one thing that's deferred (and why)
+## Per-LP scoping — how it works (shipped 2026-06-27)
 
-**Two deferred items, both unblocking when the second LP is real:**
+Selecting a landing page re-scopes **every section of the Funnel page** — funnel
+boxes, lead roster, the last-5-days daily table, the Ads/Landing-Page summary,
+and the Digital College funnel. "All landing pages" (no `?lp=`) shows the
+combined cohort.
 
-1. **Funnel-box re-scope by landing page.** The lead tagger now accepts **both**
-   high-ticket forms (`SFedWelr` + `Os4c0q6V`), so `/training` opt-ins enter
-   `lead_cycles` and the funnel boxes — but **combined**, not per-LP. The dropdown
-   re-scopes the ads / LP / VSL / Typeform summary, not the cohort boxes; the boxes
-   still can't filter per-LP because `lead_cycles` doesn't record *which* form each
-   cycle came through. Per-LP boxes would need a `source_form_id` on `lead_cycles`
-   (the `source` column is just `'typeform'` for all forms).
+The mechanism: each opt-in cycle records **which Typeform it came through** —
+`lead_cycles.source_form_id` (migration 0106), stamped by the tagger
+(`shared/lead_tagging.py`). Then:
+- **Boxes** — `sales_funnel_counts` takes `p_source_form_id` (migration 0107),
+  filtering the cycle base. Because each cycle has exactly one form, the per-LP
+  opt-in counts PARTITION the total (Main + Training = All, in opt-in *events*).
+- **Roster / daily / DC** — `getSpeedToLeadCohort` / `getDcFunnel` take a
+  `formId` and filter `lead_cycles.source_form_id`.
+- **Ads/LP summary** — Typeform aggregates the matching form(s); "All" sums every
+  high-ticket form (`getTypeformMetrics` defaults to the set). Starts come from
+  per-form Insights snapshots, summed across the counted forms; if a form lacks
+  snapshot coverage the starts/rate show "—" (never a mixed, impossible rate).
 
-2. **Per-landing-page video metrics for *shared* videos.** Each LP has its own
+> Each LP needs its own Typeform Insights snapshots for "starts" to populate —
+> add the form to `FORM_IDS` in `api/typeform_insights_cron.py`. Starts build from
+> snapshot deltas going forward (no historical backfill — seed a launch baseline
+> if you need it immediately).
+
+## The one thing that's still deferred (and why)
+
+1. **Per-landing-page video metrics for *shared* videos.** Each LP has its own
    Typeform, but the **VSL / thank-you videos may be shared** across LPs. We
    want each LP's page to show that video's stats *as embedded on that LP* —
    not its grand total. But we pull `wistia_media_daily`, which is **per-media,
@@ -85,19 +100,22 @@ page + form will have them:
 ### Step 2 — what Builder does with it
 
 1. Add the entry to `lib/db/landing-pages.ts` (the 5 things above). → LP detail
-   page works immediately for the new page.
-2. Add the new form to `OPT_IN_FORMS` (`shared/lead_tagging.py`) and
-   `HIGH_TICKET_TYPEFORM_FORM_IDS` (`funnel-assets.ts`), then run a full
-   backfill-retag (`scripts/backfill_lead_tags.py --apply`). → its opt-ins enter
-   `lead_cycles` and the (combined) funnel boxes. *(Done for `Os4c0q6V` 2026-06-26.)*
-3. **Optional, for per-LP box scoping:** add a `source_form_id` to `lead_cycles`,
-   stamp it in the tagger, and add the filter to the funnel SQL so the dropdown
-   re-scopes the boxes per LP. Not yet done — boxes are combined across LPs.
-4. **If the new LP would share a VSL or thank-you video with another LP**, have
+   page + dropdown option work immediately.
+2. Register the form in the three places that define the high-ticket form set
+   (keep them in sync):
+   - `OPT_IN_FORMS` — `shared/lead_tagging.py` (the cohort/tagger universe).
+   - `HIGH_TICKET_TYPEFORM_FORM_IDS` — `lib/db/funnel-assets.ts` (read-side lock).
+   - `FORM_IDS` — `api/typeform_insights_cron.py` (so "starts" get captured).
+   Then run a full backfill-retag (`scripts/backfill_lead_tags.py --apply`). → its
+   opt-ins enter `lead_cycles` with `source_form_id` stamped, so the funnel boxes,
+   roster, daily table, and DC all re-scope to it via the dropdown automatically
+   (no per-LP SQL change — `source_form_id` is generic). *(Done for `Os4c0q6V`
+   2026-06-27.)*
+3. **If the new LP would share a VSL or thank-you video with another LP**, have
    the team **duplicate the video** so each LP has its own Wistia hashed_id
-   (see deferred item 2 — the per-embed API route was investigated and rejected
-   as heavy + incomplete). With a unique id per LP, no extra work — the
+   (see the deferred item above — the per-embed API route was investigated and
+   rejected as heavy + incomplete). With a unique id per LP, no extra work — the
    existing pipeline handles it. Skip entirely if the new LP's videos are unique.
 
-Steps 2–4 are why the form has to exist first — Builder matches the form's real
+Steps 2–3 are why the form has to exist first — Builder matches the form's real
 shape (qualification question, hidden fields) rather than guessing.
