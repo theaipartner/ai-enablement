@@ -46,6 +46,9 @@ const NAV: NavItem[] = [
   },
   // The Calls list page is gone — per-call review pages are reached from the
   // per-lead Lifecycle (each call links there, and returns "Back to lead").
+  // Verify Reps = admin surface to add new sales reps (from Airtable) to
+  // team_members so their stats flow to every per-rep surface.
+  { href: '/sales-dashboard/reps', label: 'Verify Reps' },
 ]
 
 export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {

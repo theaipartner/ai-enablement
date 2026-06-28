@@ -123,6 +123,34 @@ def _to_iso_date(v: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Sales Team Member parser — feeds the verify-page candidate mirror
+# ---------------------------------------------------------------------------
+
+
+def parse_sales_team_member(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one Airtable "Sales Team Member" record to a sales_rep_candidates row.
+
+    The record id is the `rec*` value that team_members.airtable_user_id holds.
+    The table carries no email / Close id / Calendly — only name, Job Title, and
+    Active — so the verify page resolves the rest. `createdTime` (record metadata,
+    not a field) drives the forward-only cutoff.
+    """
+    record_id = record.get("id")
+    if not record_id:
+        return None
+    fields = record.get("fields", {})
+    return {
+        "airtable_record_id": record_id,
+        "full_name": _to_str(fields.get("Name")),
+        "first_name": _to_str(fields.get("First Name")),
+        "last_name": _to_str(fields.get("Last Name")),
+        "job_title": _to_str(fields.get("Job Title")),
+        "is_active": _to_bool(fields.get("Active")),
+        "airtable_created_at": _to_iso_dt(record.get("createdTime")),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Setter Triage Calls parser
 # ---------------------------------------------------------------------------
 
@@ -198,7 +226,9 @@ def parse_full_closer(
     if region not in ("US", "AUS"):
         # Defensive — caller is supposed to pin region per source table.
         # An unknown region is a bug, not an upsert-as-NULL case.
-        raise ValueError(f"parse_full_closer requires region 'US'|'AUS', got {region!r}")
+        raise ValueError(
+            f"parse_full_closer requires region 'US'|'AUS', got {region!r}"
+        )
 
     fields = record.get("fields") or {}
     created_time = record.get("createdTime")
@@ -221,26 +251,22 @@ def parse_full_closer(
         "record_id": record_id,
         "region": region,
         "airtable_created_at": created_time,
-
         # Identity
         "lead_id": _to_lead_id(fields.get("Lead ID")),
         "prospect_name": _to_str(fields.get("Prospect Name")),
         "prospect_email": _to_str(fields.get("Prospect Email")),
         "prospect_phone": _to_str(fields.get("Prospect Phone")),
-
         # Call meta
         "call_type": _to_str(fields.get("Call Type")),
         "date_time_of_call": _to_iso_dt(fields.get("Date & Time of Call")),
         "call_recording": _to_str(fields.get("Call Recording")),
         "call_notes": _to_str(fields.get("Call Notes")),
         "call_notes_lost": _to_str(fields.get("Call Notes (Lead lost):")),
-
         # Attribution
         "closer_record_ids": _to_str_array(fields.get("Closer Name")),
         "closer_names": _to_str_array(fields.get("Name (from Closer Name)")),
         "setter_record_ids": setter_ids,
         "setter_names": _to_str_array(fields.get("Name (from Setter Name)")),
-
         # Dispositions
         "showed": _to_str(fields.get("Showed?")),
         "closed": _to_str(fields.get("Closed?")),
@@ -249,11 +275,12 @@ def parse_full_closer(
         "paid_on_call": _to_bool(fields.get("Paid On Call?")),
         "contract_sent": _to_bool(fields.get("Contract Sent?")),
         "follow_up": _to_str(fields.get("Follow Up")),
-
         # Money — BOTH cash-paid-today fields stored separately
         # (ambiguity #3; dashboard picks canonical).
         "amount_paid_today_currency": _to_numeric(
-            fields.get("How much did they pay today?/How much are they paying upfront?"),
+            fields.get(
+                "How much did they pay today?/How much are they paying upfront?"
+            ),
         ),
         "amount_paid_today_number": _to_numeric(
             fields.get("Amount they paid today?"),
@@ -263,21 +290,17 @@ def parse_full_closer(
             fields.get("Total Contract Amount"),
         ),
         "income": _to_numeric(fields.get("Income")),
-
         # Plan structure
         "payment_status": _to_str(fields.get("Payment Status")),
         "payment_plan_type": _to_str(fields.get("Payment Plan Type?")),
         "program_type": _to_str(
             fields.get("Which program is the client going for?"),
         ),
-
         # Context
         "industry": _to_str(fields.get("Industry")),
         "location": _to_str(fields.get("Location")),
-
         # Provisional derived attribution (flagged in schema comment)
         "is_setter_led": is_setter_led,
-
         # New-form (2026-05-30 redesign) disposition + plan/payment fields.
         # Old rows leave these None. Form Type discriminates New vs Old;
         # Call Outcome is the single disposition the dashboard derives
@@ -299,13 +322,17 @@ def parse_full_closer(
             fields.get("How many monthly payments will there be? (creative plan)"),
         ),
         "deposit_topup_amount": _to_numeric(
-            fields.get("How much to collect on top of this deposit to get them started?"),
+            fields.get(
+                "How much to collect on top of this deposit to get them started?"
+            ),
         ),
         "contract_amount_to_send": _to_numeric(
             fields.get("What contract amount should be sent to the client?"),
         ),
         "follow_up_date": _to_iso_date(fields.get("Follow Up Date?")),
-        "likely_start_date": _to_iso_date(fields.get("What's their likely start date?")),
+        "likely_start_date": _to_iso_date(
+            fields.get("What's their likely start date?")
+        ),
         "payment_1_amount": _to_numeric(fields.get("Amount of 1st payment?")),
         "payment_1_date": _to_iso_date(fields.get("Date of 1st payment?")),
         "payment_2_amount": _to_numeric(fields.get("Amount of 2nd payment?")),
@@ -316,7 +343,6 @@ def parse_full_closer(
         "payment_4_date": _to_iso_date(fields.get("Date of 4th payment?")),
         "payment_5_amount": _to_numeric(fields.get("Amount of 5th payment?")),
         "payment_5_date": _to_iso_date(fields.get("Date of 5th payment?")),
-
         # Catch-all — SOURCE OF TRUTH for every field, including:
         #   - the 5 aggregation-layer-pending ambiguities
         #   - the 10 payment-installment fields

@@ -6,6 +6,12 @@ upsert each user's `id` into the matching `team_members` row by email
 but hasn't been manually added to team_members) are logged for
 manual triage — we deliberately do NOT auto-create team_members rows.
 
+It ALSO mirrors the full Close user roster into `close_users` (migration
+0109) — the source for the sales-rep verify page's Close-ID picker
+(/sales-dashboard/reps). That mirror is independent of the team_members
+match: the picker needs the whole org, including people not yet in
+team_members.
+
 Why daily polling and not webhooks: user-create / user-update events
 in Close happen 1-2 times/month at this team's volume. A daily
 polling cron is idempotent, simpler to maintain, and recovers from
@@ -121,12 +127,40 @@ def run_close_users_sync_cron() -> dict[str, Any]:
     unmatched_users: list[dict[str, str]] = []
     errors: list[str] = []
 
+    mirrored = 0
+
     for user in client.iter_users():
         seen += 1
         close_id = user.get("id")
         email = user.get("email")
         if not close_id or not email:
             continue
+        # Mirror every Close user into `close_users` — the source for the
+        # sales-rep verify page's Close-ID picker (migration 0109). Independent
+        # of the team_members match below: the picker needs the full org roster,
+        # not just people already in team_members.
+        try:
+            db.table("close_users").upsert(
+                {
+                    "close_user_id": close_id,
+                    "email": email,
+                    "first_name": user.get("first_name"),
+                    "last_name": user.get("last_name"),
+                    "full_name": (
+                        " ".join(
+                            filter(
+                                None, [user.get("first_name"), user.get("last_name")]
+                            )
+                        ).strip()
+                        or None
+                    ),
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="close_user_id",
+            ).execute()
+            mirrored += 1
+        except Exception as exc:
+            errors.append(f"close_users_mirror_failed:{email}:{exc}")
         try:
             resp = (
                 db.table("team_members")
@@ -140,11 +174,16 @@ def run_close_users_sync_cron() -> dict[str, Any]:
             continue
         rows = resp.data or []
         if not rows:
-            unmatched_users.append({
-                "close_user_id": close_id,
-                "email": email,
-                "name": " ".join(filter(None, [user.get("first_name"), user.get("last_name")])).strip() or None,
-            })
+            unmatched_users.append(
+                {
+                    "close_user_id": close_id,
+                    "email": email,
+                    "name": " ".join(
+                        filter(None, [user.get("first_name"), user.get("last_name")])
+                    ).strip()
+                    or None,
+                }
+            )
             continue
         row = rows[0]
         matched += 1
@@ -153,30 +192,38 @@ def run_close_users_sync_cron() -> dict[str, Any]:
             already_set += 1
             continue
         if existing and existing != close_id:
-            drift_warnings.append({
-                "team_member_id": row["id"],
-                "email": email,
-                "existing_close_user_id": existing,
-                "close_returned_id": close_id,
-            })
+            drift_warnings.append(
+                {
+                    "team_member_id": row["id"],
+                    "email": email,
+                    "existing_close_user_id": existing,
+                    "close_returned_id": close_id,
+                }
+            )
             logger.warning(
                 "close_users_sync_cron: drift email=%s existing=%s close=%s",
-                email, existing, close_id,
+                email,
+                existing,
+                close_id,
             )
             continue
         # close_user_id is null — populate it
         try:
-            db.table("team_members").update({"close_user_id": close_id}).eq("id", row["id"]).execute()
+            db.table("team_members").update({"close_user_id": close_id}).eq(
+                "id", row["id"]
+            ).execute()
             populated += 1
             logger.info(
                 "close_users_sync_cron: populated email=%s close_user_id=%s",
-                email, close_id,
+                email,
+                close_id,
             )
         except Exception as exc:
             errors.append(f"update_failed:{email}:{exc}")
 
     audit_payload: dict[str, Any] = {
         "users_seen": seen,
+        "close_users_mirrored": mirrored,
         "team_members_matched": matched,
         "close_user_id_populated": populated,
         "already_set_skipped": already_set,
@@ -194,13 +241,22 @@ def run_close_users_sync_cron() -> dict[str, Any]:
 
     logger.info(
         "close_users_sync_cron: seen=%d matched=%d populated=%d unmatched=%d drift=%d errors=%d",
-        seen, matched, populated, len(unmatched_users), len(drift_warnings), len(errors),
+        seen,
+        matched,
+        populated,
+        len(unmatched_users),
+        len(drift_warnings),
+        len(errors),
     )
     return audit_payload
 
 
 def _insert_audit(
-    db, *, status: str, payload: dict[str, Any], error: str | None,
+    db,
+    *,
+    status: str,
+    payload: dict[str, Any],
+    error: str | None,
 ) -> None:
     """Per-cron-invocation summary row. Same shape as clarity_sync_cron."""
     delivery_id = f"{_AUDIT_SOURCE}_{uuid.uuid4()}"
@@ -225,9 +281,7 @@ def _verify_auth(headers: Any) -> bool:
     if not expected:
         logger.error("close_users_sync_cron: CRON_SECRET not configured")
         return False
-    auth_header = (
-        headers.get("Authorization") or headers.get("authorization") or ""
-    )
+    auth_header = headers.get("Authorization") or headers.get("authorization") or ""
     if not auth_header.startswith("Bearer "):
         return False
     presented = auth_header[len("Bearer ") :]

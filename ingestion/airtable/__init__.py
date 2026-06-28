@@ -54,6 +54,13 @@ TARGET_TABLES: dict[str, tuple[str, str | None, str]] = {
 }
 
 
+# The Airtable "Sales Team Member" table — the roster of sales reps. NOT in
+# TARGET_TABLES (the webhook/cron sync that mirrors forms): this table is read
+# on its own by api/sales_rep_candidates_sync_cron.py into `sales_rep_candidates`
+# to feed the admin verify page. Each record's id IS a team_members.airtable_user_id.
+SALES_TEAM_MEMBER_TABLE_ID = "tblpSaR3Iq4vBBbpO"
+
+
 # Audit source name used in webhook_deliveries — distinct buckets for
 # the webhook receiver vs the cron backstop so failures attribute
 # cleanly.

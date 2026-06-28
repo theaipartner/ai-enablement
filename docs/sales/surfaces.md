@@ -249,6 +249,30 @@ The per-call transcript / review page. Reached **only** from a per-lead Lifecycl
 
 ---
 
+## Verify Reps — `/sales-dashboard/reps` (admin)
+
+The admin surface for **onboarding a new sales rep**. When a rep is added to the
+Airtable "Sales Team Member" table, they appear here (forward-only: created on/after
+`2026-06-27`) as a card to verify. The admin sets the rep's **sales role** (Setter /
+Closer / DC Closer), resolves their **Close ID + email** (a Close-user picker that fills
+both, or manual entry), and optionally a **Calendly event-type URI** (fully optional — DC
+closers can close by phone). Three buttons:
+
+- **Save** — persist a draft, leave the card open (rep not in Close/Calendly yet).
+- **Complete** — write the `team_members` row (`role='sales'`, `access_tier='csm'`). The
+  rep then **auto-appears on every per-rep surface** (Outbound by-rep, Talent, People,
+  Roster) via the existing `team_members` joins on `close_user_id` / `airtable_user_id` —
+  no per-page wiring.
+- **Delete** — dismiss a test/junk candidate.
+
+Data: Airtable → `sales_rep_candidates` (mirror cron `sales_rep_candidates_sync_cron`,
+every 30 min) and Close → `close_users` (the daily close-users cron); draft/final state in
+`sales_rep_verifications`. The whole `/sales-dashboard` segment is admin-gated by its
+layout. See `docs/schema/sales_rep_candidates.md`, `sales_rep_verifications.md`,
+`close_users.md`, and `team_members.md` § Sales identity.
+
+---
+
 ## Legacy surfaces (not the current product)
 
 - `/[section]`, `/states`, `/trajectory` — the older v1/v2 **metric-catalog** layer
