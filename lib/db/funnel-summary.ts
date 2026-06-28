@@ -4,8 +4,7 @@ import type { DateRange } from './funnel-window'
 import { getAdsAggregateLive, clampAdsRange } from './funnel-ads'
 import { getVslMetrics, getTypVideoMetrics, type VideoMetrics } from './funnel-lp'
 import { getTypeformMetrics, type TypeformMetrics } from './funnel-typeform'
-import { getLandingPage, LANDING_PAGES } from './landing-pages'
-import { HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID } from './funnel-assets'
+import { getLandingPage, getLandingPages } from './landing-pages'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 // Marketing page — the inline Ads + Landing-Page summary that replaced the two
@@ -108,16 +107,18 @@ export async function getAdsLpSummary(
   // Main (getLandingPage(null) would return the first LP and the section would
   // get "stuck" on Main). When a slug is set, scope to that LP.
   const isAll = !lpSlug
-  const lp = isAll ? null : getLandingPage(lpSlug)
+  const lp = isAll ? null : await getLandingPage(lpSlug)
+  // All active LPs (only needed for the all-LP aggregate).
+  const allLps = isAll ? await getLandingPages() : []
   const filterActive = !!(adsFilter.adId || adsFilter.adsetId || adsFilter.campaignId)
 
   // Assets for the selected LP, or the all-LP aggregate. Typeform: undefined →
   // every high-ticket form (getTypeformMetrics default). VSL: all LPs' videos
   // (the chart still shows one — the primary — since per-video engagement can't
-  // be summed). Confirmation video is shared across LPs.
-  const vslOptions = isAll ? LANDING_PAGES.flatMap((p) => p.vsl) : lp!.vsl
-  const confirmId = isAll ? HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID : lp!.confirmVideoHashedId
-  const confirmLabel = isAll ? 'V2 precall shortened' : lp!.confirmVideoLabel
+  // be summed). Confirmation video is shared across LPs (use the default LP's).
+  const vslOptions = isAll ? allLps.flatMap((p) => p.vsl) : lp!.vsl
+  const confirmId = isAll ? (allLps[0]?.confirmVideoHashedId ?? '') : lp!.confirmVideoHashedId
+  const confirmLabel = isAll ? (allLps[0]?.confirmVideoLabel ?? 'V2 precall shortened') : lp!.confirmVideoLabel
   const typeformForm = isAll ? undefined : lp!.typeformFormId
 
   // wholeFunnel drives the LP block (LP visits = whole-funnel Meta unique link

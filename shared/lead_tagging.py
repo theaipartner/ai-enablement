@@ -37,6 +37,7 @@ Rules (authoritative — mirror docs/sales/sales-dashboard-architecture.md):
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -49,6 +50,8 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import Json, execute_values
 
+logger = logging.getLogger("ai_enablement.lead_tagging")
+
 EFFECTIVE_DATE = "2026-05-24"
 # High-ticket opt-in Typeform forms — a lead is a unique high-ticket lead if it
 # matches a response on ANY of these (by email/phone). Multiple landing pages
@@ -56,8 +59,33 @@ EFFECTIVE_DATE = "2026-05-24"
 #   - SFedWelr  — original LP (go.theaipartner.io/lp).
 #   - Os4c0q6V  — "6/20 | Longer Form | Call Funnel", the /training LP (live
 #                 2026-06-20). Same qualification field ref (5138f17b).
-# Keep in sync with lib/db/funnel-assets.ts HIGH_TICKET_TYPEFORM_FORM_IDS.
+# The eligible opt-in form set now lives in the DB (table landing_page_forms,
+# migration 0110) so landing pages can be added in Gregory with no deploy —
+# loaded per run by _load_opt_in_forms(cur). This constant is the FALLBACK used
+# only if that read fails or returns empty (defensive: never silently wipe the
+# cohort on a transient DB hiccup).
 OPT_IN_FORMS = ["SFedWelr", "Os4c0q6V"]
+
+
+def _load_opt_in_forms(cur):
+    """The eligible opt-in Typeform form set — every form_id in
+    landing_page_forms (across active AND inactive LPs, so deactivating an LP
+    never drops a form that still has cycles). Falls back to the OPT_IN_FORMS
+    constant if the table read fails or is empty."""
+    try:
+        cur.execute("select form_id from landing_page_forms")
+        forms = [r[0] for r in cur.fetchall() if r and r[0]]
+        if forms:
+            return forms
+        logger.warning(
+            "lead_tagging: landing_page_forms empty — using OPT_IN_FORMS fallback"
+        )
+    except Exception as exc:
+        logger.warning(
+            "lead_tagging: landing_page_forms read failed (%s) — using OPT_IN_FORMS fallback",
+            exc,
+        )
+    return list(OPT_IN_FORMS)
 # Typeform "how much are you willing to invest" choice field — SHARED across the
 # forms above (same ref). Drives per-cycle qualification (>= $2,000 = qualified),
 # replacing the stale close_leads.marketing_qualified flag.
@@ -248,16 +276,19 @@ def _compute(cur, lead_ids):
     if not ids:
         return [], []
 
-    # 2. Cycle reconstruction — high-ticket Typeform (any OPT_IN_FORMS) by
-    # email/phone (REQUIRED). Forms are merged: a lead matching either form's
-    # response gets a cycle; submissions are deduped per-minute below.
+    # 2. Cycle reconstruction — high-ticket Typeform (any eligible opt-in form)
+    # by email/phone (REQUIRED). The eligible form set comes from the DB-backed
+    # landing-page registry (landing_page_forms, migration 0110); forms are
+    # merged: a lead matching any form's response gets a cycle; submissions are
+    # deduped per-minute below.
+    opt_in_forms = _load_opt_in_forms(cur)
     cur.execute(
         """select submitted_at, form_id,
              lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
              (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1),
              (select a->'choice'->>'label' from jsonb_array_elements(answers) a where a->'field'->>'ref' = %s limit 1)
            from typeform_responses where form_id = ANY(%s) and submitted_at >= %s""",
-        (INVEST_FIELD_REF, OPT_IN_FORMS, EFFECTIVE_DATE),
+        (INVEST_FIELD_REF, opt_in_forms, EFFECTIVE_DATE),
     )
     tf_by_email, tf_by_phone = defaultdict(list), defaultdict(list)
     for submitted_at, form_id, email, phone, investment in cur.fetchall():

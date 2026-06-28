@@ -3,7 +3,7 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Window } from './sales-dashboard-shared'
 import { getDateRangeFromWindow, type DateRange } from './funnel-window'
-import { HIGH_TICKET_TYPEFORM_FORM_IDS } from './funnel-assets'
+import { getHighTicketFormIds } from './landing-pages'
 
 // Funnel · Typeform metrics — used by the consolidated LP detail page.
 //
@@ -20,11 +20,13 @@ import { HIGH_TICKET_TYPEFORM_FORM_IDS } from './funnel-assets'
 // (aggregate across landing pages); per-LP callers pass a single form_id.
 // Qualification parsing relies on the budget question's field ref, which is the
 // SAME across these forms (5138f17b). Other forms in the mirror are ignored —
-// they belong to other funnels. Sourced from the asset lock.
-const HT_FORM_IDS = HIGH_TICKET_TYPEFORM_FORM_IDS as unknown as string[]
+// they belong to other funnels. The all-forms default now comes from the
+// DB-backed registry (getHighTicketFormIds) instead of a code constant.
 
-// Normalize a one-or-many form arg to an id array.
-function formIds(formId: string | string[]): string[] {
+// Normalize a one-or-many form arg to an id array; null/undefined => the full
+// high-ticket set from the landing-page registry.
+async function formIds(formId: string | string[] | null | undefined): Promise<string[]> {
+  if (formId == null) return getHighTicketFormIds()
   return Array.isArray(formId) ? formId : [formId]
 }
 
@@ -110,7 +112,7 @@ async function loadResponses(range: DateRange, formId: string | string[]): Promi
   const { data, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id, form_id, landed_at, submitted_at, answers')
-    .in('form_id', formIds(formId))
+    .in('form_id', Array.isArray(formId) ? formId : [formId])
     .gte('submitted_at', range.startUtcIso)
     .lt('submitted_at', range.endUtcIso)
   if (error) throw new Error(`typeform_responses read failed: ${error.message}`)
@@ -215,10 +217,10 @@ async function deriveStartsForRange(formId: string, range: DateRange): Promise<{
 
 export async function getTypeformMetrics(
   arg: Window | DateRange,
-  formId: string | string[] = HT_FORM_IDS,
+  formId?: string | string[],
 ): Promise<TypeformMetrics> {
   const range = resolveRange(arg)
-  const ids = formIds(formId)
+  const ids = await formIds(formId)
   const rows = await loadResponses(range, ids)
   // Starts come from per-form Insights snapshots. Aggregate across ALL counted
   // forms so starts and completions cover the SAME set. If any counted form has
@@ -317,14 +319,14 @@ export async function getTypeformMetrics(
 // metrics breakdown (e.g. the funnel-strip LP→submit cascade math).
 export async function getSubmitsCount(
   arg: Window | DateRange,
-  formId: string | string[] = HT_FORM_IDS,
+  formId?: string | string[],
 ): Promise<number> {
   const range = resolveRange(arg)
   const sb = createAdminClient()
   const { count, error } = await sb
     .from('typeform_responses' as never)
     .select('response_id', { count: 'exact', head: true })
-    .in('form_id', formIds(formId))
+    .in('form_id', await formIds(formId))
     .gte('submitted_at', range.startUtcIso)
     .lt('submitted_at', range.endUtcIso)
   if (error) throw new Error(`typeform_responses count failed: ${error.message}`)

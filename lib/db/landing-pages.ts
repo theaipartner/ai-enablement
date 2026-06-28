@@ -1,48 +1,50 @@
-// Landing-page registry — the single source of truth for which landing
-// pages the sales dashboard knows about and what assets each one owns.
-//
-// One entry per landing page. Each entry composes the low-level
-// asset-lock constants (funnel-assets.ts) into a page-shaped record the
-// LP detail page + the funnel-page landing-page dropdown both read.
-//
-// ⚠️ Adding a landing page is (almost) just a new entry here: a label,
-// the Typeform form_id (the lead-attribution key), the VSL hashed_id(s),
-// and the thank-you/confirmation video hashed_id. ALSO add the form to
-// the lead tagger's OPT_IN_FORMS (shared/lead_tagging.py) + funnel-assets'
-// HIGH_TICKET_TYPEFORM_FORM_IDS so its opt-ins enter lead_cycles and the
-// aggregate funnel. The LP detail page (VSL / thank-you / Typeform stats)
-// is driven entirely by this entry. NOTE: the lead tagger merges all
-// OPT_IN_FORMS into one combined cohort — lead_cycles does NOT yet record
-// which form/LP each cycle came from, so the funnel BOXES are combined
-// across LPs (the LP dropdown scopes the ads/LP/VSL/Typeform summary, not
-// the cohort boxes). Per-LP box filtering would need a source_form_id on
-// lead_cycles. See docs/sales/data-model.md § The lead definition.
+import 'server-only'
 
-import {
-  HIGH_TICKET_TYPEFORM_FORM_ID,
-  HIGH_TICKET_VSL_HASHED_IDS,
-  HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
-} from './funnel-assets'
+import { cache } from 'react'
+import { createAdminClient } from '@/lib/supabase/admin'
 
-// The /training LP (live 2026-06-20): its own VSL + Typeform, same high-ticket
-// funnel. VSL "6/20 | New Vsl | Call Funnel" (t05pq6ra0u) — confirmed via the
-// Wistia embed_url join.theaipartner.io/training. Reuses the shared confirm
-// video. Its form Os4c0q6V is in the asset lock + the lead tagger.
-const TRAINING_VSL_HASHED_ID = 't05pq6ra0u'
-const TRAINING_TYPEFORM_FORM_ID = 'Os4c0q6V'
+// Landing-page registry — now DB-backed (tables `landing_pages` +
+// `landing_page_forms`, migration 0110). Was a static array here; moved to the
+// DB so landing pages can be added/edited in Gregory (the admin page) with no
+// deploy. The shape returned is unchanged for existing consumers (slug, label,
+// lpPath, typeformFormId, typeformLabel, vsl[], confirmVideo*) PLUS a `forms`
+// array (an LP can own >1 form — editing an LP ADDS a form, keeping the old
+// form's cycles counted; form_id is UNIQUE so a form belongs to one LP).
+//
+// All reads go through the service-role admin client (bounded 60s cache) and are
+// additionally memoized per-request via React cache(). Server-only.
+//
+// The eligible OPT-IN form set (was HIGH_TICKET_TYPEFORM_FORM_IDS /
+// OPT_IN_FORMS / FORM_IDS) is the UNION of every form_id in landing_page_forms,
+// across active AND inactive LPs — deactivating an LP must never drop a form
+// that still has cycles. Per-form qualification (field ref + qualifying answers)
+// also lives on each form row, replacing the global INVEST_FIELD_REF rule.
 
 export type LandingPageVsl = { hashedId: string; label: string }
+
+export type LandingPageForm = {
+  formId: string
+  typeformTitle: string | null
+  qualifyFieldRef: string | null
+  qualifyAnswers: string[]
+  isPrimary: boolean
+}
 
 export type LandingPage = {
   // URL param value (?lp=<slug>) + stable key. kebab-case.
   slug: string
   // Shown in the dropdown and the detail-page eyebrow.
   label: string
-  // Canonical LP url path — reference / labeling only (the stats come
-  // from Wistia + Typeform, not the path).
+  // Canonical LP url path — reference / labeling only. '' when unset (kept a
+  // plain string, not null, so existing consumers don't change shape).
   lpPath: string
-  // Typeform form_id — the lead-attribution key for this LP.
+  // Full link pasted into the adder ('' for the original seed entries).
+  lpUrl: string
+  // The PRIMARY Typeform form_id — the single-form scoping key used by existing
+  // surfaces. The full set is in `forms`.
   typeformFormId: string
+  // Every form this LP owns (primary first).
+  forms: LandingPageForm[]
   // Short human name for the Typeform section subtitle.
   typeformLabel: string
   // VSL variant(s) embedded on this LP.
@@ -50,45 +52,146 @@ export type LandingPage = {
   // Thank-you / confirmation-page video.
   confirmVideoHashedId: string
   confirmVideoLabel: string
+  active: boolean
+  sortOrder: number
 }
 
-// Display labels for the high-ticket VSL(s).
-const HT_VSL_LABELS: Record<string, string> = {
-  i1173gx76b: 'Vídeo Motion · Nabeel (Horizontal) · Direct Closer Funnel',
-  t05pq6ra0u: '6/20 · New VSL · Call Funnel',
+type LpRow = {
+  slug: string
+  label: string
+  lp_path: string | null
+  lp_url: string | null
+  typeform_label: string | null
+  vsl: unknown
+  confirm_video_hashed_id: string | null
+  confirm_video_label: string | null
+  active: boolean
+  sort_order: number
 }
 
-export const LANDING_PAGES: LandingPage[] = [
-  {
-    slug: 'main',
-    label: 'Main LP · /lp-vsl',
-    lpPath: '/lp-vsl',
-    typeformFormId: HIGH_TICKET_TYPEFORM_FORM_ID,
-    typeformLabel: 'SFedWelr coaching application',
-    vsl: HIGH_TICKET_VSL_HASHED_IDS.map((hashedId) => ({
-      hashedId,
-      label: HT_VSL_LABELS[hashedId] ?? 'VSL',
-    })),
-    confirmVideoHashedId: HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
-    confirmVideoLabel: 'V2 precall shortened',
-  },
-  {
-    slug: 'training',
-    label: 'Training LP · /training',
-    lpPath: '/training',
-    typeformFormId: TRAINING_TYPEFORM_FORM_ID,
-    typeformLabel: '6/20 Longer Form · Call Funnel',
-    vsl: [{ hashedId: TRAINING_VSL_HASHED_ID, label: HT_VSL_LABELS[TRAINING_VSL_HASHED_ID] }],
-    confirmVideoHashedId: HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID,
-    confirmVideoLabel: 'V2 precall shortened',
-  },
-]
+type FormRow = {
+  landing_page_slug: string
+  form_id: string
+  typeform_title: string | null
+  qualify_field_ref: string | null
+  qualify_answers: string[] | null
+  is_primary: boolean
+}
 
-export const DEFAULT_LANDING_PAGE_SLUG = LANDING_PAGES[0].slug
+function toVsl(raw: unknown): LandingPageVsl[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((v) => {
+      const o = (v ?? {}) as Record<string, unknown>
+      const hashedId = typeof o.hashedId === 'string' ? o.hashedId : null
+      if (!hashedId) return null
+      return { hashedId, label: typeof o.label === 'string' ? o.label : 'VSL' }
+    })
+    .filter((x): x is LandingPageVsl => x !== null)
+}
 
-// Resolve a ?lp= slug to its entry, falling back to the default LP for
-// an unknown / missing slug (stale link, hand-edited URL).
-export function getLandingPage(slug?: string | string[] | null): LandingPage {
+// Load every LP (active + inactive) with its forms, joined in memory. Memoized
+// per request. `active`-filtering is the caller's job (the dropdown wants active;
+// the eligible-form set wants all).
+const loadAll = cache(async function loadAll(): Promise<LandingPage[]> {
+  const admin = createAdminClient()
+  const [lpRes, formRes] = await Promise.all([
+    admin
+      .from('landing_pages' as never)
+      .select(
+        'slug, label, lp_path, lp_url, typeform_label, vsl, confirm_video_hashed_id, confirm_video_label, active, sort_order',
+      )
+      .order('sort_order', { ascending: true }),
+    admin
+      .from('landing_page_forms' as never)
+      .select(
+        'landing_page_slug, form_id, typeform_title, qualify_field_ref, qualify_answers, is_primary',
+      )
+      .order('is_primary', { ascending: false }),
+  ])
+
+  const lps = (lpRes.data ?? []) as unknown as LpRow[]
+  const forms = (formRes.data ?? []) as unknown as FormRow[]
+
+  const formsBySlug = new Map<string, LandingPageForm[]>()
+  for (const f of forms) {
+    const arr = formsBySlug.get(f.landing_page_slug) ?? []
+    arr.push({
+      formId: f.form_id,
+      typeformTitle: f.typeform_title,
+      qualifyFieldRef: f.qualify_field_ref,
+      qualifyAnswers: f.qualify_answers ?? [],
+      isPrimary: f.is_primary,
+    })
+    formsBySlug.set(f.landing_page_slug, arr)
+  }
+
+  return lps.map((lp) => {
+    const lpForms = formsBySlug.get(lp.slug) ?? []
+    const primary = lpForms.find((f) => f.isPrimary) ?? lpForms[0]
+    return {
+      slug: lp.slug,
+      label: lp.label,
+      lpPath: lp.lp_path ?? '',
+      lpUrl: lp.lp_url ?? '',
+      typeformFormId: primary?.formId ?? '',
+      forms: lpForms,
+      typeformLabel: lp.typeform_label ?? '',
+      vsl: toVsl(lp.vsl),
+      confirmVideoHashedId: lp.confirm_video_hashed_id ?? '',
+      confirmVideoLabel: lp.confirm_video_label ?? '',
+      active: lp.active,
+      sortOrder: lp.sort_order,
+    }
+  })
+})
+
+// Active LPs, ordered — the dropdown + LP-detail universe.
+export async function getLandingPages(): Promise<LandingPage[]> {
+  return (await loadAll()).filter((lp) => lp.active)
+}
+
+// Resolve a ?lp= slug to its entry, falling back to the first active LP for an
+// unknown / missing slug (stale link, hand-edited URL) — mirrors the old sync
+// getLandingPage fallback. Resolves inactive LPs too (a direct slug hit wins).
+export async function getLandingPage(
+  slug?: string | string[] | null,
+): Promise<LandingPage> {
   const s = Array.isArray(slug) ? slug[0] : slug
-  return LANDING_PAGES.find((p) => p.slug === s) ?? LANDING_PAGES[0]
+  const all = await loadAll()
+  const active = all.filter((lp) => lp.active)
+  return all.find((lp) => lp.slug === s) ?? active[0] ?? all[0]
+}
+
+// The default LP slug (first active by sort_order).
+export async function getDefaultLandingPageSlug(): Promise<string> {
+  return (await getLandingPages())[0]?.slug ?? 'main'
+}
+
+// The eligible OPT-IN Typeform form set — union across ALL LPs (active AND
+// inactive). Replaces HIGH_TICKET_TYPEFORM_FORM_IDS / OPT_IN_FORMS / FORM_IDS on
+// the TS side. Includes inactive LPs so deactivation never orphans cycles.
+export async function getHighTicketFormIds(): Promise<string[]> {
+  const all = await loadAll()
+  const ids = new Set<string>()
+  for (const lp of all) for (const f of lp.forms) ids.add(f.formId)
+  return Array.from(ids)
+}
+
+// The high-ticket VSL hashed_ids — union across all LPs. Replaces
+// HIGH_TICKET_VSL_HASHED_IDS.
+export async function getHighTicketVslHashedIds(): Promise<string[]> {
+  const all = await loadAll()
+  const ids = new Set<string>()
+  for (const lp of all) for (const v of lp.vsl) ids.add(v.hashedId)
+  return Array.from(ids)
+}
+
+// The high-ticket confirmation-video hashed_ids — union across all LPs.
+// Replaces the single HIGH_TICKET_CONFIRM_VIDEO_HASHED_ID for aggregate reads.
+export async function getHighTicketConfirmVideoHashedIds(): Promise<string[]> {
+  const all = await loadAll()
+  const ids = new Set<string>()
+  for (const lp of all) if (lp.confirmVideoHashedId) ids.add(lp.confirmVideoHashedId)
+  return Array.from(ids)
 }

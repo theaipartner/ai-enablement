@@ -58,8 +58,8 @@ export default async function FunnelLandingPagesPage({
 }) {
   const win = resolveSalesWindow(searchParams)
   const range = resolveDateRange({ start: win.start ?? undefined, end: win.end ?? undefined })
-  // Which landing page's stats we're showing (registry-driven).
-  const lp = getLandingPage(searchParams?.lp)
+  // Which landing page's stats we're showing (registry-driven, DB-backed).
+  const lp = await getLandingPage(searchParams?.lp)
   const vslHashedId = parseVslId(searchParams?.vsl, lp.vsl.map((o) => o.hashedId))
 
   // LP visits = Meta unique link clicks (Drake 2026-05-27 — keeps

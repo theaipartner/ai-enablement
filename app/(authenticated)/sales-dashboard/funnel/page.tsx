@@ -4,7 +4,7 @@ import { DcFunnelSection } from '@/components/sales/dc-funnel'
 import { getLeadsForRange, type LeadRow } from '@/lib/db/leads'
 import { AdCascadeFilter, type AdHierarchy, type AdsetNode, type AdNode } from '@/components/sales/ad-cascade-filter'
 import { LandingPageFilter } from '@/components/sales/landing-page-filter'
-import { LANDING_PAGES, getLandingPage } from '@/lib/db/landing-pages'
+import { getLandingPages, getLandingPage } from '@/lib/db/landing-pages'
 import { getLeadsFunnel } from '@/lib/db/leads-funnel'
 import { getAdsetNameMap } from '@/lib/db/cortana-adset-names'
 import { getDcFunnel } from '@/lib/db/funnel-dc'
@@ -50,7 +50,9 @@ export default async function SalesDashboardFunnelPage({
   // 0106); null = "All landing pages" (combined). getLandingPage falls back to
   // the default LP for a null slug, so only resolve a form when lp is set.
   const lp = param(searchParams?.lp)
-  const lpFormId = lp ? getLandingPage(lp).typeformFormId : null
+  const lpFormId = lp ? (await getLandingPage(lp)).typeformFormId : null
+  // Active LPs for the filter dropdown (DB-backed registry, migration 0110).
+  const landingPages = await getLandingPages()
 
   // Last-5-days daily table (bottom of page) — independent of the date picker,
   // scoped to the active ad-cascade selection AND the landing-page selection.
@@ -118,7 +120,7 @@ export default async function SalesDashboardFunnelPage({
           (Drake 2026-06-15). flexWrap lets them drop to a second line. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 16 }}>
         <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={range.startEtDate} endEtDate={range.endEtDate} />
-        <LandingPageFilter options={LANDING_PAGES.map((p) => ({ slug: p.slug, label: p.label }))} selected={lp} />
+        <LandingPageFilter options={landingPages.map((p) => ({ slug: p.slug, label: p.label }))} selected={lp} />
         <DateRangePicker startEtDate={range.startEtDate} endEtDate={range.endEtDate} todayEt={todayEt} />
       </div>
 

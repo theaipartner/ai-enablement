@@ -57,12 +57,30 @@ logger.setLevel(logging.INFO)
 _AUDIT_SOURCE = "typeform_insights"
 
 # Forms to snapshot — one per high-ticket landing page, so each LP's "starts"
-# (and completion rate) populate. Keep in sync with funnel-assets.ts
-# HIGH_TICKET_TYPEFORM_FORM_IDS + lead_tagging.py OPT_IN_FORMS.
-#   SFedWelr  — Main LP
-#   Os4c0q6V  — Training LP (/training)
-# Adding a form here makes its snapshots flow automatically.
+# (and completion rate) populate. The set now comes from the DB-backed registry
+# (landing_page_forms, migration 0110) via _load_form_ids — adding a landing
+# page in Gregory makes its snapshots flow with no deploy. This constant is the
+# FALLBACK used only if the table read fails or is empty.
 FORM_IDS: list[str] = ["SFedWelr", "Os4c0q6V"]
+
+
+def _load_form_ids(db) -> list[str]:
+    """Eligible Typeform form set from landing_page_forms (every LP's forms).
+    Falls back to FORM_IDS if the read fails or is empty."""
+    try:
+        resp = db.table("landing_page_forms").select("form_id").execute()
+        ids = [r["form_id"] for r in (resp.data or []) if r.get("form_id")]
+        if ids:
+            return ids
+        logger.warning(
+            "typeform_insights_cron: landing_page_forms empty — using FORM_IDS fallback"
+        )
+    except Exception as exc:
+        logger.warning(
+            "typeform_insights_cron: landing_page_forms read failed (%s) — using FORM_IDS fallback",
+            exc,
+        )
+    return list(FORM_IDS)
 
 _INSIGHTS_URL = "https://api.typeform.com/insights/{form_id}/summary"
 _REQUEST_TIMEOUT_SECONDS = 20
@@ -112,11 +130,12 @@ def run_typeform_insights_cron() -> dict[str, Any]:
         logger.warning("typeform_insights_cron: TYPEFORM_API_KEY not configured")
         return {"error": "typeform_token_unavailable"}
 
+    form_ids = _load_form_ids(db)
     snapshots_written = 0
     errors: list[str] = []
     per_form: list[dict[str, Any]] = []
 
-    for form_id in FORM_IDS:
+    for form_id in form_ids:
         try:
             payload = _fetch_insights(form_id, api_key)
         except Exception as exc:
@@ -158,7 +177,7 @@ def run_typeform_insights_cron() -> dict[str, Any]:
             )
 
     audit_payload: dict[str, Any] = {
-        "forms_count": len(FORM_IDS),
+        "forms_count": len(form_ids),
         "snapshots_written": snapshots_written,
         "per_form": per_form,
         "errors": errors[:50],
@@ -172,7 +191,7 @@ def run_typeform_insights_cron() -> dict[str, Any]:
     )
     logger.info(
         "typeform_insights_cron: forms=%d snapshots=%d errors=%d",
-        len(FORM_IDS),
+        len(form_ids),
         snapshots_written,
         len(errors),
     )
