@@ -13,10 +13,14 @@ one**. If you're picking this up cold (new chat, time has passed): start at
   the **Typeform** metrics. Each video shows the five Wistia metrics —
   **Visits, Plays, Play rate, Time played, Engagement** — plus the **Average
   view duration** we derive. (Clarity + Calendly were removed.)
-- **Landing-page registry** — `lib/db/landing-pages.ts`. One entry per landing
-  page is the single source of truth for that page's assets. Today: two entries
-  — `main` (`/lp-vsl`, form `SFedWelr`) and `training` (`/training`, form
-  `Os4c0q6V`, VSL `t05pq6ra0u`; live 2026-06-20).
+- **Landing-page registry** — now **DB-backed** (tables `landing_pages` +
+  `landing_page_forms`, migration 0110), edited in Gregory at
+  `/sales-dashboard/landing-pages` (admin). Was the static `lib/db/landing-pages.ts`
+  array; that file is now a DB-backed async loader. Today: two entries — `main`
+  (`/lp-vsl`, form `SFedWelr`) and `training` (`/training`, form `Os4c0q6V`, VSL
+  `t05pq6ra0u`; live 2026-06-20). An LP owns a SET of forms (editing a form ADDS
+  one); each form carries its own qualification config (field ref + qualifying
+  answers), replacing the old global `INVEST_FIELD_REF` / ≥$2,000 rule.
 - **Landing-page dropdown** on the Funnel page filter row — a separate control
   from the Campaign → Ad Set → Ad cascade. It's **composable** with the ad
   filter (selecting both scopes the funnel to the intersection cohort). Picking
@@ -78,44 +82,36 @@ The mechanism: each opt-in cycle records **which Typeform it came through** —
 
 ---
 
-## Adding a new landing page
+## Adding a new landing page (in Gregory — no deploy)
 
-### Step 1 — what you collect (and hand to Builder)
+Since the registry moved to the DB (migration 0110), you add a landing page on
+the admin page: **`/sales-dashboard/landing-pages`** (admin-tier). No code change.
 
-For the new landing page, get these **five things**. Zain / whoever builds the
-page + form will have them:
+1. **Paste the LP link** → **Discover**. We fetch the page and auto-fill the VSL
+   video(s) (from Wistia) and the Typeform it embeds. Discovery is best-effort —
+   the Typeform sometimes isn't readable from the page (JS-injected, or a
+   `data-tf-live` id), so confirm/pick it from the dropdown if needed.
+2. **Set the videos** — VSL(s) and the thank-you/confirmation video are chosen
+   from the **Wistia dropdown** (our `wistia_medias` mirror) or pasted by id. The
+   confirm video isn't on the LP link (it's on the post-submit page), so pick it
+   manually; LPs may share one.
+3. **Pick the Typeform** (the attribution key — required; each LP must have its
+   own form), then set **qualification**: choose the qualification question and
+   tick **which answers qualify** a lead (e.g. everything except "Under $2,000").
+4. **Save.** The LP appears in the funnel's landing-page dropdown on refresh.
 
-| # | Thing | Where it comes from |
-|---|-------|---------------------|
-| 1 | **Short name** for the page (e.g. "VSL-B test") | you decide |
-| 2 | **Typeform form ID** — its own form, distinct from other LPs | the form's URL / Typeform admin |
-| 3 | **VSL Wistia hashed_id(s)** — one or more if variants | Wistia (the media URL: `.../medias/<hashed_id>`) |
-| 4 | **Thank-you / confirmation video Wistia hashed_id** | Wistia |
-| 5 | **Landing-page URL / path** (e.g. `/lp-vsl-b`) | the page itself |
+**What happens to leads:** new opt-ins through the form attribute to the LP
+**automatically** — the tagger reads the eligible form set from the DB at runtime,
+stamps `lead_cycles.source_form_id`, and the funnel scopes by it. No retag needed
+for a fresh LP. If real leads came in **before** you registered it, hit **Retag
+now** on the LP's row to backfill those historical opt-ins into cycles.
 
-> The **Typeform form ID (#2) is the important one** — it's how we attribute a
-> lead to this page and how the funnel re-scopes to it. Each landing page must
-> have its **own** form.
+**Editing** an LP's Typeform **adds** a form (an LP owns a set) — the old form's
+leads stay counted. A form can belong to only one LP. **Delete** is allowed only
+for an LP with no leads yet (test/junk); otherwise **Deactivate** (hides it from
+the dropdown, keeps its cycles).
 
-### Step 2 — what Builder does with it
-
-1. Add the entry to `lib/db/landing-pages.ts` (the 5 things above). → LP detail
-   page + dropdown option work immediately.
-2. Register the form in the three places that define the high-ticket form set
-   (keep them in sync):
-   - `OPT_IN_FORMS` — `shared/lead_tagging.py` (the cohort/tagger universe).
-   - `HIGH_TICKET_TYPEFORM_FORM_IDS` — `lib/db/funnel-assets.ts` (read-side lock).
-   - `FORM_IDS` — `api/typeform_insights_cron.py` (so "starts" get captured).
-   Then run a full backfill-retag (`scripts/backfill_lead_tags.py --apply`). → its
-   opt-ins enter `lead_cycles` with `source_form_id` stamped, so the funnel boxes,
-   roster, daily table, and DC all re-scope to it via the dropdown automatically
-   (no per-LP SQL change — `source_form_id` is generic). *(Done for `Os4c0q6V`
-   2026-06-27.)*
-3. **If the new LP would share a VSL or thank-you video with another LP**, have
-   the team **duplicate the video** so each LP has its own Wistia hashed_id
-   (see the deferred item above — the per-embed API route was investigated and
-   rejected as heavy + incomplete). With a unique id per LP, no extra work — the
-   existing pipeline handles it. Skip entirely if the new LP's videos are unique.
-
-Steps 2–3 are why the form has to exist first — Builder matches the form's real
-shape (qualification question, hidden fields) rather than guessing.
+> **Shared videos caveat (unchanged):** if two LPs pick the *same* Wistia video,
+> its metrics are account-wide per media (combined), not per-LP. For true per-LP
+> video stats, duplicate the video so each LP has its own hashed_id (the per-embed
+> API route was investigated and rejected — see the deferred item above).

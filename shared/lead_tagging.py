@@ -785,6 +785,39 @@ def retag_by_contact(emails=None, phones=None, utm_terms=None, trigger="manual")
     return retag(lead_ids=list(ids), trigger=trigger)
 
 
+def retag_by_form(form_ids, trigger="manual"):
+    """Retag every lead that submitted any of `form_ids` (on/after EFFECTIVE_DATE).
+
+    For the "Retag now" button on the landing-page admin page: when an LP is
+    registered AFTER real leads already came in through its Typeform, those
+    historical opt-ins have no cycle yet (the form wasn't in the eligible set when
+    they arrived). This resolves those respondents' emails/phones and delegates to
+    retag_by_contact, which creates their cycles with source_form_id stamped.
+    Going-forward leads need no retag — the webhook/cron tagger picks them up once
+    the form is in landing_page_forms."""
+    forms = [f for f in (form_ids or []) if f]
+    if not forms:
+        return {"ok": True, "lead_count": 0, "anomalies": [], "trigger": trigger, "lead_ids": []}
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """select distinct
+             lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
+             (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1)
+           from typeform_responses where form_id = any(%s) and submitted_at >= %s""",
+        (forms, EFFECTIVE_DATE),
+    )
+    emails, phones = set(), set()
+    for em, ph in cur.fetchall():
+        if em:
+            emails.add(em)
+        if ph:
+            phones.add(ph)
+    cur.close()
+    conn.close()
+    return retag_by_contact(emails=list(emails), phones=list(phones), trigger=trigger)
+
+
 def active_lead_ids(cur):
     """In-scope leads whose tags can still change — the bounded set the cron retags
     each tick. Excludes only stable-terminal leads (closed/dq and not re-opted since),

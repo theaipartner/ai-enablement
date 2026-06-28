@@ -2,6 +2,13 @@ import 'server-only'
 
 import { cache } from 'react'
 import { createAdminClient } from '@/lib/supabase/admin'
+import type {
+  LandingPageVsl,
+  LandingPageForm,
+  LandingPage,
+} from './landing-pages-shared'
+
+export type { LandingPageVsl, LandingPageForm, LandingPage }
 
 // Landing-page registry — now DB-backed (tables `landing_pages` +
 // `landing_page_forms`, migration 0110). Was a static array here; moved to the
@@ -19,42 +26,6 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // across active AND inactive LPs — deactivating an LP must never drop a form
 // that still has cycles. Per-form qualification (field ref + qualifying answers)
 // also lives on each form row, replacing the global INVEST_FIELD_REF rule.
-
-export type LandingPageVsl = { hashedId: string; label: string }
-
-export type LandingPageForm = {
-  formId: string
-  typeformTitle: string | null
-  qualifyFieldRef: string | null
-  qualifyAnswers: string[]
-  isPrimary: boolean
-}
-
-export type LandingPage = {
-  // URL param value (?lp=<slug>) + stable key. kebab-case.
-  slug: string
-  // Shown in the dropdown and the detail-page eyebrow.
-  label: string
-  // Canonical LP url path — reference / labeling only. '' when unset (kept a
-  // plain string, not null, so existing consumers don't change shape).
-  lpPath: string
-  // Full link pasted into the adder ('' for the original seed entries).
-  lpUrl: string
-  // The PRIMARY Typeform form_id — the single-form scoping key used by existing
-  // surfaces. The full set is in `forms`.
-  typeformFormId: string
-  // Every form this LP owns (primary first).
-  forms: LandingPageForm[]
-  // Short human name for the Typeform section subtitle.
-  typeformLabel: string
-  // VSL variant(s) embedded on this LP.
-  vsl: LandingPageVsl[]
-  // Thank-you / confirmation-page video.
-  confirmVideoHashedId: string
-  confirmVideoLabel: string
-  active: boolean
-  sortOrder: number
-}
 
 type LpRow = {
   slug: string
@@ -149,6 +120,11 @@ const loadAll = cache(async function loadAll(): Promise<LandingPage[]> {
 // Active LPs, ordered — the dropdown + LP-detail universe.
 export async function getLandingPages(): Promise<LandingPage[]> {
   return (await loadAll()).filter((lp) => lp.active)
+}
+
+// ALL LPs (active + inactive), ordered — the admin registry-management page.
+export async function getAllLandingPages(): Promise<LandingPage[]> {
+  return loadAll()
 }
 
 // Resolve a ?lp= slug to its entry, falling back to the first active LP for an

@@ -49,6 +49,9 @@ const NAV: NavItem[] = [
   // Verify Reps = admin surface to add new sales reps (from Airtable) to
   // team_members so their stats flow to every per-rep surface.
   { href: '/sales-dashboard/reps', label: 'Verify Reps' },
+  // Landing Pages = admin registry manager — add/edit landing pages (DB-backed),
+  // which then appear in the funnel's landing-page dropdown.
+  { href: '/sales-dashboard/landing-pages', label: 'Landing Pages' },
 ]
 
 export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {
