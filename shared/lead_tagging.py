@@ -67,16 +67,28 @@ EFFECTIVE_DATE = "2026-05-24"
 OPT_IN_FORMS = ["SFedWelr", "Os4c0q6V"]
 
 
-def _load_opt_in_forms(cur):
-    """The eligible opt-in Typeform form set — every form_id in
-    landing_page_forms (across active AND inactive LPs, so deactivating an LP
-    never drops a form that still has cycles). Falls back to the OPT_IN_FORMS
-    constant if the table read fails or is empty."""
+def _load_form_cfg(cur):
+    """Per-form opt-in + qualification config from landing_page_forms
+    (migration 0110): {form_id: {"ref": qualify_field_ref, "qualify": set|None}}
+    across active AND inactive LPs (so deactivating an LP never drops a form that
+    still has cycles). `qualify` is the set of answer labels that qualify a lead;
+    None means "use the legacy under-not-in rule" (the fallback, and any form with
+    no qualifying answers configured). Falls back to all OPT_IN_FORMS ->
+    INVEST_FIELD_REF / legacy rule if the table read fails or is empty."""
     try:
-        cur.execute("select form_id from landing_page_forms")
-        forms = [r[0] for r in cur.fetchall() if r and r[0]]
-        if forms:
-            return forms
+        cur.execute(
+            "select form_id, qualify_field_ref, qualify_answers from landing_page_forms"
+        )
+        cfg = {}
+        for fid, ref, answers in cur.fetchall():
+            if not fid:
+                continue
+            cfg[fid] = {
+                "ref": ref or INVEST_FIELD_REF,
+                "qualify": set(answers) if answers else None,
+            }
+        if cfg:
+            return cfg
         logger.warning(
             "lead_tagging: landing_page_forms empty — using OPT_IN_FORMS fallback"
         )
@@ -85,19 +97,40 @@ def _load_opt_in_forms(cur):
             "lead_tagging: landing_page_forms read failed (%s) — using OPT_IN_FORMS fallback",
             exc,
         )
-    return list(OPT_IN_FORMS)
-# Typeform "how much are you willing to invest" choice field — SHARED across the
-# forms above (same ref). Drives per-cycle qualification (>= $2,000 = qualified),
-# replacing the stale close_leads.marketing_qualified flag.
+    return {fid: {"ref": INVEST_FIELD_REF, "qualify": None} for fid in OPT_IN_FORMS}
+
+
+def _extract_choice_label(answers, ref):
+    """The choice label for the answer matching `ref` in a Typeform `answers`
+    array (psycopg2 returns jsonb as a parsed list). Mirrors the old SQL
+    `a->'choice'->>'label' where a->'field'->>'ref' = ref`. None if absent."""
+    if not ref or not isinstance(answers, list):
+        return None
+    for a in answers:
+        if isinstance(a, dict) and (a.get("field") or {}).get("ref") == ref:
+            return (a.get("choice") or {}).get("label")
+    return None
+
+
+def _qualify(label, qual_set):
+    """Per-cycle qualification from the investment answer. Blank -> None
+    (unknown). With a configured qualifying-answer set -> membership test. With
+    no set (legacy / fallback) -> the under-not-in rule (>= $2,000 = qualified)."""
+    if not label or not str(label).strip():
+        return None
+    if qual_set is None:
+        return "under" not in str(label).lower()
+    return label in qual_set
+# Typeform "how much are you willing to invest" choice field. Qualification is
+# now PER-FORM (each form's qualify_field_ref in landing_page_forms); this is the
+# FALLBACK ref used only when a form has no configured ref or the registry read
+# fails (see _load_form_cfg). The two seed forms share it (5138f17b).
 INVEST_FIELD_REF = "5138f17b-eb31-4d36-bacb-88a8c83326ed"
 
 
-def qual_from_investment(inv):
-    """Typeform investment answer -> qualified flag. None when no/blank answer
-    (treated as 'unknown'); 'Under $2,000' -> False; anything else -> True."""
-    if not inv or not str(inv).strip():
-        return None
-    return "under" not in str(inv).lower()
+# (Per-form qualification now lives in _qualify + _load_form_cfg above, reading
+# each form's qualify_field_ref + qualify_answers from the registry — the old
+# global qual_from_investment was removed when that landed.)
 # "DC Revival Lead" Close custom field. The re-engagement SMS auto-creates these
 # leads in Close as New Opt-ins; the dashboard excludes them everywhere (the
 # funnel cohort already filters them in getSpeedToLeadCohort). Exclude them from
@@ -281,22 +314,28 @@ def _compute(cur, lead_ids):
     # landing-page registry (landing_page_forms, migration 0110); forms are
     # merged: a lead matching any form's response gets a cycle; submissions are
     # deduped per-minute below.
-    opt_in_forms = _load_opt_in_forms(cur)
+    form_cfg = _load_form_cfg(cur)
+    opt_in_forms = list(form_cfg.keys())
+    # Qualification is now PER-FORM (each form's qualify_field_ref + qualifying
+    # answers, from the registry) — extracted in Python from the raw answers so a
+    # form with a different field ref still qualifies correctly. Email/phone stay
+    # SQL-extracted (form-agnostic, unchanged).
     cur.execute(
         """select submitted_at, form_id,
              lower(trim((select a->>'email' from jsonb_array_elements(answers) a where a->>'type'='email' limit 1))),
              (select a->>'phone_number' from jsonb_array_elements(answers) a where a->>'type'='phone_number' limit 1),
-             (select a->'choice'->>'label' from jsonb_array_elements(answers) a where a->'field'->>'ref' = %s limit 1)
+             answers
            from typeform_responses where form_id = ANY(%s) and submitted_at >= %s""",
-        (INVEST_FIELD_REF, opt_in_forms, EFFECTIVE_DATE),
+        (opt_in_forms, EFFECTIVE_DATE),
     )
     tf_by_email, tf_by_phone = defaultdict(list), defaultdict(list)
-    for submitted_at, form_id, email, phone, investment in cur.fetchall():
+    for submitted_at, form_id, email, phone, answers in cur.fetchall():
+        inv = _extract_choice_label(answers, form_cfg.get(form_id, {}).get("ref"))
         if email:
-            tf_by_email[email].append((submitted_at, investment, form_id))
+            tf_by_email[email].append((submitted_at, inv, form_id))
         d = digits10(phone)
         if d:
-            tf_by_phone[d].append((submitted_at, investment, form_id))
+            tf_by_phone[d].append((submitted_at, inv, form_id))
 
     cycles_by_lead = {}
     cycle_qual = {}  # (cid, opt_in_at) -> qualified bool/None, from THAT cycle's submission
@@ -315,7 +354,7 @@ def _compute(cur, lead_ids):
         pairs = sorted(by_min.values())  # by submitted_at
         times = [ts for ts, _, _ in pairs]
         for ts, inv, fid in pairs:
-            cycle_qual[(cid, ts)] = qual_from_investment(inv)
+            cycle_qual[(cid, ts)] = _qualify(inv, form_cfg.get(fid, {}).get("qualify"))
             cycle_form[(cid, ts)] = fid
         # Unique leads only: a lead with NO high-ticket Typeform match (any
         # OPT_IN_FORMS) is not a high-ticket opt-in, so it gets NO cycle (the old `close_fallback` path
