@@ -26,7 +26,7 @@ export default async function AuthenticatedLayout({
           color: 'var(--color-geg-text)',
         }}
       >
-        <TopNav userEmail="preview@disabled" accessTier="creator" />
+        <TopNav userEmail="preview@disabled" accessTier="creator" areas={['fulfillment', 'sales']} />
         <main>{children}</main>
       </div>
     )
@@ -62,7 +62,7 @@ export default async function AuthenticatedLayout({
         color: 'var(--color-geg-text)',
       }}
     >
-      <TopNav userEmail={user.email ?? ''} accessTier={access.tier} />
+      <TopNav userEmail={user.email ?? ''} accessTier={access.tier} areas={access.areas} />
       <main>{children}</main>
     </div>
   )

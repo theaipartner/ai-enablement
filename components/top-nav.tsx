@@ -4,25 +4,27 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { tierAtLeast, type AccessTier } from '@/lib/auth/access-tier-shared'
+import { tierAtLeast, hasArea, type AccessTier, type Area } from '@/lib/auth/access-tier-shared'
 
 type NavItem = {
   href: string
   label: string
   requiredTier: AccessTier
+  // Optional department gate (migration 0112). When set, the item shows only if
+  // the user has that area. Fulfillment + Sales are area-gated; CEO/Content/Tasks
+  // stay purely tier-gated (leadership surfaces).
+  requiredArea?: Area
 }
 
-// Nav vocabulary + per-item gate. Server-side filter in the layout
-// passes the resolved tier down; the conditional render below hides
-// items the user can't access. requiredTier='csm' is "everyone with an
-// authenticated session", admin gates Cost Hub, etc. The `/ella/runs`
-// item was removed 2026-05-24 (spec `remove-ella-runs-page`) — the
-// post-@-mention-split passive path is observation-only (digest +
-// unanswered-flagger only), so the per-run audit page had no purpose.
+// Nav vocabulary + per-item gate. The layout passes the resolved tier + areas
+// down; the filter below hides items the user can't access. Fulfillment requires
+// the 'fulfillment' area, Sales the 'sales' area (department separation — a sales
+// rep no longer needs admin tier to see Sales, and a sales-only rep doesn't see
+// Fulfillment). CEO/Content/Tasks remain tier-only.
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { href: '/clients', label: 'Fulfillment', requiredTier: 'csm' },
+  { href: '/clients', label: 'Fulfillment', requiredTier: 'csm', requiredArea: 'fulfillment' },
   { href: '/control-center', label: 'CEO', requiredTier: 'admin' },
-  { href: '/sales-dashboard', label: 'Sales', requiredTier: 'admin' },
+  { href: '/sales-dashboard', label: 'Sales', requiredTier: 'csm', requiredArea: 'sales' },
   { href: '/content', label: 'Content', requiredTier: 'admin' },
   { href: '/tasks', label: 'Tasks', requiredTier: 'creator' },
 ] as const
@@ -30,9 +32,11 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
 export function TopNav({
   userEmail,
   accessTier,
+  areas,
 }: {
   userEmail: string
   accessTier: AccessTier
+  areas: readonly Area[]
 }) {
   const router = useRouter()
   const supabase = createClient()
@@ -110,7 +114,11 @@ export function TopNav({
         </div>
 
         <div className="flex items-center gap-1">
-          {NAV_ITEMS.filter((item) => tierAtLeast(accessTier, item.requiredTier)).map((item) => {
+          {NAV_ITEMS.filter(
+            (item) =>
+              tierAtLeast(accessTier, item.requiredTier) &&
+              (!item.requiredArea || hasArea(areas, item.requiredArea)),
+          ).map((item) => {
             const active = isActive(item.href)
             return (
               <Link

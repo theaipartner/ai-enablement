@@ -18,6 +18,8 @@ type NavItem = {
   href: string
   label: string
   children?: { href: string; label: string }[]
+  // Admin-only items (Verify Reps, Landing Pages) hidden for sales reps (csm).
+  adminOnly?: boolean
 }
 
 const NAV: NavItem[] = [
@@ -48,18 +50,26 @@ const NAV: NavItem[] = [
   // per-lead Lifecycle (each call links there, and returns "Back to lead").
   // Verify Reps = admin surface to add new sales reps (from Airtable) to
   // team_members so their stats flow to every per-rep surface.
-  { href: '/sales-dashboard/reps', label: 'Verify Reps' },
+  { href: '/sales-dashboard/reps', label: 'Verify Reps', adminOnly: true },
   // Landing Pages = admin registry manager — add/edit landing pages (DB-backed),
   // which then appear in the funnel's landing-page dropdown.
-  { href: '/sales-dashboard/landing-pages', label: 'Landing Pages' },
+  { href: '/sales-dashboard/landing-pages', label: 'Landing Pages', adminOnly: true },
 ]
 
-export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean }) {
+export function SalesSidebar({
+  includeStatesLink,
+  isAdmin,
+}: {
+  includeStatesLink: boolean
+  isAdmin: boolean
+}) {
   // `includeStatesLink` is held for backward compat with the segment
   // layout — its toggle is unused under the four-item structure.
   void includeStatesLink
 
   const pathname = usePathname() ?? ''
+  // Sales reps (csm) see the data pages; admin tools are hidden for them.
+  const navItems = NAV.filter((item) => isAdmin || !item.adminOnly)
 
   function isActive(href: string): boolean {
     if (href === '/sales-dashboard') return pathname === '/sales-dashboard'
@@ -103,7 +113,7 @@ export function SalesSidebar({ includeStatesLink }: { includeStatesLink: boolean
         </div>
       </div>
 
-      {NAV.map((item) => (
+      {navItems.map((item) => (
         <div key={item.href}>
           <SidebarLink
             href={item.href}

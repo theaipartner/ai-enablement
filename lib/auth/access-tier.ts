@@ -3,7 +3,7 @@ import 'server-only'
 import { cache } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { tierAtLeast, type AccessTier } from '@/lib/auth/access-tier-shared'
+import { tierAtLeast, hasArea, type AccessTier, type Area } from '@/lib/auth/access-tier-shared'
 
 // Server-only surface for the four-tier hierarchical access model.
 // Pure type + `tierAtLeast` helper live in
@@ -12,11 +12,13 @@ import { tierAtLeast, type AccessTier } from '@/lib/auth/access-tier-shared'
 // client into the browser bundle. Re-exported here so server-side
 // callers can keep their existing single-import shape.
 
-export type { AccessTier }
-export { tierAtLeast }
+export type { AccessTier, Area }
+export { tierAtLeast, hasArea }
 
 export type CurrentUserAccess = {
   tier: AccessTier
+  // Departments this user can access (migration 0112) — orthogonal to tier.
+  areas: Area[]
   team_member: {
     id: string
     full_name: string
@@ -58,22 +60,37 @@ export const getCurrentUserAccessTier = cache(async function getCurrentUserAcces
   // team_members.email is partial-unique among non-archived rows per
   // migration 0007. ilike for case-insensitivity (Supabase Auth lowercases
   // emails on storage but client-side capitalization is possible on entry).
-  const { data, error } = await admin
-    .from('team_members')
-    .select('id, full_name, email, access_tier')
+  // `as never` on the table: the generated Database types don't include the
+  // `areas` column (migration 0112) until types.ts is regenerated; cast the row.
+  const { data: rawData, error } = await admin
+    .from('team_members' as never)
+    .select('id, full_name, email, access_tier, areas')
     .ilike('email', user.email)
     .is('archived_at', null)
     .limit(1)
     .maybeSingle()
-  if (error || !data) return null
+  if (error || !rawData) return null
+  const data = rawData as {
+    id: string
+    full_name: string
+    email: string
+    access_tier: string
+    areas: string[] | null
+  }
 
   const tier = data.access_tier as string
   if (tier !== 'csm' && tier !== 'head_csm' && tier !== 'admin' && tier !== 'creator') {
     return null
   }
 
+  // Narrow areas to the known values; default to fulfillment if the column is
+  // null/empty (defensive — the migration backfills everyone non-null).
+  const rawAreas = (data.areas as string[] | null) ?? []
+  const areas = rawAreas.filter((a): a is Area => a === 'fulfillment' || a === 'sales')
+
   return {
     tier,
+    areas: areas.length ? areas : ['fulfillment'],
     team_member: {
       id: data.id,
       full_name: data.full_name,

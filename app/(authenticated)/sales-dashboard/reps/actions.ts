@@ -127,6 +127,9 @@ export async function completeRep(input: RepDraftInput): Promise<RepActionResult
     close_user_id: closeUserId,
     calendly_event_type_uri: calendly,
     access_tier: 'csm',
+    // Department access (migration 0112): new sales reps get the sales area so
+    // the sales dashboard is visible to them (not fulfillment).
+    areas: ['sales'],
     is_active: true,
   }
 

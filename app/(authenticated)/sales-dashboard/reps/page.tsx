@@ -1,12 +1,15 @@
+import { redirect } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
+import { getCurrentUserAccessTier, tierAtLeast } from '@/lib/auth/access-tier'
 import {
   getRepCandidates,
   getCloseUsersForPicker,
 } from '@/lib/db/sales-rep-verify'
 import { RepsVerify } from './_components/reps-verify'
 
-// Sales Dashboard — Verify Reps (admin only; the whole /sales-dashboard segment
-// is admin-gated by its layout).
+// Sales Dashboard — Verify Reps. ADMIN-only within the Sales department: the
+// segment layout admits any sales-area user (incl. csm reps), so this page
+// re-checks admin tier and redirects reps back to the dashboard.
 //
 // New sales reps land in the Airtable "Sales Team Member" table → mirrored into
 // sales_rep_candidates (migration 0109). This page lists the forward-only set
@@ -20,6 +23,10 @@ import { RepsVerify } from './_components/reps-verify'
 export const dynamic = 'force-dynamic'
 
 export default async function RepsPage() {
+  if (process.env.NEXT_PUBLIC_DISABLE_AUTH !== 'true') {
+    const access = await getCurrentUserAccessTier()
+    if (!access || !tierAtLeast(access.tier, 'admin')) redirect('/sales-dashboard')
+  }
   const [candidates, closeUsers] = await Promise.all([
     getRepCandidates(),
     getCloseUsersForPicker(),

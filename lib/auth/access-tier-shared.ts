@@ -23,3 +23,20 @@ const TIER_ORDER: Record<AccessTier, number> = {
 export function tierAtLeast(actual: AccessTier, required: AccessTier): boolean {
   return TIER_ORDER[actual] >= TIER_ORDER[required]
 }
+
+// Department/area access — orthogonal to tier (migration 0112). Tier gates
+// seniority WITHIN an area (admin → cost-hub/CEO, head_csm → /teams); areas gate
+// WHICH departments a person sees. A person can hold one or both.
+export type Area = 'fulfillment' | 'sales'
+
+export function hasArea(areas: readonly string[] | null | undefined, area: Area): boolean {
+  return !!areas && areas.includes(area)
+}
+
+// Where to send a user who lacks access to the page they hit — their own home.
+// Sales-only people land on the sales dashboard; everyone else on fulfillment.
+export function homePathForAreas(areas: readonly string[] | null | undefined): string {
+  if (hasArea(areas, 'fulfillment')) return '/clients'
+  if (hasArea(areas, 'sales')) return '/sales-dashboard'
+  return '/login?error=no_area_access'
+}

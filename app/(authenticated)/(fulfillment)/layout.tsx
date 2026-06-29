@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
-import { getCurrentUserAccessTier } from '@/lib/auth/access-tier'
+import { getCurrentUserAccessTier, hasArea } from '@/lib/auth/access-tier'
+import { homePathForAreas } from '@/lib/auth/access-tier-shared'
 import { FulfillmentSidebar } from './sidebar'
 
 // Two-column shell for the Fulfillment section. Wraps /clients, /calls,
@@ -35,6 +36,11 @@ export default async function FulfillmentLayout({
   const access = await getCurrentUserAccessTier()
   if (!access) {
     redirect('/login?error=no_team_member_row')
+  }
+  // Department gate (migration 0112): fulfillment area required. A sales-only
+  // rep is sent to their own home (the sales dashboard) instead of seeing CSM data.
+  if (!hasArea(access.areas, 'fulfillment')) {
+    redirect(homePathForAreas(access.areas))
   }
 
   return (

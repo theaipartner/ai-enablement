@@ -14,7 +14,8 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 | `email` | `text` | Not null. Partial-unique where `archived_at is null`. Primary join key for inbound sources (Fathom, Slack Connect emails) |
 | `full_name` | `text` | Not null |
 | `role` | `text` | Free-form: `csm`, `leadership`, `engineering`, `ops`, `sales`, `system_bot` |
-| `access_tier` | `text` | Added in 0032. Not null, default `'csm'`. CHECK pins the four values `csm`/`head_csm`/`admin`/`creator`. Separate concern from `role` (job function) — controls what each user sees in the dashboard. See § Access tiers |
+| `access_tier` | `text` | Added in 0032. Not null, default `'csm'`. CHECK pins the four values `csm`/`head_csm`/`admin`/`creator`. Separate concern from `role` (job function) — controls **seniority within** an area. See § Access tiers and § Department areas |
+| `areas` | `text[]` | Added in 0112. Not null, default `array['fulfillment']`. Which **departments** a person sees in Gregory — subset of `{fulfillment, sales}`. **Orthogonal to `access_tier`** (tier = seniority within an area). Drives the top-nav + the `(fulfillment)` / `sales-dashboard` layout gates. Flip with a SQL update — no deploy (like `is_active`). See § Department areas |
 | `slack_user_id` | `text` | Partial-unique where `archived_at is null`. Slack `U...` id for mentions and matching |
 | `is_active` | `boolean` | Default `true`. Cheap filter; `archived_at` is the durable signal |
 | `is_csm` | `boolean` | Added in 0022. Not null, default `false`. Marks a team_member as eligible for `primary_csm` assignments. Surfaces in dashboard Primary CSM dropdowns (filter dropdown on `/clients`, swap dialog on `/clients/[id]` — both filter `is_csm = true`). Default `false` so non-CSM team_members (engineering, ops, sales) are excluded; flipping to `true` is an explicit choice. Orthogonal to the free-text `role` column — Scott Wilson and Nabeel Junaid carry `role='leadership'` but `is_csm=true` because they actively own clients. The Scott Chasing sentinel carries `is_csm=true` so it appears in the dropdowns alongside the four real CSMs |
@@ -61,6 +62,19 @@ Resolution + route gating live in `lib/auth/access-tier.ts` (server-only) + `lib
 Auth-side identity is `team_members.email == supabase auth user.email`, looked up via the admin (service-role) client. Email match is case-insensitive (`ilike`).
 
 No UI for managing tiers in V1 — changes happen via SQL or future migration. Settings page is a separate spec.
+
+## Department areas
+
+Added in migration `0112_team_member_areas.sql`. `areas` (`text[]`) is a **department axis orthogonal to `access_tier`**: tier controls *seniority within* a section (admin → cost-hub/CEO/Content, head_csm → /teams), `areas` controls *which departments* a person sees. Values today: `fulfillment`, `sales`.
+
+Why it exists: access used to be tier-only, which conflated the two — the sales dashboard required `admin`, so sales **reps** (csm tier) couldn't see their own dashboard, and admins saw everything. Areas decouple them: a sales rep gets `['sales']` (and the dashboard) without admin; a sales-only rep no longer sees Fulfillment.
+
+Gating:
+- **Top-nav** (`components/top-nav.tsx`): Fulfillment requires the `fulfillment` area, Sales the `sales` area; CEO/Content/Tasks stay tier-only.
+- **Layouts**: `(fulfillment)/layout.tsx` requires `fulfillment`; `sales-dashboard/layout.tsx` requires `sales`. A user lacking the area is redirected to their own home (`homePathForAreas` in `lib/auth/access-tier-shared.ts`).
+- **Admin tools inside Sales** (Verify Reps, Landing Pages) re-check `admin` tier — sales reps (csm + sales area) see the data pages, not the admin tools.
+
+Resolution: `getCurrentUserAccessTier()` (`lib/auth/access-tier.ts`) returns `areas` on `CurrentUserAccess`. Today's "all pages" group (both areas + admin/creator): Drake, Nabeel, Zain, Huzaifa. Sales reps: `['sales']`. CSM staff (Nico, Lou, Scott Wilson, Ellis): `['fulfillment']`. New sales reps added via the Verify Reps flow get `['sales']` automatically. Flip anyone with `update team_members set areas = array['...'] where ...` — no deploy.
 
 ## Sales identity
 

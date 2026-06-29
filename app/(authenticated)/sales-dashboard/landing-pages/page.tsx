@@ -1,10 +1,12 @@
+import { redirect } from 'next/navigation'
 import { HeaderBand } from '@/components/gregory/header-band'
+import { getCurrentUserAccessTier, tierAtLeast } from '@/lib/auth/access-tier'
 import { getAllLandingPages } from '@/lib/db/landing-pages'
 import { getWistiaInventory, getTypeformForms } from '@/lib/db/landing-page-assets'
 import { LpManager } from './_components/lp-manager'
 
-// Sales Dashboard — Landing Pages (admin registry manager; the whole
-// /sales-dashboard segment is admin-gated by its layout).
+// Sales Dashboard — Landing Pages. ADMIN-only within Sales (the segment layout
+// admits any sales-area user); re-checks admin tier and redirects reps back.
 //
 // Add a landing page by pasting its link: we auto-discover the embedded Typeform
 // + Wistia videos (confirm screen), pick the qualification question + qualifying
@@ -17,6 +19,10 @@ import { LpManager } from './_components/lp-manager'
 export const dynamic = 'force-dynamic'
 
 export default async function LandingPagesAdminPage() {
+  if (process.env.NEXT_PUBLIC_DISABLE_AUTH !== 'true') {
+    const access = await getCurrentUserAccessTier()
+    if (!access || !tierAtLeast(access.tier, 'admin')) redirect('/sales-dashboard')
+  }
   const [landingPages, wistia, typeforms] = await Promise.all([
     getAllLandingPages(),
     getWistiaInventory(),
