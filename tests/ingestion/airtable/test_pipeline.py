@@ -265,7 +265,9 @@ def test_sync_all_walks_all_three_target_sources():
     })
     outcome = sync_all(client, db)
 
-    assert outcome.tables_walked == 4
+    # 6 TARGET_TABLES: setter triage, closer US, closer AUS, digital college,
+    # setter EOD's, closer EOD's (the last three have no stub records here).
+    assert outcome.tables_walked == 6
     assert outcome.records_parsed == 3
     assert outcome.records_upserted == 3
     # 1 setter triage + 2 closer (1 US + 1 AUS) in the closer table

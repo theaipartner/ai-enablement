@@ -272,6 +272,7 @@ This is the list the upcoming table audit works from.
 | `airtable_setter_triage_calls` | triage + confirmation forms — `call_status`, `form_type` | connected/confirmed/DQ, tagger, CEO flags |
 | `airtable_full_closer_report` | closer EOC (US+AUS) — `call_outcome`, cash/plan fields | closer drill, showed/closed, Cash, DC routing, tagger |
 | `airtable_digital_college_sales` | Robby's dedicated DC form | DC drilldown (Talent), per-lead DC |
+| `airtable_rep_eods` | Setter + Closer EOD reports (one table, `kind` + `fields_raw`) | per-rep EOD section on the roster detail page |
 | `typeform_responses` | opt-in event log (`SFedWelr`) | tagger universe, opt-in counting |
 | `typeform_forms` | form/question reference | reference |
 | `typeform_form_insights_snapshots` | periodic Typeform analytics snapshots | typeform insights cron |

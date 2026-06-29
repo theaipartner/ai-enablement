@@ -151,6 +151,37 @@ def parse_sales_team_member(record: dict[str, Any]) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Rep EOD parser (Setter EOD's + Closer EOD's -> airtable_rep_eods)
+# ---------------------------------------------------------------------------
+
+
+def parse_rep_eod(record: dict[str, Any], kind: str) -> dict[str, Any] | None:
+    """Map one Setter/Closer EOD record to an airtable_rep_eods row.
+
+    `kind` is 'setter' or 'closer' (the table it came from). The rep link is
+    "Sales Person" (setter) / "Closer" (closer) — a Sales Team Member rec id
+    that equals team_members.airtable_user_id. The date is "Date" (setter) /
+    "Submitted At" (closer). The full field set is preserved in fields_raw so the
+    dashboard can render whatever the (evolving) form contains.
+    """
+    record_id = record.get("id")
+    if not record_id:
+        return None
+    fields = record.get("fields") or {}
+    link = fields.get("Sales Person") if kind == "setter" else fields.get("Closer")
+    rep_record_id = link[0] if isinstance(link, list) and link else None
+    date = fields.get("Date") if kind == "setter" else fields.get("Submitted At")
+    return {
+        "record_id": record_id,
+        "kind": kind,
+        "rep_record_id": rep_record_id,
+        "eod_date": _to_iso_date(date),
+        "airtable_created_at": record.get("createdTime"),
+        "fields_raw": fields,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Setter Triage Calls parser
 # ---------------------------------------------------------------------------
 

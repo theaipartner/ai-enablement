@@ -40,6 +40,7 @@ from ingestion.airtable.client import AirtableAPIError, AirtableClient
 from ingestion.airtable.parser import (
     parse_digital_college,
     parse_full_closer,
+    parse_rep_eod,
     parse_setter_triage,
 )
 
@@ -77,6 +78,10 @@ def _parse_for_table(
         return parse_setter_triage(record)
     if table_id == "tbljmzRoMoE5B26lt":
         return parse_digital_college(record)
+    if table_id == "tblnGf0NoNCWVwOsz":
+        return parse_rep_eod(record, "setter")
+    if table_id == "tbly2S13lmo82xy5e":
+        return parse_rep_eod(record, "closer")
     if table_id in ("tblYsh3fxTpXuPdIW", "tblcC25y6lMrtgcty"):
         # Region is supplied by caller via TARGET_TABLES — None would
         # be a config bug, not a runtime case.

@@ -223,6 +223,13 @@ logic.
   cash / close-badge — attributed across **all** roles, so DC closers + setters who file
   forms (Connor, Bradley, Joshua) finally see their forms here (the scheduled tables only
   show `sales_role='closer'`, so they were invisible before — Drake 2026-06-20).
+- **EODs** — a section at the **very bottom** of the per-person detail, **collapsed by
+  default**: that rep's EOD reports (Setter/Closer EOD's from Airtable, mirrored into
+  `airtable_rep_eods`) whose date falls in the selected window, newest first. Sparse today
+  (only a few reps fill them) — most reps show "No EOD reports filed in this window." Each
+  EOD renders its labeled fields straight from the Airtable record (`fields_raw`), so new
+  form fields appear with no code change. Read by `lib/db/funnel-eods.ts` `getRepEods`
+  (resolves `close_user_id → airtable_user_id`).
 - **Active/inactive.** Inactive reps are **hidden by default**; a "Show inactive" toggle
   reveals them (dimmed, with an "Inactive" chip). Active = `team_members.is_active` among
   non-archived sales rows (`is_csm=false`, so it's independent of the CSM surfaces;

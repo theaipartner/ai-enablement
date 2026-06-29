@@ -51,6 +51,19 @@ TARGET_TABLES: dict[str, tuple[str, str | None, str]] = {
         None,
         "airtable_digital_college_sales",
     ),
+    # Rep EOD's — both kinds mirror into one table (airtable_rep_eods); the
+    # parser dispatch in pipeline.py keys the setter/closer discriminator off
+    # the table id. region slot unused (None).
+    "tblnGf0NoNCWVwOsz": (
+        "Setter EOD's",
+        None,
+        "airtable_rep_eods",
+    ),
+    "tbly2S13lmo82xy5e": (
+        "Closer EOD's",
+        None,
+        "airtable_rep_eods",
+    ),
 }
 
 

@@ -20,11 +20,53 @@ import pytest
 
 from ingestion.airtable.parser import (
     parse_full_closer,
+    parse_rep_eod,
     parse_setter_triage,
     _to_bool,
     _to_numeric,
     _to_str_array,
 )
+
+
+def test_parse_rep_eod_setter():
+    record = {
+        "id": "recEOD1",
+        "createdTime": "2026-06-04T12:00:00.000Z",
+        "fields": {
+            "Sales Person": ["reclS9rriHREFJucs"],
+            "Date": "2026-06-04",
+            "Total Dials": 40,
+            "Notes": "good day",
+        },
+    }
+    row = parse_rep_eod(record, "setter")
+    assert row["record_id"] == "recEOD1"
+    assert row["kind"] == "setter"
+    assert row["rep_record_id"] == "reclS9rriHREFJucs"
+    assert row["eod_date"] == "2026-06-04"
+    assert row["fields_raw"]["Total Dials"] == 40
+
+
+def test_parse_rep_eod_closer_uses_closer_link_and_submitted_at():
+    record = {
+        "id": "recEOD2",
+        "fields": {
+            "Closer": ["recJOyLZQbcjtqsM0"],
+            "Submitted At": "2026-04-30",
+            "Closed Deals — New Calls": 1,
+        },
+    }
+    row = parse_rep_eod(record, "closer")
+    assert row["kind"] == "closer"
+    assert row["rep_record_id"] == "recJOyLZQbcjtqsM0"
+    assert row["eod_date"] == "2026-04-30"
+
+
+def test_parse_rep_eod_orphan_no_link_and_missing_id():
+    # No rep link → rep_record_id None (won't resolve to a rep, dropped from UI).
+    row = parse_rep_eod({"id": "recX", "fields": {"Date": "2026-06-01"}}, "setter")
+    assert row["rep_record_id"] is None
+    assert parse_rep_eod({"fields": {}}, "setter") is None
 
 
 # ---------------------------------------------------------------------------
