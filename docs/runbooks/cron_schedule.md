@@ -19,7 +19,8 @@ the UTC instant is fixed (a deliberate, accepted trade-off — see ADR 0003).
 | `/api/fathom_backfill` | `0 8 * * *` | daily 04:00 EDT / 03:00 EST | Daily Fathom backlog ingest safety net |
 | `/api/gregory_brain_cron` | `0 9 * * *` | daily 05:00 EDT / 04:00 EST | Daily Gregory health recompute (freshness-filtered) |
 | `/api/clarity_sync_cron` | `0 10 * * *` | daily 06:00 EDT / 05:00 EST | Microsoft Clarity page-metrics pull |
-| `/api/close_users_sync_cron` | `30 11 * * *` | daily 07:30 EDT / 06:30 EST | Close CRM users sync |
+| `/api/close_users_sync_cron` | `30 11 * * *` | daily 07:30 EDT / 06:30 EST | Close CRM users sync (fills `team_members.close_user_id` + mirrors the `close_users` table) |
+| `/api/sales_rep_candidates_sync_cron` | `*/30 * * * *` | every 30 min | Airtable "Sales Team Member" → `sales_rep_candidates` (Verify Reps page) |
 | `/api/accountability_notification_cron` | `0 12 * * *` | daily 08:00 EDT / 07:00 EST | CS accountability Slack notification |
 | `/api/client_meetings_sync_cron` | `30 4 * * *` | daily 00:30 EDT / 23:30 (prev) EST | Google Calendar → `client_meetings` |
 | `/api/ella_daily_digest_cron` | `30 20 * * *` | daily 16:30 EDT / 15:30 EST | Post #daily-digest |

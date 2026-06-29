@@ -274,9 +274,27 @@ closers can close by phone). Three buttons:
 
 Data: Airtable → `sales_rep_candidates` (mirror cron `sales_rep_candidates_sync_cron`,
 every 30 min) and Close → `close_users` (the daily close-users cron); draft/final state in
-`sales_rep_verifications`. The whole `/sales-dashboard` segment is admin-gated by its
-layout. See `docs/schema/sales_rep_candidates.md`, `sales_rep_verifications.md`,
-`close_users.md`, and `team_members.md` § Sales identity.
+`sales_rep_verifications`. The `/sales-dashboard` segment is **sales-area**-gated (migration
+0112); this admin tool additionally re-checks **admin tier** and is hidden from the sidebar
+for sales reps (csm). See `docs/schema/sales_rep_candidates.md`, `sales_rep_verifications.md`,
+`close_users.md`, and `team_members.md` § Sales identity + § Department areas.
+
+---
+
+## Landing Pages (admin) — `/sales-dashboard/landing-pages` (admin)
+
+The admin **registry manager** for landing pages (distinct from `/funnel/landing-pages`,
+which is the per-LP **stats** page). Add an LP by pasting its link → **Discover** auto-fills
+the embedded Wistia VSL(s) + Typeform (best-effort; confirm/pick from dropdowns) → set the
+**qualification question + which answers qualify** → **Save**. The LP then appears in the
+funnel's landing-page dropdown and new opt-ins through its Typeform attribute to it
+automatically (the tagger reads the form set from the DB). **Edit** adds a form (old form's
+leads stay counted); **Deactivate** hides it but keeps its cycles; **Delete** is refused if
+the LP has leads; **Retag now** backfills pre-registration opt-ins (`api/landing_page_retag.py`).
+
+DB-backed registry: `landing_pages` + `landing_page_forms` (migration 0110). Admin-tier
+within the sales area (hidden from reps' sidebar). See `docs/sales/landing-pages.md` and
+`docs/schema/landing_pages.md` / `landing_page_forms.md`.
 
 ---
 

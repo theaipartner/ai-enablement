@@ -17,7 +17,7 @@ Mirrors leads, calls, SMS, status changes, opportunities → `close_leads`, `clo
 
 ### Airtable — `ingestion/airtable/` (base `appCWa6TV6p7EBarC`, PAT `AIRTABLE_SALES_PAT`)
 One base-wide **webhook receiver** (`api/airtable_events.py`) **+ 15-min cron**
-(`airtable_sync_cron`), one parser, three mirrors:
+(`airtable_sync_cron`), per-table parsers, these mirrors:
 - `airtable_setter_triage_calls` (table `tblaoMsiE3FSkHjQt`) — ONE table, two
   `form_type`s: `Setter Triage Form` (triage) and `Closer Triage Form` (confirmation,
   ≈ Aman). **No stored timestamp field → the webhook is load-bearing for edits.**
@@ -26,6 +26,14 @@ One base-wide **webhook receiver** (`api/airtable_events.py`) **+ 15-min cron**
   `form_type` (New|Old); migration 0062 promoted ~23 typed columns.
 - `airtable_digital_college_sales` (table `tbljmzRoMoE5B26lt`) — Robby's dedicated DC
   form; migration 0066.
+- `airtable_rep_eods` (tables `tblnGf0NoNCWVwOsz` Setter EOD's + `tbly2S13lmo82xy5e`
+  Closer EOD's, unioned via a `kind` discriminator + `fields_raw`) — migration 0111;
+  per-rep EOD section on the roster detail page.
+
+**Separate from the above webhook/cron:** `api/sales_rep_candidates_sync_cron` (every
+30 min) mirrors the **Sales Team Member** table (`tblpSaR3Iq4vBBbpO`) into
+`sales_rep_candidates` for the Verify Reps admin page — it's read on its own (not in the
+main `TARGET_TABLES` sync) since each record's id is a `team_members.airtable_user_id`.
 
 Read the live field options via `AirtableClient.from_env().get_base_schema()` (scope
 `schema.bases:read`) — don't guess option values.

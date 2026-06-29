@@ -262,6 +262,9 @@ This is the list the upcoming table audit works from.
 | `close_lead_status_changes` | status transition stream | tagger (legacy qualification) |
 | `close_opportunities` | workflow markers ($1 placeholders, **not** money) | coarse signal, mostly unused |
 | `close_custom_field_definitions` | `cf_*` id → name reference | reference |
+| `close_users` | Close `/user/` mirror (0109) | sales-rep verify page's Close-ID picker |
+| `sales_rep_candidates` | Airtable "Sales Team Member" mirror (0109) | Verify Reps admin page (new-rep onboarding) |
+| `sales_rep_verifications` | per-rep verify draft/final state (0109) | Verify Reps admin page |
 | `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |
 | `lead_cycle_stages` | per-stage timestamps within a cycle (the funnel ladder) + `no_show_at`/`follow_up_at` disposition stamps (0098, display-only) | funnel stage attribution, per-lead journey, the roster Disposition column |
 | `lead_tag_runs` | audit log of every tagger run (~69k rows) | tagger diagnostics, lead-tag-log page |
@@ -276,6 +279,8 @@ This is the list the upcoming table audit works from.
 | `typeform_responses` | opt-in event log (`SFedWelr`) | tagger universe, opt-in counting |
 | `typeform_forms` | form/question reference | reference |
 | `typeform_form_insights_snapshots` | periodic Typeform analytics snapshots | typeform insights cron |
+| `landing_pages` | landing-page registry (0110) — display + Wistia assets + dropdown config | LP dropdown, LP detail, funnel scoping, Landing Pages admin page |
+| `landing_page_forms` | per-LP Typeform set + per-form qualification (0110); union = eligible opt-in form set | tagger (`OPT_IN_FORMS`), insights cron, funnel scoping |
 | `meta_ad_daily` | account-level daily Meta spend (Cortana-fed) | Ads page, adspend fallback |
 | `cortana_ad_daily` | per-ad daily attribution + spend | Ads page, funnel cascade (per-ad ROAS) |
 | `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
@@ -311,7 +316,10 @@ This is the list the upcoming table audit works from.
 > starting inventory.
 >
 > **Verified against the live cloud DB 2026-06-11 — 56 public base tables, all
-> accounted for.** Corrections from the first draft: there is **no `lead_tags` table**
+> accounted for** (count now ~62: 2026-06-28/29 added `close_users`,
+> `sales_rep_candidates`, `sales_rep_verifications` (0109), `landing_pages`,
+> `landing_page_forms` (0110), `airtable_rep_eods` (0111) — all listed above with
+> `docs/schema/` files). Corrections from the first draft: there is **no `lead_tags` table**
 > (that name was the tagger *code* at `lib/db/lead-tags.ts`); the lead model is three
 > tables — `lead_cycles` + `lead_cycle_stages` + `lead_tag_runs`. Five sales tables were
 > missing from the first draft and are now listed: `lead_cycle_stages`, `lead_tag_runs`,

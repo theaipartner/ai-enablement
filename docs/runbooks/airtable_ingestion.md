@@ -13,8 +13,11 @@ Mirrors three Airtable sources into two Supabase mirror tables:
 | `tblaoMsiE3FSkHjQt` Setter Triage Calls EOC Form | `airtable_setter_triage_calls` | Setter-side Appointment Setting rows |
 | `tblYsh3fxTpXuPdIW` Full Closer Report Form (US) | `airtable_full_closer_report` (region='US') | Engine Closing rows 96-116, US |
 | `tblcC25y6lMrtgcty` Full Closer Report Form - AUS | `airtable_full_closer_report` (region='AUS') | Engine Closing rows 96-116, AUS |
+| `tbljmzRoMoE5B26lt` Digital College | `airtable_digital_college_sales` | Robby's dedicated DC form |
+| `tblnGf0NoNCWVwOsz` Setter EOD's | `airtable_rep_eods` (kind='setter') | per-rep EOD section on the roster detail page |
+| `tbly2S13lmo82xy5e` Closer EOD's | `airtable_rep_eods` (kind='closer') | per-rep EOD section on the roster detail page |
 
-All three converge on the same pipeline + parser per table (Full Closer parser threads `region` per source). Idempotent `ON CONFLICT (record_id) DO UPDATE`.
+All converge on the same pipeline + parser per table (Full Closer parser threads `region`; the two EOD tables route to `parse_rep_eod` with a `kind` discriminator). Idempotent `ON CONFLICT (record_id) DO UPDATE`. The 15-min cron backstop (`sync_all` over `TARGET_TABLES`) covers every table; a one-time full backfill loaded the EOD history.
 
 After each sync the cron also calls `db.rpc("tag_reactivated_leads")` (migration `0064`) to maintain `close_leads.reactivated_at` from the forms just landed — a direct lead is tagged reactivated (set-once) the moment it loses its strategy-call spot: a confirmation form `Setter pipeline` handover, or a closer EOC form ghost/no-show/cancel (DQ + reschedule never trigger). Fail-soft — a tagging error is logged and never halts the sync. Backfilled once via `scripts/backfill_reactivated_at.py`. Drives the `/sales-dashboard/leads` reactivation funnel.
 
