@@ -190,15 +190,18 @@ async function deriveStartsForRange(formId: string, range: DateRange): Promise<{
   if (priorErr) throw new Error(`insights snapshots (prior) read failed: ${priorErr.message}`)
   const prior = (priorRows ?? [])[0] as { snapshot_at: string; total_visits: number } | undefined
 
-  // A prior snapshot with a ZERO/empty total_visits is NOT a usable baseline:
-  // Typeform's Insights API reports total_visits=0 for a form until it backfills
-  // the real cumulative, which then lands as one big jump. `end − 0` would leak
-  // the form's entire all-time visit count into the window — e.g. the Training
-  // form (Os4c0q6V) read 0 before 2026-06-26 then jumped to 134 and stayed flat,
-  // so a Jun 26-29 window reported 134 "starts" despite ~0 visits actually in the
-  // window. So only trust a prior baseline that's > 0; otherwise fall through to
-  // the in-window anchor below (marked partial), which yields the real in-window
-  // delta (≈0 when the counter is flat) instead of the cumulative.
+  // A prior snapshot with a ZERO/empty total_visits is NOT a usable baseline.
+  // It's not a real reading — total_visits is a cumulative odometer, so a live
+  // form never reads 0. It comes from a manually-SEEDED "launch baseline" row
+  // (raw = {"seeded": "launch baseline"}) inserted when a form is first added,
+  // BEFORE the Insights cron starts snapshotting it. With a coverage gap between
+  // that seeded 0 and the first real snapshot, `end − 0` leaks the form's entire
+  // accumulated visit count into the window — e.g. Training (Os4c0q6V): seeded 0
+  // dated 2026-06-20, first real snapshot 134 on Jun 27, so a Jun 26-29 window
+  // reported 134 "starts" despite ~0 actual in-window visits. So only trust a
+  // prior baseline that's > 0; otherwise fall through to the in-window anchor
+  // below (marked partial) for the real in-window delta (≈0 when the odometer is
+  // flat). Once a form has continuous real snapshots, normal windows are exact.
   if (prior && prior.total_visits) {
     const starts = (end.total_visits ?? 0) - (prior.total_visits ?? 0)
     return { starts: Math.max(0, starts), partial: false, anchorAt: prior.snapshot_at }
