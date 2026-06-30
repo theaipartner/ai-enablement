@@ -49,9 +49,9 @@ export default async function OutboundCampaignsPage() {
         <strong>Type the field name exactly</strong> as it appears in Close/GHL — it&rsquo;s a
         case-sensitive match, so a typo means zero leads. The field box suggests names we
         already know, but you can type a brand-new one. A field you <em>just created in GHL</em>{' '}
-        won&rsquo;t match until our sync picks it up (~15&nbsp;min) — then hit{' '}
-        <strong>Re-tag</strong> on the campaign. Use Re-tag any time after changing a
-        field/value too.
+        won&rsquo;t match instantly — it matches <strong>on its own within ~15&ndash;30&nbsp;min</strong>{' '}
+        once the sync mirrors the new field (no action needed). <strong>Re-tag</strong> just
+        applies it immediately instead of waiting — also handy after you change a field/value.
       </p>
       <CampaignManager campaigns={campaigns} fieldSuggestions={fieldSuggestions} />
     </>
