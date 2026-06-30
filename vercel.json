@@ -166,6 +166,11 @@
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 300,
       "excludeFiles": "{.next,node_modules}/**"
+    },
+    "api/ghl_events.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60,
+      "excludeFiles": "{.next,node_modules}/**"
     }
   },
   "crons": [

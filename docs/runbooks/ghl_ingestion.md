@@ -81,9 +81,47 @@ The funnel signals this feeds (consumed later by the re-sourced
 - **Local DB gotcha:** `.env.local` `SUPABASE_URL` may point at local Docker — see
   `docs/sales/ingestion.md` § The env-var gotcha before running diagnostics.
 
+## Webhooks (real-time — `api/ghl_events.py`)
+
+Live layer on top of the cron: new leads + customer replies (and calls) land in
+seconds instead of ≤15 min. The cron stays as the **reconciliation backstop**
+(house pattern: webhook live + cron backstop).
+
+**Delivery path.** Our access is a Private Integration Token, not a marketplace
+OAuth app, so events arrive via a GHL **Workflow → Custom Webhook** action (built
+in the GHL UI), not native signed event subscriptions. Recommended workflows
+(triggers → Custom Webhook POST to `…/api/ghl_events`):
+- **Contact Created** → so a new lead lands immediately.
+- **Contact Tag / Custom-field changed** → because the campaign field is usually
+  stamped *after* creation; this catches membership in real time (else the cron
+  picks it up within 15 min).
+- **Customer Replied** (inbound message) → the responded signal.
+- Optionally an outbound-call/message trigger → dials/connected (`callDuration` +
+  `userId`); otherwise the cron backstops calls.
+
+**Auth.** Workflow webhooks aren't Ed25519-signed (that's marketplace apps), so
+the receiver uses a shared secret: set `GHL_WEBHOOK_SECRET` (we choose a long
+random value) in Vercel, and add it to each workflow's Custom Webhook **header** —
+`Authorization: Bearer <secret>` or `X-GHL-Webhook-Secret: <secret>`. Until set,
+the receiver returns 401.
+
+**Shape caveat (verify the first delivery).** A workflow webhook payload may
+differ from the v2 API shape, so `ingestion/ghl/pipeline.parse_webhook_*`
+normalize defensively (messageTypeString→TYPE_*, callDuration/callStatus flat,
+customFields dict→list). Every delivery's **raw payload is stored in
+`webhook_deliveries` (`source='ghl_events'`)** — inspect the first real one and
+adjust the parser if a field differs. The receiver always responds 2xx on a
+handled error so GHL doesn't disable the webhook.
+
 ## Manual trigger (prod)
 
 ```
+# Cron:
 curl -i -X POST -H "Authorization: Bearer $CRON_SECRET" \
      https://ai-enablement-sigma.vercel.app/api/ghl_sync_cron
+# Webhook receiver (simulate a delivery):
+curl -i -X POST -H "Authorization: Bearer $GHL_WEBHOOK_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"type":"ContactCreate","id":"test123","source":"DC Revival Lead"}' \
+     https://ai-enablement-sigma.vercel.app/api/ghl_events
 ```

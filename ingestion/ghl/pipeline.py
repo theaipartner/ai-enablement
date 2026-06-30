@@ -143,6 +143,100 @@ def parse_message(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Webhook normalization
+#
+# The webhook (InboundMessage / OutboundMessage / Contact* events, or a workflow
+# Custom Webhook) payload shape differs from the v2 API response: messages carry
+# flat callDuration/callStatus + messageTypeString (not meta.call.* + TYPE_*),
+# and a contact's customFields may arrive as a dict or under different keys. These
+# normalize a webhook payload into the same row dicts the upserts expect. Tolerant
+# by design — the receiver always stores the raw payload so the first real
+# delivery can be inspected and these adjusted.
+# ---------------------------------------------------------------------------
+
+_WEBHOOK_MSG_TYPE = {
+    "SMS": "TYPE_SMS",
+    "CALL": "TYPE_CALL",
+    "EMAIL": "TYPE_EMAIL",
+    "VOICEMAIL": "TYPE_VOICEMAIL",
+}
+
+
+def looks_like_message(p: dict[str, Any]) -> bool:
+    """A message event vs a contact event."""
+    if any(
+        k in p
+        for k in ("messageType", "messageTypeString", "messageId", "callDuration")
+    ):
+        return True
+    return str(p.get("type", "")).lower().endswith("message")
+
+
+def _normalize_custom_fields(cf: Any) -> list[dict[str, Any]]:
+    """Coerce a webhook contact's customFields to the API's [{id, value}] shape."""
+    if isinstance(cf, list):
+        out: list[dict[str, Any]] = []
+        for e in cf:
+            if not isinstance(e, dict):
+                continue
+            fid = e.get("id") or e.get("customFieldId") or e.get("field_id")
+            val = e.get("value") if "value" in e else e.get("field_value")
+            if fid is not None:
+                out.append({"id": fid, "value": val})
+        return out
+    if isinstance(cf, dict):
+        return [{"id": k, "value": v} for k, v in cf.items()]
+    return []
+
+
+def parse_webhook_message(p: dict[str, Any]) -> dict[str, Any]:
+    mt = p.get("messageTypeString")
+    if not mt:
+        mt = _WEBHOOK_MSG_TYPE.get(str(p.get("messageType", "")).upper()) or p.get(
+            "messageType"
+        )
+    dur = p.get("callDuration")
+    return {
+        "id": p.get("messageId") or p.get("id"),
+        "conversation_id": p.get("conversationId"),
+        "contact_id": p.get("contactId"),
+        "location_id": p.get("locationId"),
+        "message_type": mt,
+        "direction": p.get("direction"),
+        "status": p.get("status"),
+        "user_id": p.get("userId"),
+        "call_duration": int(dur) if isinstance(dur, (int, float)) else None,
+        "call_status": p.get("callStatus"),
+        "body": p.get("body"),
+        "date_added": _ts(p.get("dateAdded")),
+        "raw": p,
+    }
+
+
+def parse_webhook_contact(p: dict[str, Any]) -> dict[str, Any]:
+    cfs = _normalize_custom_fields(p.get("customFields"))
+    return {
+        "id": p.get("id") or p.get("contactId"),
+        "location_id": p.get("locationId"),
+        "source": p.get("source"),
+        "first_name": p.get("firstName"),
+        "last_name": p.get("lastName"),
+        "contact_name": p.get("contactName")
+        or " ".join(filter(None, [p.get("firstName"), p.get("lastName")])).strip()
+        or None,
+        "email": p.get("email"),
+        "phone": p.get("phone"),
+        "tags": p.get("tags") or [],
+        "assigned_to": p.get("assignedTo"),
+        "eoc_lead_id": extract_eoc_lead_id(cfs),
+        "date_added": _ts(p.get("dateAdded")),
+        "date_updated": _ts(p.get("dateUpdated")),
+        "custom_fields": cfs,
+        "raw": p,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Sync
 # ---------------------------------------------------------------------------
 
