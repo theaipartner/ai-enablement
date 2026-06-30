@@ -176,6 +176,29 @@ A revival **close** = a closer form (old or new) carrying an explicit DC plan
 string (Robby over-marks "Digital College Closed"). Showed/booked read the closer/triage
 forms directly and were always correct.
 
+### Setter-call review rubric splits on call type
+
+`setter_call_reviews` (the Deepgram→Sonnet review of setter calls) grades two kinds of call
+differently, keyed by **`call_type`**:
+
+- **`outbound`** — a normal setting call; the goal is to **book** a closer call. Graded on
+  `booked` / `no_book_reason` ("why it didn't book").
+- **`revival`** — a Digital College reactivation call; the rep **closes on the phone**, not
+  books. Graded on `closed` / `no_close_reason` ("why it didn't close"). A soft hand-off to a
+  future meeting is a *missed close*, not a win.
+
+The inactive pair is null (a revival row has `booked = null`; an outbound row has `closed =
+null`); a CHECK enforces exactly the right outcome per `call_type`. The reviewer picks the
+rubric from its **is_revival** check — `close_leads.latest_opt_in_date < REVIVAL_HORIZON`
+(`2026-05-24`), the same cold-pre-horizon proxy that drives the Slack `🔁 Revival` badge. Note
+this is the opt-in-horizon proxy, **not** the `REVIVAL_CF` custom field used by the `/outbound`
+funnel — close but not identical; per Drake (2026-06-30) all opt-in-horizon revival calls are
+DC close attempts, so the proxy is the intended signal. Prompt `v2` carries the split
+(`agents/setter_call_reviewer/prompt.py`); migration `0121` added the columns. Going-forward
+calls are graded by `call_type` automatically. Most historical revival rows intentionally keep
+their original book grading (no full backfill); `scripts/rereview_revival_setter_calls.py` is an
+idempotent on-demand re-grade tool if that's ever wanted.
+
 Don't confuse **Revival** (this campaign) with **Reactivation** (a unique lead that lost
 its strategy-call spot — a `lead_cycles` flag, part of the main funnel).
 
@@ -296,7 +319,7 @@ Which database tables are sales. (Per-column detail lives in `docs/schema/<table
 | `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |
-| `setter_call_reviews` | AI reviews of setter calls (Deepgram → LLM) | Talent, per-lead lifecycle |
+| `setter_call_reviews` | AI reviews of setter calls (Deepgram → LLM); `call_type` splits book vs DC-close rubric | Talent, per-lead lifecycle |
 | `setter_call_transcripts` | setter-call transcripts (Deepgram) | setter call reviewer, per-lead |
 
 ### Shared (sales reads, but fulfillment also uses)

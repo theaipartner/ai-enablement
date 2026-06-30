@@ -24,13 +24,19 @@ import logging
 import re
 from typing import Any
 
-from agents.setter_call_reviewer.prompt import PROMPT_VERSION, SYSTEM_PROMPT
+from agents.setter_call_reviewer.prompt import (
+    BOOK_SYSTEM_PROMPT,
+    CLOSE_SYSTEM_PROMPT,
+    PROMPT_VERSION,
+)
 from agents.setter_call_reviewer.slack_post import post_review_to_slack
 from agents.setter_call_reviewer.talk_time import compute_talk_time
 from shared.claude_client import DEFAULT_MODEL, complete
 
 # Gregory's active-lead horizon. A lead whose latest opt-in is before this is a
 # cold pre-horizon lead — a call to them is a "revival" (re-engagement) call.
+# Revival calls are Digital College reactivations: the rep closes on the phone,
+# so they're graded on the close rubric, not the book rubric.
 REVIVAL_HORIZON = "2026-05-24"
 from shared.db import get_client
 
@@ -41,20 +47,30 @@ logger = logging.getLogger("ai_enablement.setter_call_reviewer")
 # inviting model verbosity.
 _MAX_OUTPUT_TOKENS = 2048
 
-_REQUIRED_KEYS = frozenset(
+# Keys common to both rubrics. The outcome pair is appended per call_type:
+# outbound → booked/no_book_reason, revival → closed/no_close_reason.
+_BASE_REQUIRED_KEYS = frozenset(
     {
         "sentiment",
         "lead_score",
         "lead_score_reason",
         "should_be_dqd",
         "dq_reason",
-        "booked",
-        "no_book_reason",
         "setter_strengths",
         "setter_weaknesses",
         "lead_attributes",
     }
 )
+
+# Per-call-type outcome contract: (boolean field, reason field, system prompt).
+_OUTCOME_FIELDS = {
+    "outbound": ("booked", "no_book_reason"),
+    "revival": ("closed", "no_close_reason"),
+}
+_SYSTEM_PROMPTS = {
+    "outbound": BOOK_SYSTEM_PROMPT,
+    "revival": CLOSE_SYSTEM_PROMPT,
+}
 
 
 class ReviewError(RuntimeError):
@@ -112,13 +128,19 @@ def review_call(
     transcript_text = transcript_row["transcript_text"]
     words = transcript_row.get("words") or []
 
+    # Pick the rubric BEFORE the Sonnet call. A revival (Digital College
+    # reactivation) call is graded on close-on-phone; everything else on
+    # book-a-closer. The call_type also drives which outcome columns we write.
+    call_type = "revival" if _is_revival_call(db, close_call_id) else "outbound"
+    bool_key, reason_key = _OUTCOME_FIELDS[call_type]
+
     logger.info(
-        "setter_review.sonnet_request close_call_id=%s transcript_chars=%d words=%d",
-        close_call_id, len(transcript_text), len(words),
+        "setter_review.sonnet_request close_call_id=%s call_type=%s transcript_chars=%d words=%d",
+        close_call_id, call_type, len(transcript_text), len(words),
     )
 
     result = complete(
-        system=SYSTEM_PROMPT,
+        system=_SYSTEM_PROMPTS[call_type],
         messages=[{"role": "user", "content": transcript_text}],
         model=DEFAULT_MODEL,
         max_tokens=_MAX_OUTPUT_TOKENS,
@@ -126,18 +148,32 @@ def review_call(
         run_id=None,
     )
 
-    review = _parse_and_validate(result.text, close_call_id)
+    review = _parse_and_validate(result.text, close_call_id, call_type)
     setter_words, prospect_words, talk_ratio = compute_talk_time(words)
+
+    # Write BOTH outcome pairs every time: the active call_type's pair from
+    # the review, and the inactive pair explicitly nulled. The explicit nulls
+    # matter on a re-grade that flips call_type (e.g. backfilling an existing
+    # outbound row to revival) — the upsert UPDATE only touches columns we
+    # send, so without these the prior rubric's outcome would linger.
+    outcome_cols = {
+        "booked": None,
+        "no_book_reason": None,
+        "closed": None,
+        "no_close_reason": None,
+    }
+    outcome_cols[bool_key] = review[bool_key]
+    outcome_cols[reason_key] = review[reason_key]
 
     row = {
         "close_call_id": close_call_id,
+        "call_type": call_type,
         "sentiment": review["sentiment"],
         "lead_score": review["lead_score"],
         "lead_score_reason": review["lead_score_reason"],
         "should_be_dqd": review["should_be_dqd"],
         "dq_reason": review["dq_reason"],
-        "booked": review["booked"],
-        "no_book_reason": review["no_book_reason"],
+        **outcome_cols,
         "setter_strengths": review["setter_strengths"],
         "setter_weaknesses": review["setter_weaknesses"],
         "lead_attributes": review["lead_attributes"],
@@ -173,6 +209,14 @@ def _maybe_post_to_slack(
     """
     try:
         ctx = _load_slack_context(db, close_call_id)
+        # call_type on the persisted row is authoritative for the revival
+        # badge / close-vs-book outcome line. Fall back to the context's
+        # recomputed flag for legacy rows written before call_type existed.
+        is_revival = (
+            review_row.get("call_type") == "revival"
+            if review_row.get("call_type") is not None
+            else ctx.get("is_revival", False)
+        )
         post_review_to_slack(
             db,
             close_call_id=close_call_id,
@@ -181,7 +225,7 @@ def _maybe_post_to_slack(
             prospect_name=ctx["prospect_name"],
             duration_s=ctx["duration_s"],
             direction=ctx["direction"],
-            is_revival=ctx.get("is_revival", False),
+            is_revival=is_revival,
         )
     except Exception as exc:
         # Defensive — post_review_to_slack already swallows Slack
@@ -191,6 +235,38 @@ def _maybe_post_to_slack(
             "setter_review.slack_context_failed close_call_id=%s err=%s",
             close_call_id, exc,
         )
+
+
+def _is_revival_call(db: Any, close_call_id: str) -> bool:
+    """True when this call's lead is a cold pre-horizon (revival) lead.
+
+    Resolves close_calls.lead_id → close_leads.latest_opt_in_date and
+    compares to REVIVAL_HORIZON. Mirrors the is_revival computation in
+    _load_slack_context — kept as a standalone lookup because the rubric
+    decision happens before the Slack-context resolution (and on a path
+    that may skip Slack entirely). Fail-safe: any lookup miss returns
+    False, so an unresolved lead is graded on the default book rubric.
+    """
+    call_resp = (
+        db.table("close_calls")
+        .select("lead_id")
+        .eq("close_id", close_call_id)
+        .maybe_single()
+        .execute()
+    )
+    lead_id = (call_resp.data or {}).get("lead_id") if call_resp else None
+    if not lead_id:
+        return False
+
+    ld_resp = (
+        db.table("close_leads")
+        .select("latest_opt_in_date")
+        .eq("close_id", lead_id)
+        .maybe_single()
+        .execute()
+    )
+    opt_in = (ld_resp.data or {}).get("latest_opt_in_date") if ld_resp else None
+    return bool(opt_in) and str(opt_in)[:10] < REVIVAL_HORIZON
 
 
 def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
@@ -328,14 +404,21 @@ def _load_existing_review(db: Any, close_call_id: str) -> dict[str, Any] | None:
     return resp.data[0] if resp.data else None
 
 
-def _parse_and_validate(text: str, close_call_id: str) -> dict[str, Any]:
+def _parse_and_validate(
+    text: str, close_call_id: str, call_type: str
+) -> dict[str, Any]:
     """Pull JSON out of the model response and structurally validate it.
 
     Sonnet occasionally wraps responses in markdown fences despite the
     prompt forbidding them. Strip those before parsing. After that the
     response must be a JSON object with all required keys and value
-    types matching the prompt spec.
+    types matching the prompt spec. The outcome pair required depends on
+    call_type: outbound → booked/no_book_reason, revival → closed/
+    no_close_reason.
     """
+    bool_key, reason_key = _OUTCOME_FIELDS[call_type]
+    required_keys = _BASE_REQUIRED_KEYS | {bool_key, reason_key}
+
     candidate = _strip_fences(text).strip()
     if not candidate:
         raise ReviewError(f"empty response from Sonnet for {close_call_id}")
@@ -353,7 +436,7 @@ def _parse_and_validate(text: str, close_call_id: str) -> dict[str, Any]:
             f"response for {close_call_id} not a JSON object: {type(parsed).__name__}"
         )
 
-    missing = _REQUIRED_KEYS - set(parsed.keys())
+    missing = required_keys - set(parsed.keys())
     if missing:
         raise ReviewError(
             f"response for {close_call_id} missing keys: {sorted(missing)}"
@@ -377,13 +460,13 @@ def _parse_and_validate(text: str, close_call_id: str) -> dict[str, Any]:
         raise ReviewError(
             f"should_be_dqd=true but no dq_reason for {close_call_id}"
         )
-    if not isinstance(parsed["booked"], bool):
+    if not isinstance(parsed[bool_key], bool):
         raise ReviewError(
-            f"booked not bool for {close_call_id}: {parsed['booked']!r}"
+            f"{bool_key} not bool for {close_call_id}: {parsed[bool_key]!r}"
         )
-    if parsed["booked"] is False and not parsed.get("no_book_reason"):
+    if parsed[bool_key] is False and not parsed.get(reason_key):
         raise ReviewError(
-            f"booked=false but no no_book_reason for {close_call_id}"
+            f"{bool_key}=false but no {reason_key} for {close_call_id}"
         )
     for arr_key in ("setter_strengths", "setter_weaknesses"):
         if not isinstance(parsed[arr_key], list):
@@ -426,9 +509,12 @@ def _upsert(db: Any, row: dict[str, Any]) -> dict[str, Any]:
         raise ReviewError(
             f"setter_call_reviews upsert returned no row for {row['close_call_id']}"
         )
+    # Outcome label is call_type-dependent (booked for outbound, closed for
+    # revival); log whichever pair the active call_type carries.
+    outcome = row.get("closed") if row.get("call_type") == "revival" else row.get("booked")
     logger.info(
-        "setter_review.persisted close_call_id=%s score=%s dq=%s booked=%s cost=$%s",
-        row["close_call_id"], row["lead_score"], row["should_be_dqd"],
-        row["booked"], row["sonnet_cost_usd"],
+        "setter_review.persisted close_call_id=%s call_type=%s score=%s dq=%s outcome=%s cost=$%s",
+        row["close_call_id"], row.get("call_type"), row["lead_score"],
+        row["should_be_dqd"], outcome, row["sonnet_cost_usd"],
     )
     return resp.data[0]

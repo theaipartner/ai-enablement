@@ -137,11 +137,23 @@ def _build_message(
     render (rare in modern clients).
     """
     score = review_row.get("lead_score") or 0
-    booked = bool(review_row.get("booked"))
     dq = bool(review_row.get("should_be_dqd"))
     sentiment = (review_row.get("sentiment") or "").strip()
     dq_reason = (review_row.get("dq_reason") or "").strip()
-    no_book_reason = (review_row.get("no_book_reason") or "").strip()
+
+    # Outcome is call-type-dependent. Revival (Digital College) calls are
+    # graded on closing on the phone — closed / no_close_reason. Outbound
+    # setting calls are graded on booking — booked / no_book_reason.
+    if is_revival:
+        outcome_hit = bool(review_row.get("closed"))
+        outcome_reason = (review_row.get("no_close_reason") or "").strip()
+        outcome_yes, outcome_no = "Closed", "Not closed"
+        outcome_reason_label = "Why didn't close"
+    else:
+        outcome_hit = bool(review_row.get("booked"))
+        outcome_reason = (review_row.get("no_book_reason") or "").strip()
+        outcome_yes, outcome_no = "Booked", "Not booked"
+        outcome_reason_label = "Why didn't book"
 
     setter = setter_name or "Unknown setter"
     prospect = prospect_name or "Unknown prospect"
@@ -155,7 +167,7 @@ def _build_message(
         f"{'🔁 REVIVAL  ·  ' if is_revival else ''}"
         f"{setter} → {prospect}  ·  Score {score}/10"
         f"{'  ·  DQ FLAGGED' if dq else ''}"
-        f"  ·  {'Booked' if booked else 'Not booked'}"
+        f"  ·  {outcome_yes if outcome_hit else outcome_no}"
         f"  ·  {duration_label}"
     )
 
@@ -168,12 +180,12 @@ def _build_message(
     # Header line — bold setter → prospect, score chip, booked chip,
     # DQ chip when present.
     score_emoji = _score_emoji(score)
-    booked_emoji = ":white_check_mark:" if booked else ":no_entry_sign:"
-    booked_label = "Booked" if booked else "Not booked"
+    outcome_emoji = ":white_check_mark:" if outcome_hit else ":no_entry_sign:"
+    outcome_label = outcome_yes if outcome_hit else outcome_no
     headline_parts = [
         f"*{setter}* → *{prospect}*",
         f"{score_emoji} *{score}/10*",
-        f"{booked_emoji} {booked_label}",
+        f"{outcome_emoji} {outcome_label}",
     ]
     if dq:
         headline_parts.append(":rotating_light: *DQ flagged*")
@@ -215,13 +227,13 @@ def _build_message(
             }
         )
 
-    if not booked and no_book_reason:
+    if not outcome_hit and outcome_reason:
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f":no_entry_sign: *Why didn't book:* {_escape_mrkdwn(no_book_reason)}",
+                    "text": f":no_entry_sign: *{outcome_reason_label}:* {_escape_mrkdwn(outcome_reason)}",
                 },
             }
         )

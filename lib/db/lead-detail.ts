@@ -270,7 +270,8 @@ export async function getLeadDetail(closeId: string): Promise<LeadDetail | null>
           .from('setter_call_reviews' as never)
           .select(
             'close_call_id, sentiment, lead_score, lead_score_reason, should_be_dqd, ' +
-              'dq_reason, booked, no_book_reason, setter_strengths, setter_weaknesses, ' +
+              'dq_reason, call_type, booked, no_book_reason, closed, no_close_reason, ' +
+              'setter_strengths, setter_weaknesses, ' +
               'lead_attributes, setter_words, prospect_words, talk_ratio_setter, ' +
               'model, prompt_version, reviewed_at',
           )

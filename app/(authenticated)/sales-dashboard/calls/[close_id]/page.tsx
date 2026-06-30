@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import {
   getSetterCallById,
   type SetterCallDetail,
+  type SetterCallReviewFull,
   type SetterCallReviewItem,
   type SetterCallWord,
 } from '@/lib/db/setter-calls'
@@ -125,7 +126,7 @@ function HeaderBlock({ detail }: { detail: SetterCallDetail }) {
         {review ? (
           <div style={{ display: 'inline-flex', gap: 8, alignItems: 'baseline' }}>
             <ScorePill score={review.lead_score} />
-            <BookedPill booked={review.booked} />
+            <OutcomePill review={review} />
             {review.should_be_dqd ? <DqPill reason={review.dq_reason ?? ''} /> : null}
           </div>
         ) : (
@@ -217,10 +218,16 @@ function ScorePill({ score }: { score: number }) {
   )
 }
 
-function BookedPill({ booked }: { booked: boolean }) {
-  const tone = booked
-    ? { color: 'var(--color-geg-pos)', bg: 'var(--color-geg-pos-fill)', border: 'var(--color-geg-pos-border)', label: 'Booked' }
-    : { color: 'var(--color-geg-text-3)', bg: 'transparent', border: 'var(--color-geg-border)', label: 'Not booked' }
+// Outcome pill — call-type aware. Outbound calls are graded on booking;
+// revival (Digital College) calls on closing the sale on the phone.
+function OutcomePill({ review }: { review: SetterCallReviewFull }) {
+  const isRevival = review.call_type === 'revival'
+  const hit = isRevival ? review.closed === true : review.booked === true
+  const yes = isRevival ? 'Closed' : 'Booked'
+  const no = isRevival ? 'Not closed' : 'Not booked'
+  const tone = hit
+    ? { color: 'var(--color-geg-pos)', bg: 'var(--color-geg-pos-fill)', border: 'var(--color-geg-pos-border)', label: yes }
+    : { color: 'var(--color-geg-text-3)', bg: 'transparent', border: 'var(--color-geg-border)', label: no }
   return (
     <span
       className="geg-mono"
@@ -496,22 +503,30 @@ function ReviewBox({ detail }: { detail: SetterCallDetail }) {
             </ReviewSection>
           ) : null}
 
-          {review.booked === false && review.no_book_reason ? (
-            <ReviewSection title="Why didn't book">
-              <p
-                style={{
-                  fontSize: 13.5,
-                  lineHeight: 1.55,
-                  color: 'var(--color-geg-text)',
-                  margin: 0,
-                  paddingLeft: 12,
-                  borderLeft: '2px solid var(--color-geg-neg-border)',
-                }}
-              >
-                {review.no_book_reason}
-              </p>
-            </ReviewSection>
-          ) : null}
+          {(() => {
+            // Outcome blocker — call-type aware. Revival (DC) calls show
+            // "Why didn't close"; outbound calls show "Why didn't book".
+            const isRevival = review.call_type === 'revival'
+            const missed = isRevival ? review.closed === false : review.booked === false
+            const reason = isRevival ? review.no_close_reason : review.no_book_reason
+            if (!missed || !reason) return null
+            return (
+              <ReviewSection title={isRevival ? "Why didn't close" : "Why didn't book"}>
+                <p
+                  style={{
+                    fontSize: 13.5,
+                    lineHeight: 1.55,
+                    color: 'var(--color-geg-text)',
+                    margin: 0,
+                    paddingLeft: 12,
+                    borderLeft: '2px solid var(--color-geg-neg-border)',
+                  }}
+                >
+                  {reason}
+                </p>
+              </ReviewSection>
+            )
+          })()}
         </>
       )}
     </div>

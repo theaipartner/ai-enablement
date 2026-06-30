@@ -24,10 +24,17 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 // Review fields stitched in from setter_call_reviews (nullable until
 // the Sonnet reviewer has processed the transcript).
+//
+// Outcome is call-type-dependent: outbound calls carry booked
+// (no_book_reason), revival (Digital College) calls carry closed
+// (no_close_reason) — the rep closes on the phone, not booking a meeting.
+// The inactive pair is null. Read the right one off call_type.
 export type SetterCallReviewSummary = {
   lead_score: number
   should_be_dqd: boolean
-  booked: boolean
+  call_type: 'outbound' | 'revival'
+  booked: boolean | null
+  closed: boolean | null
   sentiment: string
 }
 
@@ -158,19 +165,23 @@ export async function listSetterCalls(
       if (transcriptIds.length === 0) return
       const { data: reviews } = await supabase
         .from('setter_call_reviews' as never)
-        .select('close_call_id, lead_score, should_be_dqd, booked, sentiment')
+        .select('close_call_id, lead_score, should_be_dqd, call_type, booked, closed, sentiment')
         .in('close_call_id' as never, transcriptIds)
       for (const r of (reviews ?? []) as unknown as Array<{
         close_call_id: string
         lead_score: number
         should_be_dqd: boolean
-        booked: boolean
+        call_type: 'outbound' | 'revival'
+        booked: boolean | null
+        closed: boolean | null
         sentiment: string
       }>) {
         reviewMap.set(r.close_call_id, {
           lead_score: r.lead_score,
           should_be_dqd: r.should_be_dqd,
+          call_type: r.call_type,
           booked: r.booked,
+          closed: r.closed,
           sentiment: r.sentiment,
         })
       }
@@ -232,8 +243,13 @@ export type SetterCallReviewFull = {
   lead_score_reason: string
   should_be_dqd: boolean
   dq_reason: string | null
-  booked: boolean
+  // Outcome: outbound → booked/no_book_reason; revival → closed/no_close_reason.
+  // The inactive pair is null. Branch on call_type.
+  call_type: 'outbound' | 'revival'
+  booked: boolean | null
   no_book_reason: string | null
+  closed: boolean | null
+  no_close_reason: string | null
   setter_strengths: SetterCallReviewItem[]
   setter_weaknesses: SetterCallReviewItem[]
   lead_attributes: string[]
@@ -338,7 +354,8 @@ export async function getSetterCallById(
       .from('setter_call_reviews' as never)
       .select(`
         sentiment, lead_score, lead_score_reason,
-        should_be_dqd, dq_reason, booked, no_book_reason,
+        should_be_dqd, dq_reason, call_type,
+        booked, no_book_reason, closed, no_close_reason,
         setter_strengths, setter_weaknesses, lead_attributes,
         setter_words, prospect_words, talk_ratio_setter,
         model, prompt_version, reviewed_at
@@ -377,7 +394,9 @@ export async function getSetterCallById(
     ? {
         lead_score: full_review.lead_score,
         should_be_dqd: full_review.should_be_dqd,
+        call_type: full_review.call_type,
         booked: full_review.booked,
+        closed: full_review.closed,
         sentiment: full_review.sentiment,
       }
     : null
