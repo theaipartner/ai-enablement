@@ -189,15 +189,16 @@ differently, keyed by **`call_type`**:
 
 The inactive pair is null (a revival row has `booked = null`; an outbound row has `closed =
 null`); a CHECK enforces exactly the right outcome per `call_type`. The reviewer picks the
-rubric from its **is_revival** check — `close_leads.latest_opt_in_date < REVIVAL_HORIZON`
-(`2026-05-24`), the same cold-pre-horizon proxy that drives the Slack `🔁 Revival` badge. Note
-this is the opt-in-horizon proxy, **not** the `REVIVAL_CF` custom field used by the `/outbound`
-funnel — close but not identical; per Drake (2026-06-30) all opt-in-horizon revival calls are
-DC close attempts, so the proxy is the intended signal. Prompt `v2` carries the split
+rubric from its **is_revival** check — the lead's **`REVIVAL_CF`** ("DC Revival Lead") custom
+field being non-empty, the same canonical revival marker the tagger and the `/outbound` funnel
+use (`close_leads.custom_fields_raw->>REVIVAL_CF`). The first cut keyed off an opt-in-date proxy
+(`latest_opt_in_date < 2026-05-24`) and **silently missed the bulk of revival leads** — the
+SMS-created DC Revival leads often carry no opt-in date at all, so they fell through to the book
+rubric; fixed 2026-06-30 to use the CF. Prompt `v2` carries the split
 (`agents/setter_call_reviewer/prompt.py`); migration `0121` added the columns. Going-forward
-calls are graded by `call_type` automatically. Most historical revival rows intentionally keep
-their original book grading (no full backfill); `scripts/rereview_revival_setter_calls.py` is an
-idempotent on-demand re-grade tool if that's ever wanted.
+calls are graded by `call_type` automatically. `scripts/rereview_revival_setter_calls.py` is an
+idempotent re-grade tool — it finds reviews whose stored `call_type` disagrees with the detector
+and flips them book↔close.
 
 Don't confuse **Revival** (this campaign) with **Reactivation** (a unique lead that lost
 its strategy-call spot — a `lead_cycles` flag, part of the main funnel).

@@ -33,11 +33,16 @@ from agents.setter_call_reviewer.slack_post import post_review_to_slack
 from agents.setter_call_reviewer.talk_time import compute_talk_time
 from shared.claude_client import DEFAULT_MODEL, complete
 
-# Gregory's active-lead horizon. A lead whose latest opt-in is before this is a
-# cold pre-horizon lead — a call to them is a "revival" (re-engagement) call.
-# Revival calls are Digital College reactivations: the rep closes on the phone,
-# so they're graded on the close rubric, not the book rubric.
-REVIVAL_HORIZON = "2026-05-24"
+# "DC Revival Lead" Close custom field — the canonical revival-campaign marker
+# (the re-engagement SMS auto-creates these leads and stamps this CF). A call to
+# a revival lead is a Digital College reactivation: the rep closes on the phone,
+# so it's graded on the close rubric, not the book rubric. Keep in sync with
+# shared.lead_tagging.REVIVAL_CF and lib/db/funnel-appointment-setting.ts.
+#
+# NOTE: this replaced an opt-in-date proxy (latest_opt_in_date < a horizon),
+# which silently missed the bulk of revival leads — SMS-created ones often have
+# NO opt-in date at all, so the proxy graded them outbound (Drake 2026-06-30).
+REVIVAL_CF = "cf_QivXkWBvr34UIDkUBKXNCQo6woarc62wEbIacWWbN7P"
 from shared.db import get_client
 
 logger = logging.getLogger("ai_enablement.setter_call_reviewer")
@@ -210,13 +215,9 @@ def _maybe_post_to_slack(
     try:
         ctx = _load_slack_context(db, close_call_id)
         # call_type on the persisted row is authoritative for the revival
-        # badge / close-vs-book outcome line. Fall back to the context's
-        # recomputed flag for legacy rows written before call_type existed.
-        is_revival = (
-            review_row.get("call_type") == "revival"
-            if review_row.get("call_type") is not None
-            else ctx.get("is_revival", False)
-        )
+        # badge / close-vs-book outcome line (call_type is NOT NULL on every
+        # row since migration 0121).
+        is_revival = review_row.get("call_type") == "revival"
         post_review_to_slack(
             db,
             close_call_id=close_call_id,
@@ -238,14 +239,13 @@ def _maybe_post_to_slack(
 
 
 def _is_revival_call(db: Any, close_call_id: str) -> bool:
-    """True when this call's lead is a cold pre-horizon (revival) lead.
+    """True when this call's lead is a DC Revival lead.
 
-    Resolves close_calls.lead_id → close_leads.latest_opt_in_date and
-    compares to REVIVAL_HORIZON. Mirrors the is_revival computation in
-    _load_slack_context — kept as a standalone lookup because the rubric
-    decision happens before the Slack-context resolution (and on a path
-    that may skip Slack entirely). Fail-safe: any lookup miss returns
-    False, so an unresolved lead is graded on the default book rubric.
+    Resolves close_calls.lead_id → close_leads.custom_fields_raw and checks
+    the REVIVAL_CF marker (non-empty = revival), matching the canonical
+    revival predicate the tagger and the /outbound funnel use. Fail-safe:
+    any lookup miss returns False, so an unresolved lead is graded on the
+    default book rubric.
     """
     call_resp = (
         db.table("close_calls")
@@ -260,13 +260,13 @@ def _is_revival_call(db: Any, close_call_id: str) -> bool:
 
     ld_resp = (
         db.table("close_leads")
-        .select("latest_opt_in_date")
+        .select("custom_fields_raw")
         .eq("close_id", lead_id)
         .maybe_single()
         .execute()
     )
-    opt_in = (ld_resp.data or {}).get("latest_opt_in_date") if ld_resp else None
-    return bool(opt_in) and str(opt_in)[:10] < REVIVAL_HORIZON
+    cf = (ld_resp.data or {}).get("custom_fields_raw") if ld_resp else None
+    return bool((cf or {}).get(REVIVAL_CF))
 
 
 def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
@@ -316,29 +316,24 @@ def _load_slack_context(db: Any, close_call_id: str) -> dict[str, Any]:
             )
 
     prospect_name: str | None = None
-    is_revival = False
     if call.get("lead_id"):
         ld_resp = (
             db.table("close_leads")
-            .select("display_name, latest_opt_in_date")
+            .select("display_name")
             .eq("close_id", call["lead_id"])
             .maybe_single()
             .execute()
         )
         if ld_resp and ld_resp.data:
             prospect_name = ld_resp.data.get("display_name")
-            # Revival = a cold pre-horizon lead being re-engaged (latest opt-in
-            # before the Gregory horizon). Covers the revival SMS batch, since
-            # every batch lead is pre-horizon by construction.
-            opt_in = ld_resp.data.get("latest_opt_in_date")
-            is_revival = bool(opt_in) and str(opt_in)[:10] < REVIVAL_HORIZON
 
+    # is_revival is NOT recomputed here — the caller reads call_type off the
+    # persisted review row (the authoritative rubric decision).
     return {
         "setter_name": setter_name,
         "prospect_name": prospect_name,
         "duration_s": call.get("duration"),
         "direction": call.get("direction"),
-        "is_revival": is_revival,
     }
 
 

@@ -8,8 +8,9 @@ Two rubrics share one base. Setters make two kinds of call:
     lead the rep tries to CLOSE on the phone (not book). Graded on
     closed / no_close_reason.
 
-The reviewer picks the rubric from its is_revival check (lead opt-in
-before REVIVAL_HORIZON) and stores call_type on the row. Everything
+The reviewer picks the rubric from its is_revival check (the lead's
+REVIVAL_CF "DC Revival Lead" custom field) and stores call_type on the
+row. Everything
 except the outcome field is identical between the two rubrics — sentiment,
 lead_score, the DQ bar, strengths/weaknesses, lead_attributes. Only the
 call-context intro and the single outcome field differ, so the base is
