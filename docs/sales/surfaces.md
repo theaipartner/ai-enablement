@@ -298,6 +298,18 @@ within the sales area (hidden from reps' sidebar). See `docs/sales/landing-pages
 
 ---
 
+## Sales bot — Slack (not a dashboard page)
+
+A read-only **text-to-SQL Slack agent** the team @-mentions in
+`SALES_BOT_SLACK_CHANNEL` to ask NL questions about sales data ("opt-ins this
+week?", "Connor's connected calls last month?"). It writes guarded read-only SQL
+(the `sales_bot_ro` role, migration 0113) and answers in-thread with a
+dashboard-verify disclaimer. Not a page — a Slack front door onto the same data.
+Code `agents/sales_bot/`; agent doc `docs/agents/sales_bot.md`; ops
+`docs/runbooks/sales_bot.md`; design `docs/sales/sales-bot-build-plan.md`.
+
+---
+
 ## Legacy surfaces (not the current product)
 
 - `/[section]`, `/states`, `/trajectory` — the older v1/v2 **metric-catalog** layer

@@ -68,3 +68,6 @@ def _block_real_slack_posts(monkeypatch):
     # cron's test patches this locally too; this is the belt-and-
     # suspenders safety net per the convention above.
     monkeypatch.setattr("api.ella_unanswered_flagger_cron.post_message", _noop)
+    # Live local re-export bound at import time inside the sales bot agent
+    # (agents.sales_bot.agent does `from shared.slack_post import post_message`).
+    monkeypatch.setattr("agents.sales_bot.agent.post_message", _noop)

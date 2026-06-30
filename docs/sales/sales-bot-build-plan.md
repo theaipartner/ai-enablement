@@ -1,8 +1,12 @@
 # Sales Bot — Build Plan (handoff spec for the next instance)
 
-**Status:** designed, decisions locked, NOT built. This doc is a step-by-step
-build spec — read it top to bottom, then execute. Everything needed is here;
-references point at real files to mirror.
+**Status:** BUILT (2026-06-29). The code shipped per this spec — see
+`agents/sales_bot/`, the Slack branch in `api/slack_events.py`, migration
+`0113_sales_bot_ro_role.sql`, agent doc `docs/agents/sales_bot.md`, and ops
+runbook `docs/runbooks/sales_bot.md`. This doc is kept as the design record.
+**Remaining Drake-gated go-live steps:** apply `0113` + set the `sales_bot_ro`
+password + `SALES_BOT_DB_URL` (Vercel + `.env.local`), and create/set
+`SALES_BOT_SLACK_CHANNEL` and invite the bot. See the runbook § Provisioning.
 
 A Slack bot the sales team (esp. Nabeel) @-mentions to ask natural-language
 questions about sales data; it writes **read-only SQL** against our Postgres,
@@ -24,8 +28,18 @@ docs) — so **no embeddings / RAG**.
    role, `SELECT`-only, statement timeout, row cap, **sales-tables allowlist** (no
    fulfillment/client/PII tables, no writes, no DDL).
 5. **No embeddings.** Structured-data Q&A = SQL, not vector search.
-6. **Audience-restricted:** only works in the sales bot's Slack channel (and/or
-   for sales-area users).
+6. **ONE CHANNEL ONLY — hard requirement (Drake, do not weaken).** The bot must
+   answer sales questions in exactly **one dedicated sales channel** and **nowhere
+   else**. Sales numbers must NEVER surface in a client channel.
+   - **Strongly preferred: a SEPARATE Slack app/bot user (NOT @Ella),** invited to
+     **only** the one sales channel. Ella lives in client channels — reusing her
+     risks leaking sales data there. A separate bot that isn't in client channels
+     *physically cannot* be @-mentioned in them. This is the safe design.
+   - If (and only if) you must reuse Ella's Slack app, the channel-allowlist check
+     below is the ONLY thing preventing leakage: the handler must hard-`return`
+     unless `event.channel == SALES_BOT_SLACK_CHANNEL`, with NO fallback path, and
+     Ella's normal client behavior must be untouched. Treat any other channel as a
+     refusal. This is the fragile option — prefer the separate bot.
 
 ---
 

@@ -122,7 +122,10 @@ class handler(BaseHTTPRequestHandler):
 
         if payload.get("type") == "event_callback":
             event = payload.get("event") or {}
-            sales_channel = os.environ.get("SALES_FORM_NOTIFY_SLACK_CHANNEL", "").strip()
+            sales_channel = os.environ.get(
+                "SALES_FORM_NOTIFY_SLACK_CHANNEL", ""
+            ).strip()
+            sales_bot_channel = os.environ.get("SALES_BOT_SLACK_CHANNEL", "").strip()
             if (
                 event.get("type") == "app_mention"
                 and sales_channel
@@ -132,6 +135,14 @@ class handler(BaseHTTPRequestHandler):
                 # dismissing a missing-form ping (form genuinely not needed).
                 # Route to the engagement dismisser, NOT Ella's client monitor.
                 _handle_engagement_dismissal(event)
+            elif (
+                event.get("type") == "app_mention"
+                and sales_bot_channel
+                and event.get("channel") == sales_bot_channel
+            ):
+                # Sales-bot channel: an @-mention here is a sales question.
+                # Route to the read-only text-to-SQL sales bot, NOT Ella.
+                _handle_sales_bot_question(event)
             elif event.get("type") == "app_mention":
                 # Unified-path refactor (2026-05-18 PM): the reactive
                 # path is GONE. Slack fires a parallel `message` event
@@ -148,10 +159,13 @@ class handler(BaseHTTPRequestHandler):
                     event.get("user"),
                 )
             elif event.get("type") == "message":
-                if sales_channel and event.get("channel") == sales_channel:
-                    # Sales form-notify channel isn't a client channel — the
-                    # dismissal signal is the app_mention above, so this
-                    # message event is a no-op (skip the ingest round-trip).
+                if (sales_channel and event.get("channel") == sales_channel) or (
+                    sales_bot_channel and event.get("channel") == sales_bot_channel
+                ):
+                    # Neither the form-notify nor the sales-bot channel is a
+                    # client channel — their only signal is the app_mention
+                    # above, so this message event is a no-op (skip the ingest
+                    # round-trip).
                     pass
                 else:
                     # Every message in a client channel lands in
@@ -254,6 +268,24 @@ def _handle_engagement_dismissal(event: dict[str, Any]) -> None:
         logger.info("slack_webhook: engagement dismissal -> %s", result)
     except Exception as exc:
         logger.exception("slack_webhook: handle_dismissal_mention raised: %s", exc)
+
+
+def _handle_sales_bot_question(event: dict[str, Any]) -> None:
+    """Forward an @-mention in the sales-bot channel to the read-only
+    text-to-SQL sales bot. Synchronous (Vercel kills threads after do_POST
+    returns; Slack's retry-dedup branch covers the >3s roundtrip — same model
+    as Ella). Fail-soft: any error is logged so Slack's 200 ack still fires."""
+    try:
+        from agents.sales_bot.agent import handle_question, payload_from_event
+
+        result = handle_question(payload_from_event(event))
+        logger.info(
+            "slack_webhook: sales_bot -> status=%s tool_calls=%s",
+            result.status,
+            result.tool_calls,
+        )
+    except Exception as exc:
+        logger.exception("slack_webhook: _handle_sales_bot_question raised: %s", exc)
 
 
 def _ingest_message_event(payload: dict[str, Any]) -> None:
