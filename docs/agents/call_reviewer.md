@@ -39,8 +39,8 @@ today) filter by `asker='client'`.
   (`persistence.py:upsert_call_review`,
   `scripts/backfill_sentiment_tiers.py`) inherit this since the
   telemetry lives inside the shared function.
-- `scripts/backfill_call_reviews.py` — one-shot bulk reviewer for a
-  date window.
+- `scripts/archive/backfill_call_reviews.py` — retired one-shot bulk
+  reviewer for a date window.
 - `scripts/backfill_sentiment_tiers.py` — one-shot bulk sentiment
   classifier for existing `call_review` rows missing
   `metadata.sentiment_tier`. Idempotent via `IS NULL` filter.

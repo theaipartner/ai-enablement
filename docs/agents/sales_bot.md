@@ -5,8 +5,7 @@ A Slack agent the sales team @-mentions to ask natural-language questions about
 answers in plain English. Like Ella, but for *structured data* — so **no
 embeddings / RAG**; the "retrieval" is SQL.
 
-Built from `docs/sales/sales-bot-build-plan.md` (the design spec). Code lives in
-`agents/sales_bot/`; Slack wiring in `api/slack_events.py`; ops in
+Code lives in `agents/sales_bot/`; Slack wiring in `api/slack_events.py`; ops in
 `docs/runbooks/sales_bot.md`.
 
 ## Purpose
@@ -94,7 +93,6 @@ run scales with the tool loop (typically 2–4 Claude calls).
 
 ## Evals / smoke
 
-See `docs/sales/sales-bot-build-plan.md` § 9 for the smoke questions. Spot-check
-2–3 answers against the live dashboard after any glossary change. The two
-recurring bug classes to watch: **ET vs UTC** date bucketing and **cycles vs
-people** counting.
+Spot-check 2–3 answers against the live dashboard after any glossary change,
+using questions like the ones under § Purpose. The two recurring bug classes to
+watch: **ET vs UTC** date bucketing and **cycles vs people** counting.

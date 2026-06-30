@@ -1,6 +1,6 @@
 # Runbook: Microsoft Clarity Ingestion (Daily Self-Healing Cron, No Backfill)
 
-Spec: `docs/specs/clarity-ingestion.md`. Discovery: `docs/reports/clarity-discovery.md`. Schema doc: `docs/schema/clarity_metrics_daily.md`. Migration: `0049_clarity_metrics_daily.sql`.
+Schema doc: `docs/schema/clarity_metrics_daily.md`. Migration: `0049_clarity_metrics_daily.sql`.
 
 This runbook covers source endpoint, auth, the no-backfill model, the daily cron, the manual wrapper, failure modes, and what's intentionally deferred.
 
@@ -13,7 +13,7 @@ Source for three Engine-sheet FUNNELS rows (paths updated 2026-05-25 after Zain'
 - **Avg Time on Landing Page** (row 26; `EngagementTime.active_time` for `/lp-vsl`)
 - **Avg Time on Thank-You Page** (row 37; `EngagementTime.active_time` for `/lp-confirmation`)
 
-Row 37 was originally mis-tagged "Wistia" on the Engine sheet; discovery confirmed Clarity has per-URL time-on-page. **Drake to re-tag the sheet** (not in scope here; flagged in the report).
+Row 37 was originally mis-tagged "Wistia" on the Engine sheet; discovery confirmed Clarity has per-URL time-on-page. **Re-tag the sheet** (not in scope here; flagged in the report).
 
 ## Architecture
 
@@ -55,8 +55,8 @@ Clarity's API returns **only the last 1-3 days**. Period. There is no historical
 - **Token:** `CLARITY_API_KEY` (Personal Access Token / admin-only). Bearer header on every call.
 - **Where it must be set:**
   - **`.env.local`** for local runs (`scripts/sync_clarity.py`, tests).
-  - **Vercel project env vars** for the deployed cron. Gate (d) — Drake adds, never silently.
-- **Token generation:** Clarity → Settings → Data Export → Generate new API token. **Admin-only**; if Drake isn't admin, Nabeel runs it. Naming convention: 4-32 chars, alphanumerics + `- _ .` only. No spaces or special characters.
+  - **Vercel project env vars** for the deployed cron. Add it explicitly, never silently.
+- **Token generation:** Clarity → Settings → Data Export → Generate new API token. **Admin-only**; if you're not admin, Nabeel runs it. Naming convention: 4-32 chars, alphanumerics + `- _ .` only. No spaces or special characters.
 - **Rotation:** if 401s start appearing in the cron audit, admin regenerates the token. Update both `.env.local` AND Vercel; redeploy.
 
 ## Endpoint
@@ -121,7 +121,7 @@ curl -i -X POST \
 .venv/bin/python scripts/sync_clarity.py --apply --days 1   # narrower window
 ```
 
-**Each `--smoke` / `--apply` burns 1 of 10 daily project reqs.** The cron uses 1 on its own. Coordinate during incident debugging — if Drake is running manual syncs and the cron also fires, you can hit the cap.
+**Each `--smoke` / `--apply` burns 1 of 10 daily project reqs.** The cron uses 1 on its own. Coordinate during incident debugging — if someone is running manual syncs and the cron also fires, you can hit the cap.
 
 `--smoke` is the canonical pre-`--apply` gate per CLAUDE.md § Operational patterns. It exercises the full fetch + parse path against the real API without DB writes, so parser drift surfaces before any DB row lands.
 
@@ -129,7 +129,7 @@ curl -i -X POST \
 
 There is NO backfill — the first cron tick (or `--apply` invocation) loads whatever Clarity has for the last 3 days. From then on, history accumulates one daily snapshot at a time.
 
-If the cron is paused for >3 days, the missed window is permanently gone. Acceptable per spec; the aggregation layer should report "data not yet captured" rather than misleading zeros.
+If the cron is paused for >3 days, the missed window is permanently gone. Acceptable by design; the aggregation layer should report "data not yet captured" rather than misleading zeros.
 
 ## Canonical config — which paths are which
 
@@ -163,7 +163,7 @@ Request: `dimension1=URL` (all caps). Response field: `Url` (capital U, lowercas
 
 ### 5. The Engine row 37 ("Avg Time on Thank-You Page") was tagged Wistia on the sheet
 
-Discovery resolved this: Clarity has per-URL time-on-page; it's a Clarity metric. **Drake to re-tag the sheet manually** (or via a separate spec to update the rollup definitions).
+Discovery resolved this: Clarity has per-URL time-on-page; it's a Clarity metric. **Re-tag the sheet manually** (or via a separate spec to update the rollup definitions).
 
 ### 6. Manual --apply consumes the shared 10/day budget
 
@@ -173,7 +173,7 @@ Don't loop-retry. Don't run --smoke + --apply back-to-back unless you have a rea
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Cron audit `clarity_token_unavailable` | `CLARITY_API_KEY` missing in Vercel | Drake adds (gate d); redeploy. |
+| Cron audit `clarity_token_unavailable` | `CLARITY_API_KEY` missing in Vercel | Add it in Vercel; redeploy. |
 | Cron audit `errors: ["...HTTP 401..."]` | Token expired/revoked | Admin regenerates Clarity token; update `.env.local` + Vercel. |
 | Cron audit `errors: ["...HTTP 429..."]` | Daily 10-req cap exceeded | Wait 24h. Check if manual `--apply` runs piled on top of the cron. |
 | Cron audit `errors: ["batch upsert (N rows): ..."]` | Supabase write transport failure | Check `webhook_deliveries.processing_error` for the full exception. Re-run the cron tick manually (idempotent). |
@@ -185,7 +185,7 @@ Don't loop-retry. Don't run --smoke + --apply back-to-back unless you have a rea
 
 - **Aggregation-layer SQL views** for the three named Engine-sheet rows. Will need to handle the per-snapshot 3-day rolling-sum semantic (each row is "3 days as observed on snapshot_date") + the `url_path = '__total__'` filter.
 - **Multi-dimension probes** (e.g. URL × Browser, URL × Country) — we have 2 unused dimensions per request. Add when a Q comes that needs them.
-- **`/conf` vs `/confirmation` reconciliation** — Drake/Aman picks; trivial to expand the canonical config either way.
+- **`/conf` vs `/confirmation` reconciliation** — (team decision); trivial to expand the canonical config either way.
 - **6 quality-signal blocks as UX alarms** — RageClickCount surge alerting, etc. Stored cold today in `raw`.
 - **Engine sheet row-37 re-tag** — Wistia → Clarity. Manual sheet edit; flagged in the report.
 - **Daily total deduplication strategy** — the aggregation layer chooses how to reduce overlapping 3-day-rolling snapshots into clean per-day metrics.

@@ -87,7 +87,7 @@ Slack's signing secret changes if someone regenerates it in the app console or i
 2. Update `.env.local` (for local dev / future harness runs).
 3. Vercel dashboard → Project Settings → Environment Variables → edit `SLACK_SIGNING_SECRET` → paste new value → save.
 4. Redeploy (env-var changes don't propagate without one — see "Redeploying" above).
-5. Smoke test: @mention Ella in `#ella-test-drakeonly`. If the Vercel log shows `signature verification failed`, the old value is still cached — redeploy again or force-redeploy from the dashboard.
+5. Smoke test: @mention Ella in the Ella smoke-test channel. If the Vercel log shows `signature verification failed`, the old value is still cached — redeploy again or force-redeploy from the dashboard.
 
 The same process applies to rotating `SLACK_BOT_TOKEN` (from OAuth & Permissions → Reinstall to Workspace).
 
@@ -127,7 +127,7 @@ To roll out the captured token to production:
    `SLACK_USER_TOKEN` with the `xoxp-...` value, scope **Production**.
 2. Trigger a redeploy (any small push, OR Vercel dashboard →
    Deployments → latest → ⋯ → Redeploy without rebuild).
-3. Smoke test in `#ella-test-drakeonly`: @-mention Ella; verify the
+3. Smoke test in the Ella smoke-test channel: @-mention Ella; verify the
    reply renders as the @ella user (no APP tag); check Vercel
    function logs for `slack.postMessage ok via user-token`.
 4. Per-channel rollout: invite the @ella user to each pilot channel

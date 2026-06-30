@@ -33,7 +33,7 @@ Our Close integration lost access to the Close organization at ~**2026-06-20 06:
 
 A **deauthorization event** around 2026-06-20: the Close user/seat backing our API key + webhook subscription lost access to the org. Both surfaces died together (API key → no org; webhook → stopped delivering), which points at the seat/credential, not our code.
 
-**Trigger (identified by Drake 2026-06-24):** the **`success@theaipartner.io` Close seat was removed from the org** (seat reclaimed to cut cost / reassign to other people). The `CLOSE_API_KEY` *and* the webhook subscription were both created under that account. Close keys + webhook subscriptions are **user-scoped**: when the owning user loses org membership, the key keeps authenticating but reports zero organizations, and its webhook subscription is dropped — which is exactly the dual symptom here, and why both died at the same instant. **Not related** to the GitHub/Vercel/Supabase ownership transfer.
+**Trigger:** the **`success@theaipartner.io` Close seat was removed from the org** (seat reclaimed to cut cost / reassign to other people). The `CLOSE_API_KEY` *and* the webhook subscription were both created under that account. Close keys + webhook subscriptions are **user-scoped**: when the owning user loses org membership, the key keeps authenticating but reports zero organizations, and its webhook subscription is dropped — which is exactly the dual symptom here, and why both died at the same instant. **Not related** to the GitHub/Vercel/Supabase ownership transfer.
 
 **Recurrence guard:** recreate the key + webhook under a **durable seat that won't be reclaimed** (a stable admin/service account), not a personal seat. Credential ownership is tracked in `docs/runbooks/credentials-and-accounts.md`.
 
@@ -57,8 +57,8 @@ Anything keyed on Close data is undercounting post-June-20:
 
 ## Resolution (2026-06-25)
 
-1. **New API key** — Drake added a Close seat with org access and issued a fresh
-   `CLOSE_API_KEY` (verified `/me/` returns org "AI Partner"). Set in `.env.local`.
+1. **New API key** — a Close seat with org access was added and a fresh
+   `CLOSE_API_KEY` issued (verified `/me/` returns org "AI Partner"). Set in `.env.local`.
 2. **Webhook** — *first attempt didn't hold:* the subscription was **paused** (`whsub_165…`,
    created 2026-05-24 by the removed `success@` seat). Resuming it to `active` worked
    briefly (delivered through 12:04 next day) then Close **re-paused it** —
@@ -87,5 +87,5 @@ be reclaimed. If that seat is removed again, both die together — same failure.
 
 ## Relationship to the Jacob / ECJ task
 
-Blocked on this. The ECJ outreach happens in our Close org (per Drake), so the 11k batch should be in Close — but our mirror can't see it (only 42/10,018 CSV emails present) because the sync is down. Once Close access + backfill land, the batch should appear in `close_leads`, and the Jacob campaign (CSV match → label → second Outbound dropdown) can proceed.
+Blocked on this. The ECJ outreach happens in our Close org, so the 11k batch should be in Close — but our mirror can't see it (only 42/10,018 CSV emails present) because the sync is down. Once Close access + backfill land, the batch should appear in `close_leads`, and the Jacob campaign (CSV match → label → second Outbound dropdown) can proceed.
 </content>

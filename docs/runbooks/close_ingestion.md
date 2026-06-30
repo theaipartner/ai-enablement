@@ -1,8 +1,5 @@
 # Runbook: Close CRM Ingestion
 
-Spec: `docs/specs/close-ingestion-v1.md`. Reports:
-`docs/reports/close-smartview-discovery.md`, `docs/reports/close-full-data-inventory.md`.
-
 This runbook covers backfill, ongoing ingestion approach, idempotency, the canonical-decisions baked into the schema (triage-count path + tier derivation), and failure-mode debugging. Mirrors the shape of `docs/runbooks/fathom_backlog_ingest.md` + `docs/runbooks/cs_call_summary.md`.
 
 ## What this ingestion does
@@ -49,7 +46,7 @@ No agent code reads from Close. No code outside `ingestion/close/` and `scripts/
 ```bash
 .venv/bin/python scripts/backfill_close.py            # dry-run (default)
 .venv/bin/python scripts/backfill_close.py --smoke    # 1 lead end-to-end
-.venv/bin/python scripts/backfill_close.py --apply    # bulk (Drake-gated)
+.venv/bin/python scripts/backfill_close.py --apply    # bulk
 .venv/bin/python scripts/backfill_close.py --apply --limit 50
 ```
 
@@ -63,9 +60,9 @@ If smoke fails, investigate before re-trying. Common failure modes:
 - **Supabase column mismatch** — migration 0043 not applied, or applied to wrong env. Run dual-verify per `docs/runbooks/apply_migrations.md`.
 - **`HTTP 400` from /activity/** — unexpected `_type__in` value. The pipeline requests `Call,SMS,LeadStatusChange`; if Close renames a type, the parser silently skips unknown types but won't 400.
 
-### Bulk `--apply` gate (Drake)
+### Bulk `--apply`
 
-The first bulk `--apply` is the first large-scale production write of this arc. **Drake confirms the smoke result before invoking `--apply` at full scope.** Subsequent re-runs (after a parser fix, etc.) are not gated — the idempotency contract holds.
+The first bulk `--apply` is the first large-scale production write of this arc. **Confirm the smoke result before invoking `--apply` at full scope.** Subsequent re-runs (after a parser fix, etc.) are safe — the idempotency contract holds.
 
 ### Expected scale (today)
 
@@ -94,7 +91,7 @@ The Engine sheet has "Total Closer Triages" as an APPOINTMENT SETTING metric. Tw
 | A | `close_lead_status_changes` where `new_status_id = 'stat_GZca...' (Unconfirmed Booking - Handed over)` | Hand-OVER event (closer takes the lead) | 51 events / 25 sampled leads — dense |
 | B | `close_leads.triage_showed = 'Yes'` (cf) | Triage CALL happened (closer marks the cf) | 3 / 25 sampled leads — sparse |
 
-**Canonical = Path B** because Drake's spec definition of triage is "the phone call where a human qualifies the lead." A status flip to Handed-over marks the hand-OVER, not the triage call.
+**Canonical = Path B** because the definition of triage is "the phone call where a human qualifies the lead." A status flip to Handed-over marks the hand-OVER, not the triage call.
 
 **Gap risk:** Path B undercounts unless closers consistently fill in the `Triage Showed` cf. Daily reconciliation:
 
@@ -112,7 +109,7 @@ If the gap grows materially, surface to the team — the cf is the canonical sou
 
 ### Tier derivation: ≥ $2k disposable → tier_1
 
-Per Drake's confirmed business logic (2026-05-23): qualified for high-ticket if ≥ $2k disposable income; otherwise unqualified, routes to setter / digital college. The `investment` cf carries Typeform output strings (e.g. `'Under $2,000'`, `'$2,000 - $5,000'`).
+Business logic: qualified for high-ticket if ≥ $2k disposable income; otherwise unqualified, routes to setter / digital college. The `investment` cf carries Typeform output strings (e.g. `'Under $2,000'`, `'$2,000 - $5,000'`).
 
 Implementation: `ingestion.close.parser.derive_tier()`.
 
@@ -131,7 +128,7 @@ If Typeform values diverge from the assumed pattern, update `_CF_NAME_TO_COLUMN`
 
 ## Ongoing ingestion: live webhooks (shipped 2026-05-23 — `close-live-webhooks`)
 
-**Live path: `api/close_events.py`** — a Vercel serverless function Close pushes events to in real time. Drake chose webhooks over polling for true real-time freshness; the polling helper (`sync_recently_updated_leads`) is kept as an operational backstop for catching up after webhook outages.
+**Live path: `api/close_events.py`** — a Vercel serverless function Close pushes events to in real time. Webhooks are used over polling for true real-time freshness; the polling helper (`sync_recently_updated_leads`) is kept as an operational backstop for catching up after webhook outages.
 
 ### Subscribed events
 
@@ -140,7 +137,7 @@ Registered via `scripts/register_close_webhook.py`; the script's `EVENTS_IN_SCOP
 | Object type | Action | Routes to |
 |---|---|---|
 | `lead` | `created` / `updated` / `merged` | `close_leads` |
-| `opportunity` | `created` / `updated` | `close_opportunities` (Drake 2026-05-23 override) |
+| `opportunity` | `created` / `updated` | `close_opportunities` |
 | `activity.call` | `created` / `updated` / `answered` / `completed` | `close_calls` |
 | `activity.sms` | `created` / `updated` / `sent` | `close_sms` |
 | `activity.lead_status_change` | `created` / `updated` | `close_lead_status_changes` |
@@ -172,15 +169,15 @@ Three layers:
 2. **Per-row upsert:** every helper in `ingestion/close/pipeline.py` calls `.upsert(on_conflict="close_id")`. A legitimate retry with a fresh timestamp re-attempts processing but doesn't duplicate.
 3. **Fail-soft:** handler exceptions mark the row `failed` and STILL return 200 so Close doesn't auto-disable after 3 days of failures. Use the polling backstop to heal anything that truly failed.
 
-### Live activation runbook (Drake's gate-(d) steps)
+### Live activation runbook
 
 Sequential — each step depends on the previous one landing:
 
-1. **Builder commits + pushes `api/close_events.py` to `main`.** Vercel auto-deploys.
-2. **Drake confirms the deploy.** `curl https://ai-enablement-sigma.vercel.app/api/close_events` should return `{"status":"ok","endpoint":"close_events","accepts":"POST"}`. (Or hit it in a browser.) If the function 404s, the deploy didn't include `api/close_events.py` — wait + retry.
-3. **Drake runs `scripts/register_close_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/close_events`.** Script POSTs to Close's `/webhook/` endpoint with the events from `EVENTS_IN_SCOPE`. Response prints the signing secret — **copy it now**, Close only shows it once.
-4. **Drake adds `CLOSE_WEBHOOK_SECRET=<the hex string>` to Vercel project env vars.** Redeploy (Vercel may not pick up env changes automatically on next request — confirm via the dashboard).
-5. **Drake verifies end-to-end.** Change something on a lead in the Close UI (e.g. update a status). Within seconds:
+1. **Commit + push `api/close_events.py` to `main`.** Vercel auto-deploys.
+2. **Confirm the deploy.** `curl https://ai-enablement-sigma.vercel.app/api/close_events` should return `{"status":"ok","endpoint":"close_events","accepts":"POST"}`. (Or hit it in a browser.) If the function 404s, the deploy didn't include `api/close_events.py` — wait + retry.
+3. **Run `scripts/register_close_webhook.py --register --url https://ai-enablement-sigma.vercel.app/api/close_events`.** Script POSTs to Close's `/webhook/` endpoint with the events from `EVENTS_IN_SCOPE`. Response prints the signing secret — **copy it now**, Close only shows it once.
+4. **Add `CLOSE_WEBHOOK_SECRET=<the hex string>` to Vercel project env vars.** Redeploy (Vercel may not pick up env changes automatically on next request — confirm via the dashboard).
+5. **Verify end-to-end.** Change something on a lead in the Close UI (e.g. update a status). Within seconds:
    - `SELECT count(*) FROM webhook_deliveries WHERE source='close_webhook' AND received_at >= now() - interval '5 min'` → ≥ 1.
    - Matching row in the relevant mirror table updated (e.g. `close_leads.date_updated` for that lead's `close_id`).
 6. **If something looks wrong**, check `webhook_deliveries.processing_status` for `failed` / `malformed` rows, plus the corresponding `processing_error` field for the traceback.
@@ -190,7 +187,7 @@ Sequential — each step depends on the previous one landing:
 `scripts/backfill_close.py --apply --limit N` and the pipeline's `sync_recently_updated_leads(since_iso=...)` stay available for catching up after:
 
 - A webhook outage (Vercel down, Close-side failure, network).
-- A Close auto-pause of the subscription (3 days of failures or 100k backlog — Drake reactivates via Close API).
+- A Close auto-pause of the subscription (3 days of failures or 100k backlog — reactivate via the Close API).
 - A receiver-bug repair where we want to backfill the missed window.
 
 There is no scheduled cron for polling today; run on-demand when needed.
@@ -245,7 +242,7 @@ Daily cron at **11:30 UTC** that paginates Close's `/user/` endpoint and writes 
 
 **When a new sales rep joins:**
 
-1. Drake (or whoever) manually adds the `team_members` row first (`role='sales'`, `sales_role` set as appropriate, `close_user_id` left null).
+1. Manually add the `team_members` row first (`role='sales'`, `sales_role` set as appropriate, `close_user_id` left null).
 2. Within 24 hours, the daily cron picks up their Close user_id from the email match.
 3. The appointment-setting dashboard sees them on the next page load.
 
@@ -278,8 +275,8 @@ limit 5;
 - **Triage ingestion** — lives in Airtable forms, not Close. Will be its own ingestion spec.
 - **EOC Forms ingestion** — separate source, serves the Engine sheet's CLOSING section. Until it lands, closing-funnel money rows have no Supabase source. Close payment cfs on `close_leads` are mirrored as secondary cross-validation only.
 - **Custom-field value history** — Close exposes 30-day rolling history via the Event Log API. Useful for back-population if we need historical reconstruction of cf values.
-- **Email activity mirror** — deferred (6% of activity; Drake dropped from First Message Response definition). Add `close_emails` if a future metric needs it.
+- **Email activity mirror** — deferred (6% of activity; excluded from the First Message Response definition). Add `close_emails` if a future metric needs it.
 - **Custom-activity events + opportunity-status-change activity events** — not routed today; folded into lead-status-change / opportunity.updated. Add to `_route_event` if needed.
 - **Scheduled cf-definition cron** — manual `scripts/sync_close_cf_definitions.py` for V1; cron-ify if drift becomes a real problem.
 - **Close Export API for cold-start re-backfill** — if pagination ceilings ever become a problem.
-- **Auto-reactivation of paused subscriptions** — currently a Drake-action.
+- **Auto-reactivation of paused subscriptions** — currently a manual action.

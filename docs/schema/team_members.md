@@ -44,7 +44,7 @@ Identify agency staff (CSMs, leadership, engineering, ops) so agents can attribu
 
 ## Populated By
 
-- Manual seed for V1. Live cloud roster as of 2026-05-04: Scott Wilson, Nabeel Junaid (both `role='leadership'`, `is_csm=true`), Lou Perez, Nico Sandoval (both `role='csm'`, `is_csm=true`), Drake (engineering), Aman (sales), Ellis, Huzaifa, Zain (ops). All `is_csm=false` except the four CSMs above and the Scott Chasing sentinel.
+- Manual seed for V1. Live cloud roster as of 2026-05-04: Scott Wilson, Nabeel Junaid (both `role='leadership'`, `is_csm=true`), Lou Perez, Nico Sandoval (both `role='csm'`, `is_csm=true`), Aman (sales), Ellis, Huzaifa, Zain (ops). All `is_csm=false` except the four CSMs above and the Scott Chasing sentinel.
 - Later: programmatic sync from the CRM or an internal admin UI.
 
 ## Access tiers
@@ -53,8 +53,8 @@ Added in migration `0032_team_members_access_tier.sql` (2026-05-14). Four hierar
 
 | Tier | Outranks | Sees today |
 |------|----------|------------|
-| `creator` | admin, head_csm, csm | Everything. Drake. |
-| `admin` | head_csm, csm | Everything Drake sees. Nabeel today; hosts `/cost-hub` and any future Settings / admin surfaces. (The Ella audit dashboard at `/ella/runs` was admin-gated until it was removed 2026-05-24.) |
+| `creator` | admin, head_csm, csm | Full access; the system owner. |
+| `admin` | head_csm, csm | Everything the creator sees. Nabeel today; hosts `/cost-hub` and any future Settings / admin surfaces. (The Ella audit dashboard at `/ella/runs` was admin-gated until it was removed 2026-05-24.) |
 | `head_csm` | csm | Clients, Calls; plus the `/teams` Meeting Tracker. Scott Wilson today. |
 | `csm` | (default) | Clients, Calls. Lou Perez, Nico Sandoval, Zain, plus every default row. |
 
@@ -75,7 +75,7 @@ Gating:
 - **Layouts**: `(fulfillment)/layout.tsx` requires `fulfillment`; `sales-dashboard/layout.tsx` requires `sales`. A user lacking the area is redirected to their own home (`homePathForAreas` in `lib/auth/access-tier-shared.ts`).
 - **Admin tools inside Sales** (Verify Reps, Landing Pages) re-check `admin` tier — sales reps (csm + sales area) see the data pages, not the admin tools.
 
-Resolution: `getCurrentUserAccessTier()` (`lib/auth/access-tier.ts`) returns `areas` on `CurrentUserAccess`. Today's "all pages" group (both areas + admin/creator): Drake, Nabeel, Zain, Huzaifa. Sales reps: `['sales']`. CSM staff (Nico, Lou, Scott Wilson, Ellis): `['fulfillment']`. New sales reps added via the Verify Reps flow get `['sales']` automatically. Flip anyone with `update team_members set areas = array['...'] where ...` — no deploy.
+Resolution: `getCurrentUserAccessTier()` (`lib/auth/access-tier.ts`) returns `areas` on `CurrentUserAccess`. Today's "all pages" group (both areas + admin/creator): Nabeel, Zain, Huzaifa. Sales reps: `['sales']`. CSM staff (Nico, Lou, Scott Wilson, Ellis): `['fulfillment']`. New sales reps added via the Verify Reps flow get `['sales']` automatically. Flip anyone with `update team_members set areas = array['...'] where ...` — no deploy.
 
 ## Sales identity
 

@@ -38,32 +38,31 @@ to the same `slack_messages` table with idempotency on
 
 Sequence at first deploy:
 
-1. **Drake updates Slack app config** — adds `message.channels` and
-   `message.groups` event subscriptions; verifies scopes
-   (`channels:history`, `groups:history`); reinstalls the app to the
-   workspace if scopes changed. (Drake's gate — credentials.)
-2. **Director runs the invite helper in dry-run** —
+1. **Update the Slack app config** — add `message.channels` and
+   `message.groups` event subscriptions; verify scopes
+   (`channels:history`, `groups:history`); reinstall the app to the
+   workspace if scopes changed. (Credential change.)
+2. **Run the invite helper in dry-run** —
    `.venv/bin/python scripts/invite_ella_and_bot_to_client_channels.py`
-   reports current membership without inviting. Used to inform Drake's
-   review of the invite list.
-3. **Drake reviews + runs `--apply`** — actually invites Ella's user
-   account + the Slack bot to every client channel. Drake's gate
-   (modifies real shared Slack state).
-4. **Director runs the backfill in `--smoke`** —
+   reports current membership without inviting. Used to inform review
+   of the invite list.
+3. **Review, then run `--apply`** — actually invites Ella's user
+   account + the Slack bot to every client channel. (Modifies real
+   shared Slack state.)
+4. **Run the backfill in `--smoke`** —
    `.venv/bin/python scripts/backfill_slack_client_channels.py --smoke`.
    Pulls history for ONE channel as a real-API smoke. Reports per-channel
    counts WITHOUT inserting.
-5. **Drake reviews + Director runs `--apply`** — actually upserts
-   to `slack_messages`. Drake's gate (bulk insert into shared DB).
+5. **Review, then run `--apply`** — actually upserts
+   to `slack_messages`. (Bulk insert into shared DB.)
 6. **Verify realtime is flowing** — query
    `webhook_deliveries WHERE source='slack_message_ingest' AND processed_at > now() - interval '5 minutes'`
-   after sending a test message in a pilot channel. Drake's gate
-   (post-deploy testing on real surface).
+   after sending a test message in a pilot channel. (Post-deploy
+   testing on real surface.)
 
 ## Dedup gate (step 0, restructured 2026-05-21)
 
-> **UPDATED 2026-05-21:** The section below reflects the current (post-fix) behavior. The original gate landed 2026-05-20 (`docs/specs/ella-realtime-ingest-idempotency.md`) keyed on the OUTER event ts and did not catch Slack `message_changed` edit duplicates. The current shape — post-parse key construction using the inner/stable message ts — was the 2026-05-21 corrective.
-> See: `docs/specs/ella-realtime-ingest-dedup-message-changed.md`.
+> **UPDATED 2026-05-21:** The section below reflects the current (post-fix) behavior. The original gate landed 2026-05-20 keyed on the OUTER event ts and did not catch Slack `message_changed` edit duplicates. The current shape — post-parse key construction using the inner/stable message ts — was the 2026-05-21 corrective.
 
 Every realtime delivery passes through a dedup gate before any
 downstream side effect (slack_messages upsert, passive-monitor fork,
@@ -77,9 +76,7 @@ channel-allowlist + subtype gate + `parse_message`, and BEFORE
 construction uses `record.slack_channel_id` + `record.slack_ts` —
 both stable across `message_changed` redeliveries because `record`
 is the parsed inner-event shape. The prior position (step 0 BEFORE
-parsing, keyed on `event.get("ts")`) failed to dedup edits — see
-`docs/reports/ella-duplicate-webhook-delivery-diagnostic.md` for
-the diagnostic that surfaced the bug.
+parsing, keyed on `event.get("ts")`) failed to dedup edits.
 
 **Deterministic webhook_id format (happy path through step 0):**
 
@@ -149,7 +146,7 @@ A zero count on the first query over a week of meaningful traffic =
 probably broken (Slack does retry occasionally; with the post-parse
 key, edits also count as dupes and should show up here).
 
-**Closes** the 2026-05-19 EOD `docs/archive/historical/known-issues.md` entry
+**Closes** the 2026-05-19 `docs/archive/historical/known-issues.md` entry
 "Passive dispatch has no idempotency check against duplicate Slack
 message delivery" — the misfire that produced two ack posts + four DMs
 from a single Slack delivery would no longer fire. The prior 2026-05-20
@@ -255,8 +252,7 @@ ingests whichever channel `_resolve_client_target` happens to pick —
 not the one you asked for. Workaround: call `run_ingest` directly with
 `extra_channel_names=[<slack-channel-name-without-#>]`, which goes
 through `_resolve_channel_name_target` (Slack API lookup) and ingests
-the specific channel. See `docs/reports/ella-v2-batch-1-finish-rollout.md`
-for a working example.
+the specific channel.
 
 ### Symptom: edits aren't refreshing the row
 
@@ -323,6 +319,6 @@ Both `message.channels` AND `message.groups` event subscriptions are required. C
 - **Reactions ingestion.** `reaction_added` / `reaction_removed` events
   are a separate event type. Future work.
 - **Author-resolution caching.** The realtime handler re-fetches
-  `client_user_ids` and `team_user_ids` per request (per spec decision
-  (a)). Two small queries per event is fine at our volume; revisit if
+  `client_user_ids` and `team_user_ids` per request (a design
+  decision). Two small queries per event is fine at our volume; revisit if
   Vercel function duration starts hitting the 60s ceiling.

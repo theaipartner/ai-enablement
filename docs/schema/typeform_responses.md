@@ -25,7 +25,7 @@ Volume today: ~10k responses on the active Setter Funnel (`PWSNd0h2`), ~430 on t
 | `ingested_at` | `timestamptz` | When this row first landed (default `now()`). |
 | `created_at` / `updated_at` | `timestamptz` | Standard. `updated_at` trigger via `set_updated_at()`. |
 
-## PII posture (per spec § PII — Drake-confirmed)
+## PII posture (§ PII)
 
 Mirror raw. Emails + phones + free-text names live in `answers` as their original values. Respondent IPs live in `hidden.ip`. Rationale: the data already exists in Typeform's DB so the mirror creates no new exposure; Supabase is service-role-only.
 

@@ -8,15 +8,13 @@ Two tables, both populated by `ingestion/typeform/`:
 - `typeform_forms` — form definitions (~31 rows).
 - `typeform_responses` — per-submission lead stream.
 
-Spec: `docs/specs/typeform-ingestion.md`. Discovery: `docs/reports/typeform-discovery.md`.
-
 ## Three ingest paths (all converge on the same idempotent upsert)
 
 | Path | Trigger | What it does |
 |------|---------|--------------|
 | **Webhook (primary)** | Typeform `form_response` delivery → `/api/typeform_events` | HMAC-verified per-submission upsert. Real-time. |
 | **Cron backstop** | `*/15 * * * *` → `/api/typeform_sync_cron` | Refreshes form definitions + re-walks the last 6h of responses (`since=now-6h`). Catches webhook misses. |
-| **Backfill** | `scripts/backfill_typeform.py --apply` | Walks every form's full history via cursor pagination. Drake-gated. |
+| **Backfill** | `scripts/backfill_typeform.py --apply` | Walks every form's full history via cursor pagination. |
 
 All three use the same parser (`ingestion/typeform/parser.py`) and same idempotent `UPSERT ON CONFLICT (response_id)` — double-writes are no-ops.
 
@@ -24,11 +22,11 @@ All three use the same parser (`ingestion/typeform/parser.py`) and same idempote
 
 The interdependent order of operations to bring Typeform ingestion live. Each step assumes the previous one landed clean.
 
-### Step 1: Apply migration `0048` (Drake gate (a))
+### Step 1: Apply migration `0048`
 
 ```bash
-# Sequence against the parallel Calendly worktree's migration apply first —
-# this hits the shared cloud DB. Drake coordinates timing.
+# Sequence against any other pending migration apply first —
+# this hits the shared cloud DB. Coordinate timing.
 DB_PW=$(.venv/bin/python -c "
 from pathlib import Path
 for ln in Path('.env.local').read_text().splitlines():
@@ -46,7 +44,7 @@ Dual-verify (per `docs/runbooks/apply_migrations.md`):
 
 ### Step 2: Merge + deploy the receiver
 
-The git push that lands this work auto-deploys via the Vercel GitHub integration (post-2026-05-08 cache fix; reliable). Drake watches the Vercel dashboard.
+The git push that lands this work auto-deploys via the Vercel GitHub integration (post-2026-05-08 cache fix; reliable). Watch the Vercel dashboard.
 
 ### Step 3: Confirm receiver URL is reachable
 
@@ -55,16 +53,16 @@ curl -i https://ai-enablement-sigma.vercel.app/api/typeform_events
 # Expect HTTP 200 with body {"status":"ok","endpoint":"typeform_events","accepts":"POST"}
 ```
 
-### Step 4: Drake adds `TYPEFORM_WEBHOOK_SECRET` to Vercel (gate (d))
+### Step 4: Add `TYPEFORM_WEBHOOK_SECRET` to Vercel
 
 ```bash
 # Generate (e.g.):
 openssl rand -hex 32
 ```
 
-Drake adds the value to Vercel env vars (Project → Settings → Environment Variables → `TYPEFORM_WEBHOOK_SECRET`), then redeploys to pick it up. Confirm by curl'ing the receiver — it should now respond `500 {"error":"misconfigured"}` ONLY if the var is missing; once set, signature mismatches surface as `401 signature_invalid` and missing-signature requests surface as `401`.
+Add the value to Vercel env vars (Project → Settings → Environment Variables → `TYPEFORM_WEBHOOK_SECRET`), then redeploy to pick it up. Confirm by curl'ing the receiver — it should now respond `500 {"error":"misconfigured"}` ONLY if the var is missing; once set, signature mismatches surface as `401 signature_invalid` and missing-signature requests surface as `401`.
 
-Also confirm `TYPEFORM_API_KEY` is in Vercel (for the cron + the receiver's lazy form-sync). It's already in `.env.local`; gate (d) for the Vercel addition.
+Also confirm `TYPEFORM_API_KEY` is in Vercel (for the cron + the receiver's lazy form-sync). It's already in `.env.local`; add it to Vercel.
 
 ### Step 5: Backfill — smoke then apply
 
@@ -72,14 +70,14 @@ Also confirm `TYPEFORM_API_KEY` is in Vercel (for the cron + the receiver's lazy
 # Smoke first — one form, one page, idempotent. Run from main checkout.
 .venv/bin/python scripts/backfill_typeform.py --smoke
 
-# Then apply — all forms, all history. Drake's hard-stop gate (a) per
-# the CLAUDE.md "real-API smoke test before --apply" rule.
+# Then apply — all forms, all history. Per the CLAUDE.md
+# "real-API smoke test before --apply" rule.
 .venv/bin/python scripts/backfill_typeform.py --apply
 ```
 
 Volume estimate (from discovery): ~14k responses across 8 active+dormant funnels; with page_size=1000 cursor pagination + ~31 form-definition pulls, the full backfill should complete in a few minutes.
 
-### Step 6: Register webhooks on active forms (Drake runs)
+### Step 6: Register webhooks on active forms
 
 ```bash
 # Export the same secret you set in Vercel.
@@ -98,7 +96,7 @@ Active-form selection rule: forms with a submission within the last 30 days. NOT
 
 The script is idempotent on `(form_id, tag='ai-enablement-prod')` — safe to re-run.
 
-### Step 7: Verify end-to-end (Drake's gate (c) — post-deploy on real surfaces)
+### Step 7: Verify end-to-end (post-deploy on real surfaces)
 
 Submit a test response on the Setter Funnel (or any active form), then within seconds check:
 
@@ -139,7 +137,7 @@ Expect: `processing_status='processed'`, payload containing `forms_synced`, `res
 
 ### Adding a new funnel form
 
-The registration script auto-detects active forms by recency. When Drake spins up a new funnel:
+The registration script auto-detects active forms by recency. When a new funnel is spun up:
 
 1. Once it has its first submission, it becomes "active" per the 30-day window.
 2. Re-run `register_typeform_webhooks.py --apply` (idempotent on (form_id, tag)).
@@ -165,7 +163,7 @@ Removes the `ai-enablement-prod` tag from all currently-active forms. Doesn't to
 
 **Cron backstop reporting `typeform_token_unavailable`.** `TYPEFORM_API_KEY` not in Vercel env. Add it + redeploy.
 
-**Backfill `HTTP 400 BAD_REQUEST "can't use before/after param together with sort"`.** Someone added a `sort` param to `ingestion/typeform/client.py:list_responses` or `iter_responses`. Revert — default sort is `submitted_at desc` which is what cursor backfill wants. This is documented inline in the client + the spec + the schema docs because it WILL re-bite if "tidied up."
+**Backfill `HTTP 400 BAD_REQUEST "can't use before/after param together with sort"`.** Someone added a `sort` param to `ingestion/typeform/client.py:list_responses` or `iter_responses`. Revert — default sort is `submitted_at desc` which is what cursor backfill wants. This is documented inline in the client + the schema docs because it WILL re-bite if "tidied up."
 
 **Receiver returns 2xx but no row lands.** Check `webhook_deliveries.processing_status` for the matching `webhook_id`. If `failed`, look at `processing_error`. If `processed` but no `typeform_responses` row, the payload's `form_response.token` / `response_id` was empty (envelope shape changed); the receiver logs `typeform_webhook: missing response_id`.
 

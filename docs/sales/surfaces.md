@@ -1,9 +1,8 @@
 # Sales — Surfaces (page map)
 
-Every sales page, what it shows, and what was removed. All routes currently live under
-`app/(authenticated)/sales-dashboard/` (server components, `force-dynamic`) — they move
-under a dedicated `(sales)` route group + subdomain as part of the fulfillment/sales
-split. Nav is **flat: Advertising Hub · Outbound · Leads · Talent**, with Roster nested under Talent.
+Every sales page, what it shows, and what was removed. All routes live under
+`app/(authenticated)/sales-dashboard/` (server components, `force-dynamic`). Nav is
+**flat: Advertising Hub · Outbound · Leads · Talent**, with Roster nested under Talent.
 Outbound is its own top-level page (no longer nested under the Advertising Hub).
 
 ---
@@ -128,7 +127,7 @@ hooked in `api/close_events.py`): any new lead matching the roster gets the fiel
 2026-06-20 (the batch load start).
 
 The funnel displays **leads → responded → called → connected → closed** — the **Booked and Showed
-stages are hidden** (Drake 2026-06-24; the SQL still computes them, so un-hiding is a display-only change).
+stages are hidden** (the SQL still computes them, so un-hiding is a display-only change).
 The Called (speed-to-dial) + time-of-day sections are unchanged.
 
 **By-rep block** (migrations 0104 + 0105, `outbound_funnel_by_rep` RPC → `OutboundByRepSection`). Under the
@@ -155,9 +154,9 @@ moved to `/funnel`.)
 
 The **Connected rate** box is `connected ÷ leads worked`, where *worked* = leads
 **dialed OR connected** (not the whole cohort) — a true connection rate that
-never-touched leads don't dilute (Drake 2026-06-18). "Connected" is a **≥90s call
+never-touched leads don't dilute. "Connected" is a **≥90s call
 only** (`reachedStage`, back-filled from confirmed/showed/closed) — a triage/confirmation
-form no longer counts (Drake 2026-06-24). A form/text reach with no qualifying call is
+form no longer counts. A form/text reach with no qualifying call is
 **not** connected.
 
 ### `/leads/[close_id]` — per-lead page
@@ -200,7 +199,7 @@ logic.
   Closer) — the role the rep *is*, not a chip per call-family they happen to have
   activity in. Cross-family activity (a closer's stray triage calls) still surfaces on
   the detail view.
-- **Crucial metrics — the SAME eight on every card** (Drake 2026-06-20; every rep both sets
+- **Crucial metrics — the SAME eight on every card** (every rep both sets
   and closes a little, so the old role-keyed sets were merged — the role chip still shows the
   dedicated role, only the metric set is unified). Setter-side → closer-side, **strictly from
   the forms** (no booking-platform data), in a 4×2 grid:
@@ -210,7 +209,7 @@ logic.
   - **Meetings · Closes · Cash · Cash/mtg** — from the rep's closer EOC forms
     (`airtable_full_closer_report`), attributed by `closer_record_ids` → `user_id` across
     **ALL** reps, not just `sales_role='closer'` (`getCloserFormMetricsByRep`; a closer-only
-    resolver previously zeroed DC closers + setters who file EOC forms — Drake 2026-06-20).
+    resolver previously zeroed DC closers + setters who file EOC forms).
     - **Meetings** = forms with a *showed* outcome, **incl. any Digital College disposition**
       (a DC form means a DC meeting was held).
     - **Closes** = a High-Ticket close (`call_outcome = 'High Ticket Closed'`) **OR** a DC
@@ -221,7 +220,7 @@ logic.
       the same flat-rate logic as `funnel-cash`/`funnel-dc`). **Cash/mtg** = Cash ÷ Meetings.
 
   Everything else lives on the click-through. (The per-closer scheduled tables on the
-  detail also fold DC `$300`/plan into their **Cash** column — Drake 2026-06-20 — though
+  detail also fold DC `$300`/plan into their **Cash** column — though
   their `closedDc` *count* still keys on the outcome text; only the card is fully
   `dc_plans`-consistent on both closes and cash.)
 - **Click a card → per-person detail** (`?rep=`): the full existing drilldown tables
@@ -231,7 +230,7 @@ logic.
   **every** closer EOC form the rep filed in range — date / prospect / outcome / plan /
   cash / close-badge — attributed across **all** roles, so DC closers + setters who file
   forms (Connor, Bradley, Joshua) finally see their forms here (the scheduled tables only
-  show `sales_role='closer'`, so they were invisible before — Drake 2026-06-20).
+  show `sales_role='closer'`, so they were invisible before).
 - **EODs** — a section at the **very bottom** of the per-person detail, **collapsed by
   default**: that rep's EOD reports (Setter/Closer EOD's from Airtable, mirrored into
   `airtable_rep_eods`) whose date falls in the selected window, newest first. Sparse today
@@ -242,8 +241,8 @@ logic.
 - **Active/inactive.** Inactive reps are **hidden by default**; a "Show inactive" toggle
   reveals them (dimmed, with an "Inactive" chip). Active = `team_members.is_active` among
   non-archived sales rows (`is_csm=false`, so it's independent of the CSM surfaces;
-  flip one boolean to change the roster — no deploy). Today's active set: Aman, Cobe
-  Heydinger, Connor Malewicz, Yasmine Manno, Bradley, Joshua.
+  flip one boolean to change the roster — no deploy). The active set is driven by the
+  `is_active` toggle (no deploy needed).
 - **Cards are equal-height** (grid-auto-rows), active reps sorted first.
 - **Click feedback.** Opening a rep is a `?rep=` searchParam nav (same route → no
   `loading.tsx`), so the card navigates through a `useTransition` and the grid swaps for a
@@ -252,7 +251,7 @@ logic.
 The closer card's funnel reads the read-time loaders (`getClosingScheduledList` etc.),
 which reconstruct booking→closer-form from **Calendly** at read time (the per-closer
 attribution that once motivated the `booking_cycles` spine, now **shelved** — see
-[`booking-to-close.md`](./booking-to-close.md)). Books/Shows/Closes stay
+[`logic.md`](./logic.md) / this file). Books/Shows/Closes stay
 read-time-reconstructed (no persisted spine); Roster can replace `/people` once it's
 trusted on the real numbers.
 
@@ -332,7 +331,7 @@ week?", "Connor's connected calls last month?"). It writes guarded read-only SQL
 (the `sales_bot_ro` role, migration 0113) and answers in-thread with a
 dashboard-verify disclaimer. Not a page — a Slack front door onto the same data.
 Code `agents/sales_bot/`; agent doc `docs/agents/sales_bot.md`; ops
-`docs/runbooks/sales_bot.md`; design `docs/sales/sales-bot-build-plan.md`.
+`docs/runbooks/sales_bot.md`.
 
 ---
 

@@ -113,8 +113,9 @@ Ella's surfacing is three Slack channels (no DMs, per the 2026-05-28 redesign):
 | `/cost-hub` | Anthropic LLM spend by bucket + subscriptions (admin) | `lib/db/cost-hub.ts` |
 
 ### 7. Cost hub
-`/cost-hub` rolls up `agent_runs` LLM cost/token columns into five buckets (Gregory brain, Ella @,
-Ella passive, call reviewer, FAQ digest) across recent periods, plus manually-entered subscriptions.
+`/cost-hub` rolls up `agent_runs` LLM cost/token columns into five buckets — Ella Sonnet, Ella Haiku,
+Call review Sonnet, Call review Haiku, and Gregory brain Sonnet (each keyed on `agent_name` + a model
+prefix; see `lib/db/cost-hub.ts`) — across recent periods, plus manually-entered subscriptions.
 
 ## Cron inventory (fulfillment, from `vercel.json`)
 

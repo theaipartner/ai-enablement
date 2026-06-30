@@ -39,9 +39,9 @@ So `lead_cycles` == the unique leads list. Surfaces scope by querying it directl
 Per-phase **stages** (connected/booked/confirmed/showed/closed, HT) live in the
 sibling `lead_cycle_stages` (one row per `phase` = `primary` | `reactive`).
 
-## Digital College — closer-identity routing (Drake 2026-06-05)
+## Digital College — closer-identity routing
 
-> **DC funnel surfacing (Drake 2026-06-24):** the DC funnel (`getDcFunnel` / the Advertising-Hub
+> **DC funnel surfacing (2026-06-24):** the DC funnel (`getDcFunnel` / the Advertising-Hub
 > block) now reads **`digital_college_at`** as *Connects* and **`dc_closed_at`** (any origin) as
 > *Closed* — Booked/Showed are no longer displayed and downsells are merged into the close cohort.
 > The columns below still populate exactly as described; only what's surfaced changed.
@@ -71,4 +71,4 @@ close_leads), 0064/0065 (`tag_reactivated_leads`), the original `lead_cycles` /
 
 `lib/db/lead-tags.ts` (`getLeadCycleRows`, `getLeadCycles`) → the HT funnel
 (`leads-funnel.ts`), roster, per-lead journey; `lib/db/funnel-dc.ts` (`getDcFunnel`)
-→ the funnel-page DC section. Spec: `docs/specs/dc-funnel-closer-routing.md`.
+→ the funnel-page DC section.

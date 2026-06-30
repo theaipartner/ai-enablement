@@ -43,7 +43,7 @@ Manually-maintained one-off non-recurring expenses (domain registrations, occasi
 ## `incurred_on` vs `created_at`
 
 Two timestamps in opposite roles:
-- `incurred_on` is **when the expense happened** in calendar time. Used for month-attribution + historical totals. Drake can backdate entries (e.g., adding a March expense in May).
+- `incurred_on` is **when the expense happened** in calendar time. Used for month-attribution + historical totals. Entries can be backdated (e.g., adding a March expense in May).
 - `created_at` is **when the row landed in the table**. Audit-only; never used for month-attribution.
 
 If `incurred_on` is left at today's date the two coincide. Backdating is supported because some one-off expenses (vendor invoices that arrive late, etc.) need to land in the right month.

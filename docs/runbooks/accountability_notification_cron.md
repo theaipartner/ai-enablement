@@ -43,7 +43,7 @@ First-name extraction: `full_name.split()[0].capitalize()`. Mirrors the M5.8 Pat
 
 ## No-primary-csm handling
 
-Clients with `accountability_enabled=true` AND `status='active'` AND no active primary_csm assignment are **silently dropped** from per-CSM grouping. The count surfaces in the audit row's `payload.unassigned_missing_count` field so Drake can see if the bucket grows.
+Clients with `accountability_enabled=true` AND `status='active'` AND no active primary_csm assignment are **silently dropped** from per-CSM grouping. The count surfaces in the audit row's `payload.unassigned_missing_count` field so an operator can see if the bucket grows.
 
 **Live count at M6.1 ship (2026-05-05): zero.** All 91 active accountability-enabled clients have an active primary_csm assignment. The dropped-with-count behavior is forward-defensive rather than addressing a current gap.
 
@@ -105,7 +105,7 @@ Window of disruption: between Vercel env update and redeploy, scheduled cron fir
 4. Update `.env.local` for harness runs.
 5. Manually fire the cron → expect 200.
 
-If the PAT expires or is revoked: the cron's next fire returns 500, audit row marks `failed` with `airtable_fetch_failed`, and a `:warning:` Slack alert lands in the destination channel. Drake sees this within ~24h max.
+If the PAT expires or is revoked: the cron's next fire returns 500, audit row marks `failed` with `airtable_fetch_failed`, and a `:warning:` Slack alert lands in the destination channel. An operator sees this within ~24h max.
 
 ---
 
@@ -127,7 +127,7 @@ If a CSM expected a message and didn't get one:
    Possible states:
 
    - **`processing_status='processed'`, `payload.csms_messaged_ok` includes the CSM's name** → message fired successfully. Check the Slack channel; if the CSM doesn't see their message, suspect Slack-side filtering or the channel being archived/private without the CSM's membership.
-   - **`processing_status='processed'`, `payload.skipped_reason='no_missing_clients'`** → the cron ran cleanly but no CSM had missing clients (everyone in the active accountability roster submitted). Per spec: skip + post nothing.
+   - **`processing_status='processed'`, `payload.skipped_reason='no_missing_clients'`** → the cron ran cleanly but no CSM had missing clients (everyone in the active accountability roster submitted). By design: skip + post nothing.
    - **`processing_status='failed'`, `processing_error LIKE 'slack_post_failed_for_some_csms%'`** → per-CSM Slack post failed for some CSMs. Check `payload.csms_messaged_failed[].slack_error` for the specific Slack error code per CSM.
    - **`processing_status='failed'`, `processing_error LIKE 'airtable_fetch_failed%'`** → upstream Airtable failure. The `:warning:` Slack alert should also be in the channel; see "Rotate the secrets" if the PAT expired.
    - **No row at all in the last 24h** → the cron didn't fire. Possible causes:

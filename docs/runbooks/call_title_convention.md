@@ -40,9 +40,9 @@ v2 matches surface `classification_method='title_pattern_v2'`; v1 stays `'title_
 
 ## Why this exists
 
-Drake is pushing the team to use Zain's new booking links exclusively. The links generate one of the six canonical titles automatically. Making non-compliance technically visible — via classification dropping out — is the forcing function. A CSM who books outside the link, names a meeting ad-hoc, or keeps a legacy recurring under the old name will find their call doesn't show up on `/clients`, isn't retrieved by Ella, and renders without the Fathom checkmark on `/teams`. The friction is the lever.
+The team is expected to use the standard booking links exclusively. The links generate one of the six canonical titles automatically. Making non-compliance technically visible — via classification dropping out — is the forcing function. A CSM who books outside the link, names a meeting ad-hoc, or keeps a legacy recurring under the old name will find their call doesn't show up on `/clients`, isn't retrieved by Ella, and renders without the Fathom checkmark on `/teams`. The friction is the lever.
 
-Rationale captured in `docs/decisions/0002-title-convention-enforcement.md` (ADR) — including Nabeel's expectation that Drake make the new convention happen as part of growing into the Director role, plus the safety-net design (auto-create + merge UI + manual override).
+Rationale captured in `docs/decisions/0002-title-convention-enforcement.md` (ADR), plus the safety-net design (auto-create + merge UI + manual override).
 
 ## What gets dropped post-cutoff
 

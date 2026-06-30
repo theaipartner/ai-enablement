@@ -1,6 +1,6 @@
 # Runbook: Airtable Ingestion (Webhook + Cron Backstop, US + AUS Closer + Setter Triage)
 
-Spec: `docs/specs/airtable-ingestion.md`. Discovery: `docs/reports/airtable-discovery.md`. Schema docs: `docs/schema/airtable_setter_triage_calls.md` + `docs/schema/airtable_full_closer_report.md`. Migration: `0050_airtable_mirror.sql`.
+Schema docs: `docs/schema/airtable_setter_triage_calls.md` + `docs/schema/airtable_full_closer_report.md`. Migration: `0050_airtable_mirror.sql`.
 
 This runbook covers the activation order, the structural webhook-load-bearing fact, the five aggregation-layer-pending ambiguities, and operational concerns (webhook refresh, MAC verify, HTTP/2 retry).
 
@@ -29,7 +29,7 @@ After each sync the cron also calls `db.rpc("tag_reactivated_leads")` (migration
 - The cron CANNOT catch EDITS. A closer updating `Closed? = No → Yes` after initial save produces NO new-record signal.
 - The live webhook is the only edit-detection path. If the webhook is down for >7 days (Airtable's idle-expiry window), it disables silently — make sure the cron's `refresh_webhook()` actually fires (see § Webhook refresh).
 
-**Implication:** the dashboard's correctness on any edited-after-creation field (`Closed?`, money fields entered late, disposition updates) depends on the webhook being live. Until the webhook is registered (gate (d) below), correctness is creation-only.
+**Implication:** the dashboard's correctness on any edited-after-creation field (`Closed?`, money fields entered late, disposition updates) depends on the webhook being live. Until the webhook is registered (see the activation runbook below), correctness is creation-only.
 
 ## Architecture
 
@@ -61,30 +61,30 @@ After each sync the cron also calls `db.rpc("tag_reactivated_leads")` (migration
 - **PAT:** `AIRTABLE_SALES_PAT` (Personal Access Token). Required scopes:
   - `schema.bases:read` — used by the discovery probe only (not the runtime path).
   - `data.records:read` — load-bearing (records list + per-record fetch + webhook payload pull).
-  - **`webhook:manage`** — REQUIRED to create/list/delete/refresh webhooks. **`AIRTABLE_SALES_PAT` does NOT yet have this scope** (per discovery). Drake adds it (or mints a separate webhook-mgmt PAT) before the live webhook can be registered (gate (d) step 5 below).
+  - **`webhook:manage`** — REQUIRED to create/list/delete/refresh webhooks. **`AIRTABLE_SALES_PAT` does NOT yet have this scope** (per discovery). Add it (or mint a separate webhook-mgmt PAT) before the live webhook can be registered (step 5 below).
 - **Base access:** PAT's allow-list must include `appCWa6TV6p7EBarC`.
 
 **Where the PAT lives:**
 - `.env.local` for local runs (backfill, register helper, tests).
-- Vercel project env vars for the deployed cron + webhook receiver (gate (d)).
+- Vercel project env vars for the deployed cron + webhook receiver.
 
-## Activation runbook — Drake's 8-step order
+## Activation runbook
 
-Per the branch correction (parallel source work wound down; everything runs on `main`; no merge-to-main step), the activation order is:
+The activation order is:
 
-1. **Builder writes + Drake reviews migration `0050`** (gate (a)), Builder applies + dual-verifies.
+1. **Write, apply, and dual-verify migration `0050`** (see `apply_migrations.md`).
 2. **Push main** — Vercel auto-deploys the receiver + cron + scripts.
-3. **Drake confirms Vercel env: `AIRTABLE_SALES_PAT` set** (gate (d)) — required for both the cron AND the webhook receiver's payload fetch. Until set, the cron audits `airtable_pat_unavailable` and the receiver 500s.
-4. **Builder runs `backfill_airtable.py --smoke` then `--apply` (1-day window)** — cold start. Lands the last 24h into the mirror tables. (Already done at ship time — 2 Full Closer US records + 1 Setter Triage record at 2026-05-24 cold start.)
-5. **Drake adds `webhook:manage` scope to `AIRTABLE_SALES_PAT`** at airtable.com/create/tokens (or mints a separate webhook-mgmt PAT; `_safe_client` path will use whichever is in env).
-6. **Drake runs `scripts/register_airtable_webhook.py --apply --url https://ai-enablement-sigma.vercel.app/api/airtable_events`** — creates the subscription. The script prints `AIRTABLE_WEBHOOK_ID` + `AIRTABLE_WEBHOOK_MAC_SECRET` in a big box. **The `macSecretBase64` is returned ONCE** — if lost, delete + re-register.
-7. **Drake adds both env vars to Vercel + redeploys:**
+3. **Confirm Vercel env: `AIRTABLE_SALES_PAT` set** — required for both the cron AND the webhook receiver's payload fetch. Until set, the cron audits `airtable_pat_unavailable` and the receiver 500s.
+4. **Run `backfill_airtable.py --smoke` then `--apply` (1-day window)** — cold start. Lands the last 24h into the mirror tables. (Already done at ship time — 2 Full Closer US records + 1 Setter Triage record at 2026-05-24 cold start.)
+5. **Add the `webhook:manage` scope to `AIRTABLE_SALES_PAT`** at airtable.com/create/tokens (or mint a separate webhook-mgmt PAT; `_safe_client` path will use whichever is in env).
+6. **Run `scripts/register_airtable_webhook.py --apply --url https://ai-enablement-sigma.vercel.app/api/airtable_events`** — creates the subscription. The script prints `AIRTABLE_WEBHOOK_ID` + `AIRTABLE_WEBHOOK_MAC_SECRET` in a big box. **The `macSecretBase64` is returned ONCE** — if lost, delete + re-register.
+7. **Add both env vars to Vercel + redeploy:**
    ```
    AIRTABLE_WEBHOOK_ID=<from registration>
    AIRTABLE_WEBHOOK_MAC_SECRET=<from registration>
    ```
    Without these, the receiver returns 500 on every ping.
-8. **Verify end-to-end** (gate (c)):
+8. **Verify end-to-end:**
    - Edit a record in Airtable (any field on Setter Triage or Full Closer US/AUS).
    - Within seconds, confirm:
      ```sql
@@ -165,11 +165,11 @@ If refresh fails, the cron logs a warning + audits the failure but continues the
 .venv/bin/python scripts/register_airtable_webhook.py --delete <webhookId>
 ```
 
-`--list` works without `webhook:manage` if you only need to confirm what exists (Airtable returns 403 if the scope is missing — gate (d) check). `--apply` requires `webhook:manage`. The created subscription is base-level (covers all 3 target tables); the receiver's `_extract_changes` filters to TARGET_TABLES per payload.
+`--list` works without `webhook:manage` if you only need to confirm what exists (Airtable returns 403 if the scope is missing). `--apply` requires `webhook:manage`. The created subscription is base-level (covers all 3 target tables); the receiver's `_extract_changes` filters to TARGET_TABLES per payload.
 
 ## Five aggregation-layer-pending ambiguities
 
-Drake's explicit call per spec: **mirror raw, resolve at dashboard.** The dashboard renders these Engine rows as `NULL` / `'pending field confirmation'` rather than guessing.
+Business logic: **mirror raw, resolve at dashboard.** The dashboard renders these Engine rows as `NULL` / `'pending field confirmation'` rather than guessing.
 
 1. **Objection categorization** (Engine rows Shopping Around / Think-About-It-Fear / Spouse) — no structured field. Source: `call_notes_lost` free text. Categorization (LLM or manual) is dashboard work.
 2. **`is_setter_led` provisional** — derived `cardinality(setter_record_ids) > 0`. Discovery N=3 = 0% fill; post-ingestion N=2 = 50%. Needs N≥100. Dashboard flags as provisional.
@@ -181,10 +181,10 @@ Drake's explicit call per spec: **mirror raw, resolve at dashboard.** The dashbo
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Cron audit `airtable_pat_unavailable` | `AIRTABLE_SALES_PAT` missing in Vercel | Drake adds (gate d); next tick recovers. |
-| Webhook receiver returns 500 `misconfigured` | `AIRTABLE_WEBHOOK_MAC_SECRET` or `AIRTABLE_WEBHOOK_ID` missing in Vercel | Drake adds + redeploys. |
+| Cron audit `airtable_pat_unavailable` | `AIRTABLE_SALES_PAT` missing in Vercel | Add it in Vercel; next tick recovers. |
+| Webhook receiver returns 500 `misconfigured` | `AIRTABLE_WEBHOOK_MAC_SECRET` or `AIRTABLE_WEBHOOK_ID` missing in Vercel | Add them + redeploy. |
 | Webhook receiver returns 401 `signature_invalid` on every ping | MAC secret wrong, OR header format differs from assumption | Inspect `webhook_deliveries.headers` (sig header NOT stored — check raw ping logs). Re-verify `macSecretBase64` matches what registration printed. |
-| Register helper returns 403 on `--apply` | `webhook:manage` scope missing from PAT | Drake adds the scope (or mints a separate webhook-mgmt PAT). |
+| Register helper returns 403 on `--apply` | `webhook:manage` scope missing from PAT | Add the scope (or mint a separate webhook-mgmt PAT). |
 | Cron audit `errors: ["batch_upsert:... ConnectionTerminated"]` first attempt → retry succeeded | HTTP/2 stream termination on shared client; pipeline retried with fresh client | No action — retry path handled it. |
 | Cron audit `errors: ["batch_upsert:... (retried fresh)"]` both attempts failed | Real Supabase write failure | Inspect `webhook_deliveries.processing_error` for the full exception. |
 | Edits to existing rows not reflecting in mirror | Webhook down or `AIRTABLE_WEBHOOK_ID` unset | Check `webhook_deliveries` for recent `source='airtable_webhook'` rows. If gap > 15 min, run `register_airtable_webhook.py --list` to confirm subscription status. Re-register if `isHookEnabled=false`. |
@@ -196,6 +196,6 @@ Drake's explicit call per spec: **mirror raw, resolve at dashboard.** The dashbo
 - **Soft-delete on Airtable record deletes** — `destroyedRecordIds` in webhook payloads currently ignored.
 - **Promotion of currently-jsonb-only fields** to typed columns (Partner-*, payment installments, AUS-specific fields) — future spec when a dashboard needs faster access.
 - **Aggregation-layer SQL views** for Engine-sheet rows 96-116 — separate spec.
-- **Resolution of the 5 ambiguities** — Drake/Aman calls; dashboard reads + categorizes.
+- **Resolution of the 5 ambiguities** — (team decision); dashboard reads + categorizes.
 - **`Notify_*` Slack ping** on new closed deal — `_notify_upserted_record` stub in `pipeline.py` is the future-spec seam.
 - **Wider sample (~100 records) for `is_setter_led` fill rate confirmation** — once the cron runs for a few days, query and report.

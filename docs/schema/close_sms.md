@@ -4,7 +4,7 @@ Mirror of Close SMS activities — the dominant channel.
 
 ## Purpose
 
-SMS was 67% of all activity in the inventory probe vs Email's 6%. Drake confirmed "First Message Response" is SMS + Call, **not email**. The auto-SMS-on-opt-in flow that defines funnel entry lives here.
+SMS was 67% of all activity in the inventory probe vs Email's 6%. "First Message Response" is SMS + Call, **not email**. The auto-SMS-on-opt-in flow that defines funnel entry lives here.
 
 Aggregation surface for: First Message Responses (inbound after the auto-outbound), SMS volume per period, response rates.
 

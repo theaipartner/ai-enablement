@@ -1,6 +1,6 @@
 # Runbook: Wistia Video Analytics Ingestion
 
-Spec: `docs/specs/wistia-ingestion.md`. Discovery: `docs/reports/wistia-discovery.md`. Schema docs: `docs/schema/wistia_medias.md` + `docs/schema/wistia_media_daily.md`.
+Schema docs: `docs/schema/wistia_medias.md` + `docs/schema/wistia_media_daily.md`.
 
 This runbook covers the source endpoints + auth, the cron cadence and self-healing rolling window, the backfill, idempotency, the load-bearing `hours_watched` unit convention, failure modes, and the explicit deferral of canonical-VSL/TYP selection + engagement-rate derivation to the future aggregation layer.
 
@@ -21,7 +21,7 @@ The Engine sheet's four Wistia metrics (VSL Engagement Rate, VSL Average View Du
               │ GET /v1/medias/{id}/stats.json (lifetime)
               │ GET /modern/analytics/medias/{id}/timeseries (per-day, post-2026-05-24)
               │   — replaced /modern/stats/medias/{id}/by_date (legacy; synthesized
-              │     hours_watched, see docs/reports/wistia-watchtime-verify.md)
+              │     hours_watched — fake daily engagement)
               ▼
    ┌─────────────────────┐
    │ api/wistia_sync_    │  every 3h via Vercel Cron
@@ -54,7 +54,7 @@ Wistia caps at **600 req/min per account**. Violations return **HTTP 503 (NOT 42
 | `GET /v1/projects.json?page=N&per_page=100` | Project lookup | Fallback for `project_name` resolution when media payload omits it. |
 | `GET /v1/medias/{hashed_id}/stats.json` | Lifetime aggregates | Cross-check values only; `wistia_media_daily` is the canonical time-series. |
 | `GET /modern/analytics/medias/{hashed_id}/timeseries?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&granularity=daily` | **Per-day stats — the load-bearing source (post-2026-05-24)** | Requires `X-Wistia-API-Version: 2026-03` header. Returns list of `{timestamp, plays, unique_plays, unique_loads, unique_visitors, played_time (seconds), engagement_rate (0-1), play_rate, cta_*, form_conversions}`, zero-activity days have zeros (not nulls). **`end_date` is EXCLUSIVE** — the client wrapper `fetch_timeseries` adds +1 day internally so callers pass inclusive end. |
-| `GET /modern/stats/medias/{hashed_id}/by_date?...` | **DEPRECATED** — replaced 2026-05-24 | Was the per-day source; verification proved it synthesized `hours_watched` (fake daily engagement). Method retained on the client (`fetch_by_date`) for ad-hoc legacy queries; pipeline + cron do NOT use it. See `docs/reports/wistia-watchtime-verify.md`. |
+| `GET /modern/stats/medias/{hashed_id}/by_date?...` | **DEPRECATED** — replaced 2026-05-24 | Was the per-day source; verification proved it synthesized `hours_watched` (fake daily engagement). Method retained on the client (`fetch_by_date`) for ad-hoc legacy queries; pipeline + cron do NOT use it. |
 
 `/v1/medias/{id}/engagement` is documented but 404s on this account's API version. Don't use it.
 
@@ -93,7 +93,7 @@ If the cron misses a window > 14 days (Vercel outage, account-paused), days olde
 
 **Smoke gate (mandatory before `--apply`):** smoke mode upserts the full inventory but only ONE media's per-day data. Per CLAUDE.md § Operational patterns. Re-runnable; safe to re-trigger.
 
-**Bulk `--apply` is Drake-gated** at first invocation (first large-scale production write). Re-runs after parser fixes are not gated — idempotency contract holds.
+**Run `--smoke` before the first bulk `--apply`** (first large-scale production write). Re-runs after parser fixes are safe — idempotency contract holds.
 
 ## Idempotency
 
@@ -107,7 +107,7 @@ Three layers, same shape as the Meta sheet ingestion:
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Cron audit row `wistia_token_unavailable` | `WISTIA_API_TOKEN` missing in Vercel env | Drake adds the token to Vercel env vars + redeploys |
+| Cron audit row `wistia_token_unavailable` | `WISTIA_API_TOKEN` missing in Vercel env | Add the token to Vercel env vars + redeploy |
 | HTTP 401/403 from any endpoint | Token rotated or revoked | Nabeel (Account Owner) regenerates token with `Read detailed stats` permission; update `.env.local` + Vercel |
 | Repeated HTTP 503 in audit error log | Wistia rate-limit (600/min) hit | Client backs off automatically; if persistent, reduce concurrency or extend cron interval |
 | `daily_rows_failed` > 0 in audit | Per-media transient errors (network blip, partial 503) | Self-heals on next tick (rolling window re-pulls). Investigate only if persistent across multiple ticks for the same media |
@@ -167,13 +167,13 @@ ORDER BY day DESC;
 
 ## Explicit DEFERRALS (NOT in this ingestion)
 
-Per the spec — these belong to the future aggregation/dashboard layer:
+These belong to the future aggregation/dashboard layer:
 
 - **Canonical-VSL selection.** The discovery report identified two currently-active VSLs (`i1173gx76b` Direct Closer Funnel + `nbump1crwb` v2). The Engine sheet's "VSL" metric may be one of them, both combined, or include Base 44 (`6qq1eq4wmq`). Aggregation queries pick.
 - **Canonical-TYP selection.** Discovery identified `fbgjxwe62y` as the clear winner among the 7 Confirmation Page videos. Aggregation can default to that and let an override be added later.
 - **Engagement-rate is no longer derived** post-2026-05-24 — the timeseries endpoint returns it directly per day. Avg-view-duration = `played_time_seconds / plays_filtered` per the schema doc.
 - **Engagement-rate semantic confirmation.** Wistia's "engagement" = "average % of video watched." Aggregation-layer engineer should verify that matches the Engine-sheet author's intent before exposing the metric.
-- **Canonical play-count choice.** `play_count` (legacy, raw) vs `plays_filtered` (post-cutover, bot-filtered, ~14% lower) — aggregation layer picks which to surface as "VSL Plays" on the dashboard. My recommendation: `plays_filtered` (newer-API canonical, filtered = closer to "real human plays").
+- **Canonical play-count choice.** `play_count` (legacy, raw) vs `plays_filtered` (post-cutover, bot-filtered, ~14% lower) — aggregation layer picks which to surface as "VSL Plays" on the dashboard. Recommended: `plays_filtered` (newer-API canonical, filtered = closer to "real human plays").
 
 ## Out of scope (future specs)
 

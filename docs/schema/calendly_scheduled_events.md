@@ -9,7 +9,7 @@ Source for the Engine sheet's six Calendly-sourced rows. Live ingestion via `api
 ## ⭐ Booking link identities (CRITICAL — read before touching booking logic)
 
 Several Calendly event types share near-identical names. Counting the wrong
-one inflates or undercounts bookings. Confirmed 2026-05-29 with Drake +
+one inflates or undercounts bookings. Confirmed 2026-05-29 against
 live data. **The data layer keys on the `event_type_uri`, NOT the name** —
 the only thing separating the direct link from the Aman-solo link by name
 is casing (`Ai` vs `AI`), and Calendly drifts casing at booking time, so

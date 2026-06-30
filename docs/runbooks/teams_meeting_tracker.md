@@ -6,36 +6,36 @@ Operational guide for the `/teams` Meeting Tracker. Covers OAuth setup, reconnec
 
 `/teams` is a head-CSM-and-up dashboard surface showing every CSM's current-week meetings + whether Fathom matched them. Data path:
 
-1. **Drake OAuths once** at `/api/auth/google/connect`. The token row lands in `oauth_tokens` keyed to Drake's `team_member_id`.
-2. **The sync cron** at `/api/teams_calendar_sync_cron` fires every 30 minutes (`*/30 * * * *`). It mints a valid access token via `shared.google_oauth.get_valid_access_token`, fetches the current week's events from each CSM's primary calendar (CSMs share their calendars with Drake at the Workspace level), and upserts into `calendar_events`.
+1. **The creator-tier account OAuths once** at `/api/auth/google/connect`. The token row lands in `oauth_tokens` keyed to that account's `team_member_id`. (This account is the load-bearing calendar-sync identity — see `credentials-and-accounts.md` § calendar-sync Google account for which account it's pinned to and how to re-pin it.)
+2. **The sync cron** at `/api/teams_calendar_sync_cron` fires every 30 minutes (`*/30 * * * *`). It mints a valid access token via `shared.google_oauth.get_valid_access_token`, fetches the current week's events from each CSM's primary calendar (CSMs share their calendars with that account at the Workspace level), and upserts into `calendar_events`.
 3. **The `/teams` page** reads `calendar_events` + `calls` server-side and joins them in JS via case-insensitive title equality + ±30 min time window. Never calls Google directly.
 
 Tier gating:
-- **Creator** (Drake): sees `/teams`, can connect/reconnect Google.
-- **Admin** (Nabeel): sees `/teams`. Reconnect requires Drake's session.
-- **Head CSM** (Scott Wilson): sees `/teams`. Reconnect requires Drake's session.
+- **Creator**: sees `/teams`, can connect/reconnect Google.
+- **Admin** (Nabeel): sees `/teams`. Reconnect requires the creator-tier session.
+- **Head CSM** (Scott Wilson): sees `/teams`. Reconnect requires the creator-tier session.
 - **CSM** (Lou / Nico / Zain): redirects to `/clients?error=insufficient_access`.
 
 ## OAuth setup (one-time, V1)
 
 1. **Google Cloud Console.** Create an OAuth 2.0 Client ID under https://console.cloud.google.com/apis/credentials → "Web application". Authorized redirect URI must be exactly `{NEXT_PUBLIC_APP_URL}/api/auth/google/callback` (no trailing slash). Enable the Calendar API on the project.
-2. **Env vars in Vercel Production** (gate (d) — Drake):
+2. **Env vars in Vercel Production:**
    - `GOOGLE_OAUTH_CLIENT_ID` — the Client ID from step 1.
    - `GOOGLE_OAUTH_CLIENT_SECRET` — the Client Secret from step 1.
    - `NEXT_PUBLIC_APP_URL` — `https://ai-enablement-sigma.vercel.app`.
-3. **Connect.** Drake (creator-tier login) visits `/api/auth/google/connect` → redirected to Google's consent screen → approves → redirected back to `/teams?connected=google`. The `oauth_tokens` row for Drake gets written.
+3. **Connect.** The creator-tier login visits `/api/auth/google/connect` → redirected to Google's consent screen → approves → redirected back to `/teams?connected=google`. The `oauth_tokens` row gets written.
 
-After this one-time flow, the sync cron runs autonomously. No per-CSM OAuth needed — each CSM shares their calendar with Drake at the Workspace level (Google Calendar UI → calendar settings → "Share with specific people or groups").
+After this one-time flow, the sync cron runs autonomously. No per-CSM OAuth needed — each CSM shares their calendar with the creator-tier account at the Workspace level (Google Calendar UI → calendar settings → "Share with specific people or groups").
 
 ## Reconnect flow
 
-Drake reconnects when the stored refresh token stops working. Symptoms:
+The creator-tier user reconnects when the stored refresh token stops working. Symptoms:
 
-- `/teams` shows a yellow "Google Calendar is not connected" banner with a Reconnect button (Drake's view).
-- Other tiers see a muted "Calendar data is currently unavailable — Drake needs to reconnect" line.
+- `/teams` shows a yellow "Google Calendar is not connected" banner with a Reconnect button (the creator-tier view).
+- Other tiers see a muted "Calendar data is currently unavailable" line.
 - Audit rows show `processing_status='failed'` + `processing_error` starting with `oauth_token_unavailable`.
 
-Reconnect procedure: Drake clicks the Reconnect button (or visits `/api/auth/google/connect` directly). Google re-issues a fresh refresh token; the callback upserts it into the same row.
+Reconnect procedure: click the Reconnect button (or visit `/api/auth/google/connect` directly) from the creator-tier login. Google re-issues a fresh refresh token; the callback upserts it into the same row.
 
 Common refresh-failure causes:
 - Refresh token explicitly revoked at https://myaccount.google.com/permissions.
@@ -65,8 +65,8 @@ A healthy tick:
 
 A degraded tick:
 - `processing_status='processed'` with `error_count > 0` → one or more CSMs failed; the rest succeeded. Look at `payload.errors[]` for which.
-- `processing_status='failed'` with `processing_error='oauth_token_unavailable: ...'` → Drake's token broke. Reconnect via `/api/auth/google/connect`.
-- `processing_status='failed'` with `processing_error='drake_team_member_not_found'` → migration 0032 didn't backfill correctly, or Drake's row was archived. Investigate `team_members.access_tier`.
+- `processing_status='failed'` with `processing_error='oauth_token_unavailable: ...'` → the creator-tier token broke. Reconnect via `/api/auth/google/connect`.
+- `processing_status='failed'` with `processing_error='drake_team_member_not_found'` (literal code string) → migration 0032 didn't backfill correctly, or the creator-tier row was archived. Investigate `team_members.access_tier`.
 
 ### Per-CSM event counts
 
@@ -120,7 +120,7 @@ Current entries:
 
 When a new leak pattern surfaces, add to the list via SQL — no code deploy needed. See `docs/schema/team_members.md` § Personal emails for the exact UPDATE shape. The next cron tick picks it up.
 
-If you add a personal email and existing rows in `calendar_events` should be dropped, run a one-time cleanup DELETE matching the spec's pattern (see `docs/reports/teams-personal-email-exclusion-and-nabeel-removal.md` § Verification for the SQL).
+If you add a personal email and existing rows in `calendar_events` should be dropped, run a one-time cleanup DELETE for the affected `calendar_events` rows.
 
 ### Ignored booking links (2026-06-19)
 
@@ -170,7 +170,7 @@ When a matched call's `started_at` is more than 2 minutes after the Calendar eve
 
 - **CSM with zero events this week**: row renders with `(no meetings this week)`. Not hidden — head_csm should see the empty explicitly.
 - **CSM with calendar_api_denied**: row renders an `API access denied` pill in the header. Sub-list still shows what's cached from previous successful ticks.
-- **Drake's token missing**: the banner above the CSM list explains; rest of the page renders what's in `calendar_events` (possibly stale).
+- **Creator-tier token missing**: the banner above the CSM list explains; rest of the page renders what's in `calendar_events` (possibly stale).
 
 ## Common pitfalls
 

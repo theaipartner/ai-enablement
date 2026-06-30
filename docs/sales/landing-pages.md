@@ -1,8 +1,7 @@
 # Sales — Landing Pages
 
 How the dashboard handles landing pages, and **the checklist for adding a new
-one**. If you're picking this up cold (new chat, time has passed): start at
-"Adding a new landing page" below.
+one**. See "Adding a new landing page" below.
 
 ---
 
@@ -54,31 +53,25 @@ The mechanism: each opt-in cycle records **which Typeform it came through** —
 > snapshot deltas going forward (no historical backfill — seed a launch baseline
 > if you need it immediately).
 
-## The one thing that's still deferred (and why)
+## Shared videos — per-LP metrics need a duplicated video
 
-1. **Per-landing-page video metrics for *shared* videos.** Each LP has its own
-   Typeform, but the **VSL / thank-you videos may be shared** across LPs. We
-   want each LP's page to show that video's stats *as embedded on that LP* —
-   not its grand total. But we pull `wistia_media_daily`, which is **per-media,
-   account-wide** (one set of daily numbers per video, summed across *every*
-   page it's embedded on). So today (one LP) it's correct; the day a video is
-   shared across two LPs, both LPs would show the *combined* numbers.
+**Per-landing-page video metrics for *shared* videos.** Each LP has its own
+Typeform, but the **VSL / thank-you videos may be shared** across LPs. We
+want each LP's page to show that video's stats *as embedded on that LP* —
+not its grand total. But we pull `wistia_media_daily`, which is **per-media,
+account-wide** (one set of daily numbers per video, summed across *every*
+page it's embedded on). So with one LP per video it's correct; the day a video is
+shared across two LPs, both LPs would show the *combined* numbers.
 
-   **Investigated 2026-06-16 (live Wistia API). Verdict: don't build per-embed
-   ingestion — duplicate the video instead.**
-   - The Wistia **events** endpoint (`/v1/stats/events.json`) carries
-     `embed_url` + `percent_viewed` per play, so Plays / Engagement / Time
-     played / Avg view duration *could* be split by LP. **But events have no
-     load count**, so **Visits and Play rate can't be derived per-LP** (2 of
-     the 5 metrics would be missing). Volume is ~100+ events/day/video → a new
-     events pipeline + table + URL normalization + daily aggregation. Heavy and
-     incomplete.
-   - **Recommended:** when a video would be shared, give each LP its **own
-     Wistia media (unique hashed_id)** — duplicate it. A separate hashed_id
-     tracks independently, so our **existing** `wistia_media_daily` pipeline
-     produces all five metrics + avg view duration correctly per LP with **zero
-     code change** (just that LP's registry entry points at its own id). The
-     only cost: the team maintains two copies if they edit the video.
+**Don't build per-embed ingestion — duplicate the video instead.** When a video
+would be shared, give each LP its **own Wistia media (unique hashed_id)** by
+duplicating it. A separate hashed_id tracks independently, so the **existing**
+`wistia_media_daily` pipeline produces all five metrics + avg view duration
+correctly per LP with **zero code change** (just that LP's registry entry points
+at its own id). The only cost: the team maintains two copies if they edit the
+video. (The Wistia **events** endpoint carries per-play `embed_url` but has no
+load count, so Visits and Play rate can't be derived per-LP — a per-embed pipeline
+would be heavy and incomplete.)
 
 ---
 
@@ -113,5 +106,5 @@ the dropdown, keeps its cycles).
 
 > **Shared videos caveat (unchanged):** if two LPs pick the *same* Wistia video,
 > its metrics are account-wide per media (combined), not per-LP. For true per-LP
-> video stats, duplicate the video so each LP has its own hashed_id (the per-embed
-> API route was investigated and rejected — see the deferred item above).
+> video stats, duplicate the video so each LP has its own hashed_id (see the
+> Shared videos section above).

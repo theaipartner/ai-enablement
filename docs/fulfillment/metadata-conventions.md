@@ -75,18 +75,7 @@ Idempotency: keyed on `(source='fathom', external_id=<calls.external_id>, docume
 
 ### Drive documents
 
-`documents` rows with `source = 'drive'`.
-
-**TBD before the Drive ingestion pipeline build.** Indicative fields we expect to capture:
-
-- `drive_url`
-- `author`
-- `last_modified` (timestamptz)
-- `module` (e.g. `module_1`, `module_2`)
-- `section`
-- `folder_path`
-
-Pin this section — turning it from "TBD" into a signed-off list — as the first step of the Drive ingestion work.
+`documents` rows with `source = 'drive'`. Not implemented — the metadata validator raises `NotImplementedError` for `source='drive'`. Define the metadata contract here when a Drive ingestion pipeline is built.
 
 ### Manual documents
 
@@ -105,9 +94,7 @@ These rules apply when the Fathom ingestion pipeline produces `document_type = '
 - **Target chunk size:** 400–600 words (~500 tokens).
 - **Boundary rule:** always start and end on a speaker turn boundary. Never split mid-utterance.
 - **Overlap:** ~50 words with the previous chunk, taken from the tail of the previous chunk, to preserve context across the boundary.
-- **Filler filter:** drop utterances under 8 words that are pure acknowledgment or filler. The defined filler set is:
-  - `yeah`, `100%`, `for sure`, `right`, `mhm`, `okay`, isolated `thanks`
-  - and simple variants (case-insensitive; trailing punctuation ignored)
+- **Filler filter:** drop utterances under 8 words that are pure acknowledgment or filler — e.g. `yeah`, `yep`, `100%`, `for sure`, `right`, `mhm`, `ok`, `okay`, isolated `thanks`/`thank you` (case-insensitive; trailing punctuation ignored). The canonical list is `_FILLER_PHRASES` in `ingestion/fathom/chunker.py`.
 - **Do not drop** short utterances that contain substantive nouns, verbs, numbers, or proper nouns — even if they'd otherwise match a filler pattern. Example: "Okay, $900 then" is kept; bare "okay" is dropped.
 - **Speaker labels:** preserve in chunk text. Do not strip — retrieval benefits from knowing who said what.
 - **Timestamps:** preserve in chunk text alongside speaker labels.
@@ -159,14 +146,11 @@ Ingestion runs this cascade to set `calls.call_category`, `calls.call_type`, `ca
 
 Medium-confidence `client` calls stay `is_retrievable_by_client_agents = false` until a human reviewer promotes them. Same for any `unclassified` holdover.
 
-### Deferrals — Fathom `.txt` backlog ingestion
+### Fathom `.txt` backlog ingestion
 
-The V1 backlog pipeline (`ingestion/fathom/pipeline.py`) intentionally leaves two tables / document types empty:
+The TXT backlog pipeline (`ingestion/fathom/pipeline.py`) leaves two document types empty because the TXT exports don't carry them: `call_action_items` and `documents` rows with `document_type='call_summary'`. Transcript chunks still cover retrievability.
 
-- **`call_action_items`.** The TXT exports don't carry action items.
-- **`documents` rows with `document_type='call_summary'`.** The TXT exports don't carry summaries either. Chunks still cover retrievability; the summary doc adds a higher-signal overview but isn't on the critical path for V1.
-
-Both omissions are resolved for new calls (post 2026-04-24) via the Fathom realtime webhook + cron backfill paths shipped in F2.3 / M1.2.5 / M4.1. The webhook payload carries the `default_summary` field which the pipeline writes as a `documents` row with `document_type='call_summary'` plus an embedded chunk; the same payload carries `action_items[]` which the pipeline upserts into `call_action_items` via `_upsert_action_items`. Backlog (TXT-sourced) calls remain without summaries / action items — those would need either a Fathom-API `GET /recordings/{id}/summary` per-call backfill OR an LLM-extraction fallback if retrieval ever demands it.
+New calls get both from the Fathom realtime webhook + cron backfill: the payload's `default_summary` is written as a `call_summary` `documents` row plus an embedded chunk, and `action_items[]` is upserted into `call_action_items` via `_upsert_action_items`. Backlog (TXT-sourced) calls remain without summaries / action items unless backfilled from the Fathom API or an LLM-extraction fallback.
 
 ## 6. Re-Classification Policy
 

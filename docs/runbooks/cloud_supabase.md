@@ -55,7 +55,7 @@ PY
 
 ## Applying migrations to cloud
 
-Migrations live in `supabase/migrations/`. **`supabase db push` is the canonical tool, run by Director under the hybrid gate model — see `docs/runbooks/apply_migrations.md` § Gate model and § Preconditions.** On WSL2 specifically, the default system DNS drops AAAA-only records from Supabase's pooler, so always pass `--dns-resolver https`:
+Migrations live in `supabase/migrations/`. **`supabase db push` is the canonical tool — see `docs/runbooks/apply_migrations.md` § Flow and § Preconditions.** On WSL2 specifically, the default system DNS drops AAAA-only records from Supabase's pooler, so always pass `--dns-resolver https`:
 
 ```bash
 DB_PW=$(.venv/bin/python -c "
@@ -135,10 +135,10 @@ After changing `.env.local` values, mirror the relevant ones to Vercel. The webh
 Via the Vercel API (fast; reuses the local CLI auth token):
 
 ```python
-import json, urllib.request
+import json, os, urllib.request
 from pathlib import Path
 
-token = json.load(open("/home/drake/.local/share/com.vercel.cli/auth.json"))["token"]
+token = json.load(open(os.path.expanduser("~/.local/share/com.vercel.cli/auth.json")))["token"]
 team = "team_j92ibBgghEOBz30AWJeEE1ap"
 project = "prj_EeWPd4k8agIsq90BILpxnTX24JB8"
 

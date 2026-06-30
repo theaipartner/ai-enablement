@@ -201,7 +201,7 @@ force a redeploy.
 
 ### 3. Generate the Fathom API key
 
-One-time — from Drake's Fathom team account (NOT a personal account, NOT a
+One-time — from the Fathom team account (NOT a personal account, NOT a
 service account). Settings → API Access → Generate API Key. Capture
 immediately — Fathom only shows it once. Store in Bitwarden as
 `FATHOM_API_KEY_PROD`.
@@ -293,7 +293,7 @@ because:
 
 | Var | Purpose | Source |
 |---|---|---|
-| `FATHOM_API_KEY` | Read access to `/external/v1/meetings` | Drake generates from Fathom team account during M1.2.5 |
+| `FATHOM_API_KEY` | Read access to `/external/v1/meetings` | Generate from the Fathom team account |
 | `CRON_SECRET` | Bearer token Vercel Cron sends in `Authorization`; the handler validates against this same env var. Shared across all cron endpoints in this project (consolidated to single-var pattern in M6.2). | Generate with `openssl rand -hex 32` |
 | Existing | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` | Already in Vercel env from earlier sessions |
 

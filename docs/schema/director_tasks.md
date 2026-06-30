@@ -1,10 +1,10 @@
 # director_tasks
 
-Personal task list for the Director (creator-tier user). V1 surfaces a single-user list at `/tasks`; the table primitive is keyed by `team_member_id` so future per-user task pages slot in without a migration.
+Personal task list for the creator-tier user. V1 surfaces a single-user list at `/tasks`; the table primitive is keyed by `team_member_id` so future per-user task pages slot in without a migration.
 
 ## Purpose
 
-Drake's mental-overhead bucket. As the Director role grows, "tasks living somewhere" becomes load-bearing. The V1 ask is intentionally minimal — title field, done checkbox, delete. Recurring tasks, categorization, due dates, reminders, and assignment-to-others all defer to future specs once usage patterns emerge.
+A single-user task bucket for the creator-tier user. The V1 ask is intentionally minimal — title field, done checkbox, delete. Recurring tasks, categorization, due dates, reminders, and assignment-to-others all defer to future specs once usage patterns emerge.
 
 ## Columns
 
@@ -40,16 +40,16 @@ Drake's mental-overhead bucket. As the Director role grows, "tasks living somewh
 
 ## Access tier
 
-Surfaces only at `/tasks`, which is gated to **creator-tier** (Drake only in V1) via `app/(authenticated)/tasks/layout.tsx`. The TopNav "Tasks" link is hidden for every other tier. Every server action self-checks `getCurrentUserAccessTier().tier === 'creator'` as defense-in-depth.
+Surfaces only at `/tasks`, which is gated to **creator-tier** via `app/(authenticated)/tasks/layout.tsx`. The TopNav "Tasks" link is hidden for every other tier. Every server action self-checks `getCurrentUserAccessTier().tier === 'creator'` as defense-in-depth.
 
-## Manual SQL — Drake's tasks if dashboard access breaks
+## Manual SQL — inspecting tasks if dashboard access breaks
 
 ```sql
 SELECT id, title, done, done_at, created_at
 FROM director_tasks
 WHERE team_member_id = (
   SELECT id FROM team_members
-  WHERE email = 'drake@theaipartner.io' AND archived_at IS NULL
+  WHERE email = '<creator-email>' AND archived_at IS NULL
 )
 ORDER BY done ASC, created_at DESC;
 ```

@@ -6,8 +6,6 @@ on Landing Page** (row 26), **Avg Time on Thank-You Page** (row 37 —
 re-tagged from "Wistia" after Clarity discovery confirmed time-on-page
 is available per URL).
 
-**Spec:** `docs/specs/clarity-ingestion.md`
-**Discovery:** `docs/reports/clarity-discovery.md` (real response shape; 8 paths from 45 URL+QS variants; no-backfill constraint).
 **Migration:** `supabase/migrations/0049_clarity_metrics_daily.sql`
 **Runbook:** `docs/runbooks/clarity_ingestion.md`
 
@@ -141,7 +139,7 @@ The aggregation layer for the three named Engine-sheet metrics (rows 25, 26, 37)
 
 ## Open questions / future work
 
-- **`/conf` vs `/confirmation`** — two paths look like they could be the same funnel page. Stored separately by url_path; the canonical config points at `/confirmation`. Drake/Aman to reconcile if both are real.
+- **`/conf` vs `/confirmation`** — two paths look like they could be the same funnel page. Stored separately by url_path; the canonical config points at `/confirmation`. To be reconciled (team decision) if both are real.
 - **`pages_per_session_percentage`** — semantic unclear from name alone; not currently consumed.
 - **6 quality-signal blocks** — stored cold in `raw`. Promote to typed columns + add a Slack alarm if a future spec wants UX-quality monitoring.
 - **`Engine row 95 "Follow Up Meetings"`** — different source (Calendly territory).

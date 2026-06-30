@@ -13,7 +13,7 @@ The cost-hub displays three categories of spend: Anthropic API (rolled up from `
 | `id` | `uuid` | PK, default `gen_random_uuid()` |
 | `provider` | `text` | Not null. Free-form name ("Anthropic Claude Max", "Fathom Premium", etc.) |
 | `monthly_cost_usd` | `numeric(10, 2)` | Not null. Two-decimal precision; reflects today's price (see § Historical price drift below) |
-| `notes` | `text` | Nullable. Free-form notes — billing cycle, seat count, plan details, anything Drake or Nabeel might want to remember |
+| `notes` | `text` | Nullable. Free-form notes — billing cycle, seat count, plan details, anything an admin might want to remember |
 | `effective_from` | `date` | Not null, default `CURRENT_DATE`. The date the subscription began contributing to monthly totals. Added in migration 0039. See § Month attribution below |
 | `created_at` | `timestamptz` | Default `now()` |
 | `updated_at` | `timestamptz` | Default `now()`. Bumped via shared `set_updated_at()` BEFORE UPDATE trigger |
@@ -50,13 +50,13 @@ A subscription contributes to month **M** when both hold:
 
 The rule is implemented once in `lib/db/cost-hub.ts:subscriptionActiveInMonth` and consumed by the history-month rollup (`getMonthTotal`) and the current-month page filter. Before migration 0039, the rollup summed every non-archived sub into every historical month — so a sub added today inflated every prior month's total. `effective_from` fixes that: a sub only counts from the month it started.
 
-**Backdating use case:** Drake forgot to add a subscription that's been billing since (say) March. He adds it now with `effective_from` set to the March date (via the cost-hub editable table's date input). The history view then retroactively attributes it to March, April, May, … — every month at-or-after `effective_from`. Conversely, a sub added today with `effective_from` left at today only counts from this month forward.
+**Backdating use case:** a subscription that's been billing since (say) March can be added now with `effective_from` set to the March date (via the cost-hub editable table's date input). The history view then retroactively attributes it to March, April, May, … — every month at-or-after `effective_from`. Conversely, a sub added today with `effective_from` left at today only counts from this month forward.
 
 Existing rows at migration time were backfilled to `created_at::date` (the date they were added), so they retain the "added today" semantic rather than silently counting back to the beginning of time.
 
 ## Historical price drift (locked trade-off)
 
-`monthly_cost_usd` reflects today's price. When the cost-hub computes historical month totals (e.g., "April 2026 total"), it uses today's price for every active sub, regardless of what the actual price was at the time. If a sub price changes mid-period, Drake edits the row in place; historical totals shift slightly.
+`monthly_cost_usd` reflects today's price. When the cost-hub computes historical month totals (e.g., "April 2026 total"), it uses today's price for every active sub, regardless of what the actual price was at the time. If a sub price changes mid-period, the row is edited in place; historical totals shift slightly.
 
 If the drift becomes load-bearing (e.g., for accounting reconciliation), future iteration is an `effective_from` column for per-row price history. Out of scope for V1.
 

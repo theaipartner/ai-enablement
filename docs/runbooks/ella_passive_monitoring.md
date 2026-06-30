@@ -35,7 +35,7 @@ The passive monitor is gated by TWO independent switches. **Both must be ON** fo
 
 ### 1. Global env var: `ELLA_PASSIVE_MONITORING_ENABLED`
 
-Set in Vercel project env vars (Drake's gate (d)).
+Set in Vercel project env vars.
 
 - `ELLA_PASSIVE_MONITORING_ENABLED=true` → globally enabled
 - Anything else (or unset) → globally disabled
@@ -51,7 +51,7 @@ Set in Vercel project env vars (Drake's gate (d)).
 
 ### 2. Per-channel: `slack_channels.passive_monitoring_enabled`
 
-UPDATE the boolean in Postgres. **Default is `true` on every new channel** as of migration 0042 (2026-05-19 PM) — Drake's invariant: any channel Ella is added to should be monitored. Pre-0042 the default was `false` (opt-in per channel); the 2026-05-19 bulk-flip set 129 existing non-archived client-mapped channels from `false` → `true`, bringing the total to 137 monitored. The Path-3 onboarding RPC (`create_or_update_client_from_onboarding` Branch C) also writes `true` explicitly at row creation, so new clients onboard with monitoring on. The toggle still exists for **explicit opt-out** on a specific channel where Ella shouldn't observe — keep this UPDATE in the toolkit for that exception case.
+UPDATE the boolean in Postgres. **Default is `true` on every new channel** as of migration 0042 — the invariant is that any channel Ella is added to should be monitored. Pre-0042 the default was `false` (opt-in per channel); the 2026-05-19 bulk-flip set 129 existing non-archived client-mapped channels from `false` → `true`, bringing the total to 137 monitored. The Path-3 onboarding RPC (`create_or_update_client_from_onboarding` Branch C) also writes `true` explicitly at row creation, so new clients onboard with monitoring on. The toggle still exists for **explicit opt-out** on a specific channel where Ella shouldn't observe — keep this UPDATE in the toolkit for that exception case.
 
 **Opt-out a specific channel:**
 
@@ -186,8 +186,8 @@ is now purely a Haiku-judgment miss.
 
 Mitigation: every decision is on the `agent_runs` row (message text in
 `input_summary`, `haiku_decision` / `digest_flag` / `digest_category` /
-`haiku_reasoning` in `trigger_metadata`). Drake reviews post-hoc via
-SQL on `agent_runs` and iterates `_HAIKU_SYSTEM_PROMPT` (the
+`haiku_reasoning` in `trigger_metadata`). Review post-hoc via
+SQL on `agent_runs` and iterate `_HAIKU_SYSTEM_PROMPT` (the
 DIGEST FLAG / digest_only criteria). Because the flagging stance is
 permissive ("flag if uncertain about whether Scott would care"), the
 expected failure mode is over-flagging, not under-flagging — which is
@@ -222,7 +222,7 @@ interject." The behavior is:
 This is the structural fix for the 2026-05-19 EOD misfire where Dhamen
 Hothi posted `<@Scott> <@Lou> Who controls my sub account?` and the
 decision Haiku rationalized `acknowledge_and_escalate` despite the
-explicit human-routing. See `docs/specs/ella-at-mention-routing-gate-and-advisor-context.md`.
+explicit human-routing.
 
 To audit how often Gate 3 fires, query `agent_runs` directly:
 
@@ -239,25 +239,25 @@ routing gate.
 
 ## Initial validation rollout (post-deploy)
 
-After Drake flips `ELLA_PASSIVE_MONITORING_ENABLED=true` in Vercel and redeploys, before broadening:
+After `ELLA_PASSIVE_MONITORING_ENABLED=true` is set in Vercel and redeployed, before broadening:
 
-1. Enable a single channel — `#ella-test-drakeonly` is the working baseline:
+1. Enable a single channel — the Ella smoke-test channel is the working baseline:
 
    ```sql
    update slack_channels
       set passive_monitoring_enabled = true
-    where slack_channel_id = 'C<DRAKE_TEST_CHANNEL>';
+    where slack_channel_id = 'C<TEST_CHANNEL_ID>';
    ```
 
-2. Drake posts a client-shaped message in `#ella-test-drakeonly`. Expected: a new `agent_runs` row with `agent_name='ella'` + `trigger_type='passive_monitor'` lands within seconds (query the table directly). If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~1-2 minutes later, the cron drains it and posts to the channel.
+2. Post a client-shaped message in the smoke-test channel. Expected: a new `agent_runs` row with `agent_name='ella'` + `trigger_type='passive_monitor'` lands within seconds (query the table directly). If the decision is `respond_substantive` or `respond_general_inquiry`, a `pending_ella_responses` row exists; ~1-2 minutes later, the cron drains it and posts to the channel.
 
-3. Iterate until comfortable. Production rollout to other channels is post-validation work — not in the Batch 2.3 spec.
+3. Iterate until comfortable. Production rollout to other channels is post-validation work.
 
 ## Why per-minute cron (vs longer cadence)
 
-Per the spec § Goal originally targeted a 3-5 min CSM-interjection window; Drake's 2026-05-11 call collapsed that to 1 min. The cron picks up rows at most ~60s after they become due (`respond_after_ts <= now()`). With a 1-minute insert-time delay, that lands the post 1-2 minutes after the triggering message.
+The CSM-interjection window is 1 min (originally 3-5 min). The cron picks up rows at most ~60s after they become due (`respond_after_ts <= now()`). With a 1-minute insert-time delay, that lands the post 1-2 minutes after the triggering message.
 
-Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the project plan ever loses Pro, fallback is 5-minute cadence with the delay window shifting to 5-6 minutes — document and surface to Drake before that change ships.
+Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the project plan ever loses Pro, fallback is 5-minute cadence with the delay window shifting to 5-6 minutes — document before that change ships.
 
 ## Env vars (Vercel project)
 
@@ -270,9 +270,9 @@ Per-minute is the most aggressive cadence Vercel Cron supports on Pro. If the pr
 `ELLA_PASSIVE_KB_RELEVANCE_THRESHOLD` was removed (2026-05-18) — KB
 relevance is no longer a gate, so the threshold has no effect.
 
-## Smoke testing in #ella-test-drakeonly
+## Smoke testing in the Ella test channel
 
-**As of the 2026-05-18 PM unified-path rewrite, `team_member` messages are ALWAYS evaluated** (CSMs @Ella too), so `test_mode` is no longer the gate that admits Drake-as-team_member — it's retained on the payload for compat but inert. `#ella-test-drakeonly` is still the smoke channel (it has `passive_monitoring_enabled=true`); use it to validate the three decisions (`respond` haiku/sonnet, `acknowledge_and_escalate`, `skip`) + the double-fire check before broader rollout. `ella`/`bot`/`workflow`/`unknown` still skip (with an audit row).
+**As of the unified-path rewrite, `team_member` messages are ALWAYS evaluated** (CSMs @Ella too), so `test_mode` is no longer the gate that admits a team_member — it's retained on the payload for compat but inert. The Ella test channel (`C0AUWL20U8J`) is still the smoke channel (it has `passive_monitoring_enabled=true`); use it to validate the three decisions (`respond` haiku/sonnet, `acknowledge_and_escalate`, `skip`) + the double-fire check before broader rollout. `ella`/`bot`/`workflow`/`unknown` still skip (with an audit row).
 
 ### To validate
 
@@ -314,7 +314,7 @@ SELECT id, started_at, trigger_metadata->>'haiku_decision' AS decision,
 
 ### Disabling test_mode
 
-Leave on indefinitely for ongoing smoke testing, OR flip off when production rollout begins to keep the test channel clean for ad-hoc future testing. Drake's call. Either way, the `test_mode_run` flag on historic test runs means past test traffic stays cleanly filterable from production queries.
+Leave on indefinitely for ongoing smoke testing, OR flip off when production rollout begins to keep the test channel clean for ad-hoc future testing. Either way, the `test_mode_run` flag on historic test runs means past test traffic stays cleanly filterable from production queries.
 
 ```sql
 -- Disable test_mode (run when ready):

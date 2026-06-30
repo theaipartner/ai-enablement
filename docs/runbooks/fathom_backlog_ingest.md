@@ -14,7 +14,7 @@ Do not skip the pre-flight steps even if the export "looks fine." The F1 series 
 
 ### 1. Hygiene on the drop
 
-Drake typically drops the export under `data/fathom_backlog/` as a `.zip`. WSL can leave a `*:Zone.Identifier` NTFS sidecar — remove it before anything else:
+The export is typically dropped under `data/fathom_backlog/` as a `.zip`. WSL can leave a `*:Zone.Identifier` NTFS sidecar — remove it before anything else:
 
 ```bash
 rm -f data/fathom_backlog/*:Zone.Identifier

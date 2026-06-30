@@ -2,13 +2,13 @@
 
 **Date:** 2026-05-15
 **Status:** Accepted
-**Decision makers:** Drake (with Director, prompted by the cost-hub vs `/ella/runs` cost-figure mismatch)
+**Decision makers:** Engineering (prompted by the cost-hub vs `/ella/runs` cost-figure mismatch)
 
 ## Context
 
-Two surfaces computed "today / this week / this month" differently and showed mismatched cost numbers (diagnostic: `docs/reports/cost-hub-vs-ella-cost-discrepancy-diagnostic.md`). The cost hub anchored periods to America/New_York; `getEllaSummaryStats` used `new Date().setHours(0,0,0,0)` — **server-local** time (UTC on Vercel) — plus rolling 7-/30-day windows instead of calendar periods. Same underlying `agent_runs` data, two different definitions of "this month", so the totals never agreed.
+Two surfaces computed "today / this week / this month" differently and showed mismatched cost numbers. The cost hub anchored periods to America/New_York; `getEllaSummaryStats` used `new Date().setHours(0,0,0,0)` — **server-local** time (UTC on Vercel) — plus rolling 7-/30-day windows instead of calendar periods. Same underlying `agent_runs` data, two different definitions of "this month", so the totals never agreed.
 
-The fix needed a stated standard, not just a one-off patch, so the next surface that needs a calendar boundary doesn't reinvent it (and reintroduce the same skew). Director explicitly rejected a "sweep UTC out of the codebase" — UTC storage is correct; the inconsistency was only in *display/period* math.
+The fix needed a stated standard, not just a one-off patch, so the next surface that needs a calendar boundary doesn't reinvent it (and reintroduce the same skew). A "sweep UTC out of the codebase" was explicitly rejected — UTC storage is correct; the inconsistency was only in *display/period* math.
 
 ## Decision
 
@@ -45,14 +45,13 @@ The fix needed a stated standard, not just a one-off patch, so the next surface 
 
 - **`getEllaSummaryStats` server-local-time anchor + rolling windows + response-scope cost filter** — *fixed 2026-05-15* (spec `ella-summary-est-alignment-and-timezone-adr`). Now uses `lib/time/est-periods` boundaries + all-LLM-cost-bearing scope.
 
-This ADR is the durable record. Future timezone deviations discovered during other work get appended here as they are found and fixed — a codebase-wide audit/sweep is explicitly out of scope (Director's call; it would be churn without a driving need).
+This ADR is the durable record. Future timezone deviations discovered during other work get appended here as they are found and fixed — a codebase-wide audit/sweep is explicitly out of scope (it would be churn without a driving need).
 
 ## Implementation pointers
 
 - **Standard / code home:** `lib/time/est-periods.ts`.
 - **Consumers today:** `lib/db/cost-hub.ts`. (`lib/db/ella-runs.ts:getEllaSummaryStats` was also a consumer until the `/ella/runs` audit page was removed on 2026-05-24 — spec `remove-ella-runs-page` deleted the data layer with the route.)
 - **Cron UTC→ET map:** `docs/runbooks/cron_schedule.md`.
-- **Origin:** the cost-hub-vs-`/ella/runs` cost diagnostic; spec slug `ella-summary-est-alignment-and-timezone-adr` (spec + report deleted at 2026-05-15 EOD — recover from git history: `git log --diff-filter=D -- docs/specs/ella-summary-est-alignment-and-timezone-adr.md`).
 
 ## Review
 

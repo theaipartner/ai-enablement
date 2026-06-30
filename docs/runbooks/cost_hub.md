@@ -2,9 +2,9 @@
 
 Operational guide for the admin-tier `/cost-hub` page (migration 0038;
 origin specs `cost-hub` + `cost-hub-effective-from-and-title-convention-v2`
-+ `cost-hub-call-review-haiku-audit`, deleted at 2026-05-15 EOD —
++ `cost-hub-call-review-haiku-audit`, deleted at 2026-05-15 —
 recover from git history if needed). Closes Gregory V1 — the
-cost-reduction-opportunity surface for Nabeel + Drake.
+cost-reduction-opportunity surface for Nabeel.
 
 ## What the page shows
 
@@ -133,7 +133,7 @@ history. `effective_from` ties a sub to when it actually started.
 (EST). Add a sub normally and it counts from this month forward — it
 does **not** retroactively appear in prior months.
 
-**Backdating use case.** Drake realizes a subscription has been
+**Backdating use case.** A subscription has been
 billing since (say) March but was only just added to the hub. Set
 `effective_from` to the March date (in the Add form, or Edit an
 existing row). The History view then retroactively attributes it to
@@ -170,7 +170,7 @@ shows in the Monthly Subscriptions table with a red "Cancelled"
 badge in place of the Edit button, an opacity-dimmed strike-
 through provider name, and a Remove (×) button as the only
 remaining action. Its cost stays in the running total because
-Drake paid for it this month. When the month rolls over, the
+it was paid for this month. When the month rolls over, the
 cancelled row drops out of the visible list automatically
 (`subscriptionActiveInMonth` returns false once `archived_at`
 predates the new month's start) and stops counting from there
@@ -190,8 +190,7 @@ Monthly subs are stored as "current state" — one row per provider with
 `monthly_cost_usd` reflecting today's price. Historical month totals
 use today's price even if the actual cost was different at the time.
 If a sub price changes mid-period, edit the row in place; old month
-totals shift slightly. This is a deliberate V1 simplification (Drake
-confirmed).
+totals shift slightly. This is a deliberate V1 simplification.
 
 Note `effective_from` (migration 0039) does **not** solve this — it
 governs *which months a sub counts in*, not *what it cost in each

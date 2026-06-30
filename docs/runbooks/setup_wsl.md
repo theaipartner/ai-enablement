@@ -15,7 +15,7 @@ You can still use Windows for everything else (browser, Slack, Notion). WSL is j
 
 - Windows 10 (version 2004+) or Windows 11
 - Administrator access
-- WSL2 and Ubuntu already installed (user has confirmed this)
+- WSL2 and Ubuntu already installed
 
 ## Step 1: Update Ubuntu
 
@@ -56,7 +56,7 @@ node --version
 ## Step 4: Configure Git
 
 ```bash
-git config --global user.name "Drake"
+git config --global user.name "Your Name"
 git config --global user.email "your-github-email@example.com"
 git config --global init.defaultBranch main
 ```
@@ -99,15 +99,15 @@ supabase --version
 
 **Clone repos inside the WSL filesystem, not the Windows filesystem.**
 
-Good: `~/projects/ai-enablement` (lives at `/home/drake/projects/ai-enablement` inside WSL)
+Good: `~/projects/ai-enablement` (lives at `/home/<user>/projects/ai-enablement` inside WSL)
 
-Bad: `/mnt/c/Users/Drake/projects/ai-enablement` (lives on Windows filesystem, accessed through WSL — much slower and causes weird bugs)
+Bad: `/mnt/c/Users/<user>/projects/ai-enablement` (lives on Windows filesystem, accessed through WSL — much slower and causes weird bugs)
 
 ```bash
 mkdir -p ~/projects
 cd ~/projects
 # Clone the repo here when ready:
-# git clone git@github.com:drake/ai-enablement.git
+# git clone git@github.com:theaipartner/ai-enablement.git
 ```
 
 ## Step 8: Install Claude Code (inside WSL)

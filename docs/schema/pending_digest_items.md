@@ -15,8 +15,7 @@ redesign moved it to a channel and dropped all DMs.)
 This is a curated daily skim of "things worth Scott's eyes" — not an
 escalation queue. The flagging criteria are deliberately permissive;
 false positives are explicitly acceptable. Added by migration
-`0040_pending_digest_items.sql` (spec:
-`docs/specs/ella-architecture-refactor-and-daily-digest.md`).
+`0040_pending_digest_items.sql`.
 
 ## Columns
 

@@ -21,8 +21,8 @@ person who:
 3. **first opted in on or after 2026-05-24** — `close_leads.date_first_opted_in >= '2026-05-24'`.
 
 **Returning leads** (first opted in *before* May 24, re-opted after) are **excluded
-everywhere** in the funnel and roster — they made the data messy (Drake's call). They
-still render a per-lead page, but it shows "No opt-in cycle yet".
+everywhere** in the funnel and roster — they made the data noisy and are excluded by
+design. They still render a per-lead page, but it shows "No opt-in cycle yet".
 
 ### `lead_cycles` IS the unique leads list
 
@@ -63,7 +63,7 @@ opt-ins → connected → booked → confirmed → showed → closed
 - Within each box a later stage can't exceed an earlier one — enforced as an integrity
   guard (`validateFunnel`). **Direct & Total are books-first:** Books *can* exceed Connected
   — a self-booked direct lead (or any lead booked with no ≥90s call) is booked-but-not-connected;
-  intended, and now common since connected = a ≥90s call only (Drake 2026-06-24). **Setter &
+  intended, and now common since connected = a ≥90s call only. **Setter &
   Reactivation expect Connected ≥ Books** and flag a violation otherwise (a setter booking
   should have a real conversation behind it).
 
@@ -103,7 +103,7 @@ books/shows until the bound moved onto the tag.
 Both the SQL (`sales_funnel_counts`) and the JS fallback (`leads-funnel.ts`
 `scanDialWindows`) apply this. Note the bracket (outbound dials) can still be < Connected,
 because **Connected counts a ≥90s call in EITHER direction** — an inbound ≥90s call has no
-outbound dial behind it (Drake 2026-06-24: a triage-form reach no longer counts as connected).
+outbound dial behind it (a triage-form reach does not count as connected).
 
 ### Qualified — from Typeform, per cycle (2026-06-15)
 
@@ -132,11 +132,12 @@ box's read the same `lead_cycles.qualified`.
 - **Digital College (DC)** — the low-ticket offer (Base44 + Wix, sold Monthly/Yearly),
   often a downsell.
 
-**Closer identity routes everything** (migration 0076): `DC_CLOSER_NAMES = ("robby",)`
-(Adam later) → DC funnel; everyone else (Aman = HT closer) → HT. Routing is read from
+**Closer identity routes everything** (migration 0076):
+`DC_CLOSER_NAMES = ("robby", "bradley", "josh", "adam")` → DC funnel; other closers
+(e.g. Aman = HT closer) → HT. Routing is read from
 the **main closer EOC form** (`airtable_full_closer_report`), not the dedicated DC form.
 
-**Surfaced as Connects → Closed** (Drake 2026-06-24; `getDcFunnel` / `DcFunnelSection`).
+**Surfaced as Connects → Closed** (`getDcFunnel` / `DcFunnelSection`).
 Booked/Showed are no longer displayed (the `dc_booked_at`/`dc_showed_at` columns stay):
 
 - **DC connects** (a DC conversation) = `digital_college_at` is set — any DC engagement.
@@ -250,7 +251,6 @@ counts *people*), not these unattributed leads.
 ## Table manifest
 
 Which database tables are sales. (Per-column detail lives in `docs/schema/<table>.md`.)
-This is the list the upcoming table audit works from.
 
 ### Sales — owned by this product
 
@@ -318,21 +318,14 @@ This is the list the upcoming table audit works from.
 `monthly_subscriptions`, `cost_extras`.
 
 > These are candidates for the eventual `sales` Postgres schema move and for the
-> "what can we delete" audit — but that audit is a later pass. This manifest is the
-> starting inventory.
+> "what can we delete" audit.
 >
-> **Verified against the live cloud DB 2026-06-11 — 56 public base tables, all
-> accounted for** (count now ~62: 2026-06-28/29 added `close_users`,
-> `sales_rep_candidates`, `sales_rep_verifications` (0109), `landing_pages`,
-> `landing_page_forms` (0110), `airtable_rep_eods` (0111) — all listed above with
-> `docs/schema/` files). Corrections from the first draft: there is **no `lead_tags` table**
-> (that name was the tagger *code* at `lib/db/lead-tags.ts`); the lead model is three
-> tables — `lead_cycles` + `lead_cycle_stages` + `lead_tag_runs`. Five sales tables were
-> missing from the first draft and are now listed: `lead_cycle_stages`, `lead_tag_runs`,
-> `typeform_form_insights_snapshots`, `setter_call_reviews`, `setter_call_transcripts`.
-> Seven tables have **no `docs/schema/` file** yet: `lead_cycle_stages`, `lead_tag_runs`,
-> `typeform_form_insights_snapshots`, `setter_call_reviews`, `setter_call_transcripts`,
-> `call_classification_history`, `webhook_deliveries`.
+> There is **no `lead_tags` table** (that name is the tagger *code* at
+> `lib/db/lead-tags.ts`); the lead model is three tables — `lead_cycles` +
+> `lead_cycle_stages` + `lead_tag_runs`. Seven tables have **no `docs/schema/` file**
+> yet: `lead_cycle_stages`, `lead_tag_runs`, `typeform_form_insights_snapshots`,
+> `setter_call_reviews`, `setter_call_transcripts`, `call_classification_history`,
+> `webhook_deliveries`.
 >
 > **Fathom for sales closing calls is NOT ingested yet** — wanted, absent. The only
 > sales call-recording path today is the Deepgram **setter** pipeline (`setter_call_*`).

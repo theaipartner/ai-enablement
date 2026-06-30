@@ -78,7 +78,7 @@ Why `'malformed'` and not `'skipped'`: migration 0011's CHECK constraint on `web
 | CSM Name | `[unassigned]` | client has no active primary_csm assignment |
 | Client Name | `[unknown client]` | `primary_client_id` doesn't resolve to a clients row |
 
-Per Drake's spec: "if they become a problem we will remove" — surfacing the sentinel makes the gap visible in Slack rather than silently dropping the post.
+Surfacing the sentinel makes the gap visible in Slack rather than silently dropping the post (revisit if the sentinels become a problem).
 
 ### Audit row: `content_source` field
 

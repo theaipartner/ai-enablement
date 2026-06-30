@@ -7,8 +7,6 @@ Airtable Full Closer Report mirror — **US + AUS variants unioned via `region` 
 
 Field sets overlap ~entirely. AUS-only fields land in `fields_raw`.
 
-**Spec:** `docs/specs/airtable-ingestion.md`
-**Discovery:** `docs/reports/airtable-discovery.md`
 **Migration:** `supabase/migrations/0050_airtable_mirror.sql`
 **Runbook:** `docs/runbooks/airtable_ingestion.md`
 
@@ -116,11 +114,11 @@ Same as Setter Triage — no `lastModifiedTime` or `createdTime` field in schema
 
 ## Five aggregation-layer-pending ambiguities
 
-Drake's explicit call: **mirror raw, resolve at dashboard.** The dashboard renders these Engine rows as `NULL` / `'pending field confirmation'` rather than guessing.
+The decision: **mirror raw, resolve at dashboard.** The dashboard renders these Engine rows as `NULL` / `'pending field confirmation'` rather than guessing.
 
-1. **Objection categorization** (Engine rows Shopping Around / Think-About-It-Fear / Spouse) — NO structured field categorizes objections in this table. Likely source is the `call_notes_lost` free text. Dashboard reads + categorizes (LLM or manual) when Drake/Aman decides. Until then: pending.
+1. **Objection categorization** (Engine rows Shopping Around / Think-About-It-Fear / Spouse) — NO structured field categorizes objections in this table. Likely source is the `call_notes_lost` free text. Dashboard reads + categorizes (LLM or manual) once a categorization mechanism is picked (team decision). Until then: pending.
 2. **`is_setter_led` provisional** — see column note above.
-3. **Canonical "cash paid today"** — `amount_paid_today_currency` AND `amount_paid_today_number` BOTH stored. Dashboard picks canonical when Drake/Aman confirms.
+3. **Canonical "cash paid today"** — `amount_paid_today_currency` AND `amount_paid_today_number` BOTH stored. Dashboard picks canonical (team decision).
 4. **Three near-duplicate payment-on-call fields** — `paid_on_call` + `contract_sent` typed; the other two (`Did they pay on the call?` singleSelect, `Have you already sent a contract?` singleSelect) land in `fields_raw` only. Dashboard picks canonical.
 5. **Two typo'd "Financed/Cash/Both" fields** — `Financed, Cash deposit, both?` AND `Financed, Cash Deal, or Both?` (matching `Case`-instead-of-`Cash` typos) — both in `fields_raw` only. Dashboard picks canonical.
 
@@ -169,8 +167,8 @@ ORDER BY day DESC;
 ```
 
 ```sql
--- Objection rows: PENDING (no structured source). Once Drake/Aman picks
--- a categorization mechanism, query call_notes_lost + categorize.
+-- Objection rows: PENDING (no structured source). Once a categorization
+-- mechanism is picked (team decision), query call_notes_lost + categorize.
 ```
 
 ## New-form columns (migration 0062, 2026-05-30)

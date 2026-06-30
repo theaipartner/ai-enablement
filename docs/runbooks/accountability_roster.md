@@ -35,11 +35,11 @@ The secret is shared between Vercel (server side) and Make.com (caller side). Ro
 
 3. **Wait for the redeploy to land.** Curl with the OLD secret should now return 401; curl with the NEW secret should return 200. Both verify the new secret is live.
 
-4. **Update Make.com.** Drake or Zain edits the scenario's HTTP module → Headers → `X-Webhook-Secret` → paste new value → save scenario. Run a manual scenario execution to verify the pull succeeds (200 + payload).
+4. **Update Make.com.** Zain edits the scenario's HTTP module → Headers → `X-Webhook-Secret` → paste new value → save scenario. Run a manual scenario execution to verify the pull succeeds (200 + payload).
 
 5. **Update `.env.local`** for harness runs: `MAKE_OUTBOUND_ROSTER_SECRET=<new value>`. NOT committed — `.env.local` is gitignored.
 
-**Window of disruption:** between step 2 (Vercel rotates) and step 4 (Make.com updated), Make.com's automated pulls 401. Typical rotation: <5 minutes if Drake + Zain coordinate. If the daily pull window is at risk, time the rotation to land between scheduled pulls.
+**Window of disruption:** between step 2 (Vercel rotates) and step 4 (Make.com updated), Make.com's automated pulls 401. Typical rotation: <5 minutes if Zain coordinates the Make.com side. If the daily pull window is at risk, time the rotation to land between scheduled pulls.
 
 **If you forget step 4:** Make.com's scenario will start logging 401s. Vercel function logs will show `unauthorized — header_present=True`. Easy to diagnose, but the day's automation won't fire until fixed.
 
@@ -87,7 +87,7 @@ Make.com's pull schedule lives in their scenario, not on our side. To verify pul
    ```
    Look for one such line per expected pull window (typically once per day).
 
-2. **If no recent logs:** Make.com isn't pulling. Could be: scenario disabled, scenario errored at a prior step, Make.com auth using a stale secret (see "Rotate the shared secret"). Drake or Zain checks the scenario's run history on Make.com's side.
+2. **If no recent logs:** Make.com isn't pulling. Could be: scenario disabled, scenario errored at a prior step, Make.com auth using a stale secret (see "Rotate the shared secret"). Zain checks the scenario's run history on Make.com's side.
 
 3. **Vercel function logs persist for ~7 days.** Beyond that, no record exists on our side — outbound-pull audit log is intentionally not implemented (see `docs/archive/historical/known-issues.md` § "Path 2 outbound roster — outbound-pull audit log not implemented").
 

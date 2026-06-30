@@ -45,7 +45,7 @@ Future Gregory sales-side aggregation layer. The 11 status IDs the org uses are 
 
 ## Triage-count canonical choice
 
-**For "Total Closer Triages" the canonical source is `close_leads.triage_showed = 'Yes'`, NOT a status transition here.** The Engine sheet's "Total Closer Triages" means "the phone call where a human qualifies the lead" (Drake's confirmed semantic). A status flip to `Unconfirmed Booking - Handed over` marks the hand-OVER, not the triage call itself.
+**For "Total Closer Triages" the canonical source is `close_leads.triage_showed = 'Yes'`, NOT a status transition here.** The Engine sheet's "Total Closer Triages" means "the phone call where a human qualifies the lead". A status flip to `Unconfirmed Booking - Handed over` marks the hand-OVER, not the triage call itself.
 
 This table IS the canonical source for **Hand Downs** (closer → setter after failed contact attempts) and most other status-flip Engine metrics. See `docs/runbooks/close_ingestion.md` § Triage-count for the full reasoning and the gap risk (triage_showed cf needs to be filled in reliably by closers).
 

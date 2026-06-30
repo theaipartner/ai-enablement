@@ -40,7 +40,7 @@ tables, never the API.
 ### Credentials (env vars)
 
 - Local: `CORTANA_API_KEY` + `CORTANA_BUSINESS_ID` in `.env.local`.
-- Production: same two vars in **Vercel** (gate (d) — Drake adds them).
+- Production: set the same two vars in **Vercel** Production env vars.
   Business ID `b97a1874-7be6-41d4-bba1-8df9ffd69e18` is not a secret;
   the API key is.
 
@@ -132,7 +132,7 @@ covered; pre-Feb-2026 is not retrievable from Cortana.
 The Sheet cron (`meta_sheet_sync_cron`) and this cron both write
 `meta_ad_daily` — do **not** run both. Cutover order:
 
-1. Drake adds `CORTANA_API_KEY` + `CORTANA_BUSINESS_ID` to Vercel (gate d).
+1. Add `CORTANA_API_KEY` + `CORTANA_BUSINESS_ID` in Vercel Production env vars.
 2. Push the commit that swaps the cron in `vercel.json`
    (`meta_sheet_sync_cron` → `cortana_sync_cron`).
 3. Verify the first `cortana_sync_cron` tick (audit row + a fresh

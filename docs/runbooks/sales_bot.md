@@ -1,7 +1,7 @@
 # Runbook — Sales bot (read-only text-to-SQL Slack agent)
 
 How to provision, operate, and debug the sales bot. Agent doc:
-`docs/agents/sales_bot.md`. Design spec: `docs/sales/sales-bot-build-plan.md`.
+`docs/agents/sales_bot.md`.
 
 ## What it is
 
@@ -19,7 +19,7 @@ roundtrip — same model as Ella's webhook).
 | `SALES_BOT_DB_URL` | Vercel + `.env.local` | psycopg2 DSN for the `sales_bot_ro` role. |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ANTHROPIC_API_KEY` | already set | Shared with Ella's webhook. |
 
-## Provisioning the RO role (one-time, Drake-gated)
+## Provisioning the RO role (one-time)
 
 > **Status: DONE 2026-06-29.** `0113` applied to cloud + ledgered; the
 > `sales_bot_ro` password is set; `SALES_BOT_DB_URL` + `SALES_BOT_SLACK_CHANNEL`

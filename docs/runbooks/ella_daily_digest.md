@@ -71,7 +71,7 @@ curl -i -X POST -H "Authorization: Bearer $CRON_SECRET" \
 `?since=<iso_timestamp>` overrides the default 24h window (use for
 backfill — e.g. `?since=2026-05-17T00:00:00Z`). Unparseable `since`
 falls back to 24h with a logged warning. First production fire is via
-manual curl on the spec-completion day.
+manual curl.
 
 ## How to verify a fire
 

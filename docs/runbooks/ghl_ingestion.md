@@ -53,7 +53,7 @@ The funnel signals this feeds (consumed later by the re-sourced
 
 ## First-time setup / backfill
 
-1. Apply migration `0114` (Drake-gated; canonical path in
+1. Apply migration `0114` (canonical path in
    `docs/sales/ingestion.md` § Ops traps). Dual-verify against cloud.
 2. Set `GHL_PRIVATE_TOKEN` + `GHL_LOCATION_ID` in `.env.local` (local) and Vercel
    (prod).

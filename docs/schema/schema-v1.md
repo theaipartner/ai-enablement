@@ -9,7 +9,7 @@ First version of the schema. Oriented around what Ella (Slack Bot V1) and CSM Co
 | Table | Count | Source |
 |---|---:|---|
 | `team_members` | 9 | Manual seed (`supabase/seed/team_members.sql`); 7 have `slack_user_id` backfilled |
-| `clients` (active) | 197 | 128 pre-M4 (post-merge state from M3) + 69 auto-created by `scripts/import_master_sheet.py` during M4 Chunk C (48 churned, 21 non-churn paused/active per Drake's triage amendment to the spec). The pre-M4 baseline came from the original Active++ sheet seed + Fathom-ingest `needs_review` rows minus M3.2 merges. |
+| `clients` (active) | 197 | 128 pre-M4 (post-merge state from M3) + 69 auto-created by `scripts/import_master_sheet.py` during M4 Chunk C (48 churned, 21 non-churn paused/active per a triage amendment to the spec). The pre-M4 baseline came from the original Active++ sheet seed + Fathom-ingest `needs_review` rows minus M3.2 merges. |
 | `clients` (archived) | 6 | Pre-M4 archives; the M4 Chunk C importer didn't archive anything |
 | `client_upsells` | 24 | Inserted by `scripts/import_master_sheet.py` |
 | `client_status_history` | 209 | 128 migration-0017 seed rows (one per non-archived client at migration time) + 81 import-seed rows (`note='import seed'`) from the M4 Chunk C importer |
@@ -114,7 +114,7 @@ updated_at        timestamptz NOT NULL DEFAULT now()
 archived_at       timestamptz
 ```
 
-**Populated by:** manual seed initially (Scott, Lou, Nico, Drake, Nabeel, Zain), then programmatically as the team grows.
+**Populated by:** manual seed initially (Scott, Lou, Nico, Nabeel, Zain), then programmatically as the team grows.
 
 **Read by:** every agent (to identify who's doing what), CSM Co-Pilot (for scorecards), Slack bot (to know if a @mention is from a team member vs. a client).
 

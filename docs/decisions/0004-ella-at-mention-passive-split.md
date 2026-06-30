@@ -2,11 +2,11 @@
 
 **Date:** 2026-05-23
 **Status:** Accepted
-**Decision makers:** Drake (with Director)
+**Decision makers:** Engineering
 
 ## Context
 
-The 2026-05-18 unified-path refactor collapsed Ella's @-mention handling and the passive-observation pipeline into one Haiku-driven classifier. The intent was simplification. The 2026-05-19 evening introduced a separate "mention classifier" (`mention_classifier.py`) whose `acknowledge_and_escalate` shape carried a *navigation* rule — "if the client asks 'what module is X in', that's navigation, escalate." That rule fired on curriculum content questions: a client asking "what module covers cold opens" got an ack-and-escalate ("let me get Scott on this") instead of the curriculum answer Ella has the KB to give. Drake hit it in production within a day.
+The 2026-05-18 unified-path refactor collapsed Ella's @-mention handling and the passive-observation pipeline into one Haiku-driven classifier. The intent was simplification. The 2026-05-19 evening introduced a separate "mention classifier" (`mention_classifier.py`) whose `acknowledge_and_escalate` shape carried a *navigation* rule — "if the client asks 'what module is X in', that's navigation, escalate." That rule fired on curriculum content questions: a client asking "what module covers cold opens" got an ack-and-escalate ("let me get Scott on this") instead of the curriculum answer Ella has the KB to give. It surfaced in production within a day.
 
 Three rounds of prompt iteration (`lean toward respond` → `escalate is FORBIDDEN` → `escalate is NEVER allowed plus worked examples`) all failed — the classifier kept rationalizing through the constraint. The 2026-05-21 → 2026-05-23 Anthropic-usage-cap incident compounded it: 181 Haiku calls failed silently with `status='success'` and the failure buried in `output_summary`, masking that Ella had gone quiet on real client questions.
 
@@ -46,7 +46,7 @@ This decision is a direct application of the operational pattern documented in �
 ### Positive
 
 - **@-mentions answer curriculum questions again.** The whole point. Tested manually + via the bare-mention warm-opener path; the structural-JSON output contract makes "did the LLM escalate or respond" a simple field-read, not a string-parse.
-- **Passive is silent-but-observing.** Drake gets digest visibility without Ella having an in-channel voice that can misfire. The 2026-05-19 regression cannot recur on the @ path because there's no separate classifier to host the broken rule.
+- **Passive is silent-but-observing.** The team gets digest visibility without Ella having an in-channel voice that can misfire. The 2026-05-19 regression cannot recur on the @ path because there's no separate classifier to host the broken rule.
 - **Status honesty for LLM failures.** Future Anthropic-cap incidents (or any LLM-call failure) land as `agent_runs.status='error'` queryable via SQL; no more 181-silent-failures pattern.
 - **Operational observability via SQL.** With the `/ella/runs` audit page since removed (spec `remove-ella-runs-page`, 2026-05-24), `agent_runs` is the durable telemetry surface — the structured-JSON output on the @ path means escalation-category counts are direct `trigger_metadata->>'handoff_category'` queries.
 - **Reduced surface area.** Two deleted files (`mention_classifier.py`, `digest_response.py`) + the deleted `/ella/runs` audit page = significant net code removal alongside the behavior fix.
@@ -71,7 +71,6 @@ None at decision time. Future drift would look like: a new "escalate on X" rule 
 - **Daily digest consumer:** `api/ella_daily_digest_cron.py` (reads `pending_digest_items` populated by the passive path).
 - **Operational runbook:** `docs/runbooks/ella_passive_monitoring.md` (passive-side ops; SQL-only post `/ella/runs` removal).
 - **Agent doc:** `docs/agents/ella.md` (behavior spec, both paths, status-honesty + identity-routing sections).
-- **Source specs (deleted EOD 2026-05-23):** `ella-at-mention-passive-split` + `ella-at-mention-recent-context` + `ella-reply-as-human`. Recover from git history: `git log --diff-filter=D -- docs/specs/ella-at-mention-passive-split.md`.
 
 ## Review
 

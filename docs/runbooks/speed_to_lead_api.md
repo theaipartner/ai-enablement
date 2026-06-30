@@ -59,7 +59,7 @@ curl -s -H "Authorization: Bearer $SPEED_TO_LEAD_API_KEY" \
 | 401 | `{"error":"unauthorized"}` | Missing/wrong bearer key. |
 | 500 | `{"error":"server_misconfigured"}` | `SPEED_TO_LEAD_API_KEY` not set in the environment (deploy bug). |
 
-## Key management (gate (d) — Drake)
+## Key management
 
 - Env var: **`SPEED_TO_LEAD_API_KEY`** (see `.env.example`).
 - Generate: `openssl rand -hex 32`.

@@ -25,8 +25,9 @@ two finished Close pools). Read-only mirror via a Private Integration Token
 = a `TYPE_CALL` with `call_status='completed'` and `call_duration >= 90`** (same `>=90` as
 Close); rep = the call message's `user_id`; closes resolve to `airtable_full_closer_report`
 via `lead_id = ghl_contacts.id`. Migration `0114`; runbook `docs/runbooks/ghl_ingestion.md`;
-schema `docs/schema/ghl_*.md`. **Outbound campaign registration (the source-agnostic registry
-+ adder) is Phase 2/3 — not yet built.**
+schema `docs/schema/ghl_*.md`. The source-agnostic outbound campaign registry + adder
+shipped via migration `0115` and the `/sales-dashboard/outbound-campaigns` admin page
+(see `surfaces.md`).
 
 ### Airtable — `ingestion/airtable/` (base `appCWa6TV6p7EBarC`, PAT `AIRTABLE_SALES_PAT`)
 One base-wide **webhook receiver** (`api/airtable_events.py`) **+ 15-min cron**
@@ -58,13 +59,11 @@ Filter closer bookings by **event `name` ILIKE** `CLOSER_EVENT_TYPE_NAMES` — *
 join `event_type_uri` (retired URIs). See `logic.md` § call typing.
 
 ### OnceHub — removed (2026-06-22)
-A OnceHub scheduling integration (webhook `api/oncehub_events.py`, backfill +
-`ingestion/oncehub/`, `oncehub_bookings` mirror, read layer + tagger wiring) was built and
-briefly shipped, then **removed — we're not going with OnceHub**. Calendly is the scheduling
-platform. The `oncehub_bookings` table (migration 0092) is left inert (nothing reads it); a
-registered OnceHub webhook (`WHK-9JXMFZKAH5`) + the `ONCEHUB_WEBHOOK_SECRET` Vercel var may
-still exist on the provider side and can be deactivated. See
-[`booking-to-close.md`](./booking-to-close.md).
+The OnceHub scheduling integration was removed; bookings now come from Calendly. The
+`oncehub_bookings` table (migration 0092) is left inert (nothing reads it), and a registered
+OnceHub webhook (`WHK-9JXMFZKAH5`) + the `ONCEHUB_WEBHOOK_SECRET` Vercel var may still exist
+on the provider side and can be deactivated. For the booking→close mechanism see
+[`logic.md`](./logic.md) / [`surfaces.md`](./surfaces.md).
 
 ### Typeform — `ingestion/typeform/`
 Webhook (real-time primary) + cron backstop (`typeform_sync_cron`, `*/15`) + insights
@@ -105,21 +104,12 @@ meeting-duration metrics.
 ### Setter-calls sweep
 `setter_calls_sweep_cron` (`*/15`) — keeps setter call activity current.
 
-### Engagement pinger (missing-form notifier) — ▶ LIVE (resumed 2026-06-19 10am ET)
+### Engagement pinger (missing-form notifier) — LIVE
 
-> **STATUS: LIVE.** Paused 2026-06-16 after the first live fire surfaced issues (non-rep
-> Close users leaking into pings, no way to dismiss a not-needed form). Those are fixed —
-> ping now gated to sales reps (`sales_role` setter/closer/dc_closer), @Ella-in-thread
-> dismissal, and DC closer forms end engagements. Resumed by re-adding the `*/5` cron to
-> `vercel.json` with `ENGAGEMENT_PING_FLOOR=2026-06-19T10:00:00-04:00` (clean start — the
-> ~28-form backlog flips overdue with historical timestamps below the floor, so only forms
-> going overdue at/after 10am ET 2026-06-19 ping).
->
-> **To pause again:** remove the `engagement_ping_cron` line from `vercel.json`'s `crons`
-> and push (kill switch (a) below). **To re-clean-start after any pause:** re-add the cron
-> line **and** reset `ENGAGEMENT_PING_FLOOR` to the resume moment so the backlog stays
-> silent, then push. The function, its `functions`-block config, and all env vars stay in
-> place across a pause — resume is just those two changes.
+Live on the `*/5` cron. Pinging is gated to sales reps (`sales_role`
+setter/closer/dc_closer), supports @Ella-in-thread dismissal, and DC closer forms end
+engagements. `ENGAGEMENT_PING_FLOOR` (a go-live timestamp) keeps the historical backlog
+silent — only forms going overdue at/after the floor ping. The two kill switches are below.
 
 Pings a rep in Slack (as **Ella**) every 15 min until they file the form for a phone call.
 Logic + lifecycle: [`logic.md`](./logic.md) § Engagements; table: `docs/schema/engagements.md`
@@ -183,19 +173,15 @@ Vercel app always runs against cloud — only **local diagnostics** are at risk 
 the wrong DB. Use `.venv/bin/python` for DB ops (psycopg2 isn't in system python), and
 `os.environ.setdefault` the vars first (`.env.local` isn't auto-loaded into the shell).
 
-### Migrations — the one careful, Drake-gated path
+### Migrations
 Local Docker being up makes the Supabase CLI silently **misroute** `db push --linked`.
 Apply migrations via **psycopg2 against the pooler** (`supabase/.temp/pooler-url` +
 `SUPABASE_DB_PASSWORD`), then **manually insert the ledger row** into
 `supabase_migrations.schema_migrations`. **Dual-verify against CLOUD explicitly** (never a
 single query): schema reality (`to_regclass` / `information_schema.columns` / `pg_proc`)
-**and** ledger registration, plus a pre/post `count(*)` drift check.
+**and** ledger registration, plus a pre/post `count(*)` drift check. See
+`docs/runbooks/apply_migrations.md`.
 
-- **Drake reviews the SQL diff before apply** (the permanent migration gate).
-- **The "applied but wasn't" trap:** migration 0066 was claimed applied but had only been
-  verified against LOCAL (cloud `to_regclass = None`, ledger max = 0065). The canonical
-  apply path is `supabase db push --linked --dns-resolver https --password "$DB_PW" --yes`
-  — verify it actually hit cloud.
 - **Airtable parser sequencing:** `_upsert_batch` upserts the full parsed dict (no column
   whitelist) → apply the column migration to **cloud BEFORE deploying** the parser that
   writes it. `fields_raw` jsonb always holds the complete field set.

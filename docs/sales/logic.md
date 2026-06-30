@@ -10,10 +10,10 @@ can find the implementation.
 ## The connected signal
 
 `connected` = a **≥90s call** (any direction; `FMR_DIAL_CONNECTED_SEC = 90`), back-filled
-from confirmed/showed/closed (monotonic). **A triage/confirmation form no longer counts**
-(Drake 2026-06-24, the boss's call: connected means a real ≥90s conversation, not a form
-reach). The tagger materializes this into `lead_cycle_stages.connected_at`; the read layer
-(`lib/db/leads.ts`) mirrors it for cycle-less leads.
+from confirmed/showed/closed (monotonic). **A triage/confirmation form no longer counts** —
+connected means a real ≥90s conversation, not a form reach. The tagger materializes this into
+`lead_cycle_stages.connected_at`; the read layer (`lib/db/leads.ts`) mirrors it for cycle-less
+leads.
 
 - A no-show closer form ("Client Ghosted") is **not** a connect.
 - A booking is **not** a connection without a ≥90s call. So **Direct** (self-bookers) and
@@ -195,7 +195,7 @@ These two columns are **display-only** — read by the disposition word, never t
 The monotonic stage hits, `sales_funnel_counts`, and `reachedStage` are untouched (the
 0098 retag is verified to leave every existing stage timestamp + funnel count identical).
 
-> **Known refinement (Drake 2026-06-24):** a "Long-Term Follow Up" arguably should *stick*
+> **Known refinement:** a "Long-Term Follow Up" arguably should *stick*
 > over a later Confirmed (follow-up is an ongoing-positive state), whereas a booking after
 > a DQ correctly revives the lead. Currently pure latest-by-timestamp, so a confirmed
 > re-booking after a follow-up reads "Confirmed". Left as-is; an easy rank tweak if wanted.
@@ -297,44 +297,30 @@ This is **expected, not a bug**: ~1–2% of unique leads have no `ad_id` (organi
 explicit "Organic / no ad" bucket to the ad filter. (Verified 2026-06-11: 362 of ~365
 in-window leads carry an ad; the rest are organic.)
 
-## Perf — what's been done, and what's left (updated 2026-06-12)
+## Perf — current state
 
-**Done:**
-- **All sales data-layer reads parallelized** — the per-lead chunked `.in()` loops and the
-  independent table fetches across the roster, cohort spine, closer drill, cash, DC, and
-  per-lead detail now fan out concurrently (`lib/db/query-parallel.ts` `fetchChunked` /
-  `fetchChunkedPaged`), instead of awaiting one chunk/table at a time. Pagination loops stay
-  sequential (termination depends on the prior page count).
-- **`PersistPageState` double-fetch killed** — the date window now persists to a server-readable
-  cookie (`sd_win`, `lib/db/sales-window-cookie.ts` `resolveSalesWindow`), so the first server
-  render of a bare navigation already uses the saved window. No client re-navigation (the "~1s
-  filter/time-window catching up").
+Dashboard aggregation runs in Postgres, not JS (see the README § Performance for the standing
+rule). What that means concretely today:
+
+- **Reads are parallelized** — per-lead chunked `.in()` loops and independent table fetches fan
+  out concurrently via `lib/db/query-parallel.ts` (`fetchChunked` / `fetchChunkedPaged`).
+  Pagination loops stay sequential (termination depends on the prior page count).
+- **The date window persists to a server-readable cookie** (`sd_win`, `lib/db/sales-window-cookie.ts`
+  `resolveSalesWindow`), so the first server render of a bare navigation already uses the saved
+  window — no client re-navigation.
 - **Roster reads from tags** — `getLeadsForRange` defaults to `getLeadsForRangeTags`
-  (`lib/db/leads.ts`): the cohort spine (already tag-materialized) + `collapseToLatest(getLeadCycleRows)`
-  + ONE 1:1 `close_leads` read (ad / reactivated_at), instead of full Calendly scans,
-  the three Airtable form reads, and a post-react `close_calls` scan. (Qualified now comes from
-  `lead_cycles.qualified` — Typeform-sourced — not close_leads; see data-model.md § Qualified.)
-  Verified byte-identical on every consumed field (display + filter + pages) across 4 windows;
-  non-consumed diffs were V1 over-marks the funnel already excluded. Legacy live path kept behind
-  `SALES_ROSTER_USE_JS=1` for bake-in.
+  (`lib/db/leads.ts`): the tag-materialized cohort spine + `collapseToLatest(getLeadCycleRows)` +
+  one 1:1 `close_leads` read, instead of full Calendly scans, three Airtable form reads, and a
+  post-react `close_calls` scan. (Qualified comes from `lead_cycles.qualified` — Typeform-sourced;
+  see data-model.md § Qualified.) Legacy JS path behind `SALES_ROSTER_USE_JS=1`.
+- **Talent per-rep call activity from SQL** — `getCallActivityMetrics` defaults to
+  `getCallActivityMetricsRpc`, reading per-rep volume from `sales_rep_call_activity` (migration
+  0082, a `GROUP BY user_id` aggregate) instead of paginating every call into Node. Legacy
+  full-scan behind `SALES_REP_ACTIVITY_USE_JS=1`.
 
-- **Talent (`/people`) per-rep call activity from SQL** — `getCallActivityMetrics` defaults to
-  `getCallActivityMetricsRpc`: the per-rep volume (calls / over90s / distinct-≥90s sessions / name)
-  comes from `sales_rep_call_activity` (migration 0082, a `GROUP BY user_id` aggregate) instead of
-  paginating every call into Node + JS session-grouping. The form outcomes, matching, family
-  attribution, `missing`, DC-credit, and the connected composition (≥90s-OR-form) are unchanged.
-  Verified byte-identical on every field across setters/closers/aggregates over 4 windows. Legacy
-  full-scan kept behind `SALES_REP_ACTIVITY_USE_JS=1`.
-
-**Left:**
-- **Talent form-outcome columns** still read the Airtable forms in JS (the gnarly rep-attribution
-  part), and the closer/DC drilldowns read Calendly detail — both smaller than the call-volume scan
-  that moved to SQL. The DC-close-credit step does two unwindowed full-table form reads (cheap to
-  window-scope later).
-- **`force-dynamic` + no caching** — every navigation re-fetches server-side. The tag/SQL layers make
-  each fresh render fast natively, so this is low priority.
-- **`getAppointmentSettingMetrics`** is dead code (its route was removed) — a cleanup candidate; note
-  its `duration>0` connected proxy is *not* the live definition (live = ≥90s-OR-form).
+Still in JS: the Talent form-outcome columns (rep-attribution) and the closer/DC drilldowns
+(Calendly detail). `getAppointmentSettingMetrics` is dead code (its route was removed) — its
+`duration>0` connected proxy is *not* the live definition (live = ≥90s-OR-form).
 
 ## Cohort vs activity — the mental model
 

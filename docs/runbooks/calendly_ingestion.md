@@ -1,8 +1,8 @@
 # Runbook: Calendly Ingestion (Scheduled Events + Invitees)
 
-Spec: `docs/specs/calendly-ingestion.md`. Discovery: `docs/reports/calendly-discovery.md`. Schema docs: `docs/schema/calendly_{event_types,scheduled_events,invitees}.md`.
+Schema docs: `docs/schema/calendly_{event_types,scheduled_events,invitees}.md`.
 
-This runbook covers source endpoints, auth + the 4 footguns from discovery, the webhook activation runbook (Drake-executed), backfill, idempotency, and the deferred follow-up-meeting metric.
+This runbook covers source endpoints, auth + the 4 footguns from discovery, the webhook activation runbook, backfill, idempotency, and the deferred follow-up-meeting metric.
 
 ## What this ingestion does
 
@@ -59,7 +59,7 @@ Canonical closer set lives in `ingestion/calendly/__init__.py:CLOSER_EVENT_TYPE_
 ```python
 CLOSER_EVENT_TYPE_NAMES = frozenset({"ai partner strategy call"})
 ```
-Drake/Aman may expand later — adding a name to that frozenset is the one-line change. Aggregation queries reference this constant.
+The set may expand later (team decision) — adding a name to that frozenset is the one-line change. Aggregation queries reference this constant.
 
 ### 3. Date math in business tz (`America/New_York`), NOT UTC
 
@@ -81,7 +81,7 @@ A reschedule triggers:
 - **Token:** `CALENDLY_API_KEY` (Personal Access Token, JWT ~896 chars). HTTP Bearer.
 - Required in BOTH `.env.local` (for backfill/probes/local) AND Vercel (for the deployed webhook receiver — it fetches the parent event on every invitee tick).
 - Token page is **Account-Owner or Admin tier** in Calendly. If 401s start happening in `webhook_deliveries` failed rows, the token may have been rotated — Nabeel re-mints.
-- **Spec drift note:** `docs/specs/calendly-ingestion.md` referenced `CALENDLY_API_TOKEN`. The canonical name is `CALENDLY_API_KEY` (matches `CLOSE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` precedent). `CalendlyClient.from_env()` accepts either for backwards-compat; standardize on `_API_KEY` going forward.
+- **Env var naming:** the canonical name is `CALENDLY_API_KEY` (matches `CLOSE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` precedent). `CalendlyClient.from_env()` accepts either for backwards-compat; standardize on `_API_KEY` going forward.
 
 ### Rate limit
 
@@ -96,7 +96,7 @@ Calendly: ~60 req/min (lower plans) / 120 (Enterprise). Returns **HTTP 429** wit
 | `GET /scheduled_events?organization=<uri>&min_start_time=&max_start_time=&status=&sort=` | Paginated events list | Filter by `start_time` only (no `created_at` filter); the backfill pulls a wide window then aggregation buckets by `event_created_at`. |
 | `GET /scheduled_events/{uuid}/invitees` | Per-event invitees | Typically 1 per event in this org; supports multi-invitee groups. |
 | `GET /scheduled_events/{uuid}` | Single-event fetch | Used by the webhook receiver to fetch the parent event on every invitee tick. |
-| `POST /webhook_subscriptions` | Register subscription | Drake-gated; via `scripts/register_calendly_webhook.py`. |
+| `POST /webhook_subscriptions` | Register subscription | via `scripts/register_calendly_webhook.py`. |
 | `GET /webhook_subscriptions` | List existing subscriptions | The org has 10 existing Make.com subscriptions; ours is the 11th. |
 
 ## Webhook signature verification
@@ -116,18 +116,18 @@ valid = hmac.compare_digest(expected, sig_v1_from_header)
 
 **Caveat:** Calendly's docs don't paste the exact format inline. The implementation follows the standard prose description. **If the first real delivery 401s**, inspect the captured header in `webhook_deliveries.headers` (timestamp portion preserved; signature redacted) and adjust the parser/verifier accordingly.
 
-## Live activation runbook (Drake's gate-(d) steps)
+## Live activation runbook
 
 Sequential — each step depends on the previous:
 
-1. **Builder commits + pushes `api/calendly_events.py` to `main`.** Vercel auto-deploys.
-2. **Drake confirms the deploy:**
+1. **Commit + push `api/calendly_events.py` to `main`.** Vercel auto-deploys.
+2. **Confirm the deploy:**
    ```bash
    curl https://ai-enablement-sigma.vercel.app/api/calendly_events
    # → {"status":"ok","endpoint":"calendly_events","accepts":"POST"}
    ```
    If 404, deploy hasn't picked up yet — wait ~1-2 min.
-3. **Drake runs the register script:**
+3. **Run the register script:**
    ```bash
    .venv/bin/python scripts/register_calendly_webhook.py \
      --register --url https://ai-enablement-sigma.vercel.app/api/calendly_events
@@ -135,8 +135,8 @@ Sequential — each step depends on the previous:
    Script POSTs to `/api/v1/webhook_subscriptions` with the 4 in-scope events
    (`invitee.created`, `invitee.canceled`, `invitee_no_show.created`,
    `invitee_no_show.deleted`). Response prints the **signing key — COPY IT NOW.**
-4. **Drake adds `CALENDLY_WEBHOOK_SECRET=<the_signing_key>`** to Vercel project env vars. Redeploy to pick it up.
-5. **Drake verifies end-to-end:** book a test meeting in Calendly (any event type triggers the webhook). Within seconds:
+4. **Add `CALENDLY_WEBHOOK_SECRET=<the_signing_key>`** to Vercel project env vars. Redeploy to pick it up.
+5. **Verify end-to-end:** book a test meeting in Calendly (any event type triggers the webhook). Within seconds:
    ```sql
    SELECT count(*) FROM webhook_deliveries
    WHERE source='calendly_webhook' AND received_at >= now() - interval '5 min';
@@ -162,7 +162,7 @@ Sequential — each step depends on the previous:
 
 **Smoke gate (mandatory before `--apply`):** smoke refreshes event-types + upserts ONE event + its invitees. Idempotent. Per CLAUDE.md § Operational patterns.
 
-**Bulk `--apply` Drake-gated** at first invocation. Re-runs after parser fixes are not gated — idempotency contract holds.
+**Run `--smoke` before the first bulk `--apply`** (first large-scale production write). Re-runs after parser fixes are safe — idempotency contract holds.
 
 **Volume:** Discovery saw ~100 events over 30 days → ~25 events/7d. Wide future window adds maybe 50 more events booked recently for future meetings = ~75 events × 2 calls each = ~150 API calls. Fits comfortably under rate limit.
 
@@ -185,7 +185,7 @@ Calendly has no native "follow-up meeting" concept. Aman/team has NOT defined wh
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Every Calendly call 403s with `error 1010: browser_signature_banned` | Custom User-Agent header missing | Check the client; `USER_AGENT` constant must be set on every request |
-| Cron audit `wistia_token_unavailable` style msg | `CALENDLY_API_KEY` missing in Vercel | Drake adds; redeploy |
+| Cron audit `wistia_token_unavailable` style msg | `CALENDLY_API_KEY` missing in Vercel | Add it in Vercel; redeploy |
 | HTTP 401 on `/users/me` | Token rotated or revoked | Nabeel regenerates Personal Access Token; update `.env.local` + Vercel |
 | Webhook 401s repeatedly | `CALENDLY_WEBHOOK_SECRET` mismatch | Confirm Vercel env value matches what the register script printed; if lost, delete + recreate subscription |
 | Webhook signature parser returns empty tuple every time | Calendly's actual header format differs from the Stripe-style assumption | Inspect `webhook_deliveries.headers.calendly-webhook-signature` (timestamp preserved); adjust `_parse_signature_header` |
@@ -199,5 +199,5 @@ Calendly has no native "follow-up meeting" concept. Aman/team has NOT defined wh
 - **`no_show` consolidation** — Calendly has a native `no_show` field; Engine sheet currently sources No Show from a different system. Potential consolidation TBD.
 - **`routing_form_submission` ingestion** — invitee payload includes a `routing_form_submission` field for Calendly's pre-meeting form data. Not used today; future spec if the team adopts routing forms.
 - **Multi-invitee group events** — this org uses solo events today. Schema supports group via the invitees-counter, but aggregation queries assume single-invitee.
-- **Auto-reactivation of paused subscriptions** — if Calendly auto-disables our subscription after repeated 5xx, current recovery is Drake's manual action via `register_calendly_webhook.py --delete` + re-register.
+- **Auto-reactivation of paused subscriptions** — if Calendly auto-disables our subscription after repeated 5xx, current recovery is a manual action via `register_calendly_webhook.py --delete` + re-register.
 - **Per-event-type aggregation layer** — separate dashboard spec; this ingestion just stores raw.

@@ -1,10 +1,9 @@
 # Sales Dashboard
 
-> **Architecture & code map:** see `docs/sales/sales-dashboard-architecture.md` for the
-> route topology, data-layer modules, mirror-table model, the Calendly↔lead /
-> booking-funnel / closer-outcome logic, and the environment traps (local-vs-cloud
-> creds, migration apply, Airtable schema API). Read that first for "how the code
-> is structured"; this runbook is the metric catalog + per-feature wiring notes.
+> **Architecture & code map:** see `docs/sales/` (start at `README.md`, then `data-model.md`,
+> `logic.md`, `ingestion.md`, `surfaces.md`) for the current route topology, data model,
+> matching/business logic, and ingestion. This runbook covers the metric-catalog layer
+> (`[section]` / `states` routes) + per-feature wiring notes.
 
 Admin-tier page at `/sales-dashboard`. Visualizes the Engine sheet
 (`Data Sheet - Overall Engine.csv` at repo root) — 9 sections, ~117
@@ -35,10 +34,8 @@ data layer is unchanged — catalog, fetchers, state contract are all v1.
   guards `/cost-hub`. Non-admin tiers redirect to
   `/clients?error=insufficient_access`.
 - Nav: a "Sales" item in `components/top-nav.tsx`, visible only to
-  admin+ (Nabeel, Drake). The TopNav stays as the cross-page surface;
+  admin+ (e.g. Nabeel). The TopNav stays as the cross-page surface;
   the sales sidebar only renders under `/sales-dashboard/*`.
-- Specs: `docs/specs/sales-dashboard-v1.md`, `docs/specs/sales-dashboard-v2.md`
-  + design mock `docs/specs/sales-dashboard-v2.html`.
 
 ## The three states (legend, also rendered on the page)
 
@@ -201,7 +198,7 @@ Individual not-connected cells inside otherwise-live sections:
 ## How to promote a PENDING metric to LIVE
 
 1. Decide the metric is single-source-clean (or has an explicit
-   resolution — e.g. Drake/Aman confirms which Airtable cash-paid field
+   resolution — e.g. a team decision on which Airtable cash-paid field
    is canonical).
 2. Add or change the fetcher in `lib/db/sales-dashboard.ts` (`FETCHERS`
    map). Use existing fetchers as templates; per-card error catching is
@@ -303,8 +300,7 @@ without per-component prop noise.
 | `top-live` | 160px | 44px serif | Section page Top-Live row (3-up) |
 | `grid` | 124px | 28px serif | Full Catalog grid (4-up) |
 
-State chrome reproduces the mock at `docs/specs/sales-dashboard-v2.html`
-`.metric-card.live/pending/not-connected`. Notable details:
+State chrome uses `.metric-card.live/pending/not-connected`. Notable details:
 
 - **Live**: solid `--color-geg-bg-elev` background, full serif numeric.
 - **Pending**: `--color-geg-warn-fill` tinted background + warn-bordered
@@ -329,8 +325,8 @@ Reason: the three cash-collected cells (`cls_cash_deposits` /
 because of the schema's flagged Airtable ambiguity (two competing
 currency fields — `amount_paid_today_currency` vs
 `amount_paid_today_number`). Summing them today would put an invented
-number on the hero. Promoting requires Drake/Aman to first resolve the
-cash-field canon — at which point the three component cells and
+number on the hero. Promoting requires a team decision on the
+cash-field canon first — at which point the three component cells and
 `cls_total_cash` all promote together. The mock anticipates this
 exception via the warn-tinted hero treatment.
 
@@ -522,13 +518,13 @@ PREVIEW_URL=http://localhost:3033 npx --yes tsx scripts/verify-sales-dashboard-v
 
 # Vercel preview deploy (set NEXT_PUBLIC_DISABLE_AUTH=true on the
 # Preview env only, never Production)
-PREVIEW_URL=https://ai-enablement-xxxx-drakeynes-projects.vercel.app \
+PREVIEW_URL=https://<preview-deployment>.vercel.app \
   npx --yes tsx scripts/verify-sales-dashboard-v2-preview.ts
 ```
 
 Run after any visual change to the dashboard, after any v1 catalog
 edit (the assertions exercise catalog-derived state), or as part of
-post-deploy Drake-gate (c) verification.
+post-deploy verification.
 
 ## Smoke probe
 
@@ -545,11 +541,11 @@ Prints one section per source with row counts and key derived values.
 Non-zero exit indicates a query shape broke (e.g. a column was renamed
 mirror-side and the dashboard's filter is now invalid).
 
-## Post-deploy verification (Drake gate (c))
+## Post-deploy verification
 
 After `git push` triggers a Vercel deploy:
 
-1. Visit `/sales-dashboard` as an admin user (Drake or Nabeel).
+1. Visit `/sales-dashboard` as an admin user (e.g. Nabeel).
 2. Verify the page renders without auth redirect and the nine section
    columns are present in order.
 3. Spot-check one LIVE number per section against the smoke probe's

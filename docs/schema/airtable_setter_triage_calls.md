@@ -4,8 +4,6 @@ Airtable Setter Triage Calls EOC Form mirror — feeds the setter-side
 Engine-sheet Appointment Setting rows. Source: Airtable base
 `appCWa6TV6p7EBarC` table `tblaoMsiE3FSkHjQt`.
 
-**Spec:** `docs/specs/airtable-ingestion.md`
-**Discovery:** `docs/reports/airtable-discovery.md`
 **Migration:** `supabase/migrations/0050_airtable_mirror.sql`
 **Runbook:** `docs/runbooks/airtable_ingestion.md`
 
@@ -65,7 +63,7 @@ The per-rep tables (`lib/db/funnel-appointment-setting.ts`
 
 Notes:
 - **`Unresponsive – Setter Handover` folds into `Setter pipeline / Follow
-  up`** (Drake: same thing).
+  up`** (same thing).
 - A `Call Status` value outside a list's column set (e.g. a closer row
   marked "High Ticket booking") is counted nowhere — these are the rare
   "weird entries" reconciled manually in Airtable.

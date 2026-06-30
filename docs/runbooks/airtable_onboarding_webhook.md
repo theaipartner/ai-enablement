@@ -35,7 +35,7 @@ Same shape as Path 2 outbound's secret rotation. The secret is shared between Ve
 
 3. **Wait for the redeploy to land.** POST with the OLD secret should now 401; POST with the NEW secret should 200 (or whatever validation result the payload produces).
 
-4. **Update Make.com.** Drake or Zain edits the onboarding scenario's HTTP module → Headers → `X-Webhook-Secret` → paste new value → save scenario.
+4. **Update Make.com.** Zain edits the onboarding scenario's HTTP module → Headers → `X-Webhook-Secret` → paste new value → save scenario.
 
 5. **Update `.env.local`** for harness runs: `AIRTABLE_ONBOARDING_WEBHOOK_SECRET=<new value>`. NOT committed.
 
@@ -229,7 +229,7 @@ If Zain reports "I got a 409":
    - **The existing client genuinely shouldn't have that slack_user_id** (orphan from old Slack workspace, manual data error): clear `clients.slack_user_id = NULL` for the affected client via the dashboard or direct SQL, then ask Make.com to retry.
    - **The slack_channel_id is owned by a different client** (the channel was previously linked to someone else who churned, or to a now-merged duplicate): this is rarer; investigate the orphan row in `slack_channels` and either reattach (set `client_id = NULL`) or delete the stale link before retrying.
 
-4. **None of these silently overwrite anything.** Per spec: established Slack identities are sticky. The 409 is the safety net.
+4. **None of these silently overwrite anything.** By design: established Slack identities are sticky. The 409 is the safety net.
 
 ---
 

@@ -1,8 +1,9 @@
 # oauth_tokens
 
 Per-team-member OAuth credentials for external providers. V1 holds a
-single row for Drake's Google account; the table primitive is reusable
-when additional providers or per-user OAuth becomes needed.
+single row for the creator-tier Google account; the table primitive is reusable
+when additional providers or per-user OAuth becomes needed. That account is
+documented in `docs/runbooks/credentials-and-accounts.md` § calendar-sync Google account.
 
 ## Purpose
 
@@ -42,7 +43,7 @@ refresh.
 
 ## Populated By
 
-- The Google OAuth callback at `/api/auth/google/callback`, gated to creator-tier (Drake only in V1).
+- The Google OAuth callback at `/api/auth/google/callback`, gated to creator-tier.
 - Re-OAuth via the same flow overwrites the row in place. There is no automatic refresh — only the cron / TS helpers proactively call Google's `/token` endpoint when the stored `access_token_expires_at` is within 60 seconds of now.
 
 ## Security
@@ -53,7 +54,7 @@ refresh.
 
 ## Example Queries
 
-Inspect Drake's current Google token state:
+Inspect the creator-tier Google token state:
 
 ```sql
 select team_member_id, provider, access_token_expires_at, scope, updated_at
@@ -66,7 +67,7 @@ Force a refresh on next cron tick (useful for testing):
 ```sql
 update oauth_tokens
 set access_token_expires_at = now() - interval '1 hour'
-where team_member_id = '<drake-uuid>' and provider = 'google';
+where team_member_id = '<creator-uuid>' and provider = 'google';
 ```
 
 ## Origin

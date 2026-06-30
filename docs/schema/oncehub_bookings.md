@@ -10,5 +10,5 @@ may be dropped later. A registered OnceHub webhook (`WHK-9JXMFZKAH5`) and the
 deactivated.
 
 Calendly is the scheduling platform; the booking→close linkage is handled by read-time
-reconstruction (`lib/db/funnel-closing.ts`) + `lead_cycles`. See
-`docs/sales/booking-to-close.md`.
+reconstruction (`lib/db/funnel-closing.ts`) + `lead_cycles` — see `docs/sales/logic.md`
+§ Booking → lead matching.

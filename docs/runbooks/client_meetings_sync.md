@@ -7,9 +7,10 @@ month history (CSM pay inputs).
 ## What it does
 
 1. Auth: `Authorization: Bearer ${CRON_SECRET}`.
-2. Resolves Drake (creator-tier) and mints a Google access token via
-   `shared.google_oauth` — CSMs share calendars with Drake at the Workspace
-   level, so his token reads them all.
+2. Resolves the creator-tier account and mints a Google access token via
+   `shared.google_oauth` — CSMs share calendars with that account at the
+   Workspace level, so its token reads them all. (Load-bearing identity — see
+   `credentials-and-accounts.md` § calendar-sync Google account.)
 3. Builds an `email → client_id` map from non-archived clients (`email` +
    `metadata.alternate_emails`, lowercased/trimmed).
 4. For each CSM, fetches calendar events over a rolling **14-day** lookback
@@ -61,7 +62,7 @@ clients_matched, errors}`.
 
 | Symptom | Likely cause | Where to look |
 |---------|--------------|---------------|
-| `oauth_token_unavailable` | Drake's Google token expired / revoked | Reconnect at `/teams` (creator). Audit row `processing_error`. |
+| `oauth_token_unavailable` | The creator-tier Google token expired / revoked | Reconnect at `/teams` (creator). Audit row `processing_error`. |
 | One CSM `calendar_api_denied` | CSM unshared their calendar, or scope issue | `payload.errors[]` in the audit row. Reconciliation is skipped that run. |
 | `meetings_matched` lower than expected | Client attends under an email not on the client row | Add it to `metadata.alternate_emails` on the client. |
 | Counts double for a client | Same person on two client rows | Merge the duplicate clients. |

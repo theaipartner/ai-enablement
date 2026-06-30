@@ -64,10 +64,8 @@ vars to a syntactically valid Slack user_id (matches `^U[A-Z0-9]+$`),
 the cron DMs both Scott and the CC. Same body to both; one
 `post_message` + one `webhook_deliveries` audit row per recipient.
 
-Today's value: `U0AMC23G1SM` (Drake's slack_user_id), set during the
-FAQ digest validation period so Drake sees the same DM Scott sees.
-Gate (d) — Drake adds this to Vercel Production env vars; Builder
-never hardcodes it.
+The CC value is an optional CC recipient's Slack user_id, added to
+Vercel Production env vars (never hardcoded).
 
 Edge cases the cron handles:
 
@@ -95,7 +93,7 @@ Friday 19:00 UTC. Translates to:
 - **Standard window (early November → mid-March):** 14:00 EST.
 
 Scott is in Europe, so 14-15:00 ET is a normal afternoon hour for him.
-The seasonal drift is acceptable per the spec — locking on UTC keeps
+The seasonal drift is acceptable — locking on UTC keeps
 the cron entry simple.
 
 ## How to verify a fire

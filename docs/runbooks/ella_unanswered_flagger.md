@@ -3,7 +3,7 @@
 Operational guide for the real-time safety-net cron at
 `api/ella_unanswered_flagger_cron.py`. Covers what it does, the query
 logic, recipient resolution, the kill switch, failure modes, and the
-manual curl. Spec: `docs/specs/ella-unanswered-message-flagger.md`.
+manual curl.
 
 ## What it is
 
@@ -21,7 +21,7 @@ digest still fires at 16:30 EDT independently. The two surfaces have
 independent state (`sent_in_digest_at` vs `unanswered_posted_at`) and
 never conflict — a message can legitimately appear in both.
 
-Key behavioral rules (Drake-confirmed):
+Key behavioral rules:
 
 - **Human intervention = ANY `team_member` message in the channel
   after the flagged message landed.** Topic-agnostic — if an advisor
@@ -47,7 +47,7 @@ Key behavioral rules (Drake-confirmed):
    `payload={'disabled': true}`, return 200, no work.
 3. **Destination channel.** `ELLA_UNANSWERED_CHANNEL_SLACK_ID`. Unset →
    500 + a `processing_status='failed'` audit row noting the config
-   gap. Gate (d) — Drake sets this in Vercel Production env vars.
+   gap. Set this in Vercel Production env vars.
 4. **Candidate query.** `pending_digest_items` where
    `unanswered_posted_at IS NULL` AND `created_at <= now() - 2h` AND
    `created_at >= now() - 7d`, oldest first, capped at 50/tick. The 7d
@@ -209,8 +209,7 @@ M6.2).
 
 Symptom: 500; `processing_status='failed'` audit row with
 `payload.config_gap='ELLA_UNANSWERED_CHANNEL_SLACK_ID'`. Recovery:
-gate (d) — Drake sets the channel id in Vercel Production env vars and
-redeploys.
+set the channel id in Vercel Production env vars and redeploy.
 
 ### `#unanswered-channels` doesn't exist / bot not invited
 
