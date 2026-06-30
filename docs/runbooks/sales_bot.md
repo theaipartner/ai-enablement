@@ -21,9 +21,22 @@ roundtrip — same model as Ella's webhook).
 
 ## Provisioning the RO role (one-time, Drake-gated)
 
+> **Status: DONE 2026-06-29.** `0113` applied to cloud + ledgered; the
+> `sales_bot_ro` password is set; `SALES_BOT_DB_URL` + `SALES_BOT_SLACK_CHANNEL`
+> are in `.env.local` and Vercel (Production). Confirmed pooler username form:
+> `sales_bot_ro.sjjovsjcfffrftnraocu`. Two facts worth keeping:
+> - **RLS was the gotcha.** Every public table has RLS *enabled with no
+>   policies*; the service role bypasses it but `sales_bot_ro` does not, so the
+>   SELECT grants alone returned **zero rows**. `0113` therefore also creates a
+>   `sales_bot_ro_read` (`FOR SELECT USING (true)`) policy per allowlisted table.
+>   Any NEW allowlist table needs the same policy added there.
+> - `postgres` (the migration role) has `createrole` but **not** superuser, so
+>   `BYPASSRLS` wasn't an option — the per-table read policy is the right fix.
+
 The migration `supabase/migrations/0113_sales_bot_ro_role.sql` creates the role
 **locked** (no password committed) with read-only defaults + the SELECT
-allowlist. To bring it live:
+allowlist + the RLS read policies. The original bring-up sequence (kept for
+reference / re-provisioning):
 
 1. **Apply the migration** via the careful psycopg2 path (NOT `supabase db push`
    with local Docker up — see `docs/sales/ingestion.md` § Ops traps and
