@@ -61,6 +61,7 @@ subdomain plan). Nothing in here should reference Ella, Clients, CSM, or Gregory
 | [`ingestion.md`](./ingestion.md) | Every data source, its webhook/cron model, and the **ops traps** (the env gotcha, the migration apply path). |
 | [`surfaces.md`](./surfaces.md) | The page-by-page UI map — routes, what each shows, what was removed. |
 | [`landing-pages.md`](./landing-pages.md) | How landing pages work + **the checklist for adding a new one** (the 5 things to collect, what's deferred). |
+| [`sales-bot-build-plan.md`](./sales-bot-build-plan.md) | **Handoff spec to BUILD the sales Slack bot** (text-to-SQL, read-only). Not built yet — read top to bottom and execute. |
 | [`booking-to-close.md`](./booking-to-close.md) | **(`booking_cycles` spine SHELVED; OnceHub trialed + removed.)** Calendly is the scheduling platform; the booking→close linkage is handled by read-time reconstruction (`funnel-closing.ts`) + `lead_cycles`. Records the decision to shelve the persisted spine + the revisit trigger. |
 
 Per-table column detail stays in `docs/schema/<table>.md` (kept as-is; the manifest
