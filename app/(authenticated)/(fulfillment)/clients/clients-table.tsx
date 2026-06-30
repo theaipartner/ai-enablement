@@ -5,6 +5,7 @@ import {
   NpsStandingPill,
 } from './pills'
 import {
+  EditableAccountabilityEnabledToggle,
   EditableCsmStandingCell,
   EditableJourneyStageCell,
   EditablePrimaryCsmCell,
@@ -37,6 +38,7 @@ type SortKey =
   | 'trustpilot_status'
   | 'latest_health_score'
   | 'meetings_this_month'
+  | 'accountability'
   | 'slack'
 
 type ColumnDef = {
@@ -61,6 +63,10 @@ const COLUMNS: ColumnDef[] = [
     align: 'right',
     width: '120px',
   },
+  // Accountability toggle (accountability_enabled). Not sortable — the
+  // page's sort whitelist ignores 'accountability', so the indicator never
+  // shows active. The Accountability filter chip on the bar handles narrowing.
+  { key: 'accountability', label: 'Accountability', width: '120px' },
   // Slack hygiene badges (channel / user). Not sortable in V1 — the
   // SortableHeader still renders a link, but the page's sort whitelist
   // ignores 'slack' so the sort indicator never shows active on this
@@ -275,6 +281,12 @@ export function ClientsTable({
               }}
             >
               {row.meetings_this_month}
+            </td>
+            <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
+              <EditableAccountabilityEnabledToggle
+                clientId={row.id}
+                value={row.accountability_enabled}
+              />
             </td>
             {showSlackColumn ? (
               <td style={{ padding: '14px 14px', verticalAlign: 'middle' }}>
