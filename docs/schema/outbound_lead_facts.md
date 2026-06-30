@@ -19,7 +19,7 @@ sub-second and stay that way as outbound grows.
 | Column | Type | Notes |
 |--------|------|-------|
 | `campaign_key` | `text` | PK part. FK-ish to `outbound_campaigns.key` (e.g. `'revival'`). |
-| `close_id` | `text` | PK part. The Close lead id. A lead double-tagged across campaigns is materialized only under its **most specific** campaign (see § What populates it), so the campaigns are mutually exclusive — no `close_id` appears under two `campaign_key`s. |
+| `close_id` | `text` | PK part. The lead's **native id** — a Close lead id for Close-sourced leads, or a **GHL contact id** for GHL-sourced ones (new-model campaigns, migration 0115). Named `close_id` for history; treat it as an opaque key. **Exclusivity depends on the campaign model:** legacy pools (Revival/Jacob) stay mutually exclusive (0103), so a Close id appears under only one legacy campaign; **new-model campaigns are independent** (no exclusivity), so the *same* lead CAN appear under two `campaign_key`s by design. |
 | `anchor` | `timestamptz` | `greatest(date_created, campaign floor)` — only activity at/after this counts. |
 | `first_reply` | `timestamptz` | First inbound SMS since anchor (null = no reply). |
 | `has_inbound` | `boolean` | Responded (an inbound SMS since anchor). |
@@ -41,13 +41,18 @@ small table).
 
 ## What populates it
 
-- `refresh_outbound_facts(p_campaign_key)` (migration 0095; mutual-exclusivity added in 0103) — full
-  recompute for one campaign: a `DELETE` + `INSERT` of all that campaign's leads, in one transaction
-  (concurrent reads see the prior snapshot until commit). ≈15s for the `revival` campaign. **Exclusivity
-  (0103):** the `leads` CTE drops any lead that also carries the Close CF of a *more specific* campaign
-  (one with a higher `outbound_campaigns.sort_order`). This is why all of Jacob's leads — which the SMS
-  tool also stamps with the `DC Revival Lead` CF — are counted under `jacob` only, never double-counted in
-  `revival`.
+- `refresh_outbound_facts(p_campaign_key)` (migration 0095; exclusivity 0103; **re-sourced for new-model
+  + GHL in 0115**) — full recompute for one campaign: a `DELETE` + `INSERT` of all that campaign's leads,
+  in one transaction (concurrent reads see the prior snapshot until commit). The function **branches on
+  the campaign model:**
+  - **Legacy** (Revival/Jacob — `match_field_name IS NULL`): Close-only via `close_cf_id`, with the **0103
+    exclusivity** — the `leads` CTE drops any lead that also carries the CF of a higher-`sort_order`
+    campaign. This is why Jacob's leads (the SMS tool also stamps them `DC Revival Lead`) count under
+    `jacob` only, never double-counted in `revival`. Unchanged byte-for-byte by 0115.
+  - **New-model** (`match_field_name` + `match_value` set): matches a custom-field **name=value** across
+    **Close** (`close_leads`, name→cf via `close_custom_field_definitions`) **and GHL** (`ghl_contacts` +
+    `ghl_messages`, name→id via `ghl_custom_field_definitions`; closes from Airtable joined on
+    `lead_id = ghl_contacts.id`). **No exclusivity** — campaigns are independent and overlap is allowed.
 - `api/outbound_facts_refresh_cron.py` — Vercel cron (`*/15 * * * *`) that calls
   `refresh_outbound_facts()` for every active `outbound_campaigns` row, via a psycopg2 pooler connection
   (the 15s refresh exceeds PostgREST's 8s timeout). Audits to `webhook_deliveries`
@@ -60,7 +65,10 @@ small table).
   `p_end` it filters by `anchor` (a lead's campaign-entry date) — the **cohort** scope. Read by
   `lib/db/funnel-revival.ts` (`getOutboundFunnel`) → the `/sales-dashboard/outbound` page, which always
   passes a range (default `[campaign start → today]`).
-- `outbound_funnel_by_rep(p_campaign_key, p_start, p_end)` (0104; totals added in 0105) — uses this table
-  as the campaign's lead universe, then joins `close_calls` (dials/connections) and the Airtable closer
-  reports (closes/cash) for the per-rep "By rep" block. Returns `{ reps, totals }`. Unlike the funnel it is
-  **activity-scoped** (calls by `activity_at`, closes by form date in the window), not anchor/cohort-scoped.
+- `outbound_funnel_by_rep(p_campaign_key, p_start, p_end)` (0104; totals 0105; **NULL = all-campaigns**
+  0108; **GHL call arm** 0115; shape regression fixed 0116→**0117**) — uses this table as the campaign's
+  lead universe (`p_campaign_key IS NULL` = every campaign, the "All" view), then joins **`close_calls`
+  AND `ghl_messages`** for dials/connections (rep via `close_user_id` / `ghl_user_id`) and the Airtable
+  closer reports for closes/cash. Returns `{ reps, totals }` (a bare array silently empties the per-rep
+  table — getOutboundByRep reads `d.reps`/`d.totals`). **Activity-scoped** (calls by activity time, closes
+  by form date in the window), not anchor/cohort-scoped.

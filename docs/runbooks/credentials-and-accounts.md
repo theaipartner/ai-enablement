@@ -10,7 +10,7 @@ commit secrets — see `CLAUDE.md` § Critical Rules.
 | Platform | Location | Notes |
 |---|---|---|
 | **GitHub** | `github.com/theaipartner/ai-enablement` | Source repo. Deploys auto-trigger on push to `main`. |
-| **Vercel** | team **`success-projects-9dcde12c`** ("success' projects"), project `ai-enablement` | URL `ai-enablement-sigma.vercel.app`. Next.js app + Python serverless functions in `api/` + the 19 crons in `vercel.json`. |
+| **Vercel** | team **`success-projects-9dcde12c`** ("success' projects"), project `ai-enablement` | URL `ai-enablement-sigma.vercel.app`. Next.js app + Python serverless functions in `api/` + the crons in `vercel.json` (22 as of 2026-06-30). |
 | **Supabase** | project ref **`sjjovsjcfffrftnraocu`** (us-east-2 / Ohio) | Source of truth — all migrations + live data. Keys: `NEXT_PUBLIC_SUPABASE_URL`/`SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_PASSWORD`, `SUPABASE_DB_POOL_URL`. Rotate service_role + DB password from the Supabase dashboard → Settings → API / Database. |
 
 Env vars are configured in **Vercel → Project → Settings → Environment Variables** (Production). The
@@ -64,6 +64,7 @@ For each: purpose · env var(s) · account owner · where to mint/rotate.
 | **Airtable (accountability)** | Accountability table, base `appR566PxMuP71mD6` | `AIRTABLE_ACCOUNTABILITY_PAT`, `_BASE_ID`, `_TABLE_ID` | Company | Separate PAT, read-only. |
 | **Cortana** | Meta ad attribution | `CORTANA_API_KEY`, `CORTANA_BUSINESS_ID` | Company | Cortana settings. |
 | **Deepgram** | Setter-call transcription | `DEEPGRAM_API_KEY` | Company (confirm billing owner) | console.deepgram.com. |
+| **GHL / GoHighLevel** | Outbound CRM mirror (read-only); sub-account "Digital College" `X8hfgbsfvZWAauZHxK9S` | `GHL_PRIVATE_TOKEN`, `GHL_LOCATION_ID` | Company | GHL → Settings → **Private Integrations** → create (read-only scopes: contacts, conversations, conversations/message, locations, locations/customFields, users). Editing scopes may regenerate the token. v2 auth = `Bearer` + `Version: 2021-07-28`. See `docs/runbooks/ghl_ingestion.md`. |
 
 ### Glue / internal-issued secrets (rotate, hand to the right person)
 | Var | Purpose | Notes |
@@ -73,12 +74,13 @@ For each: purpose · env var(s) · account owner · where to mint/rotate.
 | `AIRTABLE_ONBOARDING_WEBHOOK_SECRET` | Make.com onboarding receiver | Shared with Make.com. |
 | `AIRTABLE_NPS_WEBHOOK_SECRET` | NPS webhook receiver | Shared with Make.com. |
 | `SPEED_TO_LEAD_API_KEY` | Bearer for `/api/speed-to-lead` (Zain) | Hand the new value to Zain after rotation. |
+| `GHL_WEBHOOK_SECRET` | Bearer for the `/api/ghl_events` webhook receiver | We choose the value; the team puts it in the GHL Workflow → Custom Webhook header. Rotate = change in Vercel + update the GHL workflow header. |
 
 ## Webhooks — re-register ONLY if the Vercel URL changes
 
-All five are registered against `ai-enablement-sigma.vercel.app`. **As long as that URL stays, leave
-them alone.** If the URL ever changes, re-run each helper with the new URL, then update the returned
-secret in Vercel (several mint one-time secrets):
+These all point at `ai-enablement-sigma.vercel.app`. **As long as that URL stays, leave them alone.**
+If the URL ever changes, re-run each helper with the new URL, then update the returned secret in
+Vercel (several mint one-time secrets):
 
 | Service | Endpoint | Helper | Notes |
 |---|---|---|---|
@@ -87,6 +89,7 @@ secret in Vercel (several mint one-time secrets):
 | Typeform | `/api/typeform_events` | `scripts/register_typeform_webhooks.py` | Per-form; auto-selects forms active in the last 30 days. |
 | Airtable | `/api/airtable_events` | `scripts/register_airtable_webhook.py` | Base-level; `macSecretBase64` returned once. Needs `webhook:manage` scope on the PAT. |
 | Close | `/api/close_events` | `scripts/register_close_webhook.py` | Registration infra ready; not yet live. |
+| GHL | `/api/ghl_events` | (GHL UI — no API) | **Not API-registrable.** Configured in GHL as a Workflow → Custom Webhook (Contact Created / changed / Customer Replied), auth via `GHL_WEBHOOK_SECRET` header. URL change = edit the workflow in GHL. Optional layer on top of `ghl_sync_cron`; not live until the team builds the workflows. |
 
 ## Make.com
 

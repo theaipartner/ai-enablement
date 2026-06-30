@@ -263,6 +263,12 @@ This is the list the upcoming table audit works from.
 | `close_opportunities` | workflow markers ($1 placeholders, **not** money) | coarse signal, mostly unused |
 | `close_custom_field_definitions` | `cf_*` id → name reference | reference |
 | `close_users` | Close `/user/` mirror (0109) | sales-rep verify page's Close-ID picker |
+| `ghl_contacts` | GHL contact mirror (0114) — outbound lead: `source`, `tags`, `custom_fields`, `eoc_lead_id` | new-model outbound campaigns, GHL funnel arm |
+| `ghl_conversations` | GHL conversation mirror (0114) — `last_message_date` + `messages_synced_at` watermark | drives incremental message pulls |
+| `ghl_messages` | GHL messages — SMS + calls (0114); `call_duration`/`call_status`/`user_id` | responded/called/connected signals, by-rep |
+| `ghl_custom_field_definitions` | GHL custom-field id→name (0115) | campaign `match_field_name` resolution |
+| `outbound_campaigns` | outbound campaign registry (0093) — legacy `close_cf_id` + new-model `match_field_name`/`match_value` (0115) | Outbound switcher, facts refresh, adder page |
+| `outbound_lead_facts` | materialized per-lead outbound funnel facts (0095) | `outbound_funnel()` / by-rep (the Outbound page) |
 | `sales_rep_candidates` | Airtable "Sales Team Member" mirror (0109) | Verify Reps admin page (new-rep onboarding) |
 | `sales_rep_verifications` | per-rep verify draft/final state (0109) | Verify Reps admin page |
 | `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |

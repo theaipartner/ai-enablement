@@ -63,7 +63,7 @@ ai-enablement/
 ├── supabase/migrations/        # numbered SQL migrations — source of truth for the schema
 ├── ingestion/                  # one module per external source
 │   ├── fathom/ slack/ content/                              # fulfillment-side
-│   └── close/ cortana/ wistia/ calendly/ typeform/ clarity/ airtable/ setter_calls/   # sales-side
+│   └── close/ ghl/ cortana/ wistia/ calendly/ typeform/ clarity/ airtable/ setter_calls/   # sales-side
 ├── api/                        # Vercel Python serverless functions (webhooks + crons; see vercel.json)
 ├── app/                        # Next.js 14 dashboard (clients, calls, teams, ella, tasks, cost-hub, sales-dashboard)
 ├── components/ · lib/          # dashboard UI primitives + utilities (lib/db/ holds the query layers)
