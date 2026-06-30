@@ -321,6 +321,13 @@ Campaigns are **independent** — a lead matching two is counted in both (no exc
 finished legacy pools (Revival, Jacob) render **read-only / locked** (close_cf_id + 0103 exclusivity,
 untouched). Admin-tier within the sales area. See `docs/schema/outbound_campaigns.md`.
 
+**Revival is the Close + GHL catch-all** (migration 0118) — every revival-tagged lead (Close cf or
+GHL `source`) sits in revival. **"From CSV"** option (migration 0119): upload a lead-list CSV
+(email and/or phone per row) → creates a **roster campaign** matched by email/phone across **both**
+CRMs (`outbound_campaign_roster` → `outbound_campaign_members`), which **carves those leads out of
+revival** into their own campaign + dropdown entry. Re-tag re-resolves the list (picks up
+newly-mirrored leads) and re-carves revival; Delete releases the leads back to revival.
+
 ---
 
 ## Sales bot — Slack (not a dashboard page)

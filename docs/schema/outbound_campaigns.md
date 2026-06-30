@@ -15,6 +15,7 @@ Added in migration `0093_outbound_funnel_fn.sql` alongside the `outbound_funnel(
 | `match_field_name` | `text` | **New-model campaigns** (migration 0115): the custom-field NAME to match. Resolved to a Close cf id (via `close_custom_field_definitions`) AND a GHL field id (via `ghl_custom_field_definitions`) — a lead in **either** Close or GHL carrying that field = `match_value` belongs. `NULL` ⇒ a legacy `close_cf_id` campaign. |
 | `match_value` | `text` | New-model: the **exact** value the field must hold. |
 | `ghl_source_value` | `text` | **Catch-all extension** (0118). When set, the legacy arm *also* matches GHL contacts whose `source ILIKE value\|\|'%'`. Set on **revival = "DC Revival Lead"** so revival spans Close + GHL (the ILIKE prefix also catches the "DC Revival Leads" typo). `NULL` for campaigns that don't span GHL via `source`. |
+| `is_roster` | `boolean` | **Roster (CSV) campaign** (0119). When true, leads come from `outbound_campaign_members` (a CSV of emails/phones resolved across Close + GHL) and are **carved out of revival**. |
 | `close_cf_id` | `text` | **Legacy campaigns only** (nullable since 0115). The Close custom-field id that flags membership (presence-based). Used by Revival/Jacob; `NULL` for new-model campaigns. |
 | `floor_at` | `timestamptz` | Campaign start. Per-lead anchor = `greatest(date_created, floor_at)`; only activity at/after the anchor counts. |
 | `is_active` | `boolean` | Not null, default `true`. The switcher lists active campaigns. |
@@ -57,6 +58,11 @@ stamps every Jacob lead with the `DC Revival Lead` CF too) are counted under `ja
   two campaigns is counted in **both** (by design). The GHL arm of `refresh_outbound_facts`
   sources responded/called/connected from `ghl_messages` and closes from
   `airtable_full_closer_report` joined on `lead_id = ghl_contacts.id`.
+- **Roster (CSV)** (`is_roster = true`, migration 0119): membership = an uploaded **lead list**,
+  matched by **email/phone across Close + GHL** (`outbound_campaign_roster` → resolved to
+  `outbound_campaign_members`). These leads are **carved out of revival** (the revival arm
+  deletes any fact whose id is in an active roster campaign), so a CSV pulls a specific batch
+  out of the catch-all into its own campaign. Created via the adder's "From CSV" option.
 
 ## Adding a campaign
 

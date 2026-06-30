@@ -8,6 +8,7 @@ import {
   setCampaignActive,
   deleteCampaign,
   refreshCampaign,
+  createRosterCampaign,
   type CampaignInput,
 } from '../actions'
 
@@ -113,35 +114,68 @@ function FieldRow({
   )
 }
 
+const tab = (active: boolean) =>
+  ({
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '5px 12px',
+    borderRadius: 6,
+    cursor: 'pointer',
+    border: '1px solid var(--color-geg-border-strong)',
+    background: active ? 'var(--color-geg-bg)' : 'transparent',
+    color: active ? 'var(--color-geg-text)' : 'var(--color-geg-text-faint)',
+  }) as const
+
 function AddCard() {
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<'field' | 'csv'>('field')
   const [name, setName] = useState('')
   const [field, setField] = useState('')
   const [value, setValue] = useState('')
   const [startDate, setStartDate] = useState(todayEt())
+  const [csv, setCsv] = useState('')
+  const [csvName, setCsvName] = useState('')
+  const [csvRows, setCsvRows] = useState(0)
   const [pending, startTransition] = useTransition()
   const [msg, setMsg] = useState<string | null>(null)
+
+  function reset() {
+    setName('')
+    setField('')
+    setValue('')
+    setStartDate(todayEt())
+    setCsv('')
+    setCsvName('')
+    setCsvRows(0)
+    setOpen(false)
+    setMsg(null)
+  }
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    file.text().then((text) => {
+      setCsv(text)
+      setCsvName(file.name)
+      setCsvRows(text.split(/\r?\n/).filter((l) => l.trim()).length)
+    })
+  }
 
   function submit() {
     setMsg(null)
     startTransition(async () => {
-      const res = await saveCampaign({
-        label: name,
-        matchFieldName: field,
-        matchValue: value,
-        startDate,
-        active: true,
-      } satisfies CampaignInput)
-      if (res.ok) {
-        setName('')
-        setField('')
-        setValue('')
-        setStartDate(todayEt())
-        setOpen(false)
-        setMsg(null)
-      } else {
-        setMsg(res.error)
-      }
+      const res =
+        mode === 'csv'
+          ? await createRosterCampaign({ label: name, startDate, csv })
+          : await saveCampaign({
+              label: name,
+              matchFieldName: field,
+              matchValue: value,
+              startDate,
+              active: true,
+            } satisfies CampaignInput)
+      if (res.ok) reset()
+      else setMsg(res.error)
     })
   }
 
@@ -156,6 +190,15 @@ function AddCard() {
   return (
     <div style={{ ...card, borderColor: 'var(--color-geg-accent)' }}>
       <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>New outbound campaign</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        <button style={tab(mode === 'field')} onClick={() => setMode('field')}>
+          By custom field
+        </button>
+        <button style={tab(mode === 'csv')} onClick={() => setMode('csv')}>
+          From CSV list
+        </button>
+      </div>
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
         <FieldRow label="Campaign name">
           <input
@@ -174,35 +217,54 @@ function AddCard() {
           />
         </FieldRow>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
-        <FieldRow label="Custom-field name (Close or GHL)">
-          <input
-            style={input}
-            list="match-field-names"
-            value={field}
-            onChange={(e) => setField(e.target.value)}
-            placeholder="e.g. Outbound Campaign"
-          />
-        </FieldRow>
-        <FieldRow label="Exact value">
-          <input
-            style={input}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="e.g. June Reactivation"
-          />
-        </FieldRow>
-      </div>
+
+      {mode === 'field' ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+          <FieldRow label="Custom-field name (Close or GHL)">
+            <input
+              style={input}
+              list="match-field-names"
+              value={field}
+              onChange={(e) => setField(e.target.value)}
+              placeholder="e.g. Outbound Campaign"
+            />
+          </FieldRow>
+          <FieldRow label="Exact value">
+            <input
+              style={input}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="e.g. June Reactivation"
+            />
+          </FieldRow>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 14 }}>
+          <span style={label}>Lead list (CSV with email and/or phone)</span>
+          <input type="file" accept=".csv,text/csv,text/plain" onChange={onFile} style={{ fontSize: 13 }} />
+          {csvName && (
+            <div style={{ fontSize: 12, color: 'var(--color-geg-text-2)', marginTop: 4 }}>
+              {csvName} — {csvRows.toLocaleString()} rows. These leads are matched by email/phone
+              across Close + GHL and <strong>carved out of revival</strong>.
+            </div>
+          )}
+        </div>
+      )}
+
       {msg && (
         <div style={{ color: 'var(--color-geg-danger, #c0392b)', fontSize: 12.5, marginBottom: 10 }}>
           {msg}
         </div>
       )}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button style={btn('primary')} disabled={pending} onClick={submit}>
-          {pending ? 'Adding…' : 'Add campaign'}
+        <button
+          style={btn('primary')}
+          disabled={pending || (mode === 'csv' && !csv)}
+          onClick={submit}
+        >
+          {pending ? 'Adding…' : mode === 'csv' ? 'Create from CSV' : 'Add campaign'}
         </button>
-        <button style={btn('ghost')} disabled={pending} onClick={() => setOpen(false)}>
+        <button style={btn('ghost')} disabled={pending} onClick={reset}>
           Cancel
         </button>
       </div>
@@ -334,19 +396,34 @@ function CampaignCard({ campaign }: { campaign: AdminOutboundCampaign }) {
             <div style={{ fontWeight: 600, fontSize: 14 }}>{campaign.label}</div>
             {meta}
             <div style={{ fontSize: 12.5, color: 'var(--color-geg-text-2)', marginTop: 6 }}>
-              Field <code>{campaign.matchFieldName}</code> = <code>{campaign.matchValue}</code>
+              {campaign.isRoster ? (
+                <>
+                  <strong>CSV lead list</strong> — matched by email/phone across Close + GHL, carved
+                  out of revival
+                </>
+              ) : (
+                <>
+                  Field <code>{campaign.matchFieldName}</code> = <code>{campaign.matchValue}</code>
+                </>
+              )}
               {campaign.floorAt ? ` · from ${campaign.floorAt.slice(0, 10)}` : ''}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <button style={btn('ghost')} disabled={pending} onClick={() => setEditing(true)}>
-              Edit
-            </button>
+            {!campaign.isRoster && (
+              <button style={btn('ghost')} disabled={pending} onClick={() => setEditing(true)}>
+                Edit
+              </button>
+            )}
             <button
               style={btn('ghost')}
               disabled={pending}
               onClick={() => run(() => refreshCampaign(campaign.key), 'Re-tagged.')}
-              title="Re-run the match (after changing the field/value)"
+              title={
+                campaign.isRoster
+                  ? 'Re-resolve the list (pick up newly-mirrored leads) + re-carve revival'
+                  : 'Re-run the match (after changing the field/value)'
+              }
             >
               {pending ? '…' : 'Re-tag'}
             </button>

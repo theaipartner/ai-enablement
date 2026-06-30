@@ -19,6 +19,7 @@ export type AdminOutboundCampaign = {
   isActive: boolean
   sortOrder: number
   isLegacy: boolean
+  isRoster: boolean
   leadCount: number
 }
 
@@ -31,13 +32,14 @@ type Row = {
   floor_at: string | null
   is_active: boolean
   sort_order: number
+  is_roster: boolean | null
 }
 
 export async function getAllOutboundCampaigns(): Promise<AdminOutboundCampaign[]> {
   const sb = createAdminClient()
   const { data, error } = await sb
     .from('outbound_campaigns' as never)
-    .select('key, label, close_cf_id, match_field_name, match_value, floor_at, is_active, sort_order')
+    .select('key, label, close_cf_id, match_field_name, match_value, floor_at, is_active, sort_order, is_roster')
     .order('sort_order')
   if (error) throw new Error(`getAllOutboundCampaigns failed: ${error.message}`)
   const rows = (data ?? []) as Row[]
@@ -62,7 +64,10 @@ export async function getAllOutboundCampaigns(): Promise<AdminOutboundCampaign[]
     floorAt: r.floor_at,
     isActive: r.is_active,
     sortOrder: r.sort_order,
-    isLegacy: !r.match_field_name,
+    // Legacy = the finished close_cf_id pools (Revival/Jacob): no match field and
+    // not a roster. Roster (CSV) campaigns are editable/deletable, not legacy.
+    isLegacy: !r.match_field_name && !r.is_roster,
+    isRoster: !!r.is_roster,
     leadCount: countByKey.get(r.key) ?? 0,
   }))
 }

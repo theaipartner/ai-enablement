@@ -68,8 +68,13 @@ async function requireAdmin() {
 }
 
 // Best-effort facts refresh for one campaign (the internal psycopg2 endpoint —
-// the RPC can exceed PostgREST's 8s cap on a big match). Returns the lead count.
-async function refreshFacts(key: string): Promise<RefreshResult> {
+// the RPC can exceed PostgREST's 8s cap on a big match). `resolve` first resolves
+// the campaign's CSV roster (email/phone → lead ids); `also` refreshes other
+// campaigns too (e.g. revival, so a carve-out's leads drop from the catch-all).
+async function refreshFacts(
+  key: string,
+  opts?: { resolve?: boolean; also?: string[] },
+): Promise<RefreshResult> {
   const base = process.env.NEXT_PUBLIC_APP_URL
   const secret = process.env.CRON_SECRET
   if (!base || !secret) return { ok: false, error: 'refresh_endpoint_not_configured' }
@@ -77,7 +82,7 @@ async function refreshFacts(key: string): Promise<RefreshResult> {
     const res = await fetch(`${base.replace(/\/$/, '')}/api/outbound_campaign_refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, resolve: opts?.resolve, also: opts?.also }),
       cache: 'no-store',
     })
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
@@ -175,8 +180,8 @@ export async function setCampaignActive(key: string, active: boolean): Promise<S
   return { ok: true }
 }
 
-// Delete a new-model campaign (and its materialized facts so it can't linger in
-// the "All" aggregate). Legacy campaigns are refused.
+// Delete a new-model or roster campaign (and its materialized facts + roster so it
+// can't linger in the "All" aggregate). The legacy close_cf_id pools are refused.
 export async function deleteCampaign(key: string): Promise<SimpleResult> {
   if (!(await requireAdmin())) return { ok: false, error: 'forbidden' }
   const k = clean(key)
@@ -185,16 +190,23 @@ export async function deleteCampaign(key: string): Promise<SimpleResult> {
 
   const { data: existing } = await admin
     .from('outbound_campaigns' as never)
-    .select('match_field_name')
+    .select('match_field_name, is_roster')
     .eq('key', k)
     .maybeSingle()
-  const row = existing as { match_field_name: string | null } | null
+  const row = existing as { match_field_name: string | null; is_roster: boolean | null } | null
   if (!row) return { ok: false, error: 'campaign_not_found' }
-  if (!row.match_field_name) return { ok: false, error: 'legacy_campaign_read_only' }
+  // Legacy = no match field and not a roster (Revival/Jacob) — never deletable.
+  if (!row.match_field_name && !row.is_roster) return { ok: false, error: 'legacy_campaign_read_only' }
 
   await admin.from('outbound_lead_facts' as never).delete().eq('campaign_key', k)
+  if (row.is_roster) {
+    await admin.from('outbound_campaign_members' as never).delete().eq('campaign_key', k)
+    await admin.from('outbound_campaign_roster' as never).delete().eq('campaign_key', k)
+  }
   const { error } = await admin.from('outbound_campaigns' as never).delete().eq('key', k)
   if (error) return { ok: false, error: error.message }
+  // A deleted roster carve-out releases its leads back to the revival catch-all.
+  if (row.is_roster) await refreshFacts('revival')
   revalidatePath(PATH)
   revalidatePath(OUTBOUND)
   return { ok: true }
@@ -206,8 +218,109 @@ export async function refreshCampaign(key: string): Promise<RefreshResult> {
   if (!(await requireAdmin())) return { ok: false, error: 'forbidden' }
   const k = clean(key)
   if (!k) return { ok: false, error: 'invalid_key' }
-  const res = await refreshFacts(k)
+  // resolve re-runs the roster→ids match (picks up newly-mirrored leads for a CSV
+  // campaign; a no-op for others); also revival so a carve-out re-applies.
+  const res = await refreshFacts(k, { resolve: true, also: ['revival'] })
   revalidatePath(PATH)
   revalidatePath(OUTBOUND)
   return res
+}
+
+// --- CSV roster carve-out campaign ----------------------------------------
+
+export type RosterResult =
+  | { ok: true; key: string; rows: number }
+  | { ok: false; error: string }
+
+const digitsOnly = (s: string) => s.replace(/\D/g, '')
+
+// Mirror of the SQL outbound_norm_phone: digits only, 10 → prepend 1, last 11.
+function normPhone(p: string): string | null {
+  let d = digitsOnly(p)
+  if (d.length === 10) d = '1' + d
+  return d.length >= 11 ? d.slice(-11) : null
+}
+
+// Parse a pasted/uploaded CSV into {email, phone} rows. Tolerant by design — a
+// cell containing '@' is an email, a cell with ≥10 digits is a phone. Header
+// rows fall out naturally (no '@', no long digit run). Handles comma/semicolon/
+// tab separators and quoted cells.
+function parseRoster(csv: string): { email: string | null; phone: string | null }[] {
+  const out: { email: string | null; phone: string | null }[] = []
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    let email: string | null = null
+    let phone: string | null = null
+    for (const cellRaw of line.split(/[,;\t]/)) {
+      const cell = cellRaw.trim().replace(/^["']|["']$/g, '')
+      if (!cell) continue
+      if (!email && cell.includes('@')) email = cell.toLowerCase()
+      else if (!phone && digitsOnly(cell).length >= 10) phone = normPhone(cell)
+    }
+    if (email || phone) out.push({ email, phone })
+  }
+  return out
+}
+
+// Create a campaign from an uploaded CSV lead list. The rows match leads by
+// email/phone across Close AND GHL (resolve_campaign_roster), the campaign shows
+// in the Outbound dropdown, and its leads are carved out of the revival catch-all.
+export async function createRosterCampaign(input: {
+  label: string
+  startDate: string
+  csv: string
+}): Promise<RosterResult> {
+  if (!(await requireAdmin())) return { ok: false, error: 'forbidden' }
+  const label = clean(input.label)
+  if (!label) return { ok: false, error: 'name_required' }
+  const floorAt = etMidnightUtcIso(clean(input.startDate))
+  if (!floorAt) return { ok: false, error: 'invalid_start_date' }
+  const rows = parseRoster(input.csv || '')
+  if (!rows.length) return { ok: false, error: 'no_valid_rows' }
+
+  const key = slugify(label)
+  if (!key) return { ok: false, error: 'could_not_derive_key' }
+  const admin = createAdminClient()
+
+  const { data: existing } = await admin
+    .from('outbound_campaigns' as never)
+    .select('key')
+    .eq('key', key)
+    .maybeSingle()
+  if (existing) return { ok: false, error: 'key_already_exists' }
+
+  const { data: maxRow } = await admin
+    .from('outbound_campaigns' as never)
+    .select('sort_order')
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const sortOrder = (((maxRow as { sort_order: number } | null)?.sort_order ?? -1) as number) + 1
+
+  const { error: cErr } = await admin.from('outbound_campaigns' as never).insert({
+    key,
+    label,
+    is_roster: true,
+    floor_at: floorAt,
+    is_active: true,
+    sort_order: sortOrder,
+  } as never)
+  if (cErr) return { ok: false, error: cErr.message }
+
+  // Replace any prior roster for this key, then batch-insert (chunks of 1000).
+  await admin.from('outbound_campaign_roster' as never).delete().eq('campaign_key', key)
+  const rosterRows = rows.map((r) => ({ campaign_key: key, email: r.email, phone: r.phone }))
+  for (let i = 0; i < rosterRows.length; i += 1000) {
+    const { error } = await admin
+      .from('outbound_campaign_roster' as never)
+      .insert(rosterRows.slice(i, i + 1000) as never)
+    if (error) return { ok: false, error: error.message }
+  }
+
+  // Resolve roster → lead ids, refresh this campaign, and re-refresh revival so
+  // the carved-out leads drop from the catch-all.
+  await refreshFacts(key, { resolve: true, also: ['revival'] })
+  revalidatePath(PATH)
+  revalidatePath(OUTBOUND)
+  return { ok: true, key, rows: rows.length }
 }

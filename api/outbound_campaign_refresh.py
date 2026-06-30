@@ -1,9 +1,13 @@
 """On-demand outbound-campaign refresh endpoint — the "Re-tag / Refresh" button.
 
-POST {"key": "<campaign_key>"} → recompute outbound_lead_facts for that one
-campaign via refresh_outbound_facts(key). Authenticated with
-`Authorization: Bearer ${CRON_SECRET}` (the dashboard's server action calls this
-internally — same pattern as api/landing_page_retag.py).
+POST {"key": "<campaign_key>", "resolve"?: bool, "also"?: [keys]} → recompute
+outbound_lead_facts for that campaign via refresh_outbound_facts(key).
+- `resolve` first runs resolve_campaign_roster(key) (CSV email/phone → lead ids)
+  for roster campaigns.
+- `also` then refreshes other campaigns (e.g. ["revival"]) so a carve-out's leads
+  are removed from the catch-all.
+Authenticated with `Authorization: Bearer ${CRON_SECRET}` (the dashboard's server
+action calls this internally — same pattern as api/landing_page_retag.py).
 
 Why psycopg2 (not the supabase client): the refresh can take seconds, past
 PostgREST's 8s statement timeout. A direct pooler connection (shared.lead_tagging
@@ -62,18 +66,38 @@ class handler(BaseHTTPRequestHandler):
         if not key:
             self._respond(400, {"error": "no_key"})
             return
+        # Optional: resolve the campaign's CSV roster (email/phone -> lead ids)
+        # before refreshing (roster campaigns), and also refresh other campaigns
+        # (e.g. revival) so a carve-out's leads are removed from the catch-all.
+        do_resolve = bool(body.get("resolve"))
+        also = [k for k in (body.get("also") or []) if isinstance(k, str) and k.strip()]
 
+        members = None
         conn = _connect()
         try:
             conn.autocommit = True
             with conn.cursor() as cur:
+                if do_resolve:
+                    cur.execute("select resolve_campaign_roster(%s)", (key,))
+                    members = cur.fetchone()[0]
                 cur.execute("select refresh_outbound_facts(%s)", (key,))
                 lead_count = cur.fetchone()[0]
+                for k in also:
+                    if k != key:
+                        cur.execute("select refresh_outbound_facts(%s)", (k.strip(),))
         finally:
             conn.close()
 
-        logger.info("outbound_campaign_refresh key=%s lead_count=%s", key, lead_count)
-        self._respond(200, {"ok": True, "key": key, "lead_count": lead_count})
+        logger.info(
+            "outbound_campaign_refresh key=%s lead_count=%s members=%s also=%s",
+            key,
+            lead_count,
+            members,
+            also,
+        )
+        self._respond(
+            200, {"ok": True, "key": key, "lead_count": lead_count, "members": members}
+        )
 
     def _respond(self, status: int, body: dict[str, Any]) -> None:
         encoded = json.dumps(body, default=str).encode("utf-8")

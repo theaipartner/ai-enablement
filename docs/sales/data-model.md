@@ -269,6 +269,8 @@ Which database tables are sales. (Per-column detail lives in `docs/schema/<table
 | `ghl_custom_field_definitions` | GHL custom-field id→name (0115) | campaign `match_field_name` resolution |
 | `outbound_campaigns` | outbound campaign registry (0093) — legacy `close_cf_id` + new-model `match_field_name`/`match_value` (0115) | Outbound switcher, facts refresh, adder page |
 | `outbound_lead_facts` | materialized per-lead outbound funnel facts (0095) | `outbound_funnel()` / by-rep (the Outbound page) |
+| `outbound_campaign_roster` | CSV lead list (email/phone) per campaign (0099) | resolve_campaign_roster (roster carve-out + legacy Jacob tagger) |
+| `outbound_campaign_members` | resolved roster→lead-ids (Close+GHL) for a roster campaign (0119) | refresh_outbound_facts roster arm + revival carve-out |
 | `sales_rep_candidates` | Airtable "Sales Team Member" mirror (0109) | Verify Reps admin page (new-rep onboarding) |
 | `sales_rep_verifications` | per-rep verify draft/final state (0109) | Verify Reps admin page |
 | `lead_cycles` | **the unique leads list** — one row per opt-in cycle; type + DC columns | funnel, roster, per-lead, DC funnel, Cash |
