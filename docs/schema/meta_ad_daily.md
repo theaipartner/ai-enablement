@@ -2,15 +2,20 @@
 
 Account-level (paid) daily Meta ad-spend mirror. One row per day.
 
-> **Source changed 2026-05-29.** This table is now fed from the
-> **Cortana Attribution API** (`groupBy=source`, the "Meta Ads" row) via
-> `ingestion/cortana/` → `api/cortana_sync_cron.py`. The schema is
-> unchanged, but `ctr` is now Meta's **real** CTR and `frequency` is
-> derived from `impressions/reach` — no longer the broken/derived Sheet
-> values. The prior Cortana → Google-Sheet pipeline (`ingestion/meta/`,
-> `api/meta_sheet_sync_cron.py`) is retired (code kept for revert).
-> Runbook: `docs/runbooks/cortana_ingestion.md`. Per-campaign and
-> per-ad grain live in `cortana_campaign_daily` / `cortana_ad_daily`.
+> **Source changed 2026-06-30 — now the Meta Marketing API.** This table is
+> fed from `level=account` of the **Meta Insights API**
+> (`/act_<id>/insights`) via `ingestion/meta_ads/` → `api/meta_sync_cron.py`.
+> Schema unchanged. `ctr` ← Meta `inline_link_click_ctr` (link CTR);
+> `frequency` and `cost_per_unique_link_click` are now **Meta-native** (were
+> derived); `ctr_source_raw='meta_api'`. **Cortana is retired as a source**
+> (`ingestion/cortana/` kept unscheduled for revert). ⚠ The Meta token in use
+> is a 60-day USER token expiring **2026-08-29** — see
+> `docs/runbooks/meta_ads_ingestion.md` § warnings. Per-campaign / ad-set /
+> per-ad grain live in `cortana_campaign_daily` / `cortana_adset_daily` /
+> `cortana_ad_daily` (same source swap).
+>
+> *(History: fed by the Cortana Attribution API 2026-05-29 → 2026-06-30, and by
+> a Cortana → Google-Sheet pipeline before that.)*
 
 ## Purpose
 

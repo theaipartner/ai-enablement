@@ -92,6 +92,11 @@
       "maxDuration": 300,
       "excludeFiles": "{.next,node_modules}/**"
     },
+    "api/meta_sync_cron.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
+    },
     "api/wistia_sync_cron.py": {
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 300,
@@ -184,7 +189,7 @@
     { "path": "/api/ella_daily_digest_cron", "schedule": "30 20 * * *" },
     { "path": "/api/ella_unanswered_flagger_cron", "schedule": "*/15 * * * *" },
     { "path": "/api/cs_missed_recording_cron", "schedule": "*/15 * * * *" },
-    { "path": "/api/cortana_sync_cron", "schedule": "0 */3 * * *" },
+    { "path": "/api/meta_sync_cron", "schedule": "0 */3 * * *" },
     { "path": "/api/wistia_sync_cron", "schedule": "30 * * * *" },
     { "path": "/api/typeform_sync_cron", "schedule": "*/15 * * * *" },
     { "path": "/api/typeform_insights_cron", "schedule": "7,22,37,52 * * * *" },

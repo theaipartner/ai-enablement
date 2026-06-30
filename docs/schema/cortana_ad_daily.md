@@ -1,7 +1,16 @@
 # cortana_ad_daily
 
-Per-ad daily mirror of the Cortana Attribution API (`groupBy=ad`). One
-row per (ET calendar day, ad).
+Per-ad daily mirror. One row per (ET calendar day, ad).
+
+> **Source changed 2026-06-30 — now the Meta Marketing API** (`level=ad` of
+> `/act_<id>/insights`) via `ingestion/meta_ads/`. Table name + columns
+> unchanged. `platform_entity_id` is Meta's `ad_id`; `frequency`/`ctr` are
+> native. The `conversions` blob + attributed rollups (`leads`, `roas`, video
+> metrics, …) are **no longer populated for new rows** (Meta doesn't supply
+> them and no dashboard code read them) — new rows carry `conversions={}` and
+> those columns NULL; historical Cortana rows keep their values. Runbook:
+> `docs/runbooks/meta_ads_ingestion.md`. *(Fed by Cortana `groupBy=ad`
+> 2026-05-29 → 2026-06-30.)*
 
 ## Purpose
 

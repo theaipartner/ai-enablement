@@ -248,15 +248,14 @@ through, so a drill keeps the selection.
 | Ad Set | `adset_id` | `cortana_adset_daily.entity_name` (`getAdsetNameMap`) | `cortana_adset_daily.spent` |
 | Ad | `ad_id` | `ad_name` (+ `cortana_ad_daily.entity_name`) | `cortana_ad_daily.spent` |
 
-**Ad-set names + spend (closed 2026-06-17, migration 0089).** The cascade's Ad Set level
-is fully named with spend/ROAS, via `cortana_adset_daily` — a per-ad-set mirror sourced from
-Cortana's **`groupBy=medium`** feed. The API has no native ad-set grouping, but Meta's URL
-template puts the ad-set name in `utm_medium` and Cortana keys each medium row to the real
-Meta ad-set id (`platformEntityId`), which joins `close_leads.adset_id` (21/22 cohort ad sets
-matched; the miss is a junk `{{adset.id}}` macro). Per-ad-set `spent` partitions total spend
-to the cent against the campaign + ad feeds. Ingestion keeps only numeric-`platformEntityId`
-rows (drops the organic/placement noise the medium grouping also emits). No Zain export and
-no Meta API access needed after all.
+**Ad-set names + spend (migration 0089; ad-set grain native since 2026-06-30).** The
+cascade's Ad Set level is fully named with spend/ROAS via `cortana_adset_daily`. Since the
+**Meta Marketing API** swap (2026-06-30) this is sourced from `level=adset` — `adset_id` and
+`adset_name` come **natively** from Meta, joining `close_leads.adset_id` directly. *(History:
+2026-06-17 → 06-30 it rode Cortana's `groupBy=medium` feed — Cortana had no native ad-set
+grouping, so it keyed each `utm_medium` row to the Meta ad-set id via `platformEntityId` and
+ingestion kept only numeric ids to drop organic/placement noise. The native Meta feed makes
+that hack unnecessary.)*
 
 ### Coverage / "unattributed"
 
@@ -312,10 +311,10 @@ Which database tables are sales. (Per-column detail lives in `docs/schema/<table
 | `typeform_form_insights_snapshots` | periodic Typeform analytics snapshots | typeform insights cron |
 | `landing_pages` | landing-page registry (0110) — display + Wistia assets + dropdown config | LP dropdown, LP detail, funnel scoping, Landing Pages admin page |
 | `landing_page_forms` | per-LP Typeform set + per-form qualification (0110); union = eligible opt-in form set | tagger (`OPT_IN_FORMS`), insights cron, funnel scoping |
-| `meta_ad_daily` | account-level daily Meta spend (Cortana-fed) | Ads page, adspend fallback |
-| `cortana_ad_daily` | per-ad daily attribution + spend | Ads page, funnel cascade (per-ad ROAS) |
-| `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
-| `cortana_adset_daily` | per-ad-set daily (from `groupBy=medium`) — ad-set name + spend | funnel cascade Ad Set level (name + per-ad-set ROAS) |
+| `meta_ad_daily` | account-level daily Meta spend (**Meta API**-fed since 2026-06-30, was Cortana) | Ads page, adspend fallback |
+| `cortana_ad_daily` | per-ad daily spend/delivery (**Meta API** `level=ad`) | Ads page, funnel cascade (per-ad ROAS) |
+| `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source; **Meta API** `level=campaign`) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
+| `cortana_adset_daily` | per-ad-set daily (**Meta API** `level=adset`, native) — ad-set name + spend | funnel cascade Ad Set level (name + per-ad-set ROAS) |
 | `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |

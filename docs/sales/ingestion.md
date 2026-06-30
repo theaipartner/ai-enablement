@@ -70,21 +70,41 @@ Webhook (real-time primary) + cron backstop (`typeform_sync_cron`, `*/15`) + ins
 cron + full backfill → `typeform_responses`, `typeform_forms`. **Active HT opt-in gate =
 form `SFedWelr`.** `PWSNd0h2` is the dormant Setter Funnel.
 
-### Meta / Cortana ads — `ingestion/cortana/`
-`api/cortana_sync_cron.py`, **3-hour cron** (`0 */3 * * *`). **Source changed
-2026-05-29:** `meta_ad_daily` now comes from the **Cortana Attribution API**
-(`groupBy=source`); `cortana_campaign_daily` (`groupBy=campaign`), `cortana_ad_daily`
-(`groupBy=ad`), and `cortana_adset_daily` (`groupBy=medium` — the ad-set grain; see below).
-The old `ingestion/meta/` Google-Sheet pipeline is **retired**. HT
-adspend = **`Closer Funnel`-token campaigns only** (excludes other funnels and Meta noise
-rows like `Bot Traffic`, `facebook.com`, `calendly.com`).
+### Meta ads — `ingestion/meta_ads/`
+`api/meta_sync_cron.py`, **3-hour cron** (`0 */3 * * *`). **Source changed
+2026-06-30:** the four ad mirrors now come **straight from the Meta Marketing
+(Graph) API** (`/act_<id>/insights`, `level=account|campaign|adset|ad`,
+`time_increment=1`) — **Cortana is retired as a source** (`ingestion/cortana/`
++ `api/cortana_sync_cron.py` kept unscheduled for instant revert). Same four
+tables, same columns, no consumer change: `meta_ad_daily` ← `level=account`,
+`cortana_campaign_daily` ← `level=campaign`, `cortana_adset_daily` ←
+`level=adset` (**native** now), `cortana_ad_daily` ← `level=ad`.
+`platform_entity_id` = Meta's own `campaign_id`/`adset_id`/`ad_id` (joins
+`close_leads.*`). HT adspend = **`Closer Funnel`-token campaigns only** (campaign
+names carry the token natively, e.g. `… | Booking | Closer Funnel`).
 
-The **ad-set grain rides `groupBy=medium`** (migration 0089 / `cortana_adset_daily`): the API
-has no native ad-set grouping, but `utm_medium` carries the ad-set name and Cortana keys each
-medium row to the real Meta ad-set id (`platformEntityId`, joins `close_leads.adset_id`).
-Ingestion keeps **only numeric-`platformEntityId` rows** — that filter drops the organic /
-placement noise the medium grouping also emits ("Bot Traffic", "calendly.com",
-"instagram_reels", "no referrer").
+**Three standing warnings** (full detail in `docs/runbooks/meta_ads_ingestion.md`):
+1. The token is a **60-day USER token, not a System User token** — it **expires
+   `2026-08-29`** and is person-tied; when it lapses the cron 190s and ad spend
+   **freezes** (stale, not crashed). Replace with a System User token once the
+   Meta app is registered.
+2. The ad-account timezone is **fixed EST (−5, no DST)** while the dashboard
+   uses DST-aware ET — a ~1h day-boundary offset in summer (immaterial for daily
+   totals).
+3. **Attribution not ported:** Cortana's `conversions` blob + attributed
+   rollups (`leads`/`roas`/`total_revenue`) were read by **zero** dashboard code
+   (funnel counts come from `close_leads`/`lead_cycles`), so new Meta rows carry
+   `conversions={}` and those columns NULL. Historical Cortana rows are untouched.
+
+**Multi-account is the planned next step:** the token already sees the AI
+Arbitrage fleet (US + AUS Call Funnel + a standby + a disabled former account),
+so a `meta_ad_accounts` registry + admin page (swap a banned account with no
+deploy) is deferred, not dismissed. Today, rotating accounts = change
+`META_AD_ACCOUNT_ID` in Vercel + redeploy.
+
+The **ad-set grain is native** (`level=adset`) — the old Cortana `groupBy=medium`
+hack (+ numeric-`platformEntityId` filter to drop "Bot Traffic"/"calendly.com"
+noise) is **gone**; `adset_id`/`adset_name` come straight from Meta.
 
 ### Clarity — `ingestion/clarity/`
 Daily cron (`clarity_sync_cron`, `0 10 * * *`), **no backfill possible**.

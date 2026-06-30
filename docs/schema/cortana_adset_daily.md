@@ -1,8 +1,17 @@
 # cortana_adset_daily
 
-Per-ad-set daily mirror of the Cortana Attribution API, sourced from
-`groupBy=medium`. One row per (ET calendar day, ad set). Migration
+Per-ad-set daily mirror. One row per (ET calendar day, ad set). Migration
 `0089_cortana_adset_daily.sql`.
+
+> **Source changed 2026-06-30 — now the Meta Marketing API** (`level=adset` of
+> `/act_<id>/insights`) via `ingestion/meta_ads/`. Table name + columns
+> unchanged, but the ad-set grain is now **native**: `adset_id`/`adset_name`
+> come straight from Meta, so the old Cortana `groupBy=medium` hack (+ the
+> numeric-`platformEntityId` noise filter described below) **no longer applies
+> to new rows**. `platform_entity_id` = Meta `adset_id` (still joins
+> `close_leads.adset_id`). Runbook: `docs/runbooks/meta_ads_ingestion.md`.
+> *(Fed by Cortana `groupBy=medium` 2026-06-17 → 2026-06-30; the `groupBy=medium`
+> rationale below is retained as history.)*
 
 ## Purpose
 

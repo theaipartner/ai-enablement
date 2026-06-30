@@ -1,5 +1,14 @@
 # Runbook: Cortana Attribution Ingestion (Meta ad data)
 
+> **⚠️ RETIRED 2026-06-30 — superseded by the Meta Marketing API.** The ad
+> mirrors (`meta_ad_daily`, `cortana_*_daily`) are now fed directly from Meta;
+> see **`docs/runbooks/meta_ads_ingestion.md`**. This Cortana code
+> (`ingestion/cortana/`, `api/cortana_sync_cron.py`) and its `vercel.json`
+> function entry are **kept unscheduled for instant revert only** — the cron no
+> longer runs. The historical Cortana-sourced rows (and the `conversions`
+> attribution blob on them) remain in the tables untouched. Everything below
+> describes the retired pipeline.
+
 Schema docs: `docs/schema/cortana_ad_daily.md`, `docs/schema/cortana_campaign_daily.md`, `docs/schema/meta_ad_daily.md`.
 Migration: `supabase/migrations/0057_cortana_ad_campaign_daily.sql`.
 

@@ -1,7 +1,15 @@
 # cortana_campaign_daily
 
-Per-campaign daily mirror of the Cortana Attribution API
-(`groupBy=campaign`). One row per (ET calendar day, campaign).
+Per-campaign daily mirror. One row per (ET calendar day, campaign).
+
+> **Source changed 2026-06-30 — now the Meta Marketing API** (`level=campaign`
+> of `/act_<id>/insights`) via `ingestion/meta_ads/`. Table name + columns
+> unchanged. `platform_entity_id` = Meta `campaign_id`; `entity_name` = Meta
+> `campaign_name` (the HT `Closer Funnel` token still matches). Budget fields
+> (`daily_budget`/`lifetime_budget`) + the `conversions` blob are **not
+> populated for new rows** (unused by the dashboard); historical Cortana rows
+> keep theirs. Runbook: `docs/runbooks/meta_ads_ingestion.md`. *(Fed by Cortana
+> `groupBy=campaign` 2026-05-29 → 2026-06-30.)*
 
 ## Purpose
 
