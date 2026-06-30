@@ -14,6 +14,7 @@ Added in migration `0093_outbound_funnel_fn.sql` alongside the `outbound_funnel(
 | `label` | `text` | Human display name (e.g. `'DC Revival'`) — for the dropdown. |
 | `match_field_name` | `text` | **New-model campaigns** (migration 0115): the custom-field NAME to match. Resolved to a Close cf id (via `close_custom_field_definitions`) AND a GHL field id (via `ghl_custom_field_definitions`) — a lead in **either** Close or GHL carrying that field = `match_value` belongs. `NULL` ⇒ a legacy `close_cf_id` campaign. |
 | `match_value` | `text` | New-model: the **exact** value the field must hold. |
+| `ghl_source_value` | `text` | **Catch-all extension** (0118). When set, the legacy arm *also* matches GHL contacts whose `source ILIKE value\|\|'%'`. Set on **revival = "DC Revival Lead"** so revival spans Close + GHL (the ILIKE prefix also catches the "DC Revival Leads" typo). `NULL` for campaigns that don't span GHL via `source`. |
 | `close_cf_id` | `text` | **Legacy campaigns only** (nullable since 0115). The Close custom-field id that flags membership (presence-based). Used by Revival/Jacob; `NULL` for new-model campaigns. |
 | `floor_at` | `timestamptz` | Campaign start. Per-lead anchor = `greatest(date_created, floor_at)`; only activity at/after the anchor counts. |
 | `is_active` | `boolean` | Not null, default `true`. The switcher lists active campaigns. |
@@ -47,7 +48,9 @@ stamps every Jacob lead with the `DC Revival Lead` CF too) are counted under `ja
 - **Legacy** (`match_field_name IS NULL`): Revival + Jacob. Membership = `close_cf_id`
   presence in `close_leads`, with **mutual exclusivity** (a lead tagged by a higher
   `sort_order` legacy campaign is dropped — migration 0103). These two are finished and
-  **read-only** in the adder.
+  **read-only** in the adder. **Revival is the Close + GHL catch-all** (migration 0118): its
+  `ghl_source_value` also pulls in GHL `source`-tagged revival leads, so *every* revival-tagged
+  lead — either CRM — sits in revival until a CSV carve-out (planned) moves a specific batch out.
 - **New-model** (`match_field_name` + `match_value` set, migration 0115): membership = a lead
   carrying that exact custom-field value in **Close OR GHL** (the name resolves to a Close cf
   id and/or a GHL field id). **No exclusivity** — campaigns are independent, so a lead matching
