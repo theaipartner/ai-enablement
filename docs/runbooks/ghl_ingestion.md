@@ -14,6 +14,10 @@ from there; the dashboard/agents never call GHL directly.
 ## What it does
 
 Each tick (`run_sync(full=False)`):
+0. **Custom-field defs + user map** — upsert `ghl_custom_field_definitions`
+   (name→id, so an outbound campaign's `match_field_name` resolves on the GHL
+   side) and map GHL users → `team_members.ghl_user_id` by email (so the Outbound
+   by-rep block attributes GHL calls to named reps). Both cheap.
 1. **Contacts** — paginate `/contacts/` and upsert every contact (idempotent on
    `id`). Cheap (~1.2k contacts ≈ 12 pages).
 2. **Conversations** — paginate `/conversations/search`, upsert each.

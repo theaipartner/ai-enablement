@@ -147,6 +147,11 @@
       "maxDuration": 300,
       "excludeFiles": "{.next,node_modules}/**"
     },
+    "api/outbound_campaign_refresh.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 300,
+      "excludeFiles": "{.next,node_modules}/**"
+    },
     "api/setter_calls_sweep_cron.py": {
       "runtime": "@vercel/python@4.3.1",
       "maxDuration": 300,

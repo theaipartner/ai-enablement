@@ -29,24 +29,12 @@ function monthDay(ymd: string): string {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-// Each campaign's launch date (ET, YYYY-MM-DD). These are fixed historical
-// facts and never change, so we hard-quote them rather than deriving the floor
-// from the data — that derivation only ever resolved once a date range was
-// active, so the "Started …" label wasn't persistent. Fallback is the campaign
-// floor for unknown keys.
-const CAMPAIGN_START: Record<string, string> = {
-  all: '2026-06-03', // earliest campaign start (Revival) — the combined view's floor
-  revival: '2026-06-03',
-  jacob: '2026-06-20',
-}
-
-function CampaignIntro({ campaignKey }: { campaignKey: string }) {
+function CampaignIntro({ campaignKey, label }: { campaignKey: string; label: string }) {
   if (campaignKey === 'all') {
     return (
       <>
-        <b>All outbound SMS campaigns</b> combined (Revival + Jacob). Each lead belongs to exactly one
-        campaign pool, so this view is their clean union — every outbound lead, from the outreach through
-        to the sale. Pick a campaign from the dropdown to scope to just that pool.
+        <b>All outbound campaigns</b> combined. Every outbound lead, from the outreach through to the
+        sale. Pick a campaign from the dropdown to scope to just that pool.
       </>
     )
   }
@@ -54,16 +42,22 @@ function CampaignIntro({ campaignKey }: { campaignKey: string }) {
     return (
       <>
         The <b>ECJ Reactivation (Jacob)</b> outbound campaign. Every lead matching the ECJ roster
-        (tagged <b>Jacob Lead</b> in Close), from the outreach through to the sale. These leads are
-        excluded from every other funnel — this is the only place they&apos;re counted.
+        (tagged <b>Jacob Lead</b> in Close), from the outreach through to the sale.
+      </>
+    )
+  }
+  if (campaignKey === 'revival') {
+    return (
+      <>
+        The DC re-engagement SMS campaign. Every lead tagged <b>DC Revival Lead</b> in Close, from the
+        re-engagement outreach through to the sale.
       </>
     )
   }
   return (
     <>
-      The DC re-engagement SMS campaign. Every lead tagged <b>DC Revival Lead</b> in Close, from the
-      re-engagement outreach through to the sale. These leads are excluded from every other funnel —
-      this is the only place they&apos;re counted.
+      The <b>{label}</b> outbound campaign. Every lead carrying its custom-field value — in Close or
+      GHL — from the outreach through to the sale.
     </>
   )
 }
@@ -88,7 +82,15 @@ export default async function OutboundPage({
   const endP = param(searchParams?.end)
 
   const todayEt = todayEtDate()
-  const campaignStartEt = CAMPAIGN_START[active] ?? null
+  // Campaign launch date from the registry (no hard-coded per-campaign dates).
+  // For "All" it's the earliest active campaign's floor — the combined floor.
+  const allFloorEt = campaigns.reduce<string | null>(
+    (min, c) => (c.floorEt && (!min || c.floorEt < min) ? c.floorEt : min),
+    null,
+  )
+  const campaignStartEt =
+    active === 'all' ? allFloorEt : (campaigns.find((c) => c.key === active)?.floorEt ?? null)
+  const activeLabel = campaigns.find((c) => c.key === active)?.label ?? active
   const startEt = startP ?? campaignStartEt ?? todayEt
   const endEt = endP ?? todayEt
 
@@ -125,7 +127,7 @@ export default async function OutboundPage({
         className="geg-mono"
         style={{ marginTop: 14, fontSize: 10, letterSpacing: '0.04em', color: 'var(--color-geg-text-2)', lineHeight: 1.7 }}
       >
-        <CampaignIntro campaignKey={active} />
+        <CampaignIntro campaignKey={active} label={activeLabel} />
       </div>
 
       <RevivalFunnelSection funnel={funnel} />

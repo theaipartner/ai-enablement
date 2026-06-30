@@ -54,6 +54,10 @@ const NAV: NavItem[] = [
   // Landing Pages = admin registry manager — add/edit landing pages (DB-backed),
   // which then appear in the funnel's landing-page dropdown.
   { href: '/sales-dashboard/landing-pages', label: 'Landing Pages', adminOnly: true },
+  // Outbound Campaigns = admin registry manager — add outbound campaigns (a
+  // custom-field name+value matched across Close + GHL), which then appear in the
+  // Outbound page's campaign dropdown.
+  { href: '/sales-dashboard/outbound-campaigns', label: 'Outbound Campaigns', adminOnly: true },
 ]
 
 export function SalesSidebar({

@@ -44,6 +44,8 @@ class SyncOutcome:
     conversations_scanned_for_messages: int = 0
     messages_synced: int = 0
     messages_failed: int = 0
+    custom_field_defs_synced: int = 0
+    users_mapped: int = 0
     errors: list[str] = field(default_factory=list)
 
     def record_error(self, where: str, err: Exception) -> None:
@@ -243,9 +245,88 @@ def sync_conversations_and_messages(
                 outcome.record_error(f"watermark:{cid}", e)
 
 
+def sync_custom_field_definitions(client: GHLClient, db, outcome: SyncOutcome) -> None:
+    """Upsert GHL custom-field definitions (id -> name/fieldKey).
+
+    Lets refresh_outbound_facts resolve a campaign's match_field_name to the id
+    stored in ghl_contacts.custom_fields. Cheap (a handful of fields).
+    """
+    try:
+        defs = client.list_custom_fields()
+    except GHLAPIError as e:
+        outcome.record_error("custom_field_defs", e)
+        return
+    for d in defs:
+        fid = d.get("id")
+        if not fid:
+            continue
+        row = {
+            "id": fid,
+            "location_id": d.get("locationId") or client.location_id,
+            "name": d.get("name"),
+            "field_key": d.get("fieldKey"),
+            "data_type": d.get("dataType"),
+            "raw": d,
+        }
+        try:
+            db.table("ghl_custom_field_definitions").upsert(
+                row, on_conflict="id"
+            ).execute()
+            outcome.custom_field_defs_synced += 1
+        except Exception as e:
+            outcome.record_error(f"custom_field_def:{fid}", e)
+
+
+def sync_users_to_team_members(client: GHLClient, db, outcome: SyncOutcome) -> None:
+    """Map GHL users to team_members.ghl_user_id by email (case-insensitive).
+
+    So the Outbound by-rep block attributes a GHL call (ghl_messages.user_id) to a
+    named rep. Mirrors the Close users sync. Only sets active (un-archived) rows.
+    """
+    try:
+        users = client.list_users()
+    except GHLAPIError as e:
+        outcome.record_error("users", e)
+        return
+    for u in users:
+        uid, email = u.get("id"), u.get("email")
+        if not uid or not email:
+            continue
+        try:
+            resp = (
+                db.table("team_members")
+                .select("id, ghl_user_id")
+                .ilike("email", email)
+                .is_("archived_at", "null")
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                continue
+            # Set only when missing/changed (idempotent, avoids needless writes).
+            target = rows[0]
+            if target.get("ghl_user_id") == uid:
+                outcome.users_mapped += 1
+                continue
+            db.table("team_members").update({"ghl_user_id": uid}).eq(
+                "id", target["id"]
+            ).execute()
+            outcome.users_mapped += 1
+        except Exception as e:
+            outcome.record_error(f"user_map:{email}", e)
+
+
 def run_sync(client: GHLClient, db, *, full: bool = False) -> SyncOutcome:
-    """One sync run: contacts, then conversations + their messages (incremental)."""
+    """One sync run: field defs + user map, contacts, then conversations + messages."""
     outcome = SyncOutcome()
+    try:
+        sync_custom_field_definitions(client, db, outcome)
+    except GHLAPIError as e:
+        outcome.record_error("custom_field_defs", e)
+    try:
+        sync_users_to_team_members(client, db, outcome)
+    except GHLAPIError as e:
+        outcome.record_error("users", e)
     try:
         sync_contacts(client, db, outcome)
     except GHLAPIError as e:
@@ -255,7 +336,9 @@ def run_sync(client: GHLClient, db, *, full: bool = False) -> SyncOutcome:
     except GHLAPIError as e:
         outcome.record_error("conversations", e)
     logger.info(
-        "ghl.sync contacts=%d/%d convos=%d msg_pulls=%d messages=%d errors=%d full=%s",
+        "ghl.sync defs=%d users=%d contacts=%d/%d convos=%d msg_pulls=%d messages=%d errors=%d full=%s",
+        outcome.custom_field_defs_synced,
+        outcome.users_mapped,
         outcome.contacts_synced,
         outcome.contacts_synced + outcome.contacts_failed,
         outcome.conversations_synced,

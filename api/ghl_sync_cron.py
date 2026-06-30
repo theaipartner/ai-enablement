@@ -103,6 +103,8 @@ def run_ghl_sync_cron() -> dict[str, Any]:
     outcome = run_sync(client, db, full=False)
 
     audit_payload: dict[str, Any] = {
+        "custom_field_defs_synced": outcome.custom_field_defs_synced,
+        "users_mapped": outcome.users_mapped,
         "contacts_synced": outcome.contacts_synced,
         "contacts_failed": outcome.contacts_failed,
         "conversations_synced": outcome.conversations_synced,

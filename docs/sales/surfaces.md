@@ -94,6 +94,15 @@ row (Revival, Jacob, …). "All" passes `p_campaign_key = NULL`, so both funnel 
 campaign's leads (a clean union — the pools are mutually exclusive, so no double-counting; migration 0108).
 Each pool is a registry row, so adding a campaign is a row + tagging its leads. `refresh_outbound_facts`
 runs for **every active campaign**.
+
+**Two campaign models (migration 0115).** The legacy pools (Revival, Jacob) match a Close
+`close_cf_id` with 0103 exclusivity. **New-model** campaigns — added via the adder below — match
+a custom-field **name + exact value** across **both Close AND GHL** (the name resolves to a Close
+cf id and/or a GHL field id; the GHL arm sources responded/called/connected from `ghl_messages`,
+closes from Airtable joined on `lead_id = ghl_contacts.id`). New-model campaigns are **independent —
+no exclusivity**, so a lead in two campaigns counts in both (deliberate). So "All" no longer assumes
+non-overlap; it's the union of every campaign's facts. The per-campaign start date now comes from the
+registry (`floor_at`), not hard-coded page constants.
 A **date range** (calendar, `?start=&end=`, migration 0102) scopes the funnel by each lead's
 **anchor** (campaign entry = `greatest(date_created, floor)`) — a fast filter over the materialized facts,
 no re-aggregation. There is **no all-time mode**: when the calendar is untouched the page defaults the
@@ -295,6 +304,23 @@ the LP has leads; **Retag now** backfills pre-registration opt-ins (`api/landing
 DB-backed registry: `landing_pages` + `landing_page_forms` (migration 0110). Admin-tier
 within the sales area (hidden from reps' sidebar). See `docs/sales/landing-pages.md` and
 `docs/schema/landing_pages.md` / `landing_page_forms.md`.
+
+---
+
+## Outbound Campaigns (admin) — `/sales-dashboard/outbound-campaigns` (admin)
+
+The admin **registry manager** for outbound campaigns (migration 0115). Add a campaign with a
+**name + custom-field name + exact value + start date**: any lead carrying that field=value — in
+**Close or GHL** — is counted in the campaign, from the start date onward. On **Add** it inserts
+the `outbound_campaigns` row and refreshes its facts (`api/outbound_campaign_refresh.py`), so it
+appears in the Outbound page's campaign dropdown with a populated funnel right away. **Edit + Re-tag**
+re-runs the match after a field/value change; **Activate/Deactivate** toggles the switcher;
+**Delete** removes a new-model campaign + its facts. The field-name input suggests known custom-field
+names across both Close and GHL mirrors.
+
+Campaigns are **independent** — a lead matching two is counted in both (no exclusivity). The two
+finished legacy pools (Revival, Jacob) render **read-only / locked** (close_cf_id + 0103 exclusivity,
+untouched). Admin-tier within the sales area. See `docs/schema/outbound_campaigns.md`.
 
 ---
 

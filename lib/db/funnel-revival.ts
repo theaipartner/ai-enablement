@@ -85,15 +85,24 @@ type RawOutbound = {
 
 // Active outbound campaigns for the page's switcher (Revival, Jacob, …), in
 // sort order. Each is a registry row in outbound_campaigns (migration 0093+).
-export async function getOutboundCampaigns(): Promise<Array<{ key: string; label: string }>> {
+// floorEt is the campaign's launch date (ET, YYYY-MM-DD) derived from floor_at,
+// so the page's "Started …" label + default range come from the registry (no
+// hard-coded per-campaign dates — new campaigns work automatically).
+export async function getOutboundCampaigns(): Promise<
+  Array<{ key: string; label: string; floorEt: string | null }>
+> {
   const sb = createAdminClient()
   const { data, error } = await sb
     .from('outbound_campaigns' as never)
-    .select('key, label, sort_order, is_active')
+    .select('key, label, sort_order, is_active, floor_at')
     .eq('is_active', true)
     .order('sort_order')
   if (error) throw new Error(`getOutboundCampaigns failed: ${error.message}`)
-  return ((data ?? []) as Array<{ key: string; label: string }>).map((c) => ({ key: c.key, label: c.label }))
+  return ((data ?? []) as Array<{ key: string; label: string; floor_at: string | null }>).map(
+    // floor_at is stored as ET-midnight UTC (e.g. 2026-06-03T04:00:00Z), so the
+    // first 10 chars are the ET launch date.
+    (c) => ({ key: c.key, label: c.label, floorEt: c.floor_at ? c.floor_at.slice(0, 10) : null }),
+  )
 }
 
 // `range` (optional) scopes the funnel by each lead's anchor (when it entered
