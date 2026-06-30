@@ -15,6 +15,19 @@ Mirrors leads, calls, SMS, status changes, opportunities → `close_leads`, `clo
 (`close_users_sync_cron`, `30 11 * * *`). Connected = `close_calls.duration >= 90`.
 **`status_label` is unreliable — never use it** for DQ/funnel state.
 
+### GHL / GoHighLevel — `ingestion/ghl/` (read-only)
+The outbound CRM for **new** outbound campaigns (Close keeps the advertising funnel + the
+two finished Close pools). Read-only mirror via a Private Integration Token
+(`GHL_PRIVATE_TOKEN` + `GHL_LOCATION_ID`): contacts → `ghl_contacts`, conversations →
+`ghl_conversations`, messages (SMS + calls) → `ghl_messages`. Cron `ghl_sync_cron`
+(`*/15`), incremental message pulls by a per-conversation watermark. Campaign membership =
+`ghl_contacts.source` (a `"DC Revival Lead"` string today — **not** a tag yet); **connected
+= a `TYPE_CALL` with `call_status='completed'` and `call_duration >= 90`** (same `>=90` as
+Close); rep = the call message's `user_id`; closes resolve to `airtable_full_closer_report`
+via `lead_id = ghl_contacts.id`. Migration `0114`; runbook `docs/runbooks/ghl_ingestion.md`;
+schema `docs/schema/ghl_*.md`. **Outbound campaign registration (the source-agnostic registry
++ adder) is Phase 2/3 — not yet built.**
+
 ### Airtable — `ingestion/airtable/` (base `appCWa6TV6p7EBarC`, PAT `AIRTABLE_SALES_PAT`)
 One base-wide **webhook receiver** (`api/airtable_events.py`) **+ 15-min cron**
 (`airtable_sync_cron`), per-table parsers, these mirrors:
