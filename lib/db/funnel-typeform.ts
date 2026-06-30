@@ -190,7 +190,16 @@ async function deriveStartsForRange(formId: string, range: DateRange): Promise<{
   if (priorErr) throw new Error(`insights snapshots (prior) read failed: ${priorErr.message}`)
   const prior = (priorRows ?? [])[0] as { snapshot_at: string; total_visits: number } | undefined
 
-  if (prior) {
+  // A prior snapshot with a ZERO/empty total_visits is NOT a usable baseline:
+  // Typeform's Insights API reports total_visits=0 for a form until it backfills
+  // the real cumulative, which then lands as one big jump. `end − 0` would leak
+  // the form's entire all-time visit count into the window — e.g. the Training
+  // form (Os4c0q6V) read 0 before 2026-06-26 then jumped to 134 and stayed flat,
+  // so a Jun 26-29 window reported 134 "starts" despite ~0 visits actually in the
+  // window. So only trust a prior baseline that's > 0; otherwise fall through to
+  // the in-window anchor below (marked partial), which yields the real in-window
+  // delta (≈0 when the counter is flat) instead of the cumulative.
+  if (prior && prior.total_visits) {
     const starts = (end.total_visits ?? 0) - (prior.total_visits ?? 0)
     return { starts: Math.max(0, starts), partial: false, anchorAt: prior.snapshot_at }
   }
