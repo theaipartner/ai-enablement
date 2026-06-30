@@ -44,8 +44,14 @@ export default async function OutboundCampaignsPage() {
         field&rsquo;s value — whether it lives in <strong>Close or GHL</strong> — is counted
         in the campaign, from the start date onward. Campaigns are independent: a lead in two
         campaigns is counted in both. On <strong>Add</strong> it appears in the Outbound
-        page&rsquo;s dropdown. Use <strong>Re-tag</strong> after changing a field/value. The
-        two finished campaigns (Revival, Jacob) are locked.
+        page&rsquo;s dropdown. The two finished campaigns (Revival, Jacob) are locked.
+        <br />
+        <strong>Type the field name exactly</strong> as it appears in Close/GHL — it&rsquo;s a
+        case-sensitive match, so a typo means zero leads. The field box suggests names we
+        already know, but you can type a brand-new one. A field you <em>just created in GHL</em>{' '}
+        won&rsquo;t match until our sync picks it up (~15&nbsp;min) — then hit{' '}
+        <strong>Re-tag</strong> on the campaign. Use Re-tag any time after changing a
+        field/value too.
       </p>
       <CampaignManager campaigns={campaigns} fieldSuggestions={fieldSuggestions} />
     </>
