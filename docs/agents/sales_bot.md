@@ -16,6 +16,13 @@ vs Zach no-shows last week" — anything the sales tables can answer. Raw
 text-to-SQL over the schema (not curated tools/views) is deliberate: maximum
 flexibility, any question the data supports.
 
+> ⚠️ **This bot is not fully done.** Raw text-to-SQL works well for the
+> aggregate/funnel metrics defined in the glossary, but it is **unreliable for
+> rep-level "who did what" questions** (bookings, sales, shows, cash by a named
+> rep) — exactly the questions a salesperson is most likely to ask. See
+> [§ Known limitation & what a full build needs](#known-limitation--what-a-full-build-needs)
+> before extending it.
+
 ## Inputs / outputs
 
 - **Input:** a Slack `app_mention` in `SALES_BOT_SLACK_CHANNEL`. The mention
@@ -90,6 +97,99 @@ One `agent_runs` row per mention: `agent_name='sales_bot'`,
 `trigger_type='slack_mention'`, the question in `input_summary`, the answer in
 `output_summary`, `llm_*` token/cost fields, and `metadata.tool_calls`. Cost per
 run scales with the tool loop (typically 2–4 Claude calls).
+
+## Known limitation & what a full build needs
+
+**Status: works for glossary-defined aggregates; not reliable for rep-level
+questions.** Questions like *"how many bookings did Connor secure Jun 1–20"* or
+*"how has Connor's sales been trending"* currently fail — the bot burns its turn
+budget on the wrong tables and returns the `_FALLBACK_ANSWER` ("I couldn't pin
+that down…"). This is a **data-shape problem, not a prompt-wording problem** —
+adding more glossary definitions one metric at a time does not durably fix it,
+because the underlying sources are a swamp:
+
+- **Bookings** live only in `airtable_setter_triage_calls`, signalled by a
+  `call_status` enum (`'High Ticket booking'`, `'Digital College booking'`,
+  `'Confirmed Booking'`) — while the column literally named `booking_status` is
+  100% NULL (a decoy the bot gravitates to).
+- **The closer report has multiple form versions with different schemas.** "HT
+  close" = `Call Outcome='High Ticket Closed'` **OR** legacy `Closed?='Yes'`;
+  "show" = `Showed?='Yes'` **OR** a non-no-show `Call Outcome`. No single column
+  answers it.
+- **DC closes appear in two tables that disagree.** A rep can have DC closes in
+  `airtable_full_closer_report` and **zero** in the dedicated
+  `airtable_digital_college_sales` table (which is sparse — ~57 rows, partial
+  closer coverage). Whichever a naive query picks is wrong for half the reps.
+- **Cash** is `coalesce(amount_paid_today_number, amount_paid_today_currency)`;
+  DC cash isn't stored — it's `$300 × plan units` parsed from a free-text
+  multi-select inside `fields_raw`.
+- **Attribution is array-contains on record-id columns**
+  (`setter_record_ids` / `closer_record_ids` ∋ `team_members.airtable_user_id`),
+  and **a rep is often both a setter and a closer** — so `sales_role` alone does
+  not tell you where their numbers live.
+
+### The durable fix: a semantic layer
+
+Don't keep patching the prompt. Normalize the mess **once, in SQL**, into a
+tidy/long view the bot queries instead of the raw tables:
+
+```
+rep_activity_daily(
+  rep_member_id uuid,   -- team_members.id
+  rep_name      text,
+  activity_date date,   -- bucketed in America/New_York
+  metric_key    text,   -- 'bookings' | 'dc_closes' | 'connects' | ...
+  value         numeric
+)
+```
+
+Built as a `UNION ALL` of one normalized subquery per metric — each encoding
+exactly one rule below, once, tested against the dashboard. Adding a metric is
+one more branch, never a schema change. The bot's prompt then carries the
+**metric vocabulary** (synonyms → `metric_key`) and points at this one view; the
+LLM only has to map everyday language ("deals he set", "his numbers") onto a
+small, finite, honest surface, and ask **one clarifying question** on true
+ambiguity (e.g. a setter who also closes DC: "bookings or DC closes?").
+
+**The metric grid to implement:**
+
+| metric_key | Source + rule | Attribution |
+|---|---|---|
+| `dials` | `close_calls` count | `user_id = close_user_id` |
+| `connects` | `close_calls` where `duration >= 90` | `user_id = close_user_id` |
+| `bookings` | `airtable_setter_triage_calls`, `call_status IN ('High Ticket booking','Digital College booking','Confirmed Booking')` | `setter_record_ids ∋ airtable_user_id` |
+| `shows` / `no_shows` | closer report: `Showed?='Yes'` OR non-no-show `Call Outcome` | `closer_record_ids ∋ id` |
+| `ht_closes` | closer report: `Call Outcome='High Ticket Closed'` OR `Closed?='Yes'` | `closer_record_ids ∋ id` |
+| `dc_closes` | closer report: `Digital College Closed='Yes'` OR `Call Outcome IN ('Digital College','Digital College Closed')` | `closer_record_ids ∋ id` |
+| `upfront_cash` | `coalesce(amount_paid_today_number, amount_paid_today_currency)` | `closer_record_ids ∋ id` |
+| `contract_cash` | `contract_amount_to_send` | `closer_record_ids ∋ id` |
+
+**Verified anchors** (turn these into tests — they're confirmed against the data):
+
+- `bookings`, Connor (`airtable_user_id=reclS9rriHREFJucs`), Jun 1–20 → **56**
+- `dc_closes`, Connor, since Jun 22 → **14**
+- `ht_closes` / `upfront_cash`: anchor on an actual HT closer (Connor has none)
+  and reconcile to the dashboard cash figure before trusting them.
+
+### Scope & effort
+
+- **Full grid = a small project with a maintenance tail.** The view DDL is ~an
+  afternoon; the cost is reconciling each metric to the dashboard and re-fixing
+  the view whenever the Airtable forms change versions again (they already have,
+  ≥twice). Centralizes that maintenance — doesn't remove it.
+- **Thin slice ≈ half a day, high value.** `bookings` + `dc_closes` (both already
+  verified) plus `dials`/`connects` (clean from `close_calls`) covers the
+  questions that actually fail today. Defer `shows` / cash / channel until
+  someone asks and hits a wall.
+
+### Open questions before building
+
+1. **DC source conflict** — recommend treating `airtable_full_closer_report` as
+   canonical for DC closes (it has full rep coverage; `airtable_digital_college_sales`
+   is sparse) and ignoring the DC-sales table until someone explains why it's
+   partial.
+2. **Channel (inbound vs outbound)** — a likely v2 dimension; needs a
+   lead→`outbound_lead_facts` join. Left out of the v1 grid above.
 
 ## Evals / smoke
 

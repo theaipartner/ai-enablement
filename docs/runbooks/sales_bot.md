@@ -111,6 +111,12 @@ where slack_user_id = 'U…' and not ('sales' = any(areas));
   SELECT to the role on cloud.
 - **Wrong numbers:** almost always ET-vs-UTC bucketing or cycles-vs-people. Spot
   check against the dashboard; tighten the glossary/few-shot.
+- **"I couldn't pin that down…" on a rep-level question** (bookings/sales/shows
+  by a named rep): this is a **known, unfixed limitation**, not a bug to chase in
+  the prompt — the metric lives in the Airtable form swamp the glossary doesn't
+  cover. The durable fix (a `rep_activity_daily` semantic view) and what to build
+  is written up in `docs/agents/sales_bot.md` § *Known limitation & what a full
+  build needs*. Don't patch it metric-by-metric in the glossary.
 
 ## Gotchas
 
