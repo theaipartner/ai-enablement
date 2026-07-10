@@ -9,7 +9,7 @@ Account-level (paid) daily Meta ad-spend mirror. One row per day.
 > `frequency` and `cost_per_unique_link_click` are now **Meta-native** (were
 > derived); `ctr_source_raw='meta_api'`. **Cortana is retired as a source**
 > (`ingestion/cortana/` kept unscheduled for revert). ⚠ The Meta token in use
-> is a 60-day USER token expiring **2026-08-29** — see
+> is a never-expiring USER token (since 2026-07-10) — still person-tied; see
 > `docs/runbooks/meta_ads_ingestion.md` § warnings. Per-campaign / ad-set /
 > per-ad grain live in `cortana_campaign_daily` / `cortana_adset_daily` /
 > `cortana_ad_daily` (same source swap).

@@ -1,19 +1,26 @@
-"""Thin HTTP client for the Meta Marketing (Graph) API insights endpoint.
+"""Thin HTTP client for the Meta Marketing (Graph) API.
 
 Uses stdlib urllib (no new dependency — same discipline as the rest of the
 repo's ingestion clients). Scoped to one ad account.
 
-Endpoint: GET /{version}/act_<id>/insights
-  - `level`           account | campaign | adset | ad
-  - `time_increment=1` one row per day (bucketed in the AD ACCOUNT's
-    timezone — see the timezone caveat in the runbook).
-  - `time_range`      {"since":"YYYY-MM-DD","until":"YYYY-MM-DD"} — one call
-    returns every day in the window per entity (no per-day fan-out).
-  - results paginate via `paging.next` (a full URL we just follow).
+Two surfaces:
+  - `insights(...)` — GET /{version}/act_<id>/insights (spend mirrors):
+      `level`           account | campaign | adset | ad
+      `time_increment=1` one row per day (bucketed in the AD ACCOUNT's
+      timezone — see the timezone caveat in the runbook).
+      `time_range`      {"since":"YYYY-MM-DD","until":"YYYY-MM-DD"} — one call
+      returns every day in the window per entity (no per-day fan-out).
+  - leadgen — `leadgen_adsets()` / `page_access_token()` / `leadgen_forms()` /
+    `form_leads()` for the Meta instant-form (Digital College) funnel. Lead
+    reads require a PAGE token (derived from the user token per run, never
+    stored); the adset scan runs on the user token.
+
+All list endpoints paginate via `paging.next` (a full URL we just follow).
 
 Auth: `Authorization: Bearer <access_token>`. The token in use today is a
-60-day USER token, NOT a permanent System User token — it expires (and is
-tied to a person). See docs/runbooks/meta_ads_ingestion.md § Token.
+never-expiring USER token (still tied to a person, not a System User) with
+ads_read + leads_retrieval + pages_* scopes. See
+docs/runbooks/meta_ads_ingestion.md § Token.
 """
 
 from __future__ import annotations
@@ -156,15 +163,113 @@ class MetaAdsClient:
                 break
         return rows
 
+    # -- leadgen (Digital College instant-form funnel) -------------------
+
+    def get_node(
+        self, path: str, fields: str, *, token: str | None = None
+    ) -> dict[str, Any]:
+        """GET /{path}?fields=... — a single Graph node."""
+        params = {"fields": fields}
+        url = f"{self._base}/{path}?{urllib.parse.urlencode(params)}"
+        return self._get(url, token=token)
+
+    def get_edge(
+        self,
+        path: str,
+        fields: str,
+        *,
+        params: dict[str, str] | None = None,
+        token: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """GET /{path} edge, following paging.next until exhausted."""
+        query = {"fields": fields, "limit": str(limit), **(params or {})}
+        url = f"{self._base}/{path}?{urllib.parse.urlencode(query)}"
+        rows: list[dict[str, Any]] = []
+        page = 0
+        while url:
+            body = self._get(url, token=token)
+            rows.extend(body.get("data", []))
+            url = (body.get("paging") or {}).get("next")
+            page += 1
+            if page > 1000:  # runaway guard, same as insights()
+                logger.warning("meta edge %s: stopped after 1000 pages", path)
+                break
+        return rows
+
+    def page_access_token(self, page_id: str) -> str:
+        """Derive the Page token from the user token (per run, never stored).
+
+        Lead reads (`leadgen_forms` / `form_leads`) are page-scoped: the user
+        token 403s on them even with leads_retrieval granted.
+        """
+        body = self.get_node(page_id, "access_token")
+        token = body.get("access_token")
+        if not token:
+            raise MetaAdsAPIError(f"no page access_token returned for page {page_id}")
+        return token
+
+    def leadgen_forms(self, page_id: str, page_token: str) -> list[dict[str, Any]]:
+        """All lead-gen forms on the page (any status)."""
+        return self.get_edge(
+            f"{page_id}/leadgen_forms",
+            "id,name,status,created_time,questions",
+            token=page_token,
+        )
+
+    def form_leads(
+        self,
+        form_id: str,
+        page_token: str,
+        *,
+        since_unix: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """All submissions for one form, optionally only after `since_unix`.
+
+        ⚠ Meta retains leads ~90 days — anything older is gone from the API,
+        which is why the mirror table is the durable copy.
+        """
+        params: dict[str, str] = {}
+        if since_unix is not None:
+            params["filtering"] = json.dumps(
+                [
+                    {
+                        "field": "time_created",
+                        "operator": "GREATER_THAN",
+                        "value": since_unix,
+                    }
+                ]
+            )
+        return self.get_edge(
+            f"{form_id}/leads",
+            "id,created_time,ad_id,ad_name,adset_id,adset_name,"
+            "campaign_id,campaign_name,form_id,is_organic,platform,field_data",
+            params=params,
+            token=page_token,
+        )
+
+    def leadgen_adsets(self) -> list[dict[str, Any]]:
+        """Every adset on the account with its leadgen-discriminator fields.
+
+        The caller filters to optimization_goal=LEAD_GENERATION +
+        destination_type=ON_AD (instant-form adsets — old website/Wix
+        campaigns are OFFSITE_CONVERSIONS) to build meta_leadgen_campaigns.
+        """
+        return self.get_edge(
+            f"{self._account}/adsets",
+            "id,name,campaign_id,campaign{id,name},"
+            "destination_type,optimization_goal,promoted_object",
+        )
+
     # -- internal ------------------------------------------------------
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, token: str | None = None) -> dict[str, Any]:
         # Token rides the Authorization header on our constructed request;
         # Meta's `paging.next` URLs also embed it (we never log full URLs).
         req = urllib.request.Request(
             url,
             headers={
-                "Authorization": f"Bearer {self._token}",
+                "Authorization": f"Bearer {token or self._token}",
                 "User-Agent": _UA,
                 "Accept": "application/json",
             },

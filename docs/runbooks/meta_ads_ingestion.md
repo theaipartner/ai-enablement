@@ -33,48 +33,50 @@ the API.
 
 ## ⚠️ THREE STANDING WARNINGS (read these)
 
-### 1. The access token is a 60-day USER token, NOT a System User token
+### 1. The access token is a USER token (never-expiring since 2026-07-10), NOT a System User token
 
-`META_ACCESS_TOKEN` today is a **USER** token (verified via `/debug_token`:
-`"type": "USER"`, with an `expires_at`). It is **not** a permanent System
-User token. Two consequences:
+`META_ACCESS_TOKEN` was replaced on **2026-07-10** with a new USER token
+(verified via `/debug_token`: `"type": "USER"`, **`expires_at: 0` — never
+expires**). Scopes: `ads_read`, `ads_management`, `leads_retrieval`,
+`pages_show_list`, `pages_read_engagement`, `pages_manage_ads`,
+`business_management` — it now also powers the lead-form ingestion
+(`docs/runbooks/meta_leads_ingestion.md`). Two remaining caveats:
 
-- **It expires `2026-08-29 15:29 UTC`** (data-access window ends `2026-09-28`).
-  When it lapses, **every cron tick raises `MetaAdsAuthError` (Meta code 190)
-  and ad-spend data FREEZES** — the dashboard keeps showing the last synced
-  day (stale, not crashed). The audit row in `webhook_deliveries`
-  (`source='meta_sync'`) flips to `failed`/`partial` with the 190 message.
-- **It is tied to a person** (Zain's user login, `user_id …2143`). If that
-  account revokes the app, changes password/2FA, or loses access, the token
-  dies **early**, before the expiry date.
+- **It is still tied to a person** (Zain's user login, `user_id …2143`). If
+  that account revokes the app, changes password/2FA, or loses access, the
+  token dies. Symptom: every cron tick raises `MetaAdsAuthError` (Meta code
+  190) and ad-spend data FREEZES — the dashboard keeps showing the last
+  synced day (stale, not crashed). The audit row in `webhook_deliveries`
+  (`source='meta_sync'` / `'meta_leads_sync'`) flips to `failed`/`partial`
+  with the 190 message.
+- **`data_access_expires_at` is `2026-10-07`** — a rolling 90-day window that
+  renews whenever Zain re-authenticates the app. If it lapses, data calls
+  start failing (Meta "data access expired") until he logs into the app
+  again, even though the token itself never expires.
 
-**Why we shipped it anyway:** a System User token requires the app to be
-registered/reviewed on Meta (a long process that wasn't done in time). The
-USER token pulls byte-identical data today — the only cost is longevity.
+**The better long-term shape (do this when the app is registered):** Meta
+**Business Settings → Users → System Users** → create/select one → **Add
+Assets** (the ad account(s) + the Facebook page, with View Performance /
+`ads_read` + leads access) → **Generate New Token** (pick the app, scopes
+`ads_read` + `leads_retrieval` + `pages_manage_ads`, expiration **Never**).
+Confirm via `/debug_token` it shows `"type": "SYSTEM_USER"`. Then update
+`META_ACCESS_TOKEN` (Vercel + `.env.local`) and redeploy.
 
-**The fix (do this when the app is registered):** Meta **Business Settings →
-Users → System Users** → create/select one → **Add Assets** (the ad
-account(s), with View Performance / `ads_read`) → **Generate New Token**
-(pick the app, scope `ads_read`, expiration **Never**). Confirm via
-`/debug_token` it shows `"type": "SYSTEM_USER"` and **no** `expires_at`.
-Then update `META_ACCESS_TOKEN` (Vercel + `.env.local`) and redeploy.
+### 2. Verifying / replacing the token
 
-### 2. Renewing the current USER token (stop-gap if the System User isn't ready by Aug 29)
-
-A 60-day user token can be re-extended **before it expires** by exchanging it
-for a fresh long-lived token (needs the app secret):
+Check what the current token is at any time:
 
 ```bash
-curl -sG 'https://graph.facebook.com/v23.0/oauth/access_token' \
-  --data-urlencode 'grant_type=fb_exchange_token' \
-  --data-urlencode 'client_id=1199194128631289' \
-  --data-urlencode "client_secret=<APP_SECRET>" \
-  --data-urlencode "fb_exchange_token=<CURRENT_TOKEN>"
+curl -sG 'https://graph.facebook.com/v23.0/debug_token' \
+  --data-urlencode "input_token=<TOKEN>" \
+  --data-urlencode "access_token=<TOKEN>"
+# type / expires_at / data_access_expires_at / scopes
 ```
 
-Update `META_ACCESS_TOKEN` with the returned token and redeploy. **Set a
-calendar reminder ~2 weeks before `2026-08-29`.** (A System User token makes
-this whole step disappear — prefer it.)
+When swapping in a new token: update `.env.local` + Vercel Production
+(`META_ACCESS_TOKEN`) and redeploy. The 60-day-renewal `fb_exchange_token`
+dance documented before 2026-07-10 is no longer needed while the
+never-expiring token holds.
 
 ### 3. Ad-account timezone is fixed **EST (UTC-5)**, the dashboard uses ET (DST-aware)
 

@@ -1,37 +1,34 @@
-"""Meta ad sync cron — pull Meta ad data into the mirrors.
+"""Meta leadgen sync cron — pull instant-form opt-ins into the mirrors.
 
-Vercel Cron every 3 hours. Re-pulls a trailing 4-ET-day window across four
-levels (account / campaign / adset / ad) and idempotently upserts into
-meta_ad_daily, cortana_campaign_daily, cortana_adset_daily, cortana_ad_daily.
-The trailing window absorbs Meta's ~72h spend/conversion restatements
-(last-write-wins on the upsert keys).
+Vercel Cron every 15 minutes. One tick runs the full leadgen pass
+(ingestion/meta_ads/leads_pipeline.py): adset scan → meta_leadgen_campaigns,
+forms → meta_lead_forms, submissions → meta_form_leads (trailing 72h window —
+lead rows never restate, the overlap is just cheap safety), then
+refresh_dc_ads_facts() so the DC ads funnel page is fresh.
 
-Replaces api/cortana_sync_cron.py (the Cortana Attribution path). The Cortana
-code + function entry stay in the repo for instant revert, but are no longer
-scheduled. See docs/runbooks/meta_ads_ingestion.md § Revert.
-
-⚠ TOKEN CAVEAT: META_ACCESS_TOKEN is a never-expiring USER token (since
-2026-07-10) — but still tied to a person (NOT a System User token). If that
-login revokes the app or its rolling data-access window lapses, every tick
-raises a credentials error and ad spend FREEZES (stale, not crashed).
-Details in the runbook.
+⚠ Meta retains leads only ~90 days via the API. The mirror is the durable
+copy — if this cron dies for a long stretch the backfill
+(scripts/backfill_meta_leads.py) can only recover what Meta still has.
 
 Per-tick behavior:
   1. Auth: validate `Authorization: Bearer ${CRON_SECRET}`.
   2. Build MetaAdsClient from META_ACCESS_TOKEN + META_AD_ACCOUNT_ID.
-  3. sync_meta_range over [today-3, today] (ET).
-  4. Audit row to `webhook_deliveries` with source='meta_sync'.
+  3. sync_meta_leads for META_LEADGEN_PAGE_ID, since = now - 72h.
+  4. Audit row to `webhook_deliveries` with source='meta_leads_sync'.
 
 Env vars required (set in Vercel):
   CRON_SECRET            — shared Bearer auth across all crons
-  META_ACCESS_TOKEN      — Meta Graph API access token (ads_read)
+  META_ACCESS_TOKEN      — Meta Graph API user token (ads_read +
+                           leads_retrieval + pages_show_list/pages_manage_ads)
   META_AD_ACCOUNT_ID     — ad account id (act_… or bare numeric)
+  META_LEADGEN_PAGE_ID   — Facebook page id owning the lead forms
+                           (The AI Partner = 627212320483048)
   META_API_VERSION       — optional, defaults to v23.0
   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY — shared.db
 
 Manual trigger:
   curl -i -X POST -H "Authorization: Bearer $CRON_SECRET" \\
-       https://ai-enablement-sigma.vercel.app/api/meta_sync_cron
+       https://ai-enablement-sigma.vercel.app/api/meta_leads_sync_cron
 """
 
 from __future__ import annotations
@@ -41,12 +38,12 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -54,18 +51,17 @@ if str(_REPO_ROOT) not in sys.path:
 
 from shared.db import get_client  # noqa: E402
 from ingestion.meta_ads.client import MetaAdsClient  # noqa: E402
-from ingestion.meta_ads.pipeline import sync_meta_range  # noqa: E402
+from ingestion.meta_ads.leads_pipeline import sync_meta_leads  # noqa: E402
 
 logging.getLogger().setLevel(logging.INFO)
-logger = logging.getLogger("ai_enablement.meta_sync_cron")
+logger = logging.getLogger("ai_enablement.meta_leads_sync_cron")
 logger.setLevel(logging.INFO)
 
-_ET = ZoneInfo("America/New_York")
-_AUDIT_SOURCE = "meta_sync"
+_AUDIT_SOURCE = "meta_leads_sync"
 
-# Trailing window (ET days incl today) re-pulled each tick to catch Meta's
-# delayed restatements. 4 days = today + 3 prior.
-_TRAILING_DAYS = 4
+# Trailing window re-pulled each tick. Lead rows are immutable at Meta; the
+# overlap only guards against a missed tick or two.
+_LOOKBACK_SECONDS = 72 * 3600
 
 
 class handler(BaseHTTPRequestHandler):
@@ -73,7 +69,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             self._handle()
         except Exception as exc:  # noqa: BLE001
-            logger.exception("meta_sync_cron: unhandled error: %s", exc)
+            logger.exception("meta_leads_sync_cron: unhandled error: %s", exc)
             self._respond(500, {"error": "internal_error"})
 
     def do_GET(self) -> None:
@@ -83,7 +79,7 @@ class handler(BaseHTTPRequestHandler):
         if not _verify_auth(self.headers):
             self._respond(401, {"error": "unauthorized"})
             return
-        self._respond(200, run_meta_sync_cron())
+        self._respond(200, run_meta_leads_sync_cron())
 
     def _respond(self, status: int, body: dict[str, Any]) -> None:
         encoded = json.dumps(body, default=str).encode("utf-8")
@@ -95,34 +91,33 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(encoded)
 
 
-def run_meta_sync_cron() -> dict[str, Any]:
+def run_meta_leads_sync_cron() -> dict[str, Any]:
     """One cron tick. Returns the per-invocation summary."""
     token = os.environ.get("META_ACCESS_TOKEN")
     account_id = os.environ.get("META_AD_ACCOUNT_ID")
+    page_id = os.environ.get("META_LEADGEN_PAGE_ID")
     api_version = os.environ.get("META_API_VERSION") or "v23.0"
-    if not token or not account_id:
+    if not token or not account_id or not page_id:
         db = get_client()
         _insert_audit(
             db,
             status="failed",
-            payload={"error": "meta_creds_missing"},
-            error="meta_creds_missing",
+            payload={"error": "meta_leadgen_creds_missing"},
+            error="meta_leadgen_creds_missing",
         )
-        return {"error": "meta_creds_missing"}
+        return {"error": "meta_leadgen_creds_missing"}
 
     db = get_client()
     client = MetaAdsClient(token, account_id, api_version=api_version)
-
-    end_day = datetime.now(_ET).date()
-    start_day = end_day - timedelta(days=_TRAILING_DAYS - 1)
-    outcome = sync_meta_range(db, client, start_day, end_day)
+    since_unix = int(time.time()) - _LOOKBACK_SECONDS
+    outcome = sync_meta_leads(db, client, page_id, account_id, since_unix=since_unix)
 
     payload: dict[str, Any] = {
-        "window": [start_day.isoformat(), end_day.isoformat()],
-        "meta_ad_daily_upserts": outcome.meta_ad_daily_upserts,
-        "campaign_upserts": outcome.campaign_upserts,
-        "adset_upserts": outcome.adset_upserts,
-        "ad_upserts": outcome.ad_upserts,
+        "since_unix": since_unix,
+        "campaigns_upserted": outcome.campaigns_upserted,
+        "forms_upserted": outcome.forms_upserted,
+        "leads_upserted": outcome.leads_upserted,
+        "facts_rows": outcome.facts_rows,
         "errors": outcome.errors,
     }
     _insert_audit(
@@ -132,11 +127,11 @@ def run_meta_sync_cron() -> dict[str, Any]:
         error="; ".join(outcome.errors)[:2000] if outcome.errors else None,
     )
     logger.info(
-        "meta_sync_cron: meta=%d campaign=%d adset=%d ad=%d errors=%d",
-        outcome.meta_ad_daily_upserts,
-        outcome.campaign_upserts,
-        outcome.adset_upserts,
-        outcome.ad_upserts,
+        "meta_leads_sync_cron: campaigns=%d forms=%d leads=%d facts=%s errors=%d",
+        outcome.campaigns_upserted,
+        outcome.forms_upserted,
+        outcome.leads_upserted,
+        outcome.facts_rows,
         len(outcome.errors),
     )
     return payload
@@ -158,13 +153,13 @@ def _insert_audit(
     try:
         db.table("webhook_deliveries").insert(row).execute()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("meta_sync_cron: audit insert failed: %s", exc)
+        logger.warning("meta_leads_sync_cron: audit insert failed: %s", exc)
 
 
 def _verify_auth(headers: Any) -> bool:
     expected = os.environ.get("CRON_SECRET") or ""
     if not expected:
-        logger.error("meta_sync_cron: CRON_SECRET not configured")
+        logger.error("meta_leads_sync_cron: CRON_SECRET not configured")
         return False
     auth_header = headers.get("Authorization") or headers.get("authorization") or ""
     if not auth_header.startswith("Bearer "):
