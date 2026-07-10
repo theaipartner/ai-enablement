@@ -34,7 +34,11 @@ Same stage set as `outbound_lead_facts` (see that machinery in migrations
 triage), `showed`/`closed` (closer report), `plan_units` +
 `base44_monthly/yearly` + `wix_monthly/yearly` (cash = plan_units × $300),
 `marked_no_plan`, `optin_bucket`/`dial_bucket`/`conn_bucket` (2-hour ET
-buckets 0–11), `updated_at`.
+buckets 0–11), `updated_at` — plus (0126) the lead's Meta attribution
+`campaign_id`/`adset_id`/`ad_id` (from `close_leads`), which power the page's
+ad-cascade filters on `dc_ads_funnel()` / `dc_ads_funnel_by_rep()` /
+`dc_ads_daily()` (all take optional `p_campaign_id`/`p_adset_id`/`p_ad_id`;
+`dc_ads_daily(p_end_et, p_days, …)` returns the last-N-days cohort strip).
 
 ## Populated by / read by
 

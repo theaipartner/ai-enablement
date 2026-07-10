@@ -1,9 +1,19 @@
 import { HeaderBand } from '@/components/gregory/header-band'
+import { AdCascadeFilter } from '@/components/sales/ad-cascade-filter'
 import { DcAdsCalledSection } from '@/components/sales/dc-ads-called'
+import { DcAdsDailyTable } from '@/components/sales/dc-ads-daily-table'
 import { DcAdsFunnelSection } from '@/components/sales/dc-ads-funnel'
 import { DcAdsTimeOfDaySection } from '@/components/sales/dc-ads-time-of-day'
 import { DcAdsByRepSection } from '@/components/sales/dc-ads-by-rep'
-import { getDcAdsFunnel, getDcAdsByRep, getDcAdsSpend, getDcAdsMetaOptIns } from '@/lib/db/dc-ads'
+import {
+  getDcAdsFunnel,
+  getDcAdsByRep,
+  getDcAdsSpend,
+  getDcAdsMetaOptIns,
+  getDcAdsDaily,
+  getDcAdsHierarchy,
+  type DcAdsEntityFilter,
+} from '@/lib/db/dc-ads'
 import { dateRangeFromExplicit, todayEtDate } from '@/lib/db/funnel-window'
 import { DateRangePicker } from '../funnel/landing-pages/date-range-picker'
 import { PersonPill } from '../header-pills'
@@ -34,7 +44,13 @@ const DC_ADS_FLOOR_ET = '2026-07-08'
 export default async function DcAdsPage({
   searchParams,
 }: {
-  searchParams?: { start?: string | string[]; end?: string | string[] }
+  searchParams?: {
+    start?: string | string[]
+    end?: string | string[]
+    campaign?: string | string[]
+    adset?: string | string[]
+    ad?: string | string[]
+  }
 }) {
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)?.trim() || null
 
@@ -44,14 +60,26 @@ export default async function DcAdsPage({
   const startEt = param(searchParams?.start) ?? DC_ADS_FLOOR_ET
   const endEt = param(searchParams?.end) ?? todayEt
 
+  // Ad cascade selection (?campaign / ?adset / ?ad) — same URL contract as the
+  // Advertising Hub's chooser. Scopes everything: spend, funnel, by-rep,
+  // speed-to-dial, time-of-day, and the last-5-days strip.
+  const campaign = param(searchParams?.campaign)
+  const adset = param(searchParams?.adset)
+  const ad = param(searchParams?.ad)
+  const filter: DcAdsEntityFilter = { campaignId: campaign, adsetId: adset, adId: ad }
+  const filterActive = !!(ad || adset || campaign)
+
   const range = dateRangeFromExplicit(startEt, endEt)
   const rangeBounds = { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso }
-  const [{ funnel, called, timeOfDay }, byRep, spend, metaOptIns] = await Promise.all([
-    getDcAdsFunnel(rangeBounds),
-    getDcAdsByRep(rangeBounds),
-    getDcAdsSpend(startEt, endEt),
-    getDcAdsMetaOptIns(rangeBounds),
-  ])
+  const [{ funnel, called, timeOfDay }, byRep, spend, metaOptIns, dailyRows, hierarchy] =
+    await Promise.all([
+      getDcAdsFunnel(rangeBounds, filter),
+      getDcAdsByRep(rangeBounds, filter),
+      getDcAdsSpend(startEt, endEt, filter),
+      getDcAdsMetaOptIns(rangeBounds),
+      getDcAdsDaily(todayEt, filter),
+      getDcAdsHierarchy(rangeBounds),
+    ])
 
   return (
     <div>
@@ -62,6 +90,7 @@ export default async function DcAdsPage({
       />
 
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={startEt} endEtDate={endEt} />
         <DateRangePicker startEtDate={startEt} endEtDate={endEt} todayEt={todayEt} />
         <span
           className="geg-mono"
@@ -82,7 +111,10 @@ export default async function DcAdsPage({
         no outbound leads on this page, no ad leads on Outbound.
       </div>
 
-      {metaOptIns !== funnel.optIns ? (
+      {/* Bridge-drift check only reads on the unfiltered view — the Meta-side
+          count isn't cascade-scoped, so comparing it under a filter would
+          false-alarm. */}
+      {!filterActive && metaOptIns !== funnel.optIns ? (
         <div
           className="geg-mono"
           style={{ marginTop: 8, fontSize: 9.5, letterSpacing: '0.04em', color: 'var(--color-geg-text-3)', lineHeight: 1.6 }}
@@ -94,6 +126,8 @@ export default async function DcAdsPage({
       ) : null}
 
       <DcAdsFunnelSection funnel={funnel} spendUsd={spend.spendUsd} />
+
+      <DcAdsDailyTable rows={dailyRows} />
 
       <DcAdsByRepSection rows={byRep.reps} totals={byRep.totals} />
 

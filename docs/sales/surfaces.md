@@ -163,9 +163,19 @@ ad/adset/campaign ids) → reps dial. The Outbound page's shape with **ad spend 
 - **Speed to dial** — form submit → first outbound dial (the opt-in is the hand-raise; no
   reply-first precondition like Outbound's).
 - **Time of day** — opt-ins vs dials vs connects, 2-hour ET buckets.
+- **Ad cascade chooser** (added 2026-07-10) — the hub's `AdCascadeFilter` component reused as-is
+  (`?campaign / ?adset / ?ad`, deepest wins). Scopes EVERYTHING: spend (entity's own `cortana_*`
+  table, like the hub's cascade), funnel, by-rep, speed-to-dial, time-of-day, and the daily strip.
+  Hierarchy + names come from `meta_form_leads` in the window (it carries all three levels' names
+  natively — no adset-name mirror lookup).
+- **Last 5 days strip** (added 2026-07-10) — the hub's daily cohort table shaped to the DC funnel:
+  Day · Spend · Opt-ins · Called · Connected · Closed · Cash · Dials (no speed-to-lead, no
+  bookings). Each row = that ET day's opt-in cohort + lifetime progression + dials received.
+  Pinned to the rolling strip regardless of the date picker; follows the ad chooser. Backed by the
+  `dc_ads_daily()` RPC (0126) + a per-day spend merge in `lib/db/dc-ads.ts`.
 - **Bridge-drift warning** — the page compares Meta-side form submissions (`meta_form_leads`)
   against Close-side opt-ins and prints a ⚠ line when they diverge (a growing gap = the Meta→Close
-  bridge is dropping leads).
+  bridge is dropping leads). Unfiltered view only (the Meta count isn't cascade-scoped).
 
 Scoping is mutually exclusive with Outbound: only lead-form-campaign leads here (never outbound
 pools), and DC ads leads never appear on the Outbound page (separate facts table —
