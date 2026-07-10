@@ -34,6 +34,10 @@ const NAV: NavItem[] = [
   // leads are excluded from every other funnel, so it gets its own top-level
   // page (route /outbound; internally "revival").
   { href: '/sales-dashboard/outbound', label: 'Outbound' },
+  // DC Ads = the Digital College paid-ads funnel (Meta instant-form opt-ins,
+  // ad spend in front). Outbound's shape, scoped only to lead-form campaigns —
+  // no outbound leads here, no ad leads there.
+  { href: '/sales-dashboard/dc-ads', label: 'DC Ads' },
   // Leads = the roster of every lead opted-in in the window (new + re-opt-in),
   // with type/stage filters set by the funnel drill or the filter bar.
   { href: '/sales-dashboard/leads', label: 'Leads' },

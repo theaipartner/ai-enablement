@@ -6,6 +6,11 @@ This is the heavy per-lead aggregation — it runs HERE, off the page load, so t
 `/sales-dashboard/outbound` page only ever reads the small materialized table
 (`outbound_funnel()`, sub-second). See docs/sales/surfaces.md § Outbound.
 
+Also refreshes the sibling `dc_ads_lead_facts` (migration 0123 — the DC ads
+funnel page) each tick: its downstream stages come from the same Close/Airtable
+mirrors, whose syncs land between ticks. meta_leads_sync_cron refreshes it too
+on new opt-ins; both paths are idempotent full rebuilds.
+
 Why psycopg2 (not the supabase client): the refresh takes ~15s, past PostgREST's
 8s statement timeout. A direct pooler connection (shared.lead_tagging._connect,
 same path the tagger uses) has no such cap. The DELETE+INSERT is one transaction,
@@ -118,6 +123,12 @@ def run_refresh() -> dict[str, Any]:
                     except Exception as exc:  # noqa: BLE001 — one campaign can't sink the rest
                         errors[key] = str(exc)[:300]
                         logger.warning("refresh_outbound_facts(%s) failed: %s", key, exc)
+                try:
+                    cur.execute("select refresh_dc_ads_facts()")
+                    refreshed["dc_ads"] = cur.fetchone()[0]
+                except Exception as exc:  # noqa: BLE001 — sibling facts, same isolation
+                    errors["dc_ads"] = str(exc)[:300]
+                    logger.warning("refresh_dc_ads_facts() failed: %s", exc)
             finally:
                 cur.execute("select pg_advisory_unlock(%s)", (_REFRESH_LOCK_KEY,))
         cur.close()

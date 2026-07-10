@@ -2,7 +2,7 @@
 
 Every sales page, what it shows, and what was removed. All routes live under
 `app/(authenticated)/sales-dashboard/` (server components, `force-dynamic`). Nav is
-**flat: Advertising Hub · Outbound · Leads · Talent**, with Roster nested under Talent.
+**flat: Advertising Hub · Outbound · DC Ads · Leads · Talent**, with Roster nested under Talent.
 Outbound is its own top-level page (no longer nested under the Advertising Hub).
 
 ---
@@ -142,6 +142,36 @@ and Airtable closer reports (`closer_record_ids` → `team_members.airtable_user
 calls; Connections = ≥90s calls; Closes = DC-closed-with-plan distinct deals; Cash = $300/plan unit.
 Caveat: `airtable_user_id` has no auto-sync yet (Sierra Anderson's was backfilled in 0104) — new closers
 need their `airtable_user_id` set to merge their closes with their dials.
+
+---
+
+## DC Ads — `/dc-ads` (added 2026-07-10)
+
+The **Digital College paid-ads funnel** — since the full-program suspension (July 2026) the only
+acquisition motion: Meta ad → **instant lead form** (name + phone, no landing page) → the Meta→Close
+bridge creates the Close lead in seconds (`funnel_name='Digital College'` + the Meta
+ad/adset/campaign ids) → reps dial. The Outbound page's shape with **ad spend leading the funnel**:
+
+- **Funnel** — `Adspend → Opt-ins → Called → Connected → Closed` + cash & **ROAS** row (cash ÷
+  spend), with a **$/opt-in** figure on the adspend→opt-ins arrow. Booked/Showed computed but hidden
+  (same Connected → Closed model as Outbound). Adspend = `cortana_campaign_daily` summed over ONLY
+  the lead-form campaigns (`meta_leadgen_campaigns` — detected by the adset discriminator
+  `optimization_goal=LEAD_GENERATION` + `destination_type=ON_AD`, re-scanned every 15 min).
+- **By rep** — Dials / Connections / Closes / Cash, same Close-calls + closer-report bridge as
+  Outbound's table, but **every rep with activity is listed** (not closers-only — this pool is
+  dial-heavy).
+- **Speed to dial** — form submit → first outbound dial (the opt-in is the hand-raise; no
+  reply-first precondition like Outbound's).
+- **Time of day** — opt-ins vs dials vs connects, 2-hour ET buckets.
+- **Bridge-drift warning** — the page compares Meta-side form submissions (`meta_form_leads`)
+  against Close-side opt-ins and prints a ⚠ line when they diverge (a growing gap = the Meta→Close
+  bridge is dropping leads).
+
+Scoping is mutually exclusive with Outbound: only lead-form-campaign leads here (never outbound
+pools), and DC ads leads never appear on the Outbound page (separate facts table —
+`dc_ads_lead_facts`, migrations 0122–0125 — precisely so Outbound's "All" view stays clean).
+Date range: URL `?start/?end`, default **[2026-07-08 (first lead-form campaign) → today]**.
+Data layer `lib/db/dc-ads.ts`; ingestion `docs/runbooks/meta_leads_ingestion.md`.
 
 ---
 

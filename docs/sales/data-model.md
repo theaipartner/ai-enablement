@@ -316,6 +316,10 @@ Which database tables are sales. (Per-column detail lives in `docs/schema/<table
 | `cortana_ad_daily` | per-ad daily spend/delivery (**Meta API** `level=ad`) | Ads page, funnel cascade (per-ad ROAS) |
 | `cortana_campaign_daily` | per-campaign daily (HT `Closer Funnel` adspend source; **Meta API** `level=campaign`) | Ads, Cash/ROAS, funnel cascade (per-campaign ROAS) |
 | `cortana_adset_daily` | per-ad-set daily (**Meta API** `level=adset`, native) — ad-set name + spend | funnel cascade Ad Set level (name + per-ad-set ROAS) |
+| `meta_lead_forms` | Meta instant-form registry (0122) — form status + question list | meta leads sync (form iteration), reference |
+| `meta_form_leads` | one row per Meta lead-form submission (0122) — the DC opt-in event, w/ ad attribution; durable copy (Meta retains ~90d) | DC Ads page (bridge-drift check), attribution queries |
+| `meta_leadgen_campaigns` | which campaigns are lead-form campaigns (0122; adset discriminator) — THE DC-ads spend scoping set | DC Ads spend query, `refresh_dc_ads_facts()` |
+| `dc_ads_lead_facts` | per-lead DC-ads funnel facts (0123–0125; sibling of `outbound_lead_facts`, anchored at the form opt-in) | DC Ads page via `dc_ads_funnel()` / `dc_ads_funnel_by_rep()` |
 | `clarity_metrics_daily` | landing-page metrics (Microsoft Clarity) — ⚠️ **flagged for possible removal** | Landing Pages page + a cost-hub action |
 | `wistia_media_daily` | per-day video stats (use the **timeseries** columns) | Landing Pages page |
 | `wistia_medias` | video inventory reference | reference |
