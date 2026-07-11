@@ -84,10 +84,11 @@ tables, same columns, no consumer change: `meta_ad_daily` ← `level=account`,
 names carry the token natively, e.g. `… | Booking | Closer Funnel`).
 
 **Three standing warnings** (full detail in `docs/runbooks/meta_ads_ingestion.md`):
-1. The token is a **60-day USER token, not a System User token** — it **expires
-   `2026-08-29`** and is person-tied; when it lapses the cron 190s and ad spend
-   **freezes** (stale, not crashed). Replace with a System User token once the
-   Meta app is registered.
+1. The token is a **never-expiring USER token (since 2026-07-10), not a System
+   User token** — still person-tied (Zain's login) with a rolling data-access
+   window; if the login revokes the app or the window lapses, the cron 190s and
+   ad spend **freezes** (stale, not crashed). A System User token is still the
+   better shape once the Meta app is registered.
 2. The ad-account timezone is **fixed EST (−5, no DST)** while the dashboard
    uses DST-aware ET — a ~1h day-boundary offset in summer (immaterial for daily
    totals).
@@ -105,6 +106,22 @@ deploy) is deferred, not dismissed. Today, rotating accounts = change
 The **ad-set grain is native** (`level=adset`) — the old Cortana `groupBy=medium`
 hack (+ numeric-`platformEntityId` filter to drop "Bot Traffic"/"calendly.com"
 noise) is **gone**; `adset_id`/`adset_name` come straight from Meta.
+
+**Lead-form (instant form) ingestion — the DC ads funnel (added 2026-07-10).**
+`api/meta_leads_sync_cron.py`, **15-min cron**, same module
+(`ingestion/meta_ads/leads_{parser,pipeline}.py`). One pass: adset scan →
+`meta_leadgen_campaigns` (instant-form campaigns detected by
+`optimization_goal=LEAD_GENERATION` + `destination_type=ON_AD` — THE ad-spend
+scoping set for `/dc-ads`), page forms → `meta_lead_forms`, submissions →
+`meta_form_leads` (trailing 72h; lead rows are immutable at Meta), then
+`refresh_dc_ads_facts()`. Lead reads need a **page token** derived per run
+from the user token (needs the `leads_retrieval` + `pages_*` scopes the
+2026-07-10 token carries). ⚠ **Meta retains leads ~90 days** — the mirror is
+the durable copy. The Meta→Close bridge (theirs, not ours) creates the Close
+lead in ~7s with `funnel_name='Digital College'` + the Meta ids; the `/dc-ads`
+page counts opt-ins from the Close-side facts and warns when the Meta-side
+count diverges. Backfill: `scripts/backfill_meta_leads.py` (`--smoke` then
+`--apply`). Runbook: `docs/runbooks/meta_leads_ingestion.md`.
 
 ### Clarity — `ingestion/clarity/`
 Daily cron (`clarity_sync_cron`, `0 10 * * *`), **no backfill possible**.
@@ -184,14 +201,14 @@ mislinked form:** clear the engagement's `final_at` / `form_id`, set the correct
 
 ## Ops traps (read before touching data or migrations)
 
-### The env-var gotcha — `.env.local` points at LOCAL Supabase
-The active `SUPABASE_URL` is `http://127.0.0.1:54321` — a **stale local Docker snapshot
-that lies** (missing columns, fewer rows). The cloud project
-(`sjjovsjcfffrftnraocu.supabase.co`) is on the **`#`-commented** lines. To probe cloud
-from a script, grab the `https://` URL and the commented service-role key. The deployed
-Vercel app always runs against cloud — only **local diagnostics** are at risk of hitting
-the wrong DB. Use `.venv/bin/python` for DB ops (psycopg2 isn't in system python), and
-`os.environ.setdefault` the vars first (`.env.local` isn't auto-loaded into the shell).
+### The env-var check — confirm which Supabase `.env.local` points at
+The active `SUPABASE_URL` points at **cloud** (`sjjovsjcfffrftnraocu.supabase.co`) as of
+2026-07-10 — `shared.db.get_client()` and local scripts hit production directly. (It was
+pinned to a stale local Docker snapshot, `http://127.0.0.1:54321`, for a stretch in June —
+the historical reason some backfills carry a `--cloud` flag + `.env.local.cloud-backup`
+plumbing.) Before any local diagnostic or backfill, **check the active line** rather than
+assuming either way. Use `.venv/bin/python` for DB ops (psycopg2 isn't in system python);
+`shared.db` auto-loads `.env.local` via dotenv, bare scripts must load it themselves.
 
 ### Migrations
 Local Docker being up makes the Supabase CLI silently **misroute** `db push --linked`.

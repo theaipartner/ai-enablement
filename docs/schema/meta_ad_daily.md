@@ -21,7 +21,7 @@ Account-level (paid) daily Meta ad-spend mirror. One row per day.
 
 Source data for the Engine sheet's ADVERTISING section (Total Adspend, Frequency, Total Impressions, Unique Link Clicks, Cost per Impression, Cost per Unique Link Click, Click Through Rate). Per CLAUDE.md § Core Principles, the Gregory aggregation layer reads from here — not the API directly.
 
-Cortana is the team's Meta-consolidation tool (avoids Meta-API fatigue). A 3-hour Vercel cron (`api/cortana_sync_cron.py`) pulls a trailing 4-ET-day window from Cortana's `attribution/data` endpoint and upserts the "Meta Ads" source row into this table. Cortana/Meta restate recent days (~72h) with corrected numbers; the upsert's last-write-wins on `day` is the desired behavior — the latest pull of a day is the most complete.
+A 3-hour Vercel cron (`api/meta_sync_cron.py`) pulls a trailing 4-ET-day window from the Meta Insights API and upserts the account-level row into this table. Meta restates recent days (~72h) with corrected numbers; the upsert's last-write-wins on `day` is the desired behavior — the latest pull of a day is the most complete.
 
 ## Columns
 
@@ -39,7 +39,7 @@ Cortana is the team's Meta-consolidation tool (avoids Meta-API fatigue). A 3-hou
 | `ctr` | `numeric` | Meta's real link CTR (Cortana `ctr`). (Was derived `link_clicks/impressions*100` in the Sheet era because the Sheet's CTR column was broken — see § CTR history.) |
 | `cost_per_unique_link_click` | `numeric` | DERIVED `amount_spent / unique_link_clicks` (Cortana's `costPerUniqueInlineLinkClick` is null at row grain). |
 | `frequency` | `numeric` | DERIVED `impressions / reach` (Cortana returns it null at row grain). |
-| `ctr_source_raw` | `text` | Provenance marker. Now `'cortana_attribution'`. (Sheet-era rows held `1899-12-31`, the serial-0 bug.) |
+| `ctr_source_raw` | `text` | Provenance marker. Now `'meta_api'`; Cortana-era rows hold `'cortana_attribution'`. (Sheet-era rows held `1899-12-31`, the serial-0 bug.) |
 | `created_at` / `updated_at` | `timestamptz` | Standard. `updated_at` reflects the last cron pull that restated this day. Trigger: `set_updated_at`. |
 
 ## CTR history
@@ -64,9 +64,10 @@ PK on `day` covers the only meaningful access pattern (point lookup + DESC scan 
 
 ## What populates it
 
-- `ingestion.cortana.pipeline.sync_cortana_range(db, client, start, end)` — orchestrator (writes this table + `cortana_campaign_daily` + `cortana_ad_daily`).
-- `api/cortana_sync_cron.py` — Vercel cron at `0 */3 * * *`, trailing 4-ET-day window. Catches Meta's ~72h restatements.
-- Manual catch-up: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://ai-enablement-sigma.vercel.app/api/cortana_sync_cron`, or `scripts/backfill_cortana.py --days N --apply --cloud`. Idempotent.
+- `ingestion.meta_ads.pipeline.sync_meta_range(db, client, start, end)` — orchestrator (writes this table + the three `cortana_*` mirrors from `level=campaign|adset|ad`).
+- `api/meta_sync_cron.py` — Vercel cron at `0 */3 * * *`, trailing 4-ET-day window. Catches Meta's ~72h restatements.
+- Manual catch-up: `scripts/backfill_meta_ads.py` (`--smoke` first, then `--days N --apply --cloud`). Idempotent.
+- *(Pre-2026-06-30 rows were written by the retired Cortana pipeline — `ingestion/cortana/` + `api/cortana_sync_cron.py`, kept unscheduled for revert.)*
 
 ## What reads from it
 

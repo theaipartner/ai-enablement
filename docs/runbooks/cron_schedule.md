@@ -12,7 +12,7 @@ Crons are scheduled in **UTC** (Vercel's scheduler is UTC-native). The ET column
 meaningful ET translation. The fixed-time crons shift by one clock hour across the DST boundary because
 the UTC instant is fixed (a deliberate, accepted trade-off — see ADR 0003).
 
-## Current crons (verified against `vercel.json`, 2026-06-22)
+## Current crons (verified against `vercel.json`, 2026-07-10)
 
 | Path | UTC schedule | ET equivalent | What it does |
 |---|---|---|---|
@@ -25,7 +25,8 @@ the UTC instant is fixed (a deliberate, accepted trade-off — see ADR 0003).
 | `/api/client_meetings_sync_cron` | `30 4 * * *` | daily 00:30 EDT / 23:30 (prev) EST | Google Calendar → `client_meetings` |
 | `/api/ella_daily_digest_cron` | `30 20 * * *` | daily 16:30 EDT / 15:30 EST | Post #daily-digest |
 | `/api/faq_digest_cron` | `0 19 * * 5` | Fridays 15:00 EDT / 14:00 EST | Weekly FAQ digest to Scott |
-| `/api/cortana_sync_cron` | `0 */3 * * *` | every 3h (UTC-anchored: 00,03,…) | Meta ad data via Cortana |
+| `/api/meta_sync_cron` | `0 */3 * * *` | every 3h (UTC-anchored: 00,03,…) | Meta ad spend/delivery → the four ad mirrors (replaced `/api/cortana_sync_cron` 2026-06-30; Cortana code kept unscheduled for revert) |
+| `/api/meta_leads_sync_cron` | `*/15 * * * *` | every 15 min | Meta instant-form leads → `meta_form_leads` (+ forms + leadgen-campaign scan) + DC-ads facts refresh |
 | `/api/wistia_sync_cron` | `30 * * * *` | hourly at :30 past | Wistia stats pull |
 | `/api/passive_ella_cron` | `* * * * *` | every minute | Drains the Ella passive-response queue (legacy/no-op) |
 | `/api/teams_calendar_sync_cron` | `*/30 * * * *` | every 30 min | Google Calendar → `calendar_events` (/teams) |
@@ -36,7 +37,8 @@ the UTC instant is fixed (a deliberate, accepted trade-off — see ADR 0003).
 | `/api/setter_calls_sweep_cron` | `*/15 * * * *` | every 15 min | Setter-call sweep |
 | `/api/typeform_insights_cron` | `7,22,37,52 * * * *` | every 15 min (offset +7) | Snapshot Typeform lifetime insight totals |
 | `/api/engagement_ping_cron` | `*/5 * * * *` | every 5 min | Engagement / missing-form pinger |
-| `/api/outbound_facts_refresh_cron` | `*/15 * * * *` | every 15 min | Rebuild `outbound_lead_facts` for the Outbound funnel (off-page; the page reads the precomputed table) |
+| `/api/outbound_facts_refresh_cron` | `*/15 * * * *` | every 15 min | Rebuild `outbound_lead_facts` (Outbound funnel) + `dc_ads_lead_facts` (DC Ads funnel) — off-page; the pages read the precomputed tables |
+| `/api/ghl_sync_cron` | `*/15 * * * *` | every 15 min | GHL contacts/conversations mirror |
 
 ## Adding or rescheduling a cron
 

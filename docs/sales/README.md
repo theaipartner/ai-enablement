@@ -9,7 +9,7 @@ the one "what's true right now."
 
 ## What the product is
 
-An internal **sales analytics** dashboard. Four surfaces, flat nav:
+An internal **sales analytics** dashboard. Five surfaces, flat nav:
 
 - **Advertising Hub** (route `/funnel`, was "Marketing" / "Funnel") — the cohort funnel (opt-ins →
   connected → booked → confirmed → showed → closed), split Total / Direct / Setter / Reactivation, plus
@@ -21,6 +21,12 @@ An internal **sales analytics** dashboard. Four surfaces, flat nav:
   exclusive and excluded from every other surface, so it's the only place they're counted. A calendar
   scopes the funnel by lead-entry cohort, plus an activity-scoped **By rep** table (dials / connections /
   closes / cash). Its own top-level page.
+- **DC Ads** (route `/dc-ads`, added 2026-07-10) — the Digital College paid-ads funnel (since the
+  full-program suspension, the only acquisition motion): Meta instant-form opt-ins with **ad spend
+  leading the funnel** (adspend → opt-ins → called → connected → closed, + cash/ROAS), an
+  Advertising-Hub-style **ad cascade chooser** and **last-5-days strip**, by-rep, opt-in→dial
+  speed, and time-of-day. Scoped strictly to lead-form campaigns — never outbound pools, and its
+  leads never appear on Outbound.
 - **Leads** — the lead roster + filters + speed-to-lead + first-meaningful-response
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.

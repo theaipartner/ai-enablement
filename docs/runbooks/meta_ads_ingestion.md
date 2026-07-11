@@ -107,11 +107,14 @@ a near-midnight cent landing a day over.
 ### Credentials (env vars)
 
 - Local: `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` (+ optional
-  `META_API_VERSION`) in `.env.local`.
-- **Production: set the same vars in Vercel Production env vars.** (CLI v52 is
-  broken for env writes — use the Vercel dashboard. Env-var changes don't take
-  effect until the next deploy.) `META_AD_ACCOUNT_ID = act_2293461684485411`
-  ("USA - AI Partner Call Funnel"); the token is the secret.
+  `META_API_VERSION`; the lead-form pipeline also needs `META_LEADGEN_PAGE_ID`)
+  in `.env.local`.
+- **Production: set the same vars in Vercel Production env vars.** CLI env
+  writes work again as of v54 (`vercel env add NAME production`; to REPLACE an
+  existing value do `env rm` + `env add` — `--force` didn't actually overwrite
+  when tried 2026-07-10). Env-var changes don't take effect until the next
+  deploy. `META_AD_ACCOUNT_ID = act_2293461684485411` ("USA - AI Partner Call
+  Funnel"); the token is the secret.
 
 ## Field map (read off the live API 2026-06-30)
 
