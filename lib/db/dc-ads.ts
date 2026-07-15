@@ -1,6 +1,8 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { businessHoursElapsedSec } from '@/lib/time/est-periods'
+import { summarizeCohortRows, type CohortStats } from './funnel-appointment-setting'
 import type { DcPlanCounts } from './funnel-dc'
 
 // DC ads funnel — the Digital College paid-ads funnel (Meta instant-form
@@ -65,19 +67,24 @@ export type DcAdsByRep = { reps: DcAdsRepRow[]; totals: DcAdsRepTotals }
 
 const TOD_LABELS = ['12a', '2a', '4a', '6a', '8a', '10a', '12p', '2p', '4p', '6p', '8p', '10p']
 
-// The page's ad-cascade selection (campaign → ad set → ad). Deepest wins —
-// the RPC args carry only the deepest id, mirroring the Advertising Hub.
+// The page's ad-cascade selection (campaign → ad set → ad) plus the Forms
+// facet. Cascade: deepest wins — the RPC args carry only the deepest id,
+// mirroring the Advertising Hub. The form is an independent AND facet (a form
+// spans many ads), so it composes with the cascade instead of competing.
 export type DcAdsEntityFilter = {
   campaignId?: string | null
   adsetId?: string | null
   adId?: string | null
+  formId?: string | null
 }
 
 function entityArgs(filter?: DcAdsEntityFilter): Record<string, unknown> {
-  if (filter?.adId) return { p_ad_id: filter.adId }
-  if (filter?.adsetId) return { p_adset_id: filter.adsetId }
-  if (filter?.campaignId) return { p_campaign_id: filter.campaignId }
-  return {}
+  const args: Record<string, unknown> = {}
+  if (filter?.adId) args.p_ad_id = filter.adId
+  else if (filter?.adsetId) args.p_adset_id = filter.adsetId
+  else if (filter?.campaignId) args.p_campaign_id = filter.campaignId
+  if (filter?.formId) args.p_form_id = filter.formId
+  return args
 }
 
 type RawDcAds = {
@@ -158,7 +165,10 @@ export async function getDcAdsByRep(
 
 // Which cortana_* mirror + entity ids feed the spend read for the active
 // cascade selection. Deepest wins: ad → cortana_ad_daily, ad set →
-// cortana_adset_daily, campaign → cortana_campaign_daily (that id only); no
+// cortana_adset_daily, campaign → cortana_campaign_daily (that id only). A
+// form-only selection maps to the ads that served that form (a form is not a
+// Meta spend entity; its ads are) — when BOTH a form and a cascade entity are
+// selected, the entity wins the spend read while the funnel ANDs both. No
 // selection → cortana_campaign_daily over the whole meta_leadgen_campaigns set.
 async function spendScope(
   filter?: DcAdsEntityFilter,
@@ -173,6 +183,17 @@ async function spendScope(
   if (filter?.adsetId) return { table: 'cortana_adset_daily', ids: [filter.adsetId], campaigns: all.length }
   if (filter?.campaignId)
     return { table: 'cortana_campaign_daily', ids: [filter.campaignId], campaigns: all.length }
+  if (filter?.formId) {
+    const { data: ads, error: aErr } = await sb
+      .from('meta_form_leads' as never)
+      .select('ad_id')
+      .eq('form_id', filter.formId)
+      .not('ad_id', 'is', null)
+      .limit(10000)
+    if (aErr) throw new Error(`meta_form_leads form-ads read failed: ${aErr.message}`)
+    const ids = Array.from(new Set(((ads ?? []) as Array<{ ad_id: string }>).map((r) => r.ad_id)))
+    return { table: 'cortana_ad_daily', ids, campaigns: all.length }
+  }
   return { table: 'cortana_campaign_daily', ids: all, campaigns: all.length }
 }
 
@@ -260,10 +281,16 @@ export type DcCampaignNode = {
   count: number
   adsets: DcAdsetNode[]
 }
+// The Forms facet options — Meta runs more than one instant form ("7/8 -
+// Basic Form", "7/13 - Basic Form", …). Counts are ad-attributed submissions
+// in the window, same source as the cascade counts; names come from the
+// meta_lead_forms registry.
+export type DcFormOption = { formId: string; formName: string; count: number }
 export type DcAdHierarchy = {
   campaigns: DcCampaignNode[]
   adsetsAll: DcAdsetNode[]
   adsAll: DcAdNode[]
+  forms: DcFormOption[]
 }
 
 export async function getDcAdsHierarchy(range: {
@@ -271,14 +298,21 @@ export async function getDcAdsHierarchy(range: {
   endUtcIso: string
 }): Promise<DcAdHierarchy> {
   const sb = createAdminClient()
-  const { data, error } = await sb
-    .from('meta_form_leads' as never)
-    .select('campaign_id, campaign_name, adset_id, adset_name, ad_id, ad_name')
-    .not('ad_id', 'is', null)
-    .gte('created_time', range.startUtcIso)
-    .lt('created_time', range.endUtcIso)
-    .limit(10000)
+  const [{ data, error }, { data: formRows, error: fErr }] = await Promise.all([
+    sb
+      .from('meta_form_leads' as never)
+      .select('campaign_id, campaign_name, adset_id, adset_name, ad_id, ad_name, form_id')
+      .not('ad_id', 'is', null)
+      .gte('created_time', range.startUtcIso)
+      .lt('created_time', range.endUtcIso)
+      .limit(10000),
+    sb.from('meta_lead_forms' as never).select('form_id, name'),
+  ])
   if (error) throw new Error(`meta_form_leads hierarchy read failed: ${error.message}`)
+  if (fErr) throw new Error(`meta_lead_forms registry read failed: ${fErr.message}`)
+  const formNames = new Map(
+    ((formRows ?? []) as Array<{ form_id: string; name: string | null }>).map((r) => [r.form_id, r.name]),
+  )
   type Row = {
     campaign_id: string | null
     campaign_name: string | null
@@ -286,11 +320,13 @@ export async function getDcAdsHierarchy(range: {
     adset_name: string | null
     ad_id: string
     ad_name: string | null
+    form_id: string
   }
   type AdsetAgg = { adsetName?: string; count: number; ads: Map<string, { adName: string; count: number }> }
   const camps = new Map<string, { campaignName: string; count: number; adsets: Map<string, AdsetAgg> }>()
   const adsetsAll = new Map<string, AdsetAgg>()
   const adsAll = new Map<string, { adName: string; count: number }>()
+  const formsAgg = new Map<string, number>()
   const bump = (m: Map<string, AdsetAgg>, r: Row) => {
     const key = r.adset_id ?? '—'
     const a = m.get(key) ?? { adsetName: r.adset_name ?? undefined, count: 0, ads: new Map() }
@@ -310,6 +346,7 @@ export async function getDcAdsHierarchy(range: {
     const g = adsAll.get(r.ad_id) ?? { adName: r.ad_name ?? r.ad_id, count: 0 }
     g.count += 1
     adsAll.set(r.ad_id, g)
+    formsAgg.set(r.form_id, (formsAgg.get(r.form_id) ?? 0) + 1)
   }
   const adNodes = (ads: Map<string, { adName: string; count: number }>): DcAdNode[] => {
     const list = Array.from(ads.entries()).map(([adId, v]) => ({ adId, adName: v.adName, count: v.count }))
@@ -330,6 +367,56 @@ export async function getDcAdsHierarchy(range: {
       .sort((x, y) => y.count - x.count),
     adsetsAll: adsetNodes(adsetsAll),
     adsAll: adNodes(adsAll),
+    forms: Array.from(formsAgg.entries())
+      .map(([formId, count]) => ({ formId, formName: formNames.get(formId) ?? formId, count }))
+      .sort((x, y) => y.count - x.count),
+  }
+}
+
+// The speed-to-lead boxes (ported from /sales-dashboard/leads), computed over
+// the DC ads opt-in cohort only. The RPC hands back per-lead timing/effort
+// facts; the business-hours speed clock (10a–10p ET) runs here with the SAME
+// helper + summarize math the Leads page uses, so the two pages can't drift.
+export type DcAdsSpeedStats = CohortStats & {
+  // The funnel's broad Connected (≥90s call OR a later stage) — lead-level.
+  connectedBroad: number
+  // Denominator for the true connection rate: leads we actually WORKED
+  // (dialed or reached), so never-touched leads don't dilute it — same rule
+  // as the Leads page (Drake 2026-06-18).
+  dialedOrConnected: number
+}
+
+export async function getDcAdsSpeedCohort(
+  range: { startUtcIso: string; endUtcIso: string },
+  filter?: DcAdsEntityFilter,
+): Promise<DcAdsSpeedStats> {
+  const sb = createAdminClient()
+  const { data, error } = await sb.rpc('dc_ads_speed_cohort' as never, {
+    p_start: range.startUtcIso,
+    p_end: range.endUtcIso,
+    ...entityArgs(filter),
+  } as never)
+  if (error) throw new Error(`dc_ads_speed_cohort RPC failed: ${error.message}`)
+  const rows = (data ?? []) as unknown as Array<{
+    anchor: string
+    firstDial: string | null
+    dials: number
+    connected: boolean
+  }>
+  const stats = summarizeCohortRows(
+    rows.map((r) => ({
+      speedSec: r.firstDial
+        ? businessHoursElapsedSec(new Date(r.anchor), new Date(r.firstDial))
+        : null,
+      firstCallAt: r.firstDial,
+      anyCallConnected: r.connected,
+      intensity: r.dials,
+    })),
+  )
+  return {
+    ...stats,
+    connectedBroad: rows.filter((r) => r.connected).length,
+    dialedOrConnected: rows.filter((r) => r.firstDial != null || r.connected).length,
   }
 }
 

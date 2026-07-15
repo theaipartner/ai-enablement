@@ -1163,7 +1163,15 @@ export type CohortStats = Pick<
   | 'avgIntensity'
 >
 
-export function summarizeCohortRows(rows: SpeedToLeadCohortRow[]): CohortStats {
+// The stat inputs are a structural subset of the full row so sibling cohorts
+// (the DC ads pool — lib/db/dc-ads.ts) reuse the same math without building
+// full roster rows.
+export type CohortStatRow = Pick<
+  SpeedToLeadCohortRow,
+  'speedSec' | 'firstCallAt' | 'anyCallConnected' | 'intensity'
+>
+
+export function summarizeCohortRows(rows: CohortStatRow[]): CohortStats {
   let cappedSum = 0
   let speedN = 0
   let connectedCount = 0

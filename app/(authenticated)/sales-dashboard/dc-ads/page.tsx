@@ -5,6 +5,7 @@ import { DcAdsDailyTable } from '@/components/sales/dc-ads-daily-table'
 import { DcAdsFunnelSection } from '@/components/sales/dc-ads-funnel'
 import { DcAdsTimeOfDaySection } from '@/components/sales/dc-ads-time-of-day'
 import { DcAdsByRepSection } from '@/components/sales/dc-ads-by-rep'
+import { SpeedToLeadBoxes } from '@/components/sales/speed-to-lead-boxes'
 import {
   getDcAdsFunnel,
   getDcAdsByRep,
@@ -12,6 +13,7 @@ import {
   getDcAdsMetaOptIns,
   getDcAdsDaily,
   getDcAdsHierarchy,
+  getDcAdsSpeedCohort,
   type DcAdsEntityFilter,
 } from '@/lib/db/dc-ads'
 import { dateRangeFromExplicit, todayEtDate } from '@/lib/db/funnel-window'
@@ -50,6 +52,7 @@ export default async function DcAdsPage({
     campaign?: string | string[]
     adset?: string | string[]
     ad?: string | string[]
+    form?: string | string[]
   }
 }) {
   const param = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)?.trim() || null
@@ -61,17 +64,19 @@ export default async function DcAdsPage({
   const endEt = param(searchParams?.end) ?? todayEt
 
   // Ad cascade selection (?campaign / ?adset / ?ad) — same URL contract as the
-  // Advertising Hub's chooser. Scopes everything: spend, funnel, by-rep,
-  // speed-to-dial, time-of-day, and the last-5-days strip.
+  // Advertising Hub's chooser — plus the Forms facet (?form, an AND filter).
+  // Scopes everything: spend, funnel, by-rep, speed-to-lead, speed-to-dial,
+  // time-of-day, and the last-5-days strip.
   const campaign = param(searchParams?.campaign)
   const adset = param(searchParams?.adset)
   const ad = param(searchParams?.ad)
-  const filter: DcAdsEntityFilter = { campaignId: campaign, adsetId: adset, adId: ad }
-  const filterActive = !!(ad || adset || campaign)
+  const form = param(searchParams?.form)
+  const filter: DcAdsEntityFilter = { campaignId: campaign, adsetId: adset, adId: ad, formId: form }
+  const filterActive = !!(ad || adset || campaign || form)
 
   const range = dateRangeFromExplicit(startEt, endEt)
   const rangeBounds = { startUtcIso: range.startUtcIso, endUtcIso: range.endUtcIso }
-  const [{ funnel, called, timeOfDay }, byRep, spend, metaOptIns, dailyRows, hierarchy] =
+  const [{ funnel, called, timeOfDay }, byRep, spend, metaOptIns, dailyRows, hierarchy, speedCohort] =
     await Promise.all([
       getDcAdsFunnel(rangeBounds, filter),
       getDcAdsByRep(rangeBounds, filter),
@@ -79,6 +84,7 @@ export default async function DcAdsPage({
       getDcAdsMetaOptIns(rangeBounds),
       getDcAdsDaily(todayEt, filter),
       getDcAdsHierarchy(rangeBounds),
+      getDcAdsSpeedCohort(rangeBounds, filter),
     ])
 
   return (
@@ -90,7 +96,7 @@ export default async function DcAdsPage({
       />
 
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} startEtDate={startEt} endEtDate={endEt} />
+        <AdCascadeFilter hierarchy={hierarchy} campaign={campaign} adset={adset} ad={ad} forms={hierarchy.forms} form={form} startEtDate={startEt} endEtDate={endEt} />
         <DateRangePicker startEtDate={startEt} endEtDate={endEt} todayEt={todayEt} />
         <span
           className="geg-mono"
@@ -131,6 +137,23 @@ export default async function DcAdsPage({
 
       <DcAdsByRepSection rows={byRep.reps} totals={byRep.totals} />
 
+      {/* Speed-to-lead boxes — the Leads page's four top-line stats, computed
+          over the DC ads opt-in cohort only (same 10a–10p ET business-hours
+          clock + 24h cap, so the numbers are comparable across pages). */}
+      <div style={{ marginTop: 26 }}>
+        <div
+          className="geg-mono"
+          style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-geg-text-3)', marginBottom: 10 }}
+        >
+          Speed to lead · DC ad opt-ins · selected dates
+        </div>
+        <SpeedToLeadBoxes
+          cohort={speedCohort}
+          connectedLeads={speedCohort.connectedBroad}
+          connectedDenominator={speedCohort.dialedOrConnected}
+        />
+      </div>
+
       <DcAdsCalledSection called={called} />
 
       <div
@@ -160,10 +183,12 @@ export default async function DcAdsPage({
       >
         Opt-ins = Digital College lead-form leads mirrored into Close (anchored at the form submit; a
         returning phone number re-anchors at its newest opt-in) · Called = ≥1 call (inbound or outbound,
-        any length) · Connected = a <b>call ≥90s</b> (either direction) · Closed = a DC close <b>with an
-        explicit plan</b> (a &ldquo;DC Closed&rdquo; form with no plan counts as a show, not a close) ·
-        Cash = $300 per Digital College plan unit · Adspend = the lead-form campaigns&apos; spend
-        (Meta API, ET days) · ROAS = cash ÷ adspend.
+        any length) · Connected = a <b>call ≥90s</b> (either direction) or a filed pitch form · Showed = a
+        filed <b>DC sale form</b> or closer report (the lead got a pitch) · Closed = a DC close <b>with an
+        explicit plan</b> — from the DC sale form or a closer report (a closed form with no plan counts as
+        a show, not a close) · Cash = $300 per Digital College plan unit · Adspend = the lead-form
+        campaigns&apos; spend (Meta API, ET days; with only a form selected, that form&apos;s ads) ·
+        ROAS = cash ÷ adspend.
       </div>
     </div>
   )

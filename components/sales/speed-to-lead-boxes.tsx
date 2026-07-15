@@ -1,4 +1,4 @@
-import type { SpeedToLeadCohortResult } from '@/lib/db/funnel-appointment-setting'
+import type { CohortStats } from '@/lib/db/funnel-appointment-setting'
 
 // Speed-to-Lead metric boxes — the four top-line stats from the
 // appointment-setting page's Speed-to-Lead section, WITHOUT the per-lead
@@ -7,6 +7,8 @@ import type { SpeedToLeadCohortResult } from '@/lib/db/funnel-appointment-settin
 // Ported so the leads page can show these against its own date range. An
 // optional `filter` slot renders a fifth cell (the per-rep caller filter)
 // when a caller-companion list is present; the leads page omits it.
+// Consumes only the scalar CohortStats, so cohorts without roster rows
+// (the DC ads pool) render the same boxes.
 //
 // "Connected" = first call to the lead landed over 90s (the same
 // engagement proxy used elsewhere; relabeled away from ">90s" so
@@ -19,7 +21,7 @@ export function SpeedToLeadBoxes({
   connectedLeads,
   connectedDenominator,
 }: {
-  cohort: SpeedToLeadCohortResult
+  cohort: CohortStats
   activeCaller?: string | null
   filter?: React.ReactNode
   // Broad form-OR-call connected count (matches the funnel's Connected). When
