@@ -157,8 +157,11 @@ export function DcAdsByRepSection({ rows, totals }: { rows: DcAdsRepRow[]; total
       {/* footnote */}
       <div className="geg-mono" style={{ padding: '9px 14px', background: 'var(--color-geg-bg-elev)', borderTop: '1px solid var(--color-geg-border)', fontSize: 9, letterSpacing: '0.05em', color: 'var(--color-geg-text-faint)', lineHeight: 1.7 }}>
         Activity-scoped, not cohort-scoped: what each rep did in the selected dates, regardless of when the
-        lead opted in. <b>Dials</b> = outbound calls · <b>Connections</b> = calls ≥90s · <b>Closes</b> = DC
-        closes with a plan · <b>Cash</b> = $300 per plan unit. Every rep with activity is listed.
+        lead opted in. <b>Dials</b> = outbound calls · <b>Connections</b> = calls ≥90s, counted per CALL
+        (a lead reached twice counts twice; inbound pickups count) — so the column sum runs higher than the
+        funnel&apos;s Connected, which counts each <i>lead</i> once · <b>Closes</b> = DC closes with a plan ·
+        <b>Cash</b> = $300 per plan unit. Every rep with activity is listed. All rows cover DC-ads pool
+        leads only.
       </div>
     </div>
   )

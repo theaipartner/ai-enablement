@@ -3,7 +3,7 @@
 Per-lead funnel facts for the **DC ads funnel page**
 (`/sales-dashboard/dc-ads`) — Digital College Meta-form opt-ins mirrored into
 Close, with their downstream stage flags. Sibling of `outbound_lead_facts`
-(same stage semantics, different membership + anchor). Migrations 0123–0125.
+(same stage semantics, different membership + anchor). Migrations 0123–0129.
 
 ## Purpose
 
@@ -26,6 +26,14 @@ outbound): `first_dial` = first outbound call after the opt-in (no
 funnel stage (`has_inbound` kept for reference); `optin_bucket` replaces
 `reply_bucket`.
 
+**Shows/closes come from TWO form sources** (0127): the Full Closer Report
+AND the **DC sale form** (`airtable_digital_college_sales`) — where reps
+actually file these dial-up pitches (the closer report went quiet with the
+program suspension). DC sale form rules, mirroring `lib/db/leads.ts`: a filed
+non-blank form = showed; `Closed?=Yes` with ≥1 plan = closed; `Closed?=Yes`
+with no plan = show + `marked_no_plan`; form timestamp =
+`coalesce(date_time_of_call, airtable_created_at)` and must be ≥ the anchor.
+
 ## Columns
 
 Same stage set as `outbound_lead_facts` (see that machinery in migrations
@@ -37,16 +45,23 @@ triage), `showed`/`closed` (closer report), `plan_units` +
 buckets 0–11), `updated_at` — plus (0126) the lead's Meta attribution
 `campaign_id`/`adset_id`/`ad_id` (from `close_leads`), which power the page's
 ad-cascade filters on `dc_ads_funnel()` / `dc_ads_funnel_by_rep()` /
-`dc_ads_daily()` (all take optional `p_campaign_id`/`p_adset_id`/`p_ad_id`;
-`dc_ads_daily(p_end_et, p_days, …)` returns the last-N-days cohort strip).
+`dc_ads_daily()` / `dc_ads_speed_cohort()` (all take optional
+`p_campaign_id`/`p_adset_id`/`p_ad_id`/`p_form_id`;
+`dc_ads_daily(p_end_et, p_days, …)` returns the last-N-days cohort strip;
+`dc_ads_speed_cohort()` (0129) returns per-lead anchor/first-dial/dial-count
+rows for the page's speed-to-lead boxes) — and (0128) `form_id`, the Meta
+instant form behind the opt-in. The bridge doesn't stamp form ids on
+`close_leads`, so the refresh derives it: match the lead's contact phone
+(last 10 digits) to `meta_form_leads.phone_number` and take the NEWEST
+submission's form (parity with the re-anchor-at-newest-opt-in rule).
 
 ## Populated by / read by
 
 - **Writes:** `refresh_dc_ads_facts()` called by
   `api/outbound_facts_refresh_cron.py` (15-min tick, after Close/Airtable
   syncs) and by `ingestion/meta_ads/leads_pipeline.py` after each lead sync.
-- **Reads:** `dc_ads_funnel()` / `dc_ads_funnel_by_rep()` RPCs behind
-  `lib/db/dc-ads.ts`.
+- **Reads:** `dc_ads_funnel()` / `dc_ads_funnel_by_rep()` / `dc_ads_daily()` /
+  `dc_ads_speed_cohort()` RPCs behind `lib/db/dc-ads.ts`.
 
 ## Example queries
 
