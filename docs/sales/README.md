@@ -24,9 +24,11 @@ An internal **sales analytics** dashboard. Five surfaces, flat nav:
 - **DC Ads** (route `/dc-ads`, added 2026-07-10) — the Digital College paid-ads funnel (since the
   full-program suspension, the only acquisition motion): Meta instant-form opt-ins with **ad spend
   leading the funnel** (adspend → opt-ins → called → connected → closed, + cash/ROAS), an
-  Advertising-Hub-style **ad cascade chooser** and **last-5-days strip**, by-rep, opt-in→dial
-  speed, and time-of-day. Scoped strictly to lead-form campaigns — never outbound pools, and its
-  leads never appear on Outbound.
+  Advertising-Hub-style **ad cascade chooser** + a **Forms dropdown** (per instant form),
+  **last-5-days strip**, by-rep, **speed-to-lead boxes** (the Leads page's stats, DC-scoped),
+  opt-in→dial speed, and time-of-day. Shows/closes come from the **DC sale form** ∪ closer report.
+  Scoped strictly to lead-form campaigns — never outbound pools, and its leads never appear on
+  Outbound.
 - **Leads** — the lead roster + filters + speed-to-lead + first-meaningful-response
   chart, and the per-lead page (`/leads/[close_id]`) with the two-phase Journey and
   day-grouped Lifecycle.

@@ -77,7 +77,13 @@ First run 2026-07-10: 1 campaign, 1 form, 110 leads.
   broke; `meta_form_leads` keeps ingesting regardless. Compare
   `meta_form_leads` count vs `close_leads where funnel_name='Digital College'`
   — the DC ads page's opt-in count reads the Close-side facts, so a growing
-  gap means the bridge needs fixing.
+  gap means the bridge needs fixing. **Split the gap by `form_id` first**:
+  the bridge is subscribed PER FORM, so a brand-new instant form silently
+  drops 100% of its leads until someone wires it. Happened 2026-07-13: the
+  "7/13 - Basic Form" launched unwired and 67/78 of its opt-ins never became
+  Close leads while the 7/8 form ran 232/232 clean. **Launching a new form ⇒
+  wire the bridge to it the same day** (our mirror + form dropdown pick it up
+  automatically; the bridge does not).
 - **A new lead-form campaign shows no spend on the DC page** — check it
   appears in `meta_leadgen_campaigns` (adset scan runs every tick; the
   campaign must have at least one instant-form adset).

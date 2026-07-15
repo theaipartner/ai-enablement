@@ -41,9 +41,12 @@ Indexes: `created_time desc`, `form_id`, `campaign_id`, `phone_number`.
   `api/meta_leads_sync_cron.py` (15-min cron, trailing 72h) and
   `scripts/backfill_meta_leads.py`. Upsert on `lead_id`.
 - **Reads:** the DC ads funnel page (`/sales-dashboard/dc-ads`) for the
-  Meta-side opt-in count / bridge-drift check; ad-hoc attribution queries.
-  The page's funnel stages read `dc_ads_lead_facts` (Close-side), not this
-  table.
+  Meta-side opt-in count / bridge-drift check, the ad-cascade hierarchy +
+  Forms-dropdown option counts (`getDcAdsHierarchy`), and form-scoped spend
+  (a form's `ad_id` set → `cortana_ad_daily`); `refresh_dc_ads_facts()`
+  (0128) phone-matches a lead's newest submission here to stamp
+  `dc_ads_lead_facts.form_id`; ad-hoc attribution queries. The page's
+  funnel stages read `dc_ads_lead_facts` (Close-side), not this table.
 
 ## Example queries
 

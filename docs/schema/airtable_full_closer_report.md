@@ -138,6 +138,8 @@ The Engine-sheet Closing section rows 96-116 — Showed/CCMI/No-Show/Reschedule/
 
 **Engagement FINAL.** `api/airtable_events.py` also reads this table to close missing-form engagements: a row with `call_outcome in ('Digital College', 'Digital College Closed')` ends the rep's (from `closer_record_ids`) oldest open engagement — a DC closer who closes over the phone files this instead of a triage form. HT outcomes are excluded. See `docs/schema/engagements.md` + `docs/sales/logic.md` § Engagements.
 
+**DC Ads facts.** `refresh_dc_ads_facts()` + `dc_ads_funnel_by_rep()` read it for the DC-ads pool's shows/closes, unioned with `airtable_digital_college_sales` (0127 — since the program suspension the DC sale form is where those pitches are actually filed). See `docs/schema/dc_ads_lead_facts.md`.
+
 Example aggregations:
 
 ```sql

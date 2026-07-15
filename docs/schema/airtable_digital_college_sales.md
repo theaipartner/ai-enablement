@@ -63,3 +63,11 @@ The sales dashboard low-ticket surfaces: Robby's per-rep drilldown on
 `/sales-dashboard/people` (Talent), the Leads roster + per-lead Journey /
 Lifecycle / close-details (close-type = Digital College), and the Funnel
 page closes split (ht/dc). Joined to `close_leads` by `lead_id`.
+
+Since 0127 also the **DC Ads funnel**: `refresh_dc_ads_facts()` derives
+`dc_ads_lead_facts.showed/closed/plan_*` from this table (unioned with the
+closer report — since the program suspension this form is where DC-ads
+pitches are actually filed), and `dc_ads_funnel_by_rep()` credits closes/cash
+via `closer_record_ids` → `team_members.airtable_user_id`. A closer missing
+from `team_members` shows as an unmerged nickname row on the page's by-rep
+table.

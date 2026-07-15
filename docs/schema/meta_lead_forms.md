@@ -29,7 +29,8 @@ ingesting automatically on the next 15-min tick.
 - **Writes:** `ingestion/meta_ads/leads_pipeline.py` via
   `api/meta_leads_sync_cron.py` / `scripts/backfill_meta_leads.py`
   (upsert on `form_id`, from `GET /{page_id}/leadgen_forms`).
-- **Reads:** the lead sync (form iteration), ad-hoc "what does this form
-  collect" checks.
+- **Reads:** the lead sync (form iteration); the DC Ads page's Forms
+  dropdown (`getDcAdsHierarchy` pulls option labels from `name`); ad-hoc
+  "what does this form collect" checks.
 
 Runbook: `docs/runbooks/meta_leads_ingestion.md`.
