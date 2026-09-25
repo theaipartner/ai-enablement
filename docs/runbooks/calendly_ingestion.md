@@ -160,7 +160,7 @@ Sequential — each step depends on the previous:
 
 **Window:** events with `start_time` in `[now - lookback_days, now + 60d]` (`--lookback-days` defaults to 7). The wide future-window catches events booked recently for far-out meetings (closer-strategy-calls are often scheduled days-to-weeks in advance). Aggregation buckets by `event_created_at`. Because a booking's created-time is always ≤ its meeting start-time, setting the lookback floor at date D captures every booking *created* on/after D (then filter precisely on `event_created_at` downstream).
 
-**Smoke gate (mandatory before `--apply`):** smoke refreshes event-types + upserts ONE event + its invitees. Idempotent. Per CLAUDE.md § Operational patterns.
+**Smoke gate (mandatory before `--apply`):** smoke refreshes event-types + upserts ONE event + its invitees. Idempotent. Per AGENTS.md § Operational Discipline.
 
 **Run `--smoke` before the first bulk `--apply`** (first large-scale production write). Re-runs after parser fixes are safe — idempotency contract holds.
 

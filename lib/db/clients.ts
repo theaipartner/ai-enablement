@@ -672,7 +672,7 @@ export async function getClientById(id: string): Promise<ClientDetail | null> {
 // Backs the GET /api/clients endpoint (Zane's email→client lookup).
 // Resolves by primary email first (case-insensitive), then falls back to
 // the metadata.alternate_emails surface, mirroring the system's identity
-// resolution (CLAUDE.md § Client Identity Resolution). Archived rows are
+// resolution (AGENTS.md § Client Identity Resolution). Archived rows are
 // excluded. Returns the whole clients row — the caller decides what to
 // expose.
 export async function getClientByEmail(

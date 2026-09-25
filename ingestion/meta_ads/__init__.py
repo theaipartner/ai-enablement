@@ -32,7 +32,7 @@ What is NOT ported (mirrored by Cortana but read by ZERO dashboard code):
     attribution. New rows carry `conversions = {}` and those rollup columns
     NULL. Historical Cortana rows keep their values untouched.
 
-Per CLAUDE.md § Core Principles: this is a replaceable adapter in its own
+Per AGENTS.md § Core Principles: this is a replaceable adapter in its own
 module; agents/dashboards read the mirror tables, never this API.
 
 Discovery (2026-06-30) + the token/timezone caveats live in

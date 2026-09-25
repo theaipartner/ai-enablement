@@ -123,7 +123,7 @@ curl -i -X POST \
 
 **Each `--smoke` / `--apply` burns 1 of 10 daily project reqs.** The cron uses 1 on its own. Coordinate during incident debugging — if someone is running manual syncs and the cron also fires, you can hit the cap.
 
-`--smoke` is the canonical pre-`--apply` gate per CLAUDE.md § Operational patterns. It exercises the full fetch + parse path against the real API without DB writes, so parser drift surfaces before any DB row lands.
+`--smoke` is the canonical pre-`--apply` gate per AGENTS.md § Operational Discipline. It exercises the full fetch + parse path against the real API without DB writes, so parser drift surfaces before any DB row lands.
 
 ## Cold start
 

@@ -11,13 +11,13 @@ Real-API behavior:
     Use sparingly during dev; the cron uses 1/day on its own.
   * --apply re-pulls the full N-day window and upserts; idempotent
     (PK = snapshot_date, metric_name, url).
-  * --smoke is the canonical pre-`--apply` gate per CLAUDE.md
+  * --smoke is the canonical pre-`--apply` gate per AGENTS.md
     § Operational patterns. It exercises the FULL fetch+parse path
     without touching the DB.
 
 Loads .env.local for CLARITY_API_KEY + SUPABASE_*.
 
-Per CLAUDE.md § Operational patterns: real-API smoke before bulk apply.
+Per AGENTS.md § Operational Discipline: real-API smoke before bulk apply.
 For Clarity that's important because we can't observe the parser's
 real-API behavior without spending budget — every test burns a daily
 req.

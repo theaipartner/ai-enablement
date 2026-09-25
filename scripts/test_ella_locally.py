@@ -22,7 +22,7 @@ Usage:
     python scripts/test_ella_locally.py --list
 
 Requires:
-  - Local Supabase running and populated (see CLAUDE.md).
+  - Local Supabase running and populated (see AGENTS.md).
   - ANTHROPIC_API_KEY and OPENAI_API_KEY in env — real Claude call,
     real embedding lookup. Each run burns a small amount of tokens.
   - At least one `slack_channels` row with a mapped `client_id`

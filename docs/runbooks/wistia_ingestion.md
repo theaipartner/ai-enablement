@@ -109,7 +109,7 @@ If the cron misses a window > 14 days (Vercel outage, account-paused), days olde
 
 **To extend the window** (e.g. backfill the new columns further back), bump `BACKFILL_START` in `scripts/backfill_wistia.py` and re-run `--apply`. Idempotent on `(hashed_id, day)`; legacy columns untouched.
 
-**Smoke gate (mandatory before `--apply`):** smoke mode upserts the full inventory but only ONE media's per-day data. Per CLAUDE.md § Operational patterns. Re-runnable; safe to re-trigger.
+**Smoke gate (mandatory before `--apply`):** smoke mode upserts the full inventory but only ONE media's per-day data. Per AGENTS.md § Operational Discipline. Re-runnable; safe to re-trigger.
 
 **Run `--smoke` before the first bulk `--apply`** (first large-scale production write). Re-runs after parser fixes are safe — idempotency contract holds.
 

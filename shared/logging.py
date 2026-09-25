@@ -4,7 +4,7 @@ Every agent execution gets one row in `agent_runs`. The caller opens the
 row at entry (`start_agent_run`) and closes it at exit (`end_agent_run`),
 including terminal status, token counts, and cost.
 
-Per CLAUDE.md: no `print()` for anything that should persist. This is
+Per AGENTS.md: no `print()` for anything that should persist. This is
 how agents record what they did, why, and what it cost.
 
 Example:

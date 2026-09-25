@@ -20,7 +20,7 @@ keyed on (day, entity) so the cron can re-pull a trailing window and
 restatements (Meta backfills spend/conversions for ~72h) just
 overwrite — same last-write-wins contract the Sheet pipeline had.
 
-Per CLAUDE.md § Core Principles: Cortana is a replaceable adapter
+Per AGENTS.md § Core Principles: Cortana is a replaceable adapter
 living in its own module; agents/dashboards read our mirror tables,
 never this API directly.
 

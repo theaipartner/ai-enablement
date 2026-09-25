@@ -52,7 +52,7 @@ No agent code reads from Close. No code outside `ingestion/close/` and `scripts/
 
 ### Smoke gate (mandatory before any `--apply`)
 
-Per CLAUDE.md § Operational patterns, a real-API smoke MUST pass before any bulk apply. The smoke pulls one real lead end-to-end (full lead JSON + activities + cf definitions) against the real DB. It's idempotent — safe to re-run after fixes.
+Per AGENTS.md § Operational Discipline, a real-API smoke MUST pass before any bulk apply. The smoke pulls one real lead end-to-end (full lead JSON + activities + cf definitions) against the real DB. It's idempotent — safe to re-run after fixes.
 
 If smoke fails, investigate before re-trying. Common failure modes:
 

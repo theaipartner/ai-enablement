@@ -155,7 +155,7 @@ If refresh fails, the cron logs a warning + audits the failure but continues the
 .venv/bin/python scripts/backfill_airtable.py --apply --full   # NO filter
 ```
 
-`--smoke` is the canonical pre-`--apply` gate per CLAUDE.md § Operational patterns. It also reports the observed Setter Name fill rate on Full Closer records — the attribution-hypothesis check (currently 1/2 = 50% on the post-discovery sample; needs N≥100 to confirm).
+`--smoke` is the canonical pre-`--apply` gate per AGENTS.md § Operational Discipline. It also reports the observed Setter Name fill rate on Full Closer records — the attribution-hypothesis check (currently 1/2 = 50% on the post-discovery sample; needs N≥100 to confirm).
 
 ## Webhook registration helper
 

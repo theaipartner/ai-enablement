@@ -25,7 +25,7 @@ the sales bot + the `sales_bot_ro` RLS role read them, and `meta_ad_daily`
 already set the precedent of keeping its name through a source swap (Sheet →
 Cortana). A rename to `meta_*` is a separate, optional later pass.
 
-Per CLAUDE.md § Core Principles: this is a replaceable adapter in its own
+Per AGENTS.md § Core Principles: this is a replaceable adapter in its own
 module (`ingestion/meta_ads/`); the dashboard reads the mirror tables, never
 the API.
 

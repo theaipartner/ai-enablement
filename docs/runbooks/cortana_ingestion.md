@@ -27,7 +27,7 @@ date serial `1899-12-31`) and account-level only.
 | campaign | `campaign` | `cortana_campaign_daily` | + budget/status/objective |
 | ad | `ad` | `cortana_ad_daily` | per-ad lead/close attribution + creative performance |
 
-Per CLAUDE.md § Core Principles: Cortana is a replaceable adapter in
+Per AGENTS.md § Core Principles: Cortana is a replaceable adapter in
 its own module (`ingestion/cortana/`); the dashboard reads the mirror
 tables, never the API.
 

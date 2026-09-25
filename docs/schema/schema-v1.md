@@ -630,8 +630,8 @@ The dashboard invokes Postgres functions for operations that must be atomic — 
 Once you review and we agree on the shape:
 
 1. I draft the actual SQL migration files — one per logical unit (core entities, slack, calls, documents, agent infrastructure, co-pilot prep), numbered
-2. I draft `docs/schema/` markdown — one file per table, in the format specified in CLAUDE.md
-3. You take both into Claude Code with a prompt like: "Implement the migrations in `supabase/migrations/` and the docs in `docs/schema/`, per the design in this file. Follow CLAUDE.md conventions."
+2. I draft `docs/schema/` markdown — one file per table, in the format specified in AGENTS.md
+3. You take both into Claude Code with a prompt like: "Implement the migrations in `supabase/migrations/` and the docs in `docs/schema/`, per the design in this file. Follow AGENTS.md conventions."
 4. Claude Code generates the files, you review, run migrations against Supabase, commit.
 
 Let me know what to adjust.

@@ -19,7 +19,7 @@ Three entry-point families converge on the same per-record upsert:
 Idempotent throughout: PK is `record_id` (globally unique within the
 base across all three sources). `ON CONFLICT (record_id) DO UPDATE`.
 
-Per CLAUDE.md § Operational patterns: the per-record loop is OK here
+Per AGENTS.md § Operational Discipline: the per-record loop is OK here
 because Airtable's volume is low (~hundreds/day at peak across all
 three tables). If volume grows, batch the upsert like the Clarity
 pipeline does.

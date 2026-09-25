@@ -3,7 +3,7 @@
 Spec: docs/specs/wistia-ingestion.md.
 Runbook: docs/runbooks/wistia_ingestion.md.
 
-Three modes per CLAUDE.md § Operational patterns:
+Three modes per AGENTS.md § Operational Discipline:
 
     .venv/bin/python scripts/backfill_wistia.py             # dry-run
     .venv/bin/python scripts/backfill_wistia.py --smoke     # 1 media end-to-end

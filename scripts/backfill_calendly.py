@@ -3,7 +3,7 @@
 Spec: docs/specs/calendly-ingestion.md.
 Runbook: docs/runbooks/calendly_ingestion.md.
 
-Three modes per CLAUDE.md § Operational patterns:
+Three modes per AGENTS.md § Operational Discipline:
 
     .venv/bin/python scripts/backfill_calendly.py             # dry-run
     .venv/bin/python scripts/backfill_calendly.py --smoke     # 1 event end-to-end

@@ -15,7 +15,7 @@ Three modes:
 
 **`--smoke`** — pulls ONE real lead (the first returned from /lead/),
 syncs its full data + activities + custom-field definitions, prints
-outcome. Idempotent; safe to re-run. Per CLAUDE.md § Operational
+outcome. Idempotent; safe to re-run. Per AGENTS.md § Operational
 patterns, run this BEFORE any bulk `--apply` to surface real-API
 shape bugs against the live DB.
 

@@ -106,7 +106,7 @@ Pace to expect: roughly 4 seconds per client call (that's where embedding happen
 
 On completion, the CLI prints an `APPLY SUMMARY` block and drops a JSON log at `data/fathom_ingest/run_<ts>.log`. The summary reports: `calls inserted/updated`, `documents created`, `document_chunks inserted` + `reused`, `clients auto-created`, `validation failures`, embedding cost estimate.
 
-**Cost expectation.** ~$0.04 for a full 516-call batch (text-embedding-3-small at ~11 chunks/call, ~500 tokens/chunk, $0.02/1M tokens). The "$5–15" estimate that used to live in CLAUDE.md was off by 100×. Budget $0.10 and you'll have ample headroom.
+**Cost expectation.** ~$0.04 for a full 516-call batch (text-embedding-3-small at ~11 chunks/call, ~500 tokens/chunk, $0.02/1M tokens). The "$5–15" estimate that used to live in AGENTS.md was off by 100×. Budget $0.10 and you'll have ample headroom.
 
 ---
 

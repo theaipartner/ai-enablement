@@ -19,7 +19,7 @@ Account-level (paid) daily Meta ad-spend mirror. One row per day.
 
 ## Purpose
 
-Source data for the Engine sheet's ADVERTISING section (Total Adspend, Frequency, Total Impressions, Unique Link Clicks, Cost per Impression, Cost per Unique Link Click, Click Through Rate). Per CLAUDE.md § Core Principles, the Gregory aggregation layer reads from here — not the API directly.
+Source data for the Engine sheet's ADVERTISING section (Total Adspend, Frequency, Total Impressions, Unique Link Clicks, Cost per Impression, Cost per Unique Link Click, Click Through Rate). Per AGENTS.md § Core Principles, the Gregory aggregation layer reads from here — not the API directly.
 
 A 3-hour Vercel cron (`api/meta_sync_cron.py`) pulls a trailing 4-ET-day window from the Meta Insights API and upserts the account-level row into this table. Meta restates recent days (~72h) with corrected numbers; the upsert's last-write-wins on `day` is the desired behavior — the latest pull of a day is the most complete.
 

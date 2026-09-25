@@ -4,7 +4,7 @@ Mirror of Close CRM lead objects. The funnel-relevant lead custom-field subset i
 
 ## Purpose
 
-Source data for the Gregory sales-side aggregation layer that produces the Engine sheet's APPOINTMENT SETTING + CLOSING metrics. Per CLAUDE.md § Core Principles, agents and the dashboard query this table, not Close directly.
+Source data for the Gregory sales-side aggregation layer that produces the Engine sheet's APPOINTMENT SETTING + CLOSING metrics. Per AGENTS.md § Core Principles, agents and the dashboard query this table, not Close directly.
 
 ## Columns
 

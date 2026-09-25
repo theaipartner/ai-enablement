@@ -1,7 +1,7 @@
 # Sales — Ingestion & Ops Traps
 
 How sales data gets into Supabase, and the landmines that cost real time. The core
-principle (CLAUDE.md) still holds: **agents and the dashboard read Supabase, never the
+principle (AGENTS.md) still holds: **agents and the dashboard read Supabase, never the
 external tool directly.** Each source below is a replaceable adapter under `ingestion/`.
 
 ---

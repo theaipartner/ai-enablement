@@ -70,7 +70,7 @@ Also confirm `TYPEFORM_API_KEY` is in Vercel (for the cron + the receiver's lazy
 # Smoke first — one form, one page, idempotent. Run from main checkout.
 .venv/bin/python scripts/backfill_typeform.py --smoke
 
-# Then apply — all forms, all history. Per the CLAUDE.md
+# Then apply — all forms, all history. Per the AGENTS.md
 # "real-API smoke test before --apply" rule.
 .venv/bin/python scripts/backfill_typeform.py --apply
 ```

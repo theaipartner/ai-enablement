@@ -11,7 +11,7 @@ Usage:
 Real-API behavior:
   * `--smoke` exercises full fetch+parse+upsert against ONE record from
     ONE table, idempotent — the canonical pre-`--apply` gate per
-    CLAUDE.md § Operational patterns. Also reports the observed
+    AGENTS.md § Operational Discipline. Also reports the observed
     Setter Name fill rate on Full Closer Report records (informs the
     attribution-hypothesis check per the discovery report).
   * `--apply` walks all 3 target sources with a CREATED_TIME() filter

@@ -15,7 +15,7 @@ Modes:
 
 **`--smoke`** — pulls the top form (highest total_items) and upserts
 ONE page of responses (default page size). Idempotent; safe to re-run.
-Per CLAUDE.md § Operational patterns, run this BEFORE `--apply` to
+Per AGENTS.md § Operational Discipline, run this BEFORE `--apply` to
 surface real-API shape bugs against the live DB.
 
 **`--apply`** — bulk backfill. Walks all forms (or `--form <id>`),
