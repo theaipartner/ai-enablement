@@ -3,7 +3,13 @@
 The map of every account, key, and webhook the system depends on — what it's for, which env var
 reads it, who owns the account, and where to rotate it. The actual secret **values** live in the
 company password vault (Bitwarden); this doc is the index + rotation paths, not the values. Never
-commit secrets — see `CLAUDE.md` § Critical Rules.
+commit secrets — see `AGENTS.md` § Critical Rules.
+
+## Ownership
+
+As of the **2026-09-25 handover**, **Nabeel** owns and operates this system: GitHub, Vercel, and Supabase
+access have been transferred to him, and he already holds the third-party accounts listed below. Where
+older docs or `.env.example` comments say "Drake sets/adds…", read it as "the operator".
 
 ## Where the system runs
 
@@ -27,6 +33,11 @@ Hardcoded at:
 - `api/teams_calendar_sync_cron.py` — `_DRAKE_EMAIL = "drake@theaipartner.io"`
 - `api/client_meetings_sync_cron.py` — `_DRAKE_EMAIL = "drake@theaipartner.io"`
 - `lib/db/teams.ts` — `getDrakeOAuthState()` reads that token row
+
+> **STATUS (2026-09-25 handover): `drake@theaipartner.io` has been deactivated.** The code above is
+> unchanged and both crons are still scheduled in `vercel.json`, so unless the fix was made outside the
+> repo (DB rows / Vercel), both syncs are failing. Check recent `webhook_deliveries` rows for
+> `oauth_token_unavailable`, then re-pin (below) or unschedule the two crons.
 
 **This account and its OAuth token must stay active**, or both calendar syncs silently break (the cron
 writes an `oauth_token_unavailable` audit row to `webhook_deliveries`). Two ways to keep it healthy:
