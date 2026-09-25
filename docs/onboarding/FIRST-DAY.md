@@ -7,21 +7,20 @@ companion.
 
 ## 0. Prerequisites
 
-- **WSL2** if you're on Windows — work *inside* the WSL filesystem, not the Windows mount (`/mnt/c/...`).
-  Setup: [`docs/runbooks/setup_wsl.md`](../runbooks/setup_wsl.md).
-- **Python 3.11+**, **Node 18+**, **git**, and the **Supabase CLI**.
+- A Mac set up per [`docs/runbooks/setup_mac.md`](../runbooks/setup_mac.md) — Homebrew, Python 3.11+,
+  Node 18+, git/gh, the Supabase CLI, the Vercel CLI, and access to GitHub + Vercel + Supabase.
 
-## 1. Clone (inside WSL)
+## 1. Clone
 
 ```bash
-git clone <repo-url>
+gh repo clone theaipartner/ai-enablement
 cd ai-enablement
 ```
 
 ## 2. Python environment → confirm tests pass
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest tests/ -q
 ```
@@ -34,13 +33,15 @@ Ask whoever holds the credentials (see step 3) before doing a full run against r
 ## 3. The dashboard → confirm it loads
 
 ```bash
-cp .env.example .env.local        # template; fill in real values
+vercel link                       # team success-projects-9dcde12c → project ai-enablement
+vercel env pull .env.local --environment=production
 npm install
 npm run dev                       # → http://localhost:3000
 ```
 
-- **Credentials:** `.env.example` lists every variable with a comment. You'll need at least the Supabase
-  keys for the dashboard to show data. The authoritative inventory of every account/key and who owns it is
+- **Credentials:** `vercel env pull` fills `.env.local` from Vercel, but variables marked Sensitive come
+  down blank — fill those from Bitwarden. `.env.example` documents every variable. You'll need at least
+  the Supabase keys for the dashboard to show data. The authoritative inventory of every account/key and who owns it is
   [`docs/runbooks/credentials-and-accounts.md`](../runbooks/credentials-and-accounts.md) — get the real
   values from the credential owner; never commit `.env.local`.
 - **Local auth:** set `NEXT_PUBLIC_DISABLE_AUTH=true` in `.env.local` so the dashboard's login gate is
@@ -65,7 +66,7 @@ The [README's "Where to find things" table](../../README.md#where-to-find-things
 version:
 
 - **How it all fits together** → [`docs/fulfillment/architecture.md`](../fulfillment/architecture.md) (CSM side) and [`docs/sales/`](../sales/README.md) (sales side).
-- **Conventions + critical rules before you edit code** → [`CLAUDE.md`](../../CLAUDE.md) and [`docs/fulfillment/conventions.md`](../fulfillment/conventions.md).
+- **Conventions + critical rules before you edit code** → [`AGENTS.md`](../../AGENTS.md) and [`docs/fulfillment/conventions.md`](../fulfillment/conventions.md).
 - **A specific table** → [`docs/schema/`](../schema/) · **a specific agent** → [`docs/agents/`](../agents/) · **how to run/operate a task** → [`docs/runbooks/`](../runbooks/).
 
 **One expectation to set:** the docs are kept accurate but **not exhaustive** — there isn't a doc for every

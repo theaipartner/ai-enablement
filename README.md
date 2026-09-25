@@ -32,19 +32,20 @@ there. Swapping any external tool is a contained rewrite of its `ingestion/` mod
 
 *New here? [`docs/onboarding/FIRST-DAY.md`](docs/onboarding/FIRST-DAY.md) walks this through step by step with verification checkpoints.*
 
-**Prerequisites:** WSL2 (if on Windows — see [`docs/runbooks/setup_wsl.md`](docs/runbooks/setup_wsl.md)),
-Python 3.11+, Node 18+, and the Supabase CLI. All dev happens inside WSL, not the Windows filesystem.
+**Prerequisites:** macOS with Python 3.11+, Node 18+, the Supabase CLI, and the Vercel CLI — full
+walkthrough in [`docs/runbooks/setup_mac.md`](docs/runbooks/setup_mac.md).
 
 ```bash
-git clone <repo-url>            # clone inside WSL
+gh repo clone theaipartner/ai-enablement
 cd ai-enablement
-cp .env.example .env.local      # then fill in values — see note below
-python -m venv .venv && source .venv/bin/activate
+vercel link && vercel env pull .env.local --environment=production   # see note below
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"         # Python deps (agents, ingestion, tests)
 npm install                     # Next.js dashboard deps
 ```
 
-**Credentials.** `.env.example` is the template. The authoritative inventory of every account, key, and who
+**Credentials.** `vercel env pull` fills `.env.local` from Vercel; variables marked Sensitive come down
+blank — fill those from Bitwarden. `.env.example` is the template. The authoritative inventory of every account, key, and who
 owns it is in [`docs/runbooks/credentials-and-accounts.md`](docs/runbooks/credentials-and-accounts.md).
 Never commit `.env.local`.
 
@@ -74,7 +75,7 @@ app + the Python serverless functions in `api/`. Cron schedules live in `vercel.
 | how to run/operate a task | [`docs/runbooks/`](docs/runbooks/) (its README explains coverage) |
 | why a design call was made | [`docs/decisions/`](docs/decisions/) (ADRs) |
 | accounts, keys, and how to rotate them | [`docs/runbooks/credentials-and-accounts.md`](docs/runbooks/credentials-and-accounts.md) |
-| conventions + critical rules for editing code | [`CLAUDE.md`](CLAUDE.md) |
+| conventions + critical rules for editing code (also the AI-agent instructions) | [`AGENTS.md`](AGENTS.md) |
 
 **Coverage is intentional, not exhaustive.** The docs are kept accurate but there isn't a doc for every
 subsystem, and they're *fairly* — not *fully* — comprehensive. When a doc is absent or in doubt, **the code
@@ -88,11 +89,11 @@ is the source of truth**: start from the relevant `api/` handler, `ingestion/<so
 3. **External tools are replaceable adapters** — one module each.
 4. **Interfaces are thin clients on a shared brain** — no business logic in the dashboard or Slack layer.
 
-(Expanded, with the full conventions and critical rules, in [`CLAUDE.md`](CLAUDE.md).)
+(Expanded, with the full conventions and critical rules, in [`AGENTS.md`](AGENTS.md).)
 
 ## Repo layout (high level)
 
-`CLAUDE.md` § Folder Structure has the authoritative tree. In brief:
+`AGENTS.md` § Folder Structure has the authoritative tree. In brief:
 
 ```
 docs/        fulfillment, sales, schema, runbooks, decisions, agents, archive

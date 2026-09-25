@@ -11,15 +11,14 @@ How to apply `supabase/migrations/*.sql` against the cloud Supabase project, plu
 
 ## Preconditions
 
-**Docker WSL integration must be OFF on this machine.** Verify before any cloud apply:
+**No local Supabase stack may be reachable.** Verify before any cloud apply:
 
 ```bash
 docker ps
-# Must return: "The command 'docker' could not be found in this WSL 2 distro."
-# (Or any other "Docker not reachable" error.)
+# Must fail ("Cannot connect to the Docker daemon…") or show no supabase_* containers.
 ```
 
-If `docker ps` succeeds and shows a running daemon, **STOP**. Disable Docker Desktop's WSL integration first (Docker Desktop → Settings → Resources → WSL Integration → toggle off the Ubuntu distro), then re-verify with `docker ps`.
+If a local Supabase stack is running, **STOP**: run `supabase stop` (or quit Docker Desktop), then re-verify.
 
 Reason: Supabase CLI v2.90.0 silently misroutes `db push --linked` when both a linked-cloud project AND a reachable local Docker stack are present. The bug surfaced 2026-04-28 (every migration 0011–0028 then shipped via Studio + manual ledger as a workaround for ~10 days); Phase 3 discovery on 2026-05-08 confirmed the CLI works correctly when there's no reachable local Docker target. See `docs/archive/historical/known-issues.md` for the resolved entries documenting the era.
 
