@@ -17,6 +17,8 @@
 ## What changed at handover (so old docs make sense)
 
 - `CLAUDE.md` was renamed to **`AGENTS.md`** (Codex reads it). `CLAUDE.md` is now a one-line import of it.
+- Added `docs/onboarding/START-HERE-AGENTS.md`, a pre-clone starter Nabeel drops into an empty folder as
+  `AGENTS.md` so an agent can set up his Mac before the repo exists there.
 - Removed the Claude-Code-only tooling: session hooks, a `/run` command, and `builder_server.py` +
   `.mcp.json`, an MCP server for a "Director / Builder" workflow.
 - Dev environment moved from Windows/WSL to **macOS** (`docs/runbooks/setup_mac.md`).
@@ -54,37 +56,58 @@ dashboard + Slack.
 
 ## "Prepare my codebase" — setup procedure
 
-When he asks to set up or prepare the codebase (or anything is missing), take him to a working setup.
-Do the steps yourself where you can. **Pause for him** where a browser login or a password is needed,
-telling him exactly what to click. Check before installing; skip what's already there. Reference:
-`docs/runbooks/setup_mac.md`.
+**Goal:** Nabeel's Mac is set up so that **you** can do everything on his behalf: pull, commit, and
+**push** to GitHub; pull keys and check deploys with the Vercel CLI; and query Supabase. He should only
+have to do the things that need him personally (his Mac password, browser logins, Bitwarden).
 
-1. **Check tools:** `brew`, `git`, `gh`, `python3.11` (or any 3.11+), `node` (18+), `vercel`, `supabase`.
-   Report what's present and what's missing.
-   - Install missing ones with Homebrew (`brew install git gh python@3.11 node supabase/tap/supabase`,
-     `npm i -g vercel`). No Homebrew? Ask before installing it. Alternatives: python.org and nodejs.org
-     installers, `npx vercel` / `npx supabase` instead of global installs.
-   - Your sandbox may block network installs; ask him to approve, or give him the command to run himself.
-2. **GitHub auth:** `gh auth status`; if not logged in, he runs `gh auth login` (browser flow).
-   Alternative: GitHub Desktop. Confirm he can reach `theaipartner/ai-enablement`.
-3. **Repo:** clone it if needed (`gh repo clone theaipartner/ai-enablement`), else `git pull` on `main`.
-4. **Dependencies:** `python3.11 -m venv .venv && .venv/bin/pip install -e ".[dev]"`, then `npm install`.
-5. **Keys → `.env.local`** (local, gitignored, never committed):
-   - He runs `vercel login` (browser). Then `vercel link` (team `success-projects-9dcde12c`, project
-     `ai-enablement`) and `vercel env pull .env.local --environment=production`.
+**Where he's coming from:** normally he starts in an empty folder containing
+`docs/onboarding/START-HERE-AGENTS.md` saved as `AGENTS.md`. That file covers steps 1–4 below (tools,
+GitHub login, clone) and then sends you here. If you're already inside the repo, check steps 1–3 anyway
+and fix anything missing. Reference for commands: `docs/runbooks/setup_mac.md`.
+
+**Rules for the whole procedure:** check before installing and skip what's already there. Steps
+that need his password, a browser login, or a GUI dialog: give him the exact command to paste into the
+**Terminal** app, wait for him, then verify it yourself. If your sandbox blocks network access, ask him
+to approve, or give him the Terminal command.
+
+1. **Tools:** Xcode Command Line Tools (`xcode-select -p`), Homebrew, then `git`, `gh`, Python 3.11+,
+   Node 18+, `supabase`, `vercel` (commands in START-HERE-AGENTS.md § Step 1–2).
+2. **GitHub:** `gh auth status` shows him logged in, `gh auth setup-git` has been run (so git push
+   works without prompts), and `git config --global user.name` / `user.email` are set.
+3. **Repo access:** `gh repo view theaipartner/ai-enablement` works.
+4. **Clone** (if not already): `gh repo clone theaipartner/ai-enablement`, then work inside it.
+5. **Dependencies:** `python3.11 -m venv .venv && .venv/bin/pip install -e ".[dev]"`, then `npm install`.
+6. **Vercel + keys → `.env.local`** (local, gitignored, never committed):
+   - **He** runs `vercel login` in Terminal (browser flow). You verify with `vercel whoami`.
+   - You run `vercel link --yes --team success-projects-9dcde12c --project ai-enablement`, then
+     `vercel env pull .env.local --environment=production`.
    - Vercel returns **blank values for "Sensitive" vars.** List the blank **names** (never values) and
-     say which matter. At minimum the Supabase keys are needed for the dashboard and scripts,
-     and `SUPABASE_DB_PASSWORD` for DB scripts and migrations. He fills them from Bitwarden. Options: he
-     pastes into `.env.local` himself, or uses the Bitwarden CLI (`bw`) if he prefers.
-   - Fallback if the Vercel CLI won't cooperate: copy values from Vercel → Project → Settings →
-     Environment Variables, or Bitwarden, using `.env.example` as the template.
+     say which matter. The Supabase keys are needed for the dashboard and scripts, and
+     `SUPABASE_DB_PASSWORD` for DB scripts and migrations. He fills them from **Bitwarden**, by pasting
+     into `.env.local` himself (open it for him in a text editor) or via the Bitwarden CLI (`bw`) if he
+     prefers.
+   - Fallback if the Vercel CLI won't cooperate: copy the values from Vercel → Project → Settings →
+     Environment Variables, or from Bitwarden, using `.env.example` as the template.
    - Add `NEXT_PUBLIC_DISABLE_AUTH=true` for local dashboard use (never set in Vercel).
    - Tell him plainly: **this file points at the live production database.**
-6. **Supabase CLI** (only needed for migrations; skip unless asked): `supabase login`, then
-   `supabase link --project-ref sjjovsjcfffrftnraocu`.
-7. **Verify and report:** `pytest tests/ -q`, `npm run build`, a read-only DB check (e.g. count rows in
-   `clients`), and `npm run dev` → dashboard at localhost:3000. Finish with a short checklist of what
-   works, what's pending, and what he needs to do (if anything).
+7. **Supabase CLI:** **he** runs `supabase login` in Terminal (browser flow). Then you run
+   `supabase link --project-ref sjjovsjcfffrftnraocu` (it may ask for the DB password, which is
+   `SUPABASE_DB_PASSWORD` from `.env.local`). Only migrations need this, but do it now so it's ready.
+8. **Verify and report:**
+   - `pytest tests/ -q`
+   - `npm run build`
+   - a read-only DB check (e.g. count rows in `clients`)
+   - `vercel ls` (you can see deployments)
+   - `git push --dry-run origin main` (you can push)
+   - `npm run dev`, then have him open localhost:3000
+
+   Finish with a short checklist: what works, and what (if anything) he still needs to do.
+9. **Wrap up with him in a few sentences:**
+   - From now on, open Codex **inside the `ai-enablement` folder**. The setup folder can be deleted.
+   - When he asks for a change, you'll explain the plan, make it, test it, and **ask before pushing**,
+     because pushing to `main` puts it live within minutes.
+   - To ship something, he just tells you ("push it" / "ship it") after you've shown him what changed.
+   - If something goes wrong after a deploy, you can roll it back.
 
 ## Known open issues (as of handover)
 
