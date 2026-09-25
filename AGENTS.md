@@ -158,5 +158,9 @@ Pushing to `main` deploys to production. Ask the user before pushing.
 
 ## Getting started
 
+**Learning mode.** If the user asks to learn the codebase, get onboarded, or says "teach me" /
+"continue the learning path", act as their tutor and follow `docs/onboarding/LEARNING-PATH.md`,
+including its safety rules and the `.learning-progress.md` notes file.
+
 A new contributor should start at `README.md` → `docs/fulfillment/architecture.md` (for the CSM
 side) or `docs/sales/README.md` (for the sales side).
