@@ -59,9 +59,6 @@ supabase/snippets/
 
 # Local Claude Code state — never source.
 .claude/
-
-# Personal onboarding notes kept by the AI tutor (docs/onboarding/LEARNING-PATH.md).
-.learning-progress.md
 .preview-cookie
 
 # Ad-hoc screenshot dumps from exploratory/verification runs — snapshots,

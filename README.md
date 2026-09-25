@@ -67,7 +67,7 @@ app + the Python serverless functions in `api/`. Cron schedules live in `vercel.
 | You want… | Go to |
 |---|---|
 | to set up the repo on day one | [`docs/onboarding/FIRST-DAY.md`](docs/onboarding/FIRST-DAY.md) |
-| to be taught the codebase step by step by your AI agent | [`docs/onboarding/LEARNING-PATH.md`](docs/onboarding/LEARNING-PATH.md) |
+| the handover context for your AI agent (setup, working rules, open issues, stale code) | [`docs/onboarding/HANDOVER.md`](docs/onboarding/HANDOVER.md) |
 | how the system fits together | [`docs/fulfillment/architecture.md`](docs/fulfillment/architecture.md) |
 | the conventions (UI, call titling, data hygiene) | [`docs/fulfillment/conventions.md`](docs/fulfillment/conventions.md) |
 | the sales funnel / dashboard | [`docs/sales/`](docs/sales/README.md) |

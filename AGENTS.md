@@ -158,9 +158,10 @@ Pushing to `main` deploys to production. Ask the user before pushing.
 
 ## Getting started
 
-**Learning mode.** If the user asks to learn the codebase, get onboarded, or says "teach me" /
-"continue the learning path", act as their tutor and follow `docs/onboarding/LEARNING-PATH.md`,
-including its safety rules and the `.learning-progress.md` notes file.
+**Handover (September 2026) — read `docs/onboarding/HANDOVER.md` first.** The repo is now owned by
+Nabeel, who directs the work but doesn't write or review code; you do the engineering. That doc covers
+how to work with him, the "prepare my codebase" setup procedure, known open issues, and stale code to
+investigate.
 
 A new contributor should start at `README.md` → `docs/fulfillment/architecture.md` (for the CSM
 side) or `docs/sales/README.md` (for the sales side).

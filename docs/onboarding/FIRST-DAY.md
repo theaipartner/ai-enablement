@@ -62,9 +62,8 @@ deploys the Next.js app + the Python serverless functions in `api/`. Cron schedu
 
 ## Where to look next
 
-**New to the codebase (or to git)?** Open Codex in the repo and say *"teach me the codebase"*. It will
-follow [`LEARNING-PATH.md`](LEARNING-PATH.md), a step-by-step course from git basics to tracing data
-through the system.
+**Working through an AI agent?** Open Codex in the repo and say *"prepare my codebase"*. It follows
+[`HANDOVER.md`](HANDOVER.md) to do this setup for you, then helps you make changes safely.
 
 The [README's "Where to find things" table](../../README.md#where-to-find-things) is the full map. The short
 version:
